@@ -1,3 +1,4 @@
+#include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
 #include <zlib.h>
@@ -5,6 +6,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstddef>
+#include <memory>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -30,6 +32,11 @@ void resolve_dispatch() {
 }
 
 }  // namespace
+
+std::uint32_t gzip_crc32(std::uint32_t crc, const void* data, std::size_t len) {
+    resolve_dispatch();
+    return libdeflate_crc32(crc, data, len);
+}
 
 GzipMemberDecompressor::GzipMemberDecompressor()
     : d_((resolve_dispatch(), libdeflate_alloc_decompressor())) {}
@@ -136,10 +143,19 @@ bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
                                                 const void* data,
                                                 std::size_t len) const {
     if (!c_) return false;
-    out.resize(bound(len));
-    auto n = compress(data, len, out.data(), out.size());
+    // The worst-case buffer is a member's size again, and a vector would zero
+    // fill and fault in all of it to keep a few percent. A per-thread scratch
+    // buffer is reused across members and only its used part is written.
+    const std::size_t cap = bound(len);
+    thread_local std::unique_ptr<std::uint8_t[]> scratch;
+    thread_local std::size_t scratch_cap = 0;
+    if (scratch_cap < cap) {
+        scratch.reset(new std::uint8_t[cap]);
+        scratch_cap = cap;
+    }
+    auto n = compress(data, len, scratch.get(), cap);
     if (!n) return false;
-    out.resize(*n);
+    out.assign(scratch.get(), scratch.get() + *n);
     return true;
 }
 
@@ -152,8 +168,9 @@ std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
 
 std::optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
-    z_stream zs{};
-    if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) return std::nullopt;
+    GzipStreamInflater gz;
+    if (!gz.init(16 + MAX_WBITS)) return std::nullopt;
+    z_stream& zs = gz.z();
     const auto* in = static_cast<const Bytef*>(comp);
     std::size_t in_left = comp_len;
     std::size_t produced = 0;
@@ -173,7 +190,7 @@ std::optional<std::size_t> decode_truncated_member(
             std::min<std::size_t>(out.size() - produced, UINT_MAX);
         zs.next_out = out.data() + produced;
         zs.avail_out = static_cast<uInt>(room);
-        const int rc = inflate(&zs, Z_NO_FLUSH);
+        const int rc = gz.inflate(Z_NO_FLUSH);
         produced += room - zs.avail_out;
         if (rc == Z_STREAM_END) {
             complete = true;
@@ -187,7 +204,6 @@ std::optional<std::size_t> decode_truncated_member(
         ok = false;  // Z_DATA_ERROR, Z_NEED_DICT, Z_MEM_ERROR
         break;
     }
-    inflateEnd(&zs);
     if (!ok) return std::nullopt;
     if (complete) return produced;
     std::size_t keep = produced;

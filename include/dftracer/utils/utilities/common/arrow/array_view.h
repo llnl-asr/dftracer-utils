@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARRAY_VIEW_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARRAY_VIEW_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <nanoarrow/nanoarrow.h>

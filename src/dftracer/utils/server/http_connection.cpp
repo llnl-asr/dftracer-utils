@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/io/ops.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/server/http_connection.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
@@ -91,7 +91,9 @@ coro::CoroTask<void> handle_connection(int client_fd,
                 char hex[24];
                 std::vector<struct iovec> iovs;
 
-                while (auto chunk = co_await resp.stream->next()) {
+                for (;;) {
+                    auto chunk = co_await resp.stream->next();
+                    if (!chunk) break;
                     if (chunk->views.empty()) continue;
 
                     std::size_t payload_size = 0;

@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_PYTHON_SERIES_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 
 namespace dftracer::utils::dataframe {
 class Series;

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/pipeline.h>
@@ -180,7 +180,7 @@ TEST_CASE("a range sub-query reads the rows between the enclosing bounds") {
         const TLookup* found = nullptr;
         for_each_pipeline_term(program->main, [&](const Term& t) {
             if (const auto* l = std::get_if<TLookup>(&t.node)) {
-                REQUIRE(l->range != RangeRead::NONE);
+                REQUIRE(l->range != RangeRead::None);
                 l->slot->table = make_lookup_table(*l, side);
                 found = l;
             }

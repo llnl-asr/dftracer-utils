@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -122,11 +122,11 @@ std::unique_ptr<ParallelWriter> make_sharded_writer() {
 }
 
 std::unique_ptr<ParallelWriter> make_writer(const WriterConfig& cfg) {
-    if (cfg.layout == FileLayout::SHARDED) return make_sharded_writer();
+    if (cfg.layout == FileLayout::Sharded) return make_sharded_writer();
     // Padded striped needs gzip and a large-enough stripe to guarantee a
     // compressed flush fits one slot. Below the minimum, fall back to the
     // atomic-byte-offset writer.
-    LayoutInfo info{cfg.layout, FilesystemKind::UNKNOWN, cfg.stripe_size, 0};
+    LayoutInfo info{cfg.layout, FilesystemKind::Unknown, cfg.stripe_size, 0};
     if (uses_padded_layout(info, cfg.gzip)) {
         return make_padded_striped_writer(cfg.stripe_size);
     }
@@ -137,8 +137,8 @@ ConfiguredWriter make_writer_for_path(const WriterRequest& req) {
     LayoutInfo info = detect_layout(req.path);
     // A striped layout with no usable stripe size cannot slot workers by
     // offset; degrade to sharded so writes still land correctly.
-    if (info.layout == FileLayout::STRIPED && info.stripe_size == 0) {
-        info.layout = FileLayout::SHARDED;
+    if (info.layout == FileLayout::Striped && info.stripe_size == 0) {
+        info.layout = FileLayout::Sharded;
     }
     const bool padded = uses_padded_layout(info, req.gzip);
     WriterSizing sizing = compute_writer_sizing(

@@ -15,7 +15,7 @@ A class may set ``source``: duql row sets and macros, such as
 
 or as a YAML or JSON spec (``id``, ``extends``, ``fields``,
 ``index.path_budget``, ``index.stats_share``, ``source``) registered here, loaded from
-``$DFTRACER_SCHEMA_PATH``, or placed in ``<index_dir>/schemas/`` next to an
+``$DFTRACER_UTILS_SCHEMA_PATH``, or placed in ``<index_dir>/schemas/`` next to an
 index. Registered schemas last for the process.
 """
 

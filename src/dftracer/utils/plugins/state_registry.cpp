@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/plugins/reserved_names.h>
 #include <dftracer/utils/plugins/state_registry.h>
 

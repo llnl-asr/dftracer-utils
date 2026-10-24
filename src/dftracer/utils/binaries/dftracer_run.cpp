@@ -1,12 +1,12 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -127,7 +127,7 @@ static bool prescan_plugin_args(int argc, char** argv, std::vector<char*>& kept,
 
 class RunArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
     cli::FilesArgs files_args;
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
@@ -199,7 +199,7 @@ static Result<Plugins> build_plugins(const PluginArgs& plugin_args) {
                             build_config(plugin_args.shared, block));
             } catch (const std::exception& e) {
                 return make_error(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "plugin '" + block.path + "' config error: " + e.what());
             }
         } else {
@@ -277,7 +277,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     if (!directory.empty()) {
         PatternDirectoryScannerUtility scanner;
         PatternDirectoryScannerUtilityInput scan_input{
-            directory, trace_file_patterns(), false};
+            directory, trace_file_patterns(), true};
         auto matched = co_await scanner(scan_input);
         for (const auto& entry : matched) files.push_back(entry.path.string());
     } else {
@@ -288,19 +288,6 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         DFTRACER_UTILS_LOG_ERROR("%s",
                                  "No trace files found. Use -d or --files.");
         co_return 1;
-    }
-
-    // Normalize single-member inputs to multi-member gzip so each checkpoint is
-    // a real member.
-    if (!no_auto_index) {
-        dftracer::utils::index::build::MemberNormalizeResult norm;
-        cli::run_on_pool(cli->pipeline, "dftracer_run normalize",
-                         [&](CoroScope&) -> coro::CoroTask<void> {
-                             norm = co_await dftracer::utils::index::build::
-                                 normalize_members_for_ingest(std::move(files),
-                                                              checkpoint_size);
-                         });
-        files = std::move(norm.files);
     }
 
     // A load or fold-ordering failure must stop the run before any scanning.

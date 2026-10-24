@@ -107,7 +107,7 @@ bool or_to_set(const QueryNode& node, std::string& field,
                 return or_to_set(*n.left, field, vals) &&
                        or_to_set(*n.right, field, vals);
             } else if constexpr (std::is_same_v<T, CompareNode>) {
-                if (n.op != CompareOp::EQ || n.field.any) return false;
+                if (n.op != CompareOp::Eq || n.field.any) return false;
                 if (field.empty())
                     field = n.field.path;
                 else if (field != n.field.path)
@@ -146,7 +146,7 @@ void flatten(const QueryNode& node, Buckets& b) {
                     return;
                 }
                 const auto num = as_number(n.value.value);
-                if (n.op == CompareOp::EQ) {
+                if (n.op == CompareOp::Eq) {
                     if (num) {
                         auto& iv = b.intervals[n.field.path];
                         tighten_lo(iv.lo, Bound{*num, false});
@@ -155,13 +155,13 @@ void flatten(const QueryNode& node, Buckets& b) {
                         add_set_value(b, n.field.path, n.value.value);
                     }
                 } else if (num &&
-                           (n.op == CompareOp::GT || n.op == CompareOp::GE)) {
+                           (n.op == CompareOp::Gt || n.op == CompareOp::Ge)) {
                     tighten_lo(b.intervals[n.field.path].lo,
-                               Bound{*num, n.op == CompareOp::GT});
+                               Bound{*num, n.op == CompareOp::Gt});
                 } else if (num &&
-                           (n.op == CompareOp::LT || n.op == CompareOp::LE)) {
+                           (n.op == CompareOp::Lt || n.op == CompareOp::Le)) {
                     tighten_hi(b.intervals[n.field.path].hi,
-                               Bound{*num, n.op == CompareOp::LT});
+                               Bound{*num, n.op == CompareOp::Lt});
                 } else {
                     b.residual.insert(to_string(node));  // NE, or non-numeric
                 }

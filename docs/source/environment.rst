@@ -34,6 +34,14 @@ Runtime and scheduler
      - hardware concurrency
      - Fixes the I/O backend (io_uring/kqueue) thread-pool size independently
        of the compute pool. Same parsing rule as ``DFTRACER_UTILS_THREADS``.
+   * - ``DFTRACER_UTILS_IO_BACKEND``
+     - ``auto``
+     - Forces the I/O backend of every runtime that would pick one itself:
+       ``auto``, ``io_uring``, ``epoll``, ``kqueue`` or ``threadpool``. A
+       backend this platform or build lacks, or any other value, stops the
+       runtime from starting with an error; it never falls back. Use
+       ``threadpool`` to trace the tools with DFTracer's preload, which sees
+       only libc calls and so misses io_uring.
    * - ``DFTRACER_UTILS_HW_CONCURRENCY``
      - ``std::thread::hardware_concurrency()`` (or ``1`` if that is ``0``)
      - Overrides the detected core count used to size thread pools when the
@@ -74,6 +82,69 @@ Memory and kernels
        stores them raw. ``auto``, unset or any other value compresses only
        when the spill file is on a network file system, where the bytes
        written cost more than the compression.
+   * - ``DFTRACER_UTILS_MEMORY_BACKEND``
+     - the build option
+     - ``page_heap`` or ``system``. Picks the allocator backend, read once
+       before the first allocation. Unset or empty uses the CMake option of the
+       same name (``page_heap``, and ``system`` in the sanitizer presets). Any
+       other value stops the process at the first allocation.
+   * - ``DFTRACER_UTILS_MEM_DECAY_MS``
+     - ``1000``
+     - Milliseconds an idle page or run stays backed before the heap gives it
+       back to the operating system. ``0`` gives it back at the first slow
+       path. Read once before the first allocation. A value that is not a whole
+       number up to ``4294967295`` stops the process at the first allocation.
+   * - ``DFTRACER_UTILS_MEM_BUDGET``
+     - a third of the available memory
+     - The sum of reservations that the memory manager accepts, in bytes or
+       with a unit such as ``4GB``. Unset or ``0`` uses a third of the
+       available memory (the cgroup limit when there is one). A value that is
+       not a byte size is an error that names the variable.
+   * - ``DFTRACER_UTILS_MEM_HARD_LIMIT``
+     - ``0``
+     - Bytes of heap the process may hold from the operating system, in bytes
+       or with a unit. An allocation that would pass it fails with
+       ``std::bad_alloc``. ``0`` sets no cap. A bad value is an error that
+       names the variable.
+   * - ``DFTRACER_UTILS_MEM_LIMIT_HEADROOM``
+     - 5% of the limit, at least 256 MB
+     - How far below the process memory limit the memory counted against it
+       may grow before holders are asked to give bytes back. In a cgroup that
+       is the memory of every process in the group, not only this one. Bytes
+       or a unit. A bad value is an error that names the variable.
+   * - ``DFTRACER_UTILS_MEM_SPILL_HEADROOM``
+     - 2% of the budget, at least 32 MB
+     - How far past the budget a pool that is spilling may reserve, so that
+       the spill can allocate its buffers. Bytes or a unit. A bad value is an
+       error that names the variable.
+   * - ``DFTRACER_UTILS_MEMORY_DEBUG``
+     - ``0``
+     - ``1`` turns on the heap debug checks, read once before the first
+       allocation: a record of the caller and size of each live block, a
+       redzone behind each block, a fill pattern on freed blocks and double
+       free detection. Each allocation is slower and freed blocks stay counted
+       for a while. Any value other than ``0`` or ``1`` stops the process at
+       the first allocation.
+   * - ``DFTRACER_UTILS_MEMORY_EXIT_CHECK``
+     - ``0``
+     - For test runs. ``1`` makes the process print a leak report and exit
+       with status ``70`` when blocks that no host buffer owns are still live
+       at exit or a scratch pool leaked. Do not set it for a normal run. The
+       Python extension turns it off at import. Any value other than ``0`` or
+       ``1`` stops the process at the first allocation.
+   * - ``DFTRACER_UTILS_MEMORY_REPORT``
+     - ``0``
+     - ``1`` prints one line to stderr at exit, such as
+       ``dftracer-utils memory: peak=... live=... measured=... limit=...
+       heap_peak=... used_peak=...``. ``live``, ``measured`` and ``limit`` are
+       the values at exit. ``peak`` is the most live bytes seen when the
+       counters were read, so a tool that never reads them shows ``0``.
+       ``heap_peak`` is the most bytes the page heap had mapped at once, exact
+       for any run; mapped address space can far exceed what the process
+       touches. ``used_peak`` is the most bytes in use, read each time the page
+       heap has mapped another 64 MiB, so it can trail the true peak by that
+       much. Both are ``0`` on the system backend. It works with the exit check
+       on or off.
    * - ``DFTRACER_UTILS_STRING_PREDICATE``
      - ``auto``
      - Scan used by the string class predicates (``isalpha``, ``isdigit`` and
@@ -99,7 +170,7 @@ duql
    * - Variable
      - Default
      - Effect
-   * - ``DFTRACER_DUQL_PATH``
+   * - ``DFTRACER_UTILS_DUQL_PATH``
      - unset
      - ``.duql`` macro files or directories, ``:``-separated. Loaded after the
        query's own macros and ``--duql-path``. See :doc:`guides/core/duql`.
@@ -139,27 +210,27 @@ RocksDB and indexing
        it explicitly also overrides the read-only fast path, which otherwise
        keeps every SST file open (``-1``) to avoid re-reading filter/index
        blocks on point lookups.
-   * - ``DFTRACER_SCHEMA_PATH``
+   * - ``DFTRACER_UTILS_SCHEMA_PATH``
      - unset
      - Record schema spec files or directories, ``:``-separated, registered
        on first use of the schema registry. See
        :doc:`reference/record-schema`.
-   * - ``DFTRACER_INDEX_SIZE_FACTOR``
+   * - ``DFTRACER_UTILS_INDEX_SIZE_FACTOR``
      - ``3``
      - Multiplier applied to total input bytes to size the scratch reservation
        when staging an index build to local scratch. Non-positive values are
        treated as ``1``.
-   * - ``DFTRACER_INDEX_SCRATCH``
+   * - ``DFTRACER_UTILS_INDEX_SCRATCH``
      - auto-detected best local mount
      - Forces the scratch staging root. A path is used directly (validated
        writable and roomy); ``off``, ``none``, ``0``, or ``false`` disables
        scratch staging entirely.
-   * - ``DFTRACER_INDEX_STAGE``
+   * - ``DFTRACER_UTILS_INDEX_STAGE``
      - stage only for network destinations
      - Controls when an index build stages to local scratch before publishing
        to its final destination. ``never``, ``off``, or ``0`` disables
        staging; ``always`` forces staging even for local destinations.
-   * - ``DFTRACER_CACHE_MAX_BYTES``
+   * - ``DFTRACER_UTILS_CACHE_MAX_BYTES``
      - ``2G``
      - Size cap for each query cache store (rollups and materialized views
        in ``.dftindex-cache``). A size such as ``512M`` or ``4G``. When a
@@ -246,7 +317,7 @@ console-script.
    * - Variable
      - Default
      - Effect
-   * - ``DFTRACER_PLUGIN_INCLUDE``
+   * - ``DFTRACER_UTILS_PLUGIN_INCLUDE``
      - bundled package headers, then a source-tree parent walk
      - Overrides the directory containing ``dftracer/utils/plugins/abi.h``,
        the plugin C ABI header. Takes priority over the other two lookups.
@@ -256,7 +327,7 @@ console-script.
        ``shutil.which("c++")`` then ``shutil.which("clang++")`` then
        ``"c++"`` when unset; it always selects a C++ compiler regardless of
        what ``CXX`` names.
-   * - ``DFTRACER_JIT_CACHE``
+   * - ``DFTRACER_UTILS_JIT_CACHE``
      - ``~/.cache/dftracer-utils/jit``
      - Directory for content-hashed compiled plugin/JIT shared objects, so an
        unchanged source never recompiles.

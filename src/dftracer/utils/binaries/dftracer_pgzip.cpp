@@ -1,9 +1,9 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/runtime/coro/coro.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
 #include <algorithm>
@@ -20,7 +20,7 @@ namespace fileio = dftracer::utils::utilities::fileio;
 
 class PgzipArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_DOT,
+    cli::DirectoryArgs directory{cli::DirMode::DefaultDot,
                                  "Directory containing .pfw files"};
     cli::PipelineArgs pipeline;
     cli::WatchdogArgs watchdog;
@@ -186,16 +186,17 @@ static int run_pgzip(const PgzipArgParse& cli) {
             auto file_chan =
                 coro::make_channel<std::size_t>(executor_threads * 2);
 
-            co_await ctx.scope([&file_chan, files_ptr, results_ptr, mutex_ptr,
-                                compression_level, executor_threads,
-                                chunk_size](
-                                   CoroScope& scope) -> coro::CoroTask<void> {
+            auto compress_scope =
+                [&file_chan, files_ptr, results_ptr, mutex_ptr,
+                 compression_level, executor_threads,
+                 chunk_size](CoroScope& scope) -> coro::CoroTask<void> {
                 scope.spawn(
                     [ch = file_chan->producer(), num_files = files_ptr->size()](
                         CoroScope&) mutable -> coro::CoroTask<void> {
                         auto guard = ch.guard();
                         for (std::size_t i = 0; i < num_files; ++i) {
-                            if (!co_await ch.send(i)) co_return;
+                            const auto send_ok = co_await ch.send(i);
+                            if (!send_ok) co_return;
                         }
                         co_return;
                     });
@@ -205,7 +206,9 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                  results_ptr, mutex_ptr, compression_level,
                                  executor_threads, chunk_size](
                                     CoroScope&) -> coro::CoroTask<void> {
-                        while (auto fi_opt = co_await ch.receive()) {
+                        for (;;) {
+                            auto fi_opt = co_await ch.receive();
+                            if (!fi_opt) break;
                             const auto& path = (*files_ptr)[*fi_opt];
 
                             auto result = co_await compress_file_parallel(
@@ -249,7 +252,8 @@ static int run_pgzip(const PgzipArgParse& cli) {
                 }
 
                 co_return;
-            });
+            };
+            co_await ctx.scope(compress_scope);
 
             co_return;
         },

@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -14,16 +14,16 @@ namespace dftracer::utils::index::extensions {
 void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag) {
     const auto t = static_cast<index::store::PathType>(tag);
     stat.type = index::store::join(stat.type, t);
-    if (t <= index::store::PathType::MIXED)
+    if (t <= index::store::PathType::Mixed)
         stat.seen |= static_cast<std::uint8_t>(1U << tag);
-    if (t != index::store::PathType::NULL_VALUE) ++stat.count;
+    if (t != index::store::PathType::NullValue) ++stat.count;
 }
 
 void CatalogFold::step(const trace::views::detail::FoldBatch& batch) {
     FileState& fs = files_[batch.unit.file_path];
     if (fs.index_path.empty()) fs.index_path = batch.unit.index_path;
     for (const auto& e : batch.events) {
-        if (e.phase == trace::RecordPhase::METADATA) continue;
+        if (e.phase == trace::RecordPhase::Metadata) continue;
         for (const auto& [leaf_id, tag] : e.schema_leaves)
             observe_catalog_path(fs.paths[leaf_id], tag);
     }
@@ -58,7 +58,7 @@ coro::CoroTask<bool> CatalogFold::finalize(
             file_id = ro.get_file_info_id(
                 index::store::internal::get_logical_path(file));
             if (file_id < 0 ||
-                ro.extension_current(file_id, IndexExtension::CATALOG))
+                ro.extension_current(file_id, IndexExtension::Catalog))
                 continue;
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("catalog check failed for %s: %s",
@@ -71,13 +71,13 @@ coro::CoroTask<bool> CatalogFold::finalize(
         try {
             index::store::IndexDatabase db(fs.index_path);
             auto writer = db.begin_write();
-            index::store::records::clear_file(*writer, IndexExtension::CATALOG,
+            index::store::records::clear_file(*writer, IndexExtension::Catalog,
                                               file_id);
             for (const auto& [id, stat] : fs.paths)
                 index::store::records::put_catalog_path(
                     *writer, file_id, intern_->resolve(id), stat);
             index::store::records::put_manifest(
-                *writer, file_id, IndexExtension::CATALOG, params_hash_);
+                *writer, file_id, IndexExtension::Catalog, params_hash_);
             writer->commit();
             wrote = true;
         } catch (const std::exception& e) {

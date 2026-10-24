@@ -3,14 +3,14 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/core/common/base64.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -93,8 +93,8 @@ Series large_copy(const Series& s) {
     w->encoding = df::Encoding::Flat;
     w->length = s.length();
     const auto n = static_cast<std::size_t>(s.length());
-    w->offsets = df::Buffer::allocate((n + 1) * sizeof(std::int64_t));
-    auto* off = reinterpret_cast<std::int64_t*>(w->offsets->data());
+    w->offsets = df::new_buffer((n + 1) * sizeof(std::int64_t));
+    auto* off = reinterpret_cast<std::int64_t*>(df::writable(w->offsets));
     std::string bytes;
     std::vector<std::uint8_t> valid((n + 7) / 8, 0);
     off[0] = 0;
@@ -108,12 +108,12 @@ Series large_copy(const Series& s) {
         }
         off[i + 1] = static_cast<std::int64_t>(bytes.size());
     }
-    w->data = df::Buffer::allocate(bytes.size());
+    w->data = df::new_buffer(bytes.size());
     if (!bytes.empty())
-        std::memcpy(w->data->data(), bytes.data(), bytes.size());
+        std::memcpy(df::writable(w->data), bytes.data(), bytes.size());
     if (w->null_count > 0) {
-        w->validity = df::Buffer::allocate(valid.size());
-        std::memcpy(w->validity->data(), valid.data(), valid.size());
+        w->validity = df::new_buffer(valid.size());
+        std::memcpy(df::writable(w->validity), valid.data(), valid.size());
     }
     return Series{w};
 }

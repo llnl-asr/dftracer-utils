@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -18,11 +18,9 @@
 // reachable op, so a future `new dftu_series()` site that forgets them fails
 // here instead of shipping a silent wrong-answer.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils::dataframe;
 

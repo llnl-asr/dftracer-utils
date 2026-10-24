@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_DUQL_VECTORIZE_H
 #define DFTRACER_UTILS_DUQL_VECTORIZE_H
 
-#include <dftracer/utils/core/common/expected.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/term.h>
 

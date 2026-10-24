@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
@@ -29,10 +29,10 @@ constexpr std::string_view DIM_TS = "ts";
 constexpr std::string_view DIM_DUR = "dur";
 constexpr std::string_view DIM_TE = "te";
 
-constexpr std::array<std::string_view, BloomCore::BF_COUNT> FIXED_BLOOM_NAMES =
-    {DIM_NAME, DIM_CAT, DIM_PID, DIM_TID, DIM_HHASH, DIM_FHASH, DIM_SHASH};
+constexpr std::array<std::string_view, BloomCore::BfCount> FIXED_BLOOM_NAMES = {
+    DIM_NAME, DIM_CAT, DIM_PID, DIM_TID, DIM_HHASH, DIM_FHASH, DIM_SHASH};
 
-constexpr std::array<std::string_view, BloomCore::FD_COUNT> FIXED_DIM_NAMES = {
+constexpr std::array<std::string_view, BloomCore::FdCount> FIXED_DIM_NAMES = {
     DIM_NAME,  DIM_CAT,   DIM_PID,   DIM_TID, DIM_PID_TID,
     DIM_HHASH, DIM_FHASH, DIM_SHASH, DIM_TS,  DIM_DUR};
 
@@ -46,7 +46,7 @@ void put_bloom(index::store::IndexWrite& w, int file_id,
                std::vector<unsigned char>& blob) {
     bf.serialize_into(blob);
     records::put_path_granule(
-        w, IndexExtension::BLOOM, file_id, path, checkpoint_idx,
+        w, IndexExtension::Bloom, file_id, path, checkpoint_idx,
         kinds::encode_bloom(blob,
                             static_cast<std::uint64_t>(bf.num_entries())));
 }
@@ -55,7 +55,7 @@ void put_file_bloom(index::store::IndexWrite& w, int file_id,
                     std::string_view path, const ScalableBloomFilter& bf,
                     std::vector<unsigned char>& blob) {
     bf.serialize_into(blob);
-    records::put_path_file(w, IndexExtension::BLOOM, file_id, path,
+    records::put_path_file(w, IndexExtension::Bloom, file_id, path,
                            kinds::encode_bloom(blob, static_cast<std::uint64_t>(
                                                          bf.num_entries())));
 }
@@ -69,8 +69,8 @@ void put_dimension(index::store::IndexWrite& w, int file_id,
                    std::uint64_t observed,
                    const BloomCore::ChunkIndexerConfig& config,
                    const BloomCore::ChunkStatistics& stats, bool extra) {
-    const bool zones = config.extensions.has(IndexExtension::ZONEMAP);
-    const bool counts = config.extensions.has(IndexExtension::COUNTS);
+    const bool zones = config.extensions.has(IndexExtension::Zonemap);
+    const bool counts = config.extensions.has(IndexExtension::Counts);
     if (!zones && !counts) return;
     // dftracer's ts and dur are on every data event; other dimensions count.
     const bool always_present =
@@ -88,13 +88,13 @@ void put_dimension(index::store::IndexWrite& w, int file_id,
         zone.present = present;
         if (ds.dimension == DIM_TS && !stats.timestamp_histogram.empty())
             zone.histogram = stats.timestamp_histogram;
-        records::put_path_granule(w, IndexExtension::ZONEMAP, file_id,
+        records::put_path_granule(w, IndexExtension::Zonemap, file_id,
                                   ds.dimension, checkpoint_idx,
                                   kinds::encode_zone(zone));
     }
     if (counts && compressed)
         records::put_path_granule(
-            w, IndexExtension::COUNTS, file_id, ds.dimension, checkpoint_idx,
+            w, IndexExtension::Counts, file_id, ds.dimension, checkpoint_idx,
             kinds::encode_counts({observed, *compressed}));
 }
 
@@ -102,8 +102,8 @@ void put_dimension(index::store::IndexWrite& w, int file_id,
 
 BloomCore::FileAccumulator::FileAccumulator(const ChunkIndexerConfig& config)
     : config_(&config) {
-    fixed_blooms.reserve(BF_COUNT);
-    for (std::size_t b = 0; b < BF_COUNT; ++b)
+    fixed_blooms.reserve(BfCount);
+    for (std::size_t b = 0; b < BfCount; ++b)
         fixed_blooms.emplace_back(config.expected_entries_per_chunk,
                                   config.false_positive_rate);
 }
@@ -129,13 +129,13 @@ void BloomCore::write_chunk(index::store::IndexWrite& w, int file_id,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc) {
     const auto& m = config.extensions;
-    const bool blooms = m.has(IndexExtension::BLOOM);
-    const bool zones = m.has(IndexExtension::ZONEMAP);
+    const bool blooms = m.has(IndexExtension::Bloom);
+    const bool zones = m.has(IndexExtension::Zonemap);
     const bool fixed = config.fixed_dimensions;
     const auto observed = chunk.statistics.total_events;
     auto& blob = acc.blob;
 
-    for (std::size_t b = 0; fixed && blooms && b < BF_COUNT; ++b) {
+    for (std::size_t b = 0; fixed && blooms && b < BfCount; ++b) {
         put_bloom(w, file_id, checkpoint_idx, FIXED_BLOOM_NAMES[b],
                   chunk.fixed_blooms[b], blob);
         acc.fixed_blooms[b].merge_from(chunk.fixed_blooms[b]);
@@ -188,13 +188,13 @@ void BloomCore::write_chunk(index::store::IndexWrite& w, int file_id,
         te.max = std::to_string(chunk.statistics.max_timestamp_us);
         te.observed = observed;
         te.present = observed;
-        records::put_path_granule(w, IndexExtension::ZONEMAP, file_id, DIM_TE,
+        records::put_path_granule(w, IndexExtension::Zonemap, file_id, DIM_TE,
                                   checkpoint_idx, kinds::encode_zone(te));
     }
 
     // Postings hash the value, so postings written by concurrent workers or
     // sinks agree.
-    if (m.has(IndexExtension::POSTINGS))
+    if (m.has(IndexExtension::Postings))
         for (const auto& [name, _] : chunk.statistics.name_counts)
             records::put_posting_granule(
                 w, file_id, DIM_NAME, kinds::value_hash(name), checkpoint_idx);
@@ -215,26 +215,26 @@ BloomCore::ChunkStatistics BloomCore::finish_file(
     const ChunkIndexerConfig& config,
     const std::vector<std::string>& extra_dims, const Catalog& catalog) {
     const auto& m = config.extensions;
-    const bool blooms = m.has(IndexExtension::BLOOM);
-    const bool zones = m.has(IndexExtension::ZONEMAP);
+    const bool blooms = m.has(IndexExtension::Bloom);
+    const bool zones = m.has(IndexExtension::Zonemap);
     const bool fixed = config.fixed_dimensions;
     auto& blob = acc.blob;
 
-    for (std::size_t b = 0; fixed && blooms && b < BF_COUNT; ++b) {
+    for (std::size_t b = 0; fixed && blooms && b < BfCount; ++b) {
         put_file_bloom(w, file_id, FIXED_BLOOM_NAMES[b], acc.fixed_blooms[b],
                        blob);
-        records::put_path(w, IndexExtension::BLOOM, file_id,
+        records::put_path(w, IndexExtension::Bloom, file_id,
                           FIXED_BLOOM_NAMES[b]);
     }
     for (std::size_t e = 0; blooms && e < extra_dims.size(); ++e) {
         auto& file_bloom = acc.extra(extra_dims[e]);
         if (!file_bloom.skip)
             put_file_bloom(w, file_id, extra_dims[e], file_bloom.bloom, blob);
-        records::put_path(w, IndexExtension::BLOOM, file_id, extra_dims[e]);
+        records::put_path(w, IndexExtension::Bloom, file_id, extra_dims[e]);
     }
     if (fixed && zones)
-        records::put_path(w, IndexExtension::ZONEMAP, file_id, DIM_TE);
-    for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::COUNTS}) {
+        records::put_path(w, IndexExtension::Zonemap, file_id, DIM_TE);
+    for (auto ext : {IndexExtension::Zonemap, IndexExtension::Counts}) {
         if (!m.has(ext)) continue;
         for (auto dim : FIXED_DIM_NAMES)
             if (fixed) records::put_path(w, ext, file_id, dim);
@@ -245,8 +245,8 @@ BloomCore::ChunkStatistics BloomCore::finish_file(
     records::put_file_scalar_stats(w, file_id, acc.statistics, acc.chunks);
     records::put_file_pid_tid_counts(w, file_id, acc.statistics.pid_tid_counts);
 
-    if (m.has(IndexExtension::POSTINGS)) {
-        records::put_path(w, IndexExtension::POSTINGS, file_id, DIM_NAME);
+    if (m.has(IndexExtension::Postings)) {
+        records::put_path(w, IndexExtension::Postings, file_id, DIM_NAME);
         for (const auto& [name, _] : acc.statistics.name_counts)
             records::put_posting(w, file_id, DIM_NAME, kinds::value_hash(name));
     }
@@ -277,8 +277,12 @@ std::string join_value_types(const std::string& a, const std::string& b) {
 bool observe_type(index::extensions::ChunkDimensionStats& ds,
                   const char* type) {
     ++ds.present;
-    if (ds.value_type == "mixed") return false;
-    if (ds.value_type == type) return true;
+    // The value types ("string", "uint", "int", "double", "mixed") start with
+    // distinct letters, so the first byte tells them apart.
+    if (!ds.value_type.empty()) {
+        if (ds.value_type[0] == 'm') return false;
+        if (ds.value_type[0] == type[0]) return true;
+    }
     const std::string joined = join_value_types(ds.value_type, type);
     if (joined != ds.value_type) ds.value_type = joined;
     if (joined == "mixed") {
@@ -290,7 +294,7 @@ bool observe_type(index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_bounds(index::extensions::ChunkDimensionStats& ds,
-                    const std::string& text) {
+                    std::string_view text) {
     if (ds.min_value.empty() || index::extensions::dimension_value_less(
                                     text, ds.min_value, ds.value_type))
         ds.min_value = text;
@@ -300,7 +304,7 @@ void observe_bounds(index::extensions::ChunkDimensionStats& ds,
 }
 
 void observe_stats(index::extensions::ChunkDimensionStats& ds,
-                   const std::string& text, const char* type) {
+                   std::string_view text, const char* type) {
     if (observe_type(ds, type)) observe_bounds(ds, text);
 }
 
@@ -392,7 +396,7 @@ void BloomCore::observe_value(ChunkDimensionStats& stats, double value) {
 
 void BloomCore::observe_value(ChunkDimensionStats& stats,
                               std::string_view value) {
-    observe_stats(stats, std::string(value), "string");
+    observe_stats(stats, value, "string");
 }
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
@@ -417,25 +421,23 @@ void BloomCore::observe_extra(ChunkState& chunk, std::size_t e, double value) {
 
 void BloomCore::observe_extra(ChunkState& chunk, std::size_t e,
                               std::string_view value) {
-    const std::string text(value);
-    chunk.extra_blooms[e].add(text);
-    observe_stats(chunk.extra_dim_stats[e], text, "string");
+    chunk.extra_blooms[e].add(value);
+    observe_stats(chunk.extra_dim_stats[e], value, "string");
 }
 
 void BloomCore::init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
                                  const std::vector<std::string>& extra_dims) {
-    for (std::size_t b = 0; b < BF_COUNT; ++b) {
+    for (std::size_t b = 0; b < BfCount; ++b) {
         chunk.fixed_blooms[b] = ScalableBloomFilter(
             config.expected_entries_per_chunk, config.false_positive_rate);
     }
-    for (std::size_t d = 0; d < FD_COUNT; ++d) {
+    for (std::size_t d = 0; d < FdCount; ++d) {
         auto& ds = chunk.fixed_dim_stats[d];
         ds.dimension = std::string(FIXED_DIM_NAMES[d]);
-        ds.value_type =
-            (d == FD_PID || d == FD_TID || d == FD_TS || d == FD_DUR)
-                ? "uint"
-                : "string";
+        ds.value_type = (d == FdPid || d == FdTid || d == FdTs || d == FdDur)
+                            ? "uint"
+                            : "string";
     }
     chunk.extra_blooms.clear();
     chunk.extra_dim_stats.clear();
@@ -462,14 +464,66 @@ void BloomCore::observe_metadata(ChunkState& chunk,
     index::store::add_metadata_value(chunk.metadata.names, record_name);
 }
 
-void BloomCore::observe_data(ChunkState& chunk, PidTidCache& cache,
+BloomCore::EventCache::NameSlot& BloomCore::EventCache::name_slot(
+    std::uint32_t name_id, std::uint32_t cat_id) {
+    const std::uint64_t key = (std::uint64_t{name_id} << 32) | cat_id;
+    NameSlot& slot = names_[(key * 0x9E3779B97F4A7C15ULL) >> 56];
+    if (slot.epoch != epoch_ || slot.key != key) {
+        slot = NameSlot{};
+        slot.key = key;
+        slot.epoch = epoch_;
+    }
+    return slot;
+}
+
+BloomCore::EventCache::PidSlot& BloomCore::EventCache::pid_slot(
+    std::uint64_t pid, std::uint64_t tid) {
+    PidSlot& slot =
+        pids_[((pid * 0x9E3779B97F4A7C15ULL) ^ (tid * 0xC2B2AE3D27D4EB4FULL)) >>
+              56];
+    if (slot.epoch != epoch_ || slot.pid != pid || slot.tid != tid) {
+        slot = PidSlot{};
+        slot.pid = pid;
+        slot.tid = tid;
+        slot.epoch = epoch_;
+        slot.pid_len = static_cast<std::uint8_t>(
+            std::to_chars(slot.pid_buf, slot.pid_buf + sizeof(slot.pid_buf),
+                          pid)
+                .ptr -
+            slot.pid_buf);
+        slot.tid_len = static_cast<std::uint8_t>(
+            std::to_chars(slot.tid_buf, slot.tid_buf + sizeof(slot.tid_buf),
+                          tid)
+                .ptr -
+            slot.tid_buf);
+    }
+    return slot;
+}
+
+void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
+                             std::uint32_t name_id, std::uint32_t cat_id,
                              std::string_view name, std::string_view cat,
                              std::uint64_t pid, std::uint64_t tid,
                              std::uint64_t ts, std::uint64_t dur, bool has_dur,
                              std::string_view hhash, std::string_view fhash,
                              std::string_view shash) {
-    chunk.statistics.update_from_event(name, cat, pid, tid, ts, dur, has_dur);
+    EventCache::NameSlot& ns = cache.name_slot(name_id, cat_id);
+    EventCache::PidSlot& ps = cache.pid_slot(pid, tid);
+    chunk.statistics.update_from_event(ns.stats, ps.stats, name, cat, pid, tid,
+                                       ts, dur, has_dur);
 
+    // A value already in a chunk's bloom adds nothing, so a slot remembers
+    // that it was added and skips the probe.
+    auto observe_known = [&chunk](int bloom_idx, std::size_t dim_idx,
+                                  std::string_view val, bool& in_bloom,
+                                  std::uint32_t& dim_slot) {
+        if (val.empty()) return;
+        if (bloom_idx >= 0 && !in_bloom) {
+            chunk.fixed_blooms[bloom_idx].add(val);
+            in_bloom = true;
+        }
+        chunk.fixed_dim_stats[dim_idx].observe(val, dim_slot);
+    };
     auto observe_fixed = [&chunk](int bloom_idx, std::size_t dim_idx,
                                   std::string_view val) {
         if (val.empty()) return;
@@ -477,40 +531,28 @@ void BloomCore::observe_data(ChunkState& chunk, PidTidCache& cache,
         chunk.fixed_dim_stats[dim_idx].observe(val);
     };
 
-    observe_fixed(BF_NAME, FD_NAME, name);
-    observe_fixed(BF_CAT, FD_CAT, cat);
+    observe_known(BfName, FdName, name, ns.name_in_bloom, ns.name_dim);
+    observe_known(BfCat, FdCat, cat, ns.cat_in_bloom, ns.cat_dim);
 
-    if (pid != cache.last_pid || cache.pid_len == 0) {
-        auto [pp, _1] = std::to_chars(
-            cache.pid_buf, cache.pid_buf + sizeof(cache.pid_buf), pid);
-        cache.pid_len = static_cast<std::uint8_t>(pp - cache.pid_buf);
-        cache.last_pid = pid;
-    }
-    if (tid != cache.last_tid || cache.tid_len == 0) {
-        auto [tp, _2] = std::to_chars(
-            cache.tid_buf, cache.tid_buf + sizeof(cache.tid_buf), tid);
-        cache.tid_len = static_cast<std::uint8_t>(tp - cache.tid_buf);
-        cache.last_tid = tid;
-    }
-    std::string_view pid_sv(cache.pid_buf, cache.pid_len);
-    std::string_view tid_sv(cache.tid_buf, cache.tid_len);
-
-    observe_fixed(BF_PID, FD_PID, pid_sv);
-    observe_fixed(BF_TID, FD_TID, tid_sv);
+    const std::string_view pid_sv(ps.pid_buf, ps.pid_len);
+    const std::string_view tid_sv(ps.tid_buf, ps.tid_len);
+    observe_known(BfPid, FdPid, pid_sv, ps.pid_in_bloom, ps.pid_dim);
+    observe_known(BfTid, FdTid, tid_sv, ps.tid_in_bloom, ps.tid_dim);
 
     char pt_buf[52];
-    std::memcpy(pt_buf, cache.pid_buf, cache.pid_len);
-    pt_buf[cache.pid_len] = ':';
-    std::memcpy(pt_buf + cache.pid_len + 1, cache.tid_buf, cache.tid_len);
-    std::string_view pt_sv(pt_buf, cache.pid_len + 1 + cache.tid_len);
-    observe_fixed(-1, FD_PID_TID, pt_sv);
+    std::memcpy(pt_buf, ps.pid_buf, ps.pid_len);
+    pt_buf[ps.pid_len] = ':';
+    std::memcpy(pt_buf + ps.pid_len + 1, ps.tid_buf, ps.tid_len);
+    const std::string_view pt_sv(pt_buf, ps.pid_len + 1 + ps.tid_len);
+    bool no_bloom = false;
+    observe_known(-1, FdPidTid, pt_sv, no_bloom, ps.pid_tid_dim);
 
-    chunk.fixed_dim_stats[FD_TS].observe_range_only(ts);
-    chunk.fixed_dim_stats[FD_DUR].observe_range_only(dur);
+    chunk.fixed_dim_stats[FdTs].observe_range_only(ts);
+    chunk.fixed_dim_stats[FdDur].observe_range_only(dur);
 
-    observe_fixed(BF_HHASH, FD_HHASH, hhash);
-    observe_fixed(BF_FHASH, FD_FHASH, fhash);
-    observe_fixed(BF_SHASH, FD_SHASH, shash);
+    observe_fixed(BfHhash, FdHhash, hhash);
+    observe_fixed(BfFhash, FdFhash, fhash);
+    observe_fixed(BfShash, FdShash, shash);
 
     chunk.events_processed++;
 }
@@ -549,7 +591,7 @@ void BloomCore::merge_dimension_stats(ChunkDimensionStats& dst,
 }
 
 void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
-    for (std::size_t b = 0; b < BF_COUNT; ++b) {
+    for (std::size_t b = 0; b < BfCount; ++b) {
         dst.fixed_blooms[b].merge_from(src.fixed_blooms[b]);
     }
     for (std::size_t e = 0;
@@ -560,7 +602,7 @@ void BloomCore::merge_chunk_state(ChunkState& dst, ChunkState& src) {
     auto merge_dim = [](ChunkDimensionStats& dds, ChunkDimensionStats& sds) {
         merge_dimension_stats(dds, sds);
     };
-    for (std::size_t d = 0; d < FD_COUNT; ++d) {
+    for (std::size_t d = 0; d < FdCount; ++d) {
         merge_dim(dst.fixed_dim_stats[d], src.fixed_dim_stats[d]);
     }
     for (std::size_t e = 0;
@@ -593,8 +635,8 @@ std::vector<index::store::IndexExtension> BloomCore::tier_extensions(
     for (auto ext : index::store::ALL_EXTENSIONS)
         if ((index::store::PRUNING_EXTENSIONS.has(ext) &&
              config.extensions.has(ext)) ||
-            ext == IndexExtension::STATS || ext == IndexExtension::CATALOG ||
-            ext == IndexExtension::METADATA)
+            ext == IndexExtension::Stats || ext == IndexExtension::Catalog ||
+            ext == IndexExtension::Metadata)
             exts.push_back(ext);
     return exts;
 }

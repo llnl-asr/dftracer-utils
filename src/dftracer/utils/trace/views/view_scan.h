@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_SCAN_H
 
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
@@ -46,14 +46,14 @@ ScanShape scan_shape(const ViewDefinition& vdef);
 // bloom, so a repeat scan of an already-built index attaches nothing.
 std::vector<std::unique_ptr<Fold>> select_index_folds(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern);
+    dftracer::utils::dstd::StringIntern& intern);
 
 // The fold that writes the path catalog of the files that lack one, or null
 // when every file has it or the scan cannot establish it. Its slot is the first
 // full scan of a trace.
 std::unique_ptr<Fold> select_catalog_fold(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    dftracer::utils::StringIntern& intern);
+    dftracer::utils::dstd::StringIntern& intern);
 
 // One candidate chunk to scan: a byte range within a file's index.
 struct ScanUnit {
@@ -82,12 +82,12 @@ const dftracer::utils::index::RecordSchema& plan_record_schema(
 bool plan_by_path(const ViewPlan& plan);
 
 // The trace roles an operation reads. DURATION implies TIME.
-enum class TraceRole : std::uint8_t { TIME, DURATION };
+enum class TraceRole : std::uint8_t { Time, Duration };
 
 // Throws INVALID_ARGUMENT naming `op` when the files' record_schema binds no
 // path to `role` (a time role for TIME; time and duration for DURATION).
 void require_role(const ViewPlan& plan, std::string_view op,
-                  TraceRole role = TraceRole::TIME);
+                  TraceRole role = TraceRole::Time);
 
 // Fold the phase selector into the query: Events -> ph=="X", Counters ->
 // ph=="C", Any -> no constraint. ANDed with any user filter and, for a plan
@@ -138,7 +138,7 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
     const std::function<void(std::size_t,
                              const std::vector<std::string_view>&)>& on_batch,
     std::span<Fold* const> folds = {},
-    dftracer::utils::StringIntern* intern = nullptr);
+    dftracer::utils::dstd::StringIntern* intern = nullptr);
 
 }  // namespace dftracer::utils::trace::views::detail
 

@@ -1,35 +1,40 @@
-// Dynamic filter pushdown (docs/plans/plugin_runtime.md section 12, gap 10):
-// once a scan is already open, nothing could previously narrow what remains.
-// dataframe::Cursor::narrow() is the advisory hook; views::detail::DynamicPrune
-// is the state ViewSource's streaming cursor writes into so a running fuse()
-// scan can skip units it has not claimed yet without the caller re-planning.
+// Dynamic filter pushdown: once a scan is already open, nothing could
+// previously narrow what remains. dataframe::Cursor::narrow() is the advisory
+// hook; views::detail::DynamicPrune is the state ViewSource's streaming cursor
+// writes into so a running fuse() scan can skip units it has not claimed yet
+// without the caller re-planning.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <dftracer/utils/trace/views/view_scan.h>
+#include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 namespace q = dftracer::utils::duql;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;
@@ -146,6 +151,17 @@ struct CountingSource : dataframe::Source {
     }
 };
 
+// Events one unit yields through ViewScannerUtility, driven to completion.
+coro::CoroTask<std::uint64_t> scan_unit_events(ScanUnit unit,
+                                               ViewDefinition vdef) {
+    ViewScannerUtility scanner;
+    std::uint64_t matched = 0;
+    const ViewScannerInput input = make_scanner_input(unit, vdef, std::nullopt);
+    auto gen = scanner(input);
+    while (auto batch = co_await gen.next()) matched += batch->events_matched;
+    co_return matched;
+}
+
 }  // namespace
 
 TEST_SUITE("Dynamic filter pushdown") {
@@ -177,7 +193,7 @@ TEST_SUITE("Dynamic filter pushdown") {
         // Build the same narrowing ViewSource::scan()/Cursor::narrow() would:
         // a bloom/dictionary prune of every remaining checkpoint against
         // name == "gamma", turned into per-file exclusions.
-        q::Expr e = q::field_cmp("name", q::CompareOp::EQ,
+        q::Expr e = q::field_cmp("name", q::CompareOp::Eq,
                                  q::LiteralNode{std::string("gamma")});
         auto built = std::move(e).build();
         REQUIRE(built.has_value());
@@ -395,5 +411,54 @@ TEST_SUITE("Dynamic filter pushdown") {
             if (all[i] == 3) ++full_pid3;
         CHECK(out.num_rows() == full_pid3);
         CHECK(joined_src->rows < full_src->rows);
+    }
+
+    TEST_CASE("threads planning and scanning on their own never stall") {
+        TestEnvironment env(200);
+        std::string gz = create_grouped_trace(env, /*per_name=*/200);
+        const std::string idx_dir = env.get_dir() + "/stall.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
+                                             /*checkpoint_size=*/256));
+        const std::string idx = determine_index_path(gz, idx_dir);
+
+        // Each call plans over its own ViewPlan, so threads share the index
+        // and nothing else.
+        auto scan_all = [&] {
+            ScanPlan plan_ptr = scan::from_file(gz, idx);
+            const ViewPlan& plan = *plan_ptr;
+            ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
+            std::uint64_t skipped = 0;
+            std::uint64_t matched = 0;
+            for (const ScanUnit& u : gather_units(plan, vdef, skipped).get())
+                matched += scan_unit_events(u, vdef).get();
+            return matched;
+        };
+        const std::uint64_t expected = scan_all();
+        REQUIRE(expected > 0);
+
+        constexpr int THREADS = 8;
+        constexpr int ROUNDS = 6;
+        std::atomic<int> wrong{0};
+        std::atomic<int> failed{0};
+        std::string first_error;
+        std::mutex error_mutex;
+        std::vector<std::thread> threads;
+        for (int t = 0; t < THREADS; ++t)
+            threads.emplace_back([&] {
+                for (int r = 0; r < ROUNDS; ++r) {
+                    try {
+                        if (scan_all() != expected) ++wrong;
+                    } catch (const std::exception& e) {
+                        if (failed++ == 0) {
+                            std::lock_guard<std::mutex> lock(error_mutex);
+                            first_error = e.what();
+                        }
+                    }
+                }
+            });
+        for (auto& t : threads) t.join();
+        INFO(first_error);
+        CHECK(failed == 0);
+        CHECK(wrong == 0);
     }
 }

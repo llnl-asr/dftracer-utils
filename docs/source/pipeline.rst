@@ -49,8 +49,8 @@ Tasks are created using ``make_task`` and receive a ``CoroScope&`` parameter:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/tasks/task.h>
-   #include <dftracer/utils/core/coro/task.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
+   #include <dftracer/utils/runtime/coro/task.h>
 
    using namespace dftracer::utils;
    using namespace dftracer::utils::coro;
@@ -101,8 +101,8 @@ Configure pipeline with ``PipelineConfig``:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/pipeline/pipeline.h>
-   #include <dftracer/utils/core/pipeline/pipeline_config.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
 
    auto config = PipelineConfig()
        .with_name("MyPipeline")
@@ -154,7 +154,7 @@ Example with parallel work:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/tasks/coro_scope.h>
+   #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
    auto task = make_task([](CoroScope& scope) -> CoroTask<void> {
        // Spawn multiple parallel tasks
@@ -226,8 +226,8 @@ Use ``Channel<T>`` for streaming data between tasks. This pattern is useful when
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/channel.h>
-   #include <dftracer/utils/core/tasks/task.h>
+   #include <dftracer/utils/runtime/coro/channel.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
 
    // Create channel with capacity
    auto channel = coro::make_channel<Batch>(100);
@@ -365,8 +365,8 @@ Run multiple operations concurrently:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/when_all.h>
-   #include <dftracer/utils/core/coro/when_any.h>
+   #include <dftracer/utils/runtime/coro/when_all.h>
+   #include <dftracer/utils/runtime/coro/when_any.h>
 
    // Wait for all
    std::vector<IOAwaitable<Data>> ops;
@@ -408,7 +408,7 @@ Lazy Sequences and Async Generators
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/generator.h>
+   #include <dftracer/utils/runtime/coro/generator.h>
 
    // Synchronous generator
    Generator<int> range(int start, int end) {
@@ -426,7 +426,7 @@ Lazy Sequences and Async Generators
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/coro/async_generator.h>
+   #include <dftracer/utils/runtime/coro/async_generator.h>
 
    // Async generator - streams data from files
    AsyncGenerator<Data> read_all(const std::vector<std::string>& paths) {
@@ -739,7 +739,7 @@ any failure. See :doc:`cpp_api/runtime`.
         auto result = co_await io::open("missing.txt", O_RDONLY);
         if (result < 0) {
             // Negative result indicates OS error; convert to exception
-            throw DFTUtilsException::cat(ErrorCode::IO, "Failed to open file: ",
+            throw DFTUtilsException::cat(ErrorCode::Io, "Failed to open file: ",
                                          std::strerror(-result));
         }
         co_return;
@@ -762,7 +762,7 @@ any failure. See :doc:`cpp_api/runtime`.
             // This might throw
             int result = risky_operation();
             if (result < 0) {
-                throw DFTUtilsException(ErrorCode::INTERNAL,
+                throw DFTUtilsException(ErrorCode::Internal,
                                         "Operation failed");
             }
             co_return result;
@@ -844,7 +844,7 @@ Control execution duration and cooperative cancellation using ``PipelineConfig``
 
 .. code-block:: cpp
 
-    #include <dftracer/utils/core/coro/when_any.h>
+    #include <dftracer/utils/runtime/coro/when_any.h>
 
     auto task = make_task([](CoroScope& scope) -> coro::CoroTask<void> {
         auto cache_future = scope.spawn([](CoroScope& s)
@@ -887,8 +887,8 @@ Build complex task graphs with fan-out, fan-in, map, and reduce. Example from ``
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/task_graph/task_graph.h>
-   #include <dftracer/utils/core/pipeline/pipeline.h>
+   #include <dftracer/utils/runtime/task_graph/task_graph.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline.h>
 
    using namespace dftracer::utils;
    using namespace dftracer::utils::task_graph;
@@ -896,30 +896,30 @@ Build complex task graphs with fan-out, fan-in, map, and reduce. Example from ``
    auto graph = TaskGraph::builder({.name = "DFTracerSplit"});
 
    // Phase 1: Parallel file processing
-   auto file_metadata = graph.parallel<Metadata>(
+   auto file_probes = graph.parallel<FileProbe>(
        input_files.size(),
-       [&input_files](CoroScope&, std::size_t idx) -> coro::CoroTask<Metadata> {
+       [&input_files](CoroScope&, std::size_t idx) -> coro::CoroTask<FileProbe> {
            // Each task processes one file
-           co_return collect_metadata(input_files[idx]);
+           co_return probe_file(input_files[idx]);
        },
-       {.name = "ProcessFile"});
+       {.name = "ProbeFile"});
 
-   // Phase 2: Reduce all metadata into chunk manifests
-   auto manifests = graph.reduce<std::vector<Manifest>>(
-       file_metadata, split_every{input_files.size()},
-       [](CoroScope&, std::vector<Metadata> all) -> coro::CoroTask<std::vector<Manifest>> {
-           co_return create_manifests(all);
+   // Phase 2: Reduce all probes into groups of files
+   auto groups = graph.reduce<std::vector<FileGroup>>(
+       file_probes, split_every{input_files.size()},
+       [](CoroScope&, std::vector<FileProbe> all) -> coro::CoroTask<std::vector<FileGroup>> {
+           co_return group_files(all);
        },
-       {.name = "CreateManifests"});
+       {.name = "GroupFiles"});
 
    // Phase 3: Create extraction task with combiner
    auto extractor = make_task(...);
-   extractor->depends_on(manifests.task());
+   extractor->depends_on(groups.task());
    graph.add(extractor);
 
    // Execute pipeline
    Pipeline pipeline(config);
-   pipeline.set_source(file_metadata.tasks());
+   pipeline.set_source(file_probes.tasks());
    pipeline.set_destination(extractor);
    pipeline.execute();
 
@@ -974,12 +974,12 @@ The replay binary is otherwise unchanged from a CLI perspective; see the
 Memory Budget Control
 ----------------------
 
-The helpers in ``dftracer/utils/core/common/memory_budget.h`` give utilities a
+The helpers in ``dftracer/utils/common/memory_budget.h`` give utilities a
 single place to size a workload against available system memory:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/common/memory_budget.h>
+   #include <dftracer/utils/common/memory_budget.h>
 
    using namespace dftracer::utils;
 

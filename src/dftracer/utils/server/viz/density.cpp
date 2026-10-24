@@ -1,14 +1,14 @@
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -245,7 +245,7 @@ static std::string serve_density_from_summary(
     // events aren't shifted off-screen on non-us traces (the us round-trip
     // loses at most sub-us, invisible on the timeline).
     const std::uint64_t native_global_min =
-        dftracer::utils::trace::scale_between(TraceIndex::TimeMetric::US,
+        dftracer::utils::trace::scale_between(TraceIndex::TimeMetric::Us,
                                               metric, display_global_min);
     auto pid_s = params.get("pid");
     auto tid_s = params.get("tid");
@@ -559,7 +559,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // long events that enclose the window are never read.
     double lookback = params.get_double("lookback", 0);
     if (lookback < 0) lookback = 0;
-    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::US)
+    if (lookback > 0 && index.time_metric() != TraceIndex::TimeMetric::Us)
         lookback = static_cast<double>(
             index.us_to_native(static_cast<std::uint64_t>(lookback)));
 
@@ -582,7 +582,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
             enc_summary = s;
             enc_threshold_us = s->long_threshold_us;
             enc_threshold_native =
-                index.time_metric() == TraceIndex::TimeMetric::US
+                index.time_metric() == TraceIndex::TimeMetric::Us
                     ? enc_threshold_us
                     : static_cast<double>(index.us_to_native(
                           static_cast<std::uint64_t>(enc_threshold_us)));
@@ -747,7 +747,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
         agg_interval = infer_agg_interval(std::move(ats));
         double cfg_native = cfg_agg_interval;
         if (cfg_agg_interval > 0 &&
-            index.time_metric() != TraceIndex::TimeMetric::US)
+            index.time_metric() != TraceIndex::TimeMetric::Us)
             cfg_native = static_cast<double>(index.us_to_native(
                 static_cast<std::uint64_t>(cfg_agg_interval)));
         if (agg_interval <= 0) {
@@ -997,7 +997,7 @@ coro::CoroTask<HttpResponse> handle_viz_density(const HttpRequest& req,
     // Counters get their own rows above the lane's events (assign_view_depths
     // leaves every counter block on depth 0).
     assign_counter_depths(big, big_depth, dens);
-    if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::US) {
+    if (global_min > 0 || index.time_metric() != TraceIndex::TimeMetric::Us) {
         for (auto& e : big)
             e = normalize_event_ts(e, global_min, index.time_metric());
     }

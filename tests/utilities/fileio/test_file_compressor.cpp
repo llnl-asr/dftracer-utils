@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -209,7 +209,7 @@ TEST_SUITE("FileCompressor") {
             auto result = compressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
+            CHECK(result.error().code == dftracer::utils::ErrorCode::NotFound);
             CHECK(result.error().message.find("does not exist") !=
                   std::string::npos);
             CHECK(!fs::exists(non_existent + ".gz"));

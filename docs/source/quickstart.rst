@@ -264,10 +264,10 @@ Create and execute parallel data processing tasks using coroutines:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/pipeline/pipeline.h>
-   #include <dftracer/utils/core/pipeline/pipeline_config.h>
-   #include <dftracer/utils/core/tasks/task.h>
-   #include <dftracer/utils/core/coro/channel.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline.h>
+   #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
+   #include <dftracer/utils/runtime/coro/channel.h>
    #include <iostream>
 
    using namespace dftracer::utils;
@@ -319,8 +319,8 @@ Spawn multiple tasks to run in parallel:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/tasks/task.h>
-   #include <dftracer/utils/core/tasks/coro_scope.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
+   #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
    auto task = make_task([](CoroScope& scope) -> CoroTask<void> {
        std::vector<SpawnFuture<int>> futures;
@@ -352,9 +352,9 @@ Process data lazily without materializing everything in memory:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/tasks/task.h>
-   #include <dftracer/utils/core/tasks/coro_scope.h>
-   #include <dftracer/utils/core/coro/async_generator.h>
+   #include <dftracer/utils/runtime/tasks/task.h>
+   #include <dftracer/utils/runtime/tasks/coro_scope.h>
+   #include <dftracer/utils/runtime/coro/async_generator.h>
 
    // Streaming data source (lazy evaluation)
    AsyncGenerator<std::string> read_lines_async(

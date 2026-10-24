@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
@@ -67,6 +67,32 @@ std::vector<std::tuple<std::string, double, double>> row_key_set(
     return rows;
 }
 
+// 40 events whose args carry exactly `keys`, in a trace named `name`.
+std::string create_args_trace(TestEnvironment& env, const std::string& name,
+                              const std::vector<std::string>& keys) {
+    const std::string pfw = env.get_dir() + "/" + name + ".pfw";
+    std::ofstream ofs(pfw);
+    for (int i = 0; i < 40; ++i) {
+        ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
+            << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{)";
+        for (std::size_t k = 0; k < keys.size(); ++k)
+            ofs << (k ? "," : "") << '"' << keys[k] << R"(":)" << i;
+        ofs << "}}\n";
+    }
+    ofs.close();
+    const std::string gz = pfw + ".gz";
+    dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
+    fs::remove(pfw);
+    return gz;
+}
+
+std::set<std::string> arg_columns(const dataframe::DataFrame& df) {
+    std::set<std::string> out;
+    for (const std::string& n : df.names)
+        if (n.rfind("args.", 0) == 0) out.insert(n);
+    return out;
+}
+
 }  // namespace
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
@@ -75,7 +101,10 @@ namespace {
 
 constexpr int DISTINCT_EVENTS = 900;
 
-std::string distinct_run(int i) { return "r" + std::to_string((i * i) % 17); }
+std::string distinct_run(int i) {
+    const auto u = static_cast<unsigned>(i);
+    return "r" + std::to_string((u * u) % 17);
+}
 std::string distinct_metric(int i) {
     return "m" + std::to_string((i / 7 + i % 5) % 9);
 }
@@ -106,6 +135,56 @@ std::string create_distinct_trace(TestEnvironment& env,
 }  // namespace
 
 TEST_SUITE("trace scan - streaming row query") {
+    TEST_CASE("a select-all frame holds only its own trace's args columns") {
+        TestEnvironment env(200);
+        const std::string gz_a = create_args_trace(env, "trace_a", {"a", "b"});
+        const std::string gz_b = create_args_trace(env, "trace_b", {"c"});
+        const std::set<std::string> only_a{"args.a", "args.b"};
+        const std::set<std::string> only_b{"args.c"};
+
+        const auto plan_a =
+            scan::from_file(gz_a, determine_index_path(gz_a, ""));
+        CHECK(arg_columns(run(scan::collect(plan_a).collect())) == only_a);
+
+        const auto plan_b =
+            scan::from_file(gz_b, determine_index_path(gz_b, ""));
+        CHECK(arg_columns(run(scan::collect(plan_b).collect())) == only_b);
+        CHECK(arg_columns(run(scan::collect_frame(plan_b))) == only_b);
+
+        // The schema a plan declares comes from the index it reads, which
+        // here holds both traces.
+        const std::vector<std::string> schema_b = scan::columns(plan_b);
+        CHECK(std::find(schema_b.begin(), schema_b.end(), "a") ==
+              schema_b.end());
+        CHECK(std::find(schema_b.begin(), schema_b.end(), "c") !=
+              schema_b.end());
+        dataframe::Schema declared = ViewSource(plan_b).schema();
+        std::set<std::string> declared_args;
+        for (const auto& f : declared.fields)
+            if (f.name.rfind("args.", 0) == 0) declared_args.insert(f.name);
+        CHECK(declared_args == only_b);
+    }
+
+    TEST_CASE("traces sharing one index root keep their own args columns") {
+        TestEnvironment env(200);
+        const std::string gz_a = create_args_trace(env, "trace_a", {"a", "b"});
+        const std::string gz_b = create_args_trace(env, "trace_b", {"c"});
+        const std::string idx_dir = env.get_dir() + "/shared.dftindex";
+        REQUIRE(dftu_utils_test::build_index(gz_a, idx_dir, 256));
+        REQUIRE(dftu_utils_test::build_index(gz_b, idx_dir, 256));
+
+        const auto plan_a =
+            scan::from_file(gz_a, determine_index_path(gz_a, idx_dir));
+        CHECK(arg_columns(run(scan::collect(plan_a).collect())) ==
+              std::set<std::string>{"args.a", "args.b"});
+        const auto plan_b =
+            scan::from_file(gz_b, determine_index_path(gz_b, idx_dir));
+        CHECK(arg_columns(run(scan::collect(plan_b).collect())) ==
+              std::set<std::string>{"args.c"});
+        CHECK(arg_columns(run(scan::collect_frame(plan_b))) ==
+              std::set<std::string>{"args.c"});
+    }
+
     TEST_CASE(
         "collect() streaming row query matches the buffered collect_frame()") {
         TestEnvironment env(200);

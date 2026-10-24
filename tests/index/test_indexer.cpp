@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
@@ -78,14 +78,14 @@ TEST_SUITE("Indexer") {
             Indexer::open({});
             FAIL("expected an error");
         } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::INVALID_ARGUMENT);
+            CHECK(e.code() == ErrorCode::InvalidArgument);
         }
         const std::string missing = "/no/such/dir/trace.pfw.gz";
         try {
             Indexer::open({missing});
             FAIL("expected an error");
         } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::NOT_FOUND);
+            CHECK(e.code() == ErrorCode::NotFound);
             CHECK(std::string(e.what()).find(missing) != std::string::npos);
         }
     }
@@ -135,6 +135,22 @@ TEST_SUITE("Indexer") {
             CHECK(f.file_id >= 0);
             CHECK(f.index_path == index_of(f.path));
         }
+        rt.shutdown();
+    }
+
+    TEST_CASE("status stats the files when it runs, not when open ran") {
+        Runtime rt(4);
+        TestEnvironment env(10);
+        const auto a = env.create_dft_test_gzip_file(30);
+        CHECK(Indexer::open({a}, with_runtime(rt)).build().indexed == 1);
+
+        auto ix = Indexer::open({a}, with_runtime(rt));
+        const auto replacement = env.create_dft_test_gzip_file(55);
+        fs::copy_file(replacement, a, fs::copy_options::overwrite_existing);
+        touch_later(a);
+        CHECK(ix.status().needs_work == std::vector<std::string>{a});
+        CHECK(ix.build().indexed == 1);
+        CHECK(ix.status().needs_work.empty());
         rt.shutdown();
     }
 

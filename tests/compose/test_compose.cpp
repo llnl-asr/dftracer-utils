@@ -1,15 +1,17 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/task_graph/task_graph.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utilities/compose.h>
+#include <dftracer/utils/runtime/compose.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/task_graph/task_graph.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
 #include <string>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::make_task;
@@ -106,7 +108,9 @@ TEST_SUITE("compose") {
         auto doubled = u::map(Doubler{});
         std::vector<int> out;
         rt.run_blocking("map", [&](auto&) -> CoroTask<void> {
-            out = co_await doubled(std::vector<int>{1, 2, 3, 4});
+            // GCC 12.1 rejects a braced list inside co_await.
+            std::vector<int> in{1, 2, 3, 4};
+            out = co_await doubled(std::move(in));
         });
         CHECK(out == std::vector<int>{2, 4, 6, 8});
     }
@@ -118,7 +122,8 @@ TEST_SUITE("compose") {
             u::fold(0, [](int acc, int x) { return acc + x; });
         int out = -1;
         rt.run_blocking("mapreduce", [&](auto&) -> CoroTask<void> {
-            out = co_await sum_of_doubles(std::vector<int>{1, 2, 3, 4});
+            std::vector<int> in{1, 2, 3, 4};
+            out = co_await sum_of_doubles(std::move(in));
         });
         CHECK(out == 20);  // (2+4+6+8)
     }

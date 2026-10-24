@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/batch_byte_size.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -182,7 +182,7 @@ static PyObject *TraceReaderIterator_iter(TraceReaderIteratorObject *self) {
 }
 
 static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
-    if (self->mode == IteratorMode::JSON_DICT) {
+    if (self->mode == IteratorMode::JsonDict) {
         while (true) {
             if (self->json_dict_current_batch) {
                 auto &events = self->json_dict_current_batch->events;
@@ -236,7 +236,7 @@ static PyObject *TraceReaderIterator_next(TraceReaderIteratorObject *self) {
     }
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    if (self->mode == IteratorMode::ARROW) {
+    if (self->mode == IteratorMode::Arrow) {
         auto *astate = self->arrow_state.get();
         std::optional<ArrowExportResult> batch;
         Py_BEGIN_ALLOW_THREADS batch = astate->channel->blocking_receive();

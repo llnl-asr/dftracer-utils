@@ -1,8 +1,8 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/io/ops.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/utilities/common/arrow/array_view.h>
 #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
 #include <fcntl.h>
@@ -426,7 +426,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     ArrowExportResult& batch) {
     CompressedBatch result{};
 
-    if (compression_ == IpcCompression::NONE) {
+    if (compression_ == IpcCompression::None) {
         result.body = buffer_pool_.acquire(64 * 1024);
 
         int rc =
@@ -443,7 +443,7 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     }
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
-    if (compression_ != IpcCompression::ZSTD) {
+    if (compression_ != IpcCompression::Zstd) {
         co_return result;
     }
 

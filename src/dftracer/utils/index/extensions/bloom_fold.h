@@ -2,8 +2,10 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FOLD_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
@@ -13,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,7 +34,7 @@ class BloomFold : public trace::views::detail::Fold {
     /// Indexes config.extra_dimensions besides the fixed dimensions: each is
     /// an args key or a dotted path below args.
     explicit BloomFold(
-        dftracer::utils::StringIntern& intern,
+        dftracer::utils::dstd::StringIntern& intern,
         index::schemas::dft::BloomCore::ChunkIndexerConfig config = {});
     /// Removes the spill runs unless finish_spilled handed them off.
     ~BloomFold() override;
@@ -73,13 +76,14 @@ class BloomFold : public trace::views::detail::Fold {
     void observe(const Lane& lane,
                  const trace::views::detail::FoldBatch& batch);
     bool spills() const { return !spill_dir_.empty(); }
-    /// Whether finish_spilled writes the tier rather than write(): spill is
-    /// enabled and the fold holds chunks or runs. write() writes nothing for
-    /// a file without records.
+    /// Whether finish_spilled writes the tier rather than write(): the file
+    /// spilled while it was parsed. A file that fit its share goes through
+    /// the shared write, so many small files share SSTs rather than each
+    /// writing, syncing and ingesting runs of its own.
     bool writes_runs() const {
         if (spill_dir_.empty() || files_.empty()) return false;
-        const FileState& fs = files_.begin()->second;
-        return !fs.spill.runs.empty() || !fs.chunks.empty();
+        const auto& sp = files_.begin()->second.spill;
+        return !sp.runs.empty() || sp.open != nullptr;
     }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
@@ -108,7 +112,20 @@ class BloomFold : public trace::views::detail::Fold {
     /// Bounds the streaming build of one file whose chunks arrive in order:
     /// once the finished chunks held pass `share` bytes, they are written to
     /// sorted runs under `dir` (created as needed) for `file_id`.
-    void enable_spill(std::uint64_t share, std::string dir, int file_id);
+    /// A fresh `file_id` was reserved by this build, so its runs clear nothing.
+    void enable_spill(std::uint64_t share, std::string dir, int file_id,
+                      bool fresh_id = false);
+    /// The on-disk size of the file being folded, which caps its auto keys.
+    /// Unset, the size is read from the path when the file is written.
+    void set_file_bytes(std::uint64_t bytes) { file_bytes_ = bytes; }
+    /// Bytes the open run of a file that has written @p runs runs holds before
+    /// it is committed, for a spill @p share. It never falls under
+    /// MIN_SPILL_RUN_BYTES and doubles every SPILL_RUNS_PER_DOUBLING runs, so
+    /// a tiny budget writes few large runs, not many small ones: every run is
+    /// SSTs that overlap in L0, and a family with more of them than
+    /// descriptors cannot be scanned.
+    static std::uint64_t run_limit(std::uint64_t share,
+                                   std::size_t runs) noexcept;
     /// Runs written so far; 0 means the file is still wholly in memory.
     std::size_t spill_runs() const;
     /// For a file with spill enabled, with or without runs so far: writes the
@@ -119,6 +136,14 @@ class BloomFold : public trace::views::detail::Fold {
     /// the files from here on.
     std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
     finish_spilled(int file_id);
+
+    /// The catalog of `file` as a full scan of its records so far leaves it
+    /// (empty if unseen).
+    index::schemas::dft::BloomCore::Catalog file_catalog(
+        const std::string& file);
+    /// Calls that folded one path into a catalog since construction: one per
+    /// distinct (leaf, tag) pair a flush met, not one per event.
+    std::uint64_t catalog_observations() const { return catalog_observations_; }
 
     /// Harvested per-checkpoint chunks for a file (nullptr if unseen), for
     /// tests. Moved-from once finalize or write has run.
@@ -197,11 +222,26 @@ class BloomFold : public trace::views::detail::Fold {
         ankerl::unordered_dense::set<std::uint32_t> key_union;
         std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
             runs;
+        /// The run being filled; it commits once it holds run_limit() bytes.
+        std::unique_ptr<index::store::IndexDatabaseSstWriterContext> open;
+        /// Estimated bytes `open` holds.
+        std::uint64_t buffered = 0;
         bool handed_off = false;
+    };
+
+    using SchemaLeaf = std::pair<std::uint32_t, std::uint8_t>;
+    // A distinct leaves list and the data events that carried it since the
+    // last flush into FileState::paths.
+    struct Shape {
+        dstd::Vector<SchemaLeaf> leaves;
+        std::uint64_t events = 0;
     };
 
     struct FileState {
         std::string index_path;
+        dstd::Vector<Shape> shapes;
+        dstd::HashMap<std::uint64_t, std::uint32_t> shape_ids;
+        std::uint32_t last_shape = 0;
         SpillState spill;
         std::map<std::uint64_t, ChunkState> chunks;
         std::map<std::uint64_t, AutoChunk> auto_chunks;
@@ -212,7 +252,7 @@ class BloomFold : public trace::views::detail::Fold {
         ankerl::unordered_dense::map<std::uint32_t, PathEvidence> evidence;
     };
 
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     index::schemas::dft::BloomCore::ChunkIndexerConfig config_;
     // Interned args key (or captured path) of each extra dimension, in
     // config_.extra_dimensions order.
@@ -221,6 +261,7 @@ class BloomFold : public trace::views::detail::Fold {
     // command hash keys the fixed shash dimension already covers.
     ankerl::unordered_dense::set<std::uint32_t> auto_skip_;
     std::uint32_t dur_key_ = 0;
+    std::optional<std::uint64_t> file_bytes_;
 
     /// Writes the tier and manifest entries of `file` into `w`, one chunk at
     /// a time. Consumes `fs`.
@@ -239,6 +280,8 @@ class BloomFold : public trace::views::detail::Fold {
         const std::string& file, const FileState& fs, std::uint64_t data_chunks,
         const std::map<std::string, std::uint32_t>& keys) const;
     Catalog catalog(const FileState& fs) const;
+    void observe_shape(FileState& fs, std::span<const SchemaLeaf> leaves);
+    void flush_shapes(FileState& fs);
     void observe_auto(AutoChunk& chunk,
                       const trace::views::detail::FoldEvent& e);
     ChunkState assemble_chunk(FileState& fs, std::uint64_t cp,
@@ -251,9 +294,14 @@ class BloomFold : public trace::views::detail::Fold {
     void spill(FileState& fs, std::uint64_t upto);
 
     StringViewMap<FileState> files_;
+    // The file the last open() found, until files_ gains or loses a file.
+    std::string last_file_;
+    FileState* last_state_ = nullptr;
+    std::uint64_t catalog_observations_ = 0;
     std::uint64_t spill_share_ = 0;
     std::string spill_dir_;
     int spill_file_id_ = -1;
+    bool spill_fresh_ = false;
 };
 
 }  // namespace dftracer::utils::index::extensions

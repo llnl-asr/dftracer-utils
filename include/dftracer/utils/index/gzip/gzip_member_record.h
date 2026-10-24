@@ -7,7 +7,7 @@ namespace dftracer::utils::index::gzip {
 
 /// How a reader starts a record: decode a whole member, stream a large member
 /// from its gzip header, or stream from a restart point inside a member.
-enum class GzipRecordKind : std::uint8_t { MEMBER = 0, HEAD = 1, RESTART = 2 };
+enum class GzipRecordKind : std::uint8_t { Member = 0, Head = 1, Restart = 2 };
 
 /// One gzip member, or one piece of a member larger than the checkpoint size:
 /// the unit of random access. Boundaries come from the inflater, not a header
@@ -27,7 +27,7 @@ struct GzipMemberRecord {
     std::uint64_t uc_size = 0;
     std::uint64_t first_line_num = 0;
     std::uint64_t last_line_num = 0;
-    GzipRecordKind kind = GzipRecordKind::MEMBER;
+    GzipRecordKind kind = GzipRecordKind::Member;
     std::uint8_t bits = 0;
 };
 

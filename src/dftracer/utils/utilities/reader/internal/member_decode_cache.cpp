@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/cache/eviction_policies/eviction_policy_factory.h>
+#include <dftracer/utils/dstd/cache/eviction_policies/eviction_policy_factory.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 
 // Compile the eviction policies once for the member cache's key type. This is

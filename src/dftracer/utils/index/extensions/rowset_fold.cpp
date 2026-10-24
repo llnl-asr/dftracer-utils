@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/duql/fields.h>
@@ -32,7 +32,7 @@ bool metadata_phase(const duql::QueryNode& n) {
     }
     const auto* c = std::get_if<duql::CompareNode>(&n.data);
     const auto* s = c ? std::get_if<std::string>(&c->value.value) : nullptr;
-    return c && c->op == duql::CompareOp::EQ && !c->field.any &&
+    return c && c->op == duql::CompareOp::Eq && !c->field.any &&
            c->field.path == "ph" && s && *s == "M";
 }
 
@@ -49,7 +49,7 @@ void equalities(const duql::QueryNode& n,
         return;
     }
     const auto* c = std::get_if<duql::CompareNode>(&n.data);
-    if (!c || c->op != duql::CompareOp::EQ || c->field.any) return;
+    if (!c || c->op != duql::CompareOp::Eq || c->field.any) return;
     if (const auto* s = std::get_if<std::string>(&c->value.value))
         out.emplace_back(c->field.path, *s);
 }
@@ -72,11 +72,11 @@ RowSetFold::Value cell(const views::PodSource& src, std::string_view path) {
     using V = RowSetFold::Value;
     if (const auto* sp = src.special(path)) {
         switch (*sp) {
-            case views::FoldEvent::Special::FALSE_VALUE:
+            case views::FoldEvent::Special::FalseValue:
                 return false;
-            case views::FoldEvent::Special::TRUE_VALUE:
+            case views::FoldEvent::Special::TrueValue:
                 return true;
-            case views::FoldEvent::Special::NULL_VALUE:
+            case views::FoldEvent::Special::NullValue:
                 return V{};
             default:
                 return src.value(path);
@@ -182,7 +182,7 @@ df::Series series_of(const std::vector<RowSetFold::Value>& c) {
 
 }  // namespace
 
-RowSetFold::RowSetFold(dftracer::utils::StringIntern& intern,
+RowSetFold::RowSetFold(dftracer::utils::dstd::StringIntern& intern,
                        std::vector<IndexedRowSet> rowsets,
                        std::uint64_t budget_bytes)
     : intern_(&intern),
@@ -199,7 +199,7 @@ RowSetFold::RowSetFold(dftracer::utils::StringIntern& intern,
         if (rowsets_[r].filter) equalities(rowsets_[r].filter->root(), eq);
         for (const auto& [field, value] : eq) {
             if (field == "ph" && value == "M")
-                g.phase = trace::RecordPhase::METADATA;
+                g.phase = trace::RecordPhase::Metadata;
             if (field == "name") g.name = intern_->get_or_insert(value);
         }
         if (g.phase) {
@@ -309,7 +309,7 @@ void RowSetFold::write(index::store::IndexWrite& w, int file_id) const {
                                           df::frame_to_native(f));
     }
     index::store::records::put_manifest(
-        w, file_id, index::store::IndexExtension::ROWSET, 0);
+        w, file_id, index::store::IndexExtension::Rowset, 0);
 }
 
 }  // namespace dftracer::utils::index::extensions

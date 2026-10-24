@@ -1,10 +1,10 @@
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/view_builder.h>
 #include <dftracer/utils/dataframe/kernels/dictionary.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -154,8 +154,8 @@ std::vector<std::uint8_t> validity_of(const std::vector<bool>& present) {
 
 // One array element or struct field value.
 struct Scalar {
-    enum class K : std::uint8_t { NUL, BOOL, INT, DBL, STR, JSON };
-    K k = K::NUL;
+    enum class K : std::uint8_t { Nul, Bool, Int, Dbl, Str, Json };
+    K k = K::Nul;
     std::int64_t i = 0;
     double d = 0;
     std::string s;
@@ -166,40 +166,40 @@ Scalar scalar_of(simdjson::dom::element e) {
     Scalar out;
     switch (e.type()) {
         case T::BOOL:
-            out.k = Scalar::K::BOOL;
+            out.k = Scalar::K::Bool;
             out.i = e.get_bool().value_unsafe() ? 1 : 0;
             break;
         case T::INT64:
-            out.k = Scalar::K::INT;
+            out.k = Scalar::K::Int;
             out.i = e.get_int64().value_unsafe();
             break;
         case T::UINT64: {
             const std::uint64_t u = e.get_uint64().value_unsafe();
             if (u <= static_cast<std::uint64_t>(
                          std::numeric_limits<std::int64_t>::max())) {
-                out.k = Scalar::K::INT;
+                out.k = Scalar::K::Int;
                 out.i = static_cast<std::int64_t>(u);
             } else {
-                out.k = Scalar::K::DBL;
+                out.k = Scalar::K::Dbl;
                 out.d = static_cast<double>(u);
             }
             break;
         }
         case T::DOUBLE:
-            out.k = Scalar::K::DBL;
+            out.k = Scalar::K::Dbl;
             out.d = e.get_double().value_unsafe();
             break;
         case T::STRING:
-            out.k = Scalar::K::STR;
+            out.k = Scalar::K::Str;
             out.s = e.get_string().value_unsafe();
             break;
         case T::ARRAY:
         case T::OBJECT:
-            out.k = Scalar::K::JSON;
+            out.k = Scalar::K::Json;
             dftracer::utils::json::append_canonical_json(out.s, e);
             break;
         case T::BIGINT:
-            out.k = Scalar::K::STR;
+            out.k = Scalar::K::Str;
             out.s = e.get_bigint().value_unsafe();
             break;
         default:
@@ -212,11 +212,11 @@ Scalar scalar_of(simdjson::dom::element e) {
 char infer_kind(const std::vector<Scalar>& vals) {
     bool i = false, d = false, s = false, b = false, j = false;
     for (const Scalar& v : vals) {
-        i |= v.k == Scalar::K::INT;
-        d |= v.k == Scalar::K::DBL;
-        s |= v.k == Scalar::K::STR;
-        b |= v.k == Scalar::K::BOOL;
-        j |= v.k == Scalar::K::JSON;
+        i |= v.k == Scalar::K::Int;
+        d |= v.k == Scalar::K::Dbl;
+        s |= v.k == Scalar::K::Str;
+        b |= v.k == Scalar::K::Bool;
+        j |= v.k == Scalar::K::Json;
     }
     if (j ||
         static_cast<int>(i || d) + static_cast<int>(s) + static_cast<int>(b) >
@@ -236,11 +236,11 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
         std::vector<double> ds(vals.size(), 0);
         for (std::size_t r = 0; r < vals.size(); ++r) {
             const Scalar& v = vals[r];
-            if (v.k == Scalar::K::INT) {
+            if (v.k == Scalar::K::Int) {
                 is[r] = v.i;
                 ds[r] = static_cast<double>(v.i);
                 present[r] = true;
-            } else if (v.k == Scalar::K::DBL && kind == 'f') {
+            } else if (v.k == Scalar::K::Dbl && kind == 'f') {
                 ds[r] = v.d;
                 present[r] = true;
             }
@@ -253,7 +253,7 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
     if (kind == 'b') {
         std::vector<std::uint8_t> bits((vals.size() + 7) / 8, 0);
         for (std::size_t r = 0; r < vals.size(); ++r) {
-            if (vals[r].k != Scalar::K::BOOL) continue;
+            if (vals[r].k != Scalar::K::Bool) continue;
             present[r] = true;
             if (vals[r].i)
                 bits[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
@@ -266,27 +266,27 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
     std::vector<std::string_view> text(vals.size());
     for (std::size_t r = 0; r < vals.size(); ++r) {
         const Scalar& v = vals[r];
-        if (v.k == Scalar::K::NUL || (kind == 's' && v.k != Scalar::K::STR))
+        if (v.k == Scalar::K::Nul || (kind == 's' && v.k != Scalar::K::Str))
             continue;
         present[r] = true;
-        if (v.k == Scalar::K::STR && kind == 's') {
+        if (v.k == Scalar::K::Str && kind == 's') {
             text[r] = v.s;
             continue;
         }
         std::string& t = owned.emplace_back();
         switch (v.k) {
-            case Scalar::K::STR:
+            case Scalar::K::Str:
                 t += '"';
                 dftracer::utils::json::append_json_escaped(t, v.s);
                 t += '"';
                 break;
-            case Scalar::K::BOOL:
+            case Scalar::K::Bool:
                 t = v.i ? "true" : "false";
                 break;
-            case Scalar::K::INT:
+            case Scalar::K::Int:
                 t = std::to_string(v.i);
                 break;
-            case Scalar::K::DBL:
+            case Scalar::K::Dbl:
                 t = double_text(v.d);
                 break;
             default:
@@ -315,24 +315,24 @@ std::string flat_key(std::string_view path) {
 }
 
 std::optional<std::string> array_text(
-    const FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    const FoldEvent& ev, const dftracer::utils::dstd::StringIntern& intern,
     std::string_view at) {
     const std::string path = flat_key(at);
     PodSource src(ev, intern);
     if (const auto* sp = src.special(path)) {
-        if (*sp == FoldEvent::Special::EMPTY_ARRAY) return "[]";
-        if (*sp == FoldEvent::Special::JSON_ARRAY)
+        if (*sp == FoldEvent::Special::EmptyArray) return "[]";
+        if (*sp == FoldEvent::Special::JsonArray)
             return std::string(src.value(path));
         return std::nullopt;
     }
     if (src.has(path)) return std::nullopt;
     auto cell = container_cell(ev, intern, path);
-    if (!cell || cell->kind != duql::Cell::Kind::ARRAY) return std::nullopt;
+    if (!cell || cell->kind != duql::Cell::Kind::Array) return std::nullopt;
     return std::get<std::string>(std::move(cell->value));
 }
 
 df::Series list_column(EventRows evs,
-                       const dftracer::utils::StringIntern& intern,
+                       const dftracer::utils::dstd::StringIntern& intern,
                        std::string_view spec, std::string_view path) {
     std::vector<std::pair<std::string, char>> fields;
     const bool fixed_struct = spec.starts_with('{');
@@ -465,7 +465,7 @@ struct IdCodeTable {
 // once, found again through the last hit or a short list.
 class ChunkViews {
    public:
-    explicit ChunkViews(const dftracer::utils::StringIntern& intern)
+    explicit ChunkViews(const dftracer::utils::dstd::StringIntern& intern)
         : intern_(intern) {}
 
     void append(df::ViewBuilder& b, std::uint32_t id) {
@@ -485,8 +485,7 @@ class ChunkViews {
         auto owner = intern_.chunk(chunk);
         const auto* data = reinterpret_cast<const std::uint8_t*>(owner->data());
         const auto size = owner->size();
-        const auto index = b.add_buffer(df::Buffer::wrap(
-            const_cast<std::uint8_t*>(data), size, [owner](void*) {}));
+        const auto index = b.add_buffer(df::borrow_buffer(data, size, owner));
         seen_.emplace_back(chunk, index);
         return remember(chunk, index);
     }
@@ -498,7 +497,7 @@ class ChunkViews {
         return index;
     }
 
-    const dftracer::utils::StringIntern& intern_;
+    const dftracer::utils::dstd::StringIntern& intern_;
     std::vector<std::pair<std::uint32_t, std::int32_t>> seen_;
     std::uint32_t last_chunk_ = 0;
     std::int32_t last_index_ = 0;
@@ -514,9 +513,8 @@ df::Series text_view_column(const std::shared_ptr<std::string>& data,
     b.reserve(static_cast<std::int64_t>(ends.size()));
     std::int32_t index = 0;
     if (!data->empty())
-        index = b.add_buffer(
-            df::Buffer::wrap(reinterpret_cast<std::uint8_t*>(data->data()),
-                             data->size(), [data](void*) {}));
+        index =
+            b.add_buffer(df::borrow_buffer(data->data(), data->size(), data));
     std::size_t begin = 0;
     for (std::size_t r = 0; r < ends.size(); ++r) {
         if (!present[r])
@@ -532,8 +530,8 @@ df::Series text_view_column(const std::shared_ptr<std::string>& data,
 }  // namespace
 
 df::Series interned_column(std::span<const std::uint32_t> ids,
-                           const dftracer::utils::StringIntern& intern) {
-    constexpr auto NO_ID = dftracer::utils::StringIntern::NO_ID;
+                           const dftracer::utils::dstd::StringIntern& intern) {
+    constexpr auto NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
     const std::size_t n = ids.size();
     const std::size_t cap = n / 4;
     ChunkViews views(intern);
@@ -600,7 +598,7 @@ std::vector<std::uint32_t> ids_of(EventRows evs,
 }
 
 df::Series str_id_column(EventRows evs, std::uint32_t FoldEvent::* field,
-                         const dftracer::utils::StringIntern& intern) {
+                         const dftracer::utils::dstd::StringIntern& intern) {
     return interned_column(ids_of(evs, field), intern);
 }
 
@@ -626,7 +624,7 @@ std::string number_text(const FoldEvent::ArgValue& v) {
 // The column of `vals` (one per row, null when absent) as `type`.
 df::Series typed_arg_column(const std::vector<const FoldEvent::ArgValue*>& vals,
                             ArgType::Kind kind, std::size_t present_count,
-                            const dftracer::utils::StringIntern& intern) {
+                            const dftracer::utils::dstd::StringIntern& intern) {
     using Kind = ArgType::Kind;
     const auto n = static_cast<std::int64_t>(vals.size());
     std::vector<std::uint8_t> vbits;
@@ -665,7 +663,7 @@ df::Series typed_arg_column(const std::vector<const FoldEvent::ArgValue*>& vals,
             std::vector<std::uint32_t> ids(vals.size());
             for (std::size_t r = 0; r < vals.size(); ++r)
                 ids[r] = vals[r] ? std::get<std::uint32_t>(*vals[r])
-                                 : dftracer::utils::StringIntern::NO_ID;
+                                 : dftracer::utils::dstd::StringIntern::NO_ID;
             return interned_column(ids, intern);
         }
         case Kind::Dbl: {
@@ -708,13 +706,13 @@ df::Series typed_arg_column(const std::vector<const FoldEvent::ArgValue*>& vals,
 // fallback, matching PodSource::find_arg; pass NO_ID for no fallback.
 df::Series arg_column(EventRows evs, std::uint32_t keyid,
                       std::uint32_t keyid_alt,
-                      const dftracer::utils::StringIntern& intern) {
+                      const dftracer::utils::dstd::StringIntern& intern) {
     std::vector<const FoldEvent::ArgValue*> vals;
     vals.reserve(evs.size());
     ArgType type;
     for (const auto& ev : evs) {
         const auto* v = find_arg(ev, keyid);
-        if (!v && keyid_alt != dftracer::utils::StringIntern::NO_ID)
+        if (!v && keyid_alt != dftracer::utils::dstd::StringIntern::NO_ID)
             v = find_arg(ev, keyid_alt);
         if (v) type.see(*v);
         vals.push_back(v);
@@ -728,7 +726,7 @@ df::Series arg_column(EventRows evs, std::uint32_t keyid,
 // in two passes over the events rather than one pass per column. Each column is
 // typed and filled exactly as arg_column(evs, key, NO_ID) would.
 void append_all_arg_columns(EventRows evs,
-                            const dftracer::utils::StringIntern& intern,
+                            const dftracer::utils::dstd::StringIntern& intern,
                             df::DataFrame& out, std::string_view prefix) {
     struct Col {
         std::uint32_t key = 0;
@@ -781,7 +779,7 @@ void append_all_arg_columns(EventRows evs,
 }
 
 df::Series top_column(EventRows evs, std::string_view name,
-                      const dftracer::utils::StringIntern& intern,
+                      const dftracer::utils::dstd::StringIntern& intern,
                       double time_scale) {
     if (name == "name") return str_id_column(evs, &FoldEvent::name_id, intern);
     if (name == "cat") return str_id_column(evs, &FoldEvent::cat_id, intern);
@@ -799,7 +797,7 @@ df::Series top_column(EventRows evs, std::string_view name,
 }
 
 df::Series hash_column(EventRows evs, std::string_view f,
-                       const dftracer::utils::StringIntern& intern) {
+                       const dftracer::utils::dstd::StringIntern& intern) {
     return f == "fhash" ? str_id_column(evs, &FoldEvent::fhash_id, intern)
                         : str_id_column(evs, &FoldEvent::hhash_id, intern);
 }
@@ -808,12 +806,12 @@ df::Series hash_column(EventRows evs, std::string_view f,
 // an Int64 (the enum's integer, matching the engine agg path's i64 form) so
 // the group-by collapses and renders it identically to a numeric key.
 df::Series iocat_column(EventRows evs,
-                        const dftracer::utils::StringIntern& intern) {
+                        const dftracer::utils::dstd::StringIntern& intern) {
     std::vector<std::int64_t> vals;
     vals.reserve(evs.size());
     for (const auto& ev : evs) {
         const std::string_view name =
-            ev.name_id == dftracer::utils::StringIntern::NO_ID
+            ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID
                 ? std::string_view{}
                 : intern.resolve(ev.name_id);
         vals.push_back(static_cast<std::int64_t>(
@@ -834,22 +832,22 @@ bool append_json_key(const PodSource& src, std::string& out,
                      std::string_view field) {
     if (const auto* sp = src.special(field)) {
         switch (*sp) {
-            case FoldEvent::Special::NULL_VALUE:
+            case FoldEvent::Special::NullValue:
                 return false;
-            case FoldEvent::Special::FALSE_VALUE:
+            case FoldEvent::Special::FalseValue:
                 out += "false";
                 return true;
-            case FoldEvent::Special::TRUE_VALUE:
+            case FoldEvent::Special::TrueValue:
                 out += "true";
                 return true;
-            case FoldEvent::Special::EMPTY_ARRAY:
+            case FoldEvent::Special::EmptyArray:
                 out += "[]";
                 return true;
-            case FoldEvent::Special::EMPTY_OBJECT:
+            case FoldEvent::Special::EmptyObject:
                 out += "{}";
                 return true;
-            case FoldEvent::Special::JSON_ARRAY:
-            case FoldEvent::Special::JSON_OBJECT:
+            case FoldEvent::Special::JsonArray:
+            case FoldEvent::Special::JsonObject:
                 return src.append_value(out, field);
         }
     }
@@ -864,10 +862,9 @@ bool append_json_key(const PodSource& src, std::string& out,
 // A group-key string column (see AGG_KEY_ARG_PREFIX): null where the event
 // lacks the value or holds JSON null, so a missing key never merges with "".
 // A `json` key column holds canonical JSON text.
-df::Series group_key_str_column(EventRows evs,
-                                const dftracer::utils::StringIntern& intern,
-                                std::string_view field, bool arg_only,
-                                bool json) {
+df::Series group_key_str_column(
+    EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
+    std::string_view field, bool arg_only, bool json) {
     auto data = std::make_shared<std::string>();
     std::vector<std::size_t> ends;
     std::vector<bool> present;
@@ -885,10 +882,10 @@ df::Series group_key_str_column(EventRows evs,
                             : src.append_value(*data, field);
         if (!has)
             if (const auto* sp = src.special(field)) {
-                if (*sp == FoldEvent::Special::EMPTY_ARRAY) {
+                if (*sp == FoldEvent::Special::EmptyArray) {
                     *data += "[]";
                     has = true;
-                } else if (*sp == FoldEvent::Special::EMPTY_OBJECT) {
+                } else if (*sp == FoldEvent::Special::EmptyObject) {
                     *data += "{}";
                     has = true;
                 }
@@ -907,10 +904,11 @@ df::Series group_key_str_column(EventRows evs,
 // byte size (derived_size_t), falling back to a literal numeric "size" arg, so
 // the discovered "size" metric matches fold_numeric_args_t.
 df::Series num_arg_column(EventRows evs, std::string_view name,
-                          const dftracer::utils::StringIntern& intern) {
+                          const dftracer::utils::dstd::StringIntern& intern) {
     const bool is_size = name == "size";
     const std::uint32_t keyid =
-        const_cast<dftracer::utils::StringIntern&>(intern).get_or_insert(name);
+        const_cast<dftracer::utils::dstd::StringIntern&>(intern).get_or_insert(
+            name);
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     std::vector<double> vals;
     std::vector<bool> present;
@@ -947,8 +945,9 @@ df::Series num_arg_column(EventRows evs, std::string_view name,
 // (derived_size_t), "te" is ts+dur (null when the event has no dur, matching
 // number_typed("dur")). ts/dur are read RAW; a non-identity time_scale is
 // reapplied on the engine side (SCALED_TE_COL), never baked in here.
-df::Series derived_agg_column(EventRows evs, std::string_view name,
-                              const dftracer::utils::StringIntern& intern) {
+df::Series derived_agg_column(
+    EventRows evs, std::string_view name,
+    const dftracer::utils::dstd::StringIntern& intern) {
     const bool is_size = name == "size";
     const std::int64_t n = static_cast<std::int64_t>(evs.size());
     std::vector<std::uint64_t> vals;
@@ -1021,7 +1020,8 @@ df::Series clip_column(EventRows evs, const WindowSel& w) {
 
 bool any_hash_present(EventRows evs, std::uint32_t FoldEvent::* field) {
     for (const auto& ev : evs)
-        if (ev.*field != dftracer::utils::StringIntern::NO_ID) return true;
+        if (ev.*field != dftracer::utils::dstd::StringIntern::NO_ID)
+            return true;
     return false;
 }
 
@@ -1168,7 +1168,7 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path) {
 namespace {
 
 df::Series select_column(EventRows evs,
-                         const dftracer::utils::StringIntern& intern,
+                         const dftracer::utils::dstd::StringIntern& intern,
                          const std::string& sel, double time_scale,
                          bool by_path) {
     WindowSel win;
@@ -1186,7 +1186,7 @@ df::Series select_column(EventRows evs,
     if (parse_list_sel(sel, list_spec, list_path))
         return list_column(evs, intern, list_spec, list_path);
     if (by_path && !is_path_token(sel)) {
-        auto& mut = const_cast<dftracer::utils::StringIntern&>(intern);
+        auto& mut = const_cast<dftracer::utils::dstd::StringIntern&>(intern);
         const std::uint32_t id = mut.get_or_insert(flat_key(sel));
         return arg_column(evs, id, id, intern);
     }
@@ -1214,7 +1214,7 @@ df::Series select_column(EventRows evs,
         // A nested/extra field (args.n.v) is captured under its full
         // name, a flat arg under its bare key; try the full name first,
         // then the stripped key, matching PodSource::find_arg.
-        auto& mut = const_cast<dftracer::utils::StringIntern&>(intern);
+        auto& mut = const_cast<dftracer::utils::dstd::StringIntern&>(intern);
         const std::uint32_t id_full = mut.get_or_insert(flat_key(sel));
         const std::uint32_t id_bare = mut.get_or_insert(flat_key(key));
         return arg_column(evs, id_full, id_bare, intern);
@@ -1234,7 +1234,7 @@ RowKeySource row_key_source(std::string_view sel, bool by_path) {
         parse_list_sel(sel, list_spec, list_path))
         return out;
     if (by_path && !is_path_token(sel)) {
-        out.kind = Kind::ARG;
+        out.kind = Kind::Arg;
         out.arg_full = flat_key(sel);
         return out;
     }
@@ -1248,36 +1248,36 @@ RowKeySource row_key_source(std::string_view sel, bool by_path) {
     const std::string_view field = is_top_level(sel) ? sel : key;
     if (is_top_level(sel) || is_hash_field(key)) {
         if (field == "name")
-            out.kind = Kind::NAME;
+            out.kind = Kind::Name;
         else if (field == "cat")
-            out.kind = Kind::CAT;
+            out.kind = Kind::Cat;
         else if (field == "fhash")
-            out.kind = Kind::FHASH;
+            out.kind = Kind::Fhash;
         else if (field == "hhash")
-            out.kind = Kind::HHASH;
+            out.kind = Kind::Hhash;
         else if (field == "pid")
-            out.kind = Kind::PID;
+            out.kind = Kind::Pid;
         else if (field == "tid")
-            out.kind = Kind::TID;
+            out.kind = Kind::Tid;
         else if (field == "ts")
-            out.kind = Kind::TS;
+            out.kind = Kind::Ts;
         else if (field == "dur")
-            out.kind = Kind::DUR;
+            out.kind = Kind::Dur;
         else
-            out.kind = Kind::PH;
+            out.kind = Kind::Ph;
         return out;
     }
-    out.kind = Kind::ARG;
+    out.kind = Kind::Arg;
     out.arg_full = flat_key(sel);
     out.arg_bare = flat_key(key);
     return out;
 }
 
 dataframe::DataFrame build_row_frame(
-    EventRows evs, const dftracer::utils::StringIntern& intern,
+    EventRows evs, const dftracer::utils::dstd::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale, bool by_path) {
     df::DataFrame out;
-    const dftracer::utils::StringIntern* intern_ = &intern;
+    const dftracer::utils::dstd::StringIntern* intern_ = &intern;
     const std::vector<std::string>& select_ = select;
 
     if (select_.empty() && by_path) {
@@ -1315,7 +1315,7 @@ dataframe::DataFrame build_row_frame(
 
 std::vector<std::pair<std::string, dataframe::Series>>
 build_dyn_numeric_columns(EventRows evs,
-                          const dftracer::utils::StringIntern& intern,
+                          const dftracer::utils::dstd::StringIntern& intern,
                           const std::vector<std::string>& select) {
     namespace agg = dftracer::utils::index::schemas::dft::agg;
     // A windowed select holds only the events that start in the window.

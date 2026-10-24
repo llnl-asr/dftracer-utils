@@ -2,12 +2,12 @@
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/result_registry.h>
 #include <dftracer/utils/plugins/state_registry.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 
@@ -47,8 +47,8 @@ struct PluginTraceWriter {
 // graph. Leaf nodes carry the plugin callback + owned state; combinator nodes
 // carry their children. Arena-owned by PluginFold (scan-lifetime).
 struct ComposeOp {
-    enum class Kind { LEAF, THEN, WHEN_ALL, WHEN_ANY };
-    Kind kind = Kind::LEAF;
+    enum class Kind { Leaf, Then, WhenAll, WhenAny };
+    Kind kind = Kind::Leaf;
     dftu_op_fn fn = nullptr;
     void* state = nullptr;
     void (*free_state)(void*) = nullptr;
@@ -149,12 +149,14 @@ class PluginFold : public trace::views::detail::Fold {
    public:
     /// `memory_budget` is the scan's out-of-core aggregation budget in bytes,
     /// the same knob as View::memory_budget: 0 means auto (~1/3 of available
-    /// memory) and NO_SPILL_BUDGET disables spilling. Past it, an accumulator's
-    /// live group map spills to a sorted temp run instead of growing.
-    /// `states` are the state types the plugin's factory registered; the fold
-    /// makes one instance of each per slice and drives it like an accumulator.
-    /// It must outlive the fold; null means the plugin registered none.
-    PluginFold(const dftu_plugin* plugin, dftracer::utils::StringIntern& intern,
+    /// memory) and memory::NO_SPILL_BUDGET disables spilling. Past it, an
+    /// accumulator's live group map spills to a sorted temp run instead of
+    /// growing. `states` are the state types the plugin's factory registered;
+    /// the fold makes one instance of each per slice and drives it like an
+    /// accumulator. It must outlive the fold; null means the plugin registered
+    /// none.
+    PluginFold(const dftu_plugin* plugin,
+               dftracer::utils::dstd::StringIntern& intern,
                SharedResultRegistry* results = nullptr,
                NamedResultRegistry* named_results = nullptr,
                std::string plugin_name = {}, std::uint64_t memory_budget = 0,
@@ -259,7 +261,7 @@ class PluginFold : public trace::views::detail::Fold {
     // only); null for a stream-only or unknown id. Lets then()/when_all pipe
     // host utilities through the dftu_op engine.
 
-    dftracer::utils::StringIntern& intern_table() { return *intern_; }
+    dftracer::utils::dstd::StringIntern& intern_table() { return *intern_; }
     ::dftu_writer* create_writer(const char* path, std::uint32_t num_workers,
                                  int gzip);
     ::dftu_trace_writer* create_trace_writer(const char* path);
@@ -295,7 +297,7 @@ class PluginFold : public trace::views::detail::Fold {
 
     const dftu_plugin* plugin_;
     std::string plugin_name_;
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     void* slice_;
     dftu_plugin_host host_{};
     ::dftu_task* pending_ = nullptr;

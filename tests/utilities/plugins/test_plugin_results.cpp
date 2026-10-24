@@ -3,13 +3,13 @@
 // checks the registry moves and releases an emitted Arrow array.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/result_registry.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
@@ -24,7 +24,7 @@
 
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedArrow;
@@ -74,7 +74,7 @@ std::vector<FoldEvent> make_events(std::uint64_t count) {
         evs[i].ts = i;
         // step() drops METADATA/UNKNOWN-phase events before it ever reaches
         // on_batch; the default FoldEvent phase is UNKNOWN.
-        evs[i].phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+        evs[i].phase = dftracer::utils::trace::RecordPhase::Complete;
     }
     return evs;
 }

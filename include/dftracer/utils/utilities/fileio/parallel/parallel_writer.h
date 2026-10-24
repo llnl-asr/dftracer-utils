@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_PARALLEL_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_PARALLEL_PARALLEL_WRITER_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/parallel/layout.h>
 
 #include <cstddef>
@@ -76,7 +76,7 @@ class ParallelWriter {
 };
 
 struct WriterConfig {
-    FileLayout layout = FileLayout::STRIPED;
+    FileLayout layout = FileLayout::Striped;
     std::size_t stripe_size = 0;  ///< PFS stripe; 0 disables padded layout
     bool gzip = false;
 };

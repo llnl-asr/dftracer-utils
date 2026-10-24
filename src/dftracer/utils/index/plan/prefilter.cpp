@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/index/plan/condition.h>
@@ -69,7 +69,7 @@ Clauses clauses_of(const duql::QueryNode& node) {
         [](auto&& n) -> Clauses {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, duql::CompareNode>) {
-                if (n.op != duql::CompareOp::EQ) return {};
+                if (n.op != duql::CompareOp::Eq) return {};
                 auto s = needle(n.value);
                 if (!s) return {};
                 return {{std::move(*s)}};
@@ -87,8 +87,8 @@ Clauses clauses_of(const duql::QueryNode& node) {
                 // A case-sensitive pattern's required literals sit in the
                 // value's bytes unless JSON escaping hides them.
                 if (n.negated || !n.compiled ||
-                    (n.op != duql::MatchOp::LIKE &&
-                     n.op != duql::MatchOp::REGEX))
+                    (n.op != duql::MatchOp::Like &&
+                     n.op != duql::MatchOp::Regex))
                     return {};
                 Clauses out;
                 for (const auto& lit : duql::required_literals(*n.compiled))
@@ -145,7 +145,7 @@ void ranges_of(const duql::QueryNode& node,
     }
     const auto* n = std::get_if<duql::CompareNode>(&node.data);
     // An any() key is followed by an array, not the number a range reads.
-    if (!n || n->field.any || n->op == duql::CompareOp::NE) return;
+    if (!n || n->field.any || n->op == duql::CompareOp::Ne) return;
     const std::string& path = n->field.path;
     const std::string_view key =
         std::string_view(path).substr(path.rfind('.') + 1);
@@ -164,10 +164,10 @@ void ranges_of(const duql::QueryNode& node,
     }
     // A number equals the bound when it is at both ends of [bound, bound].
     std::vector<Prefilter::Bound> bounds{bound};
-    if (n->op == duql::CompareOp::EQ) {
-        bounds[0].op = duql::CompareOp::GE;
+    if (n->op == duql::CompareOp::Eq) {
+        bounds[0].op = duql::CompareOp::Ge;
         bounds.push_back(bounds[0]);
-        bounds[1].op = duql::CompareOp::LE;
+        bounds[1].op = duql::CompareOp::Le;
     }
     for (auto& r : out)
         if (r.path == path) {
@@ -182,13 +182,13 @@ void ranges_of(const duql::QueryNode& node,
 
 bool holds(duql::CompareOp op, int cmp) {
     switch (op) {
-        case duql::CompareOp::GT:
+        case duql::CompareOp::Gt:
             return cmp > 0;
-        case duql::CompareOp::GE:
+        case duql::CompareOp::Ge:
             return cmp >= 0;
-        case duql::CompareOp::LT:
+        case duql::CompareOp::Lt:
             return cmp < 0;
-        case duql::CompareOp::LE:
+        case duql::CompareOp::Le:
             return cmp <= 0;
         default:
             return true;

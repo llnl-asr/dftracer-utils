@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_bytes_iterator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>

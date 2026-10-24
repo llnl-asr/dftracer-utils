@@ -1,11 +1,12 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/async_mutex.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/line.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
@@ -16,6 +17,7 @@
 #include <cinttypes>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace dftracer::utils::trace {
 
@@ -34,7 +36,7 @@ MetadataCollectorUtility::operator()(
         if (file_path.size() <= 3 ||
             file_path.substr(file_path.size() - 3) != ".gz") {
             throw DFTUtilsException(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "Not a gzip trace: " + file_path +
                     " (dftracer traces must be gzip-compressed)");
         }
@@ -59,6 +61,38 @@ MetadataCollectorUtility::operator()(
     }
 }
 
+namespace {
+
+// The index record of `file` when the index holds it unchanged since the
+// stat the caller read; the stat check is the one the scan already made, so
+// the file is not opened again.
+std::optional<internal::IndexedFile> fresh_index_record(
+    const std::string& index_path, const std::string& file,
+    const dftracer::utils::InputFileStat& st) {
+    namespace store = dftracer::utils::index::store;
+    try {
+        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
+        const int id =
+            db.get_file_info_id(store::internal::get_logical_path(file));
+        if (id < 0 || db.check_freshness(file, st.size, st.mtime) !=
+                          store::IndexDatabase::Freshness::Fresh)
+            return std::nullopt;
+        const auto checkpoint_size = db.get_checkpoint_size(id);
+        if (checkpoint_size == 0) return std::nullopt;
+        return internal::IndexedFile{{st.mtime, st.size},
+                                     db.get_num_lines(id),
+                                     db.get_max_bytes(id),
+                                     checkpoint_size,
+                                     db.query_gzip_members(id).size()};
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),
+                                 e.what());
+        return std::nullopt;
+    }
+}
+
+}  // namespace
+
 coro::CoroTask<MetadataCollectorUtilityOutput>
 MetadataCollectorUtility::process_compressed(
     const MetadataCollectorUtilityInput& input) {
@@ -69,40 +103,67 @@ MetadataCollectorUtility::process_compressed(
     try {
         meta.format = dftracer::utils::index::gzip::CheckpointIndexerFactory::
             detect_format(input.file_path);
-        meta.compressed_size = fs::file_size(input.file_path);
+        dftracer::utils::InputFileStat input_stat;
+        if (!dftracer::utils::stat_input(input.file_path, input_stat))
+            throw DFTUtilsException::cat(ErrorCode::Io, "cannot stat ",
+                                         input.file_path);
+        meta.compressed_size = input_stat.size;
 
-        // Scans of one file that start together would each build or
-        // rebuild its index and remove the other's files.
         const std::shared_ptr<internal::IndexRoot> root =
             internal::index_root(input.index_path);
-        std::size_t total_lines = 0;
-        {
-            co_await root->building.lock();
-            const coro::AsyncMutexGuard held(root->building);
-            const std::pair<std::int64_t, std::uint64_t> stamp{
-                static_cast<std::int64_t>(
-                    index::store::internal::get_file_modification_time(
-                        input.file_path)),
-                index::store::internal::file_size_bytes(input.file_path)};
-            // A scan writing to the root makes a read-only open fail, which
-            // need_rebuild() takes for a stale index, so a file this process
-            // built or read is not opened again.
-            std::error_code ec;
-            const fs::path canonical =
-                fs::weakly_canonical(input.file_path, ec);
-            const std::string file_key =
-                ec ? input.file_path : canonical.string();
-            if (const auto seen = root->current.find(file_key);
-                seen != root->current.end() && seen->second.stamp == stamp) {
-                meta.has_index = true;
-                total_lines = seen->second.num_lines;
-                meta.uncompressed_size = seen->second.max_bytes;
-                meta.checkpoint_size = seen->second.checkpoint_size;
-                meta.num_checkpoints = seen->second.num_checkpoints;
-            } else {
+        const std::pair<std::int64_t, std::uint64_t> stamp{input_stat.mtime,
+                                                           input_stat.size};
+        const std::string& file_key = input.file_path;
+
+        using dftracer::utils::index::gzip::CheckpointIndexer;
+        using dftracer::utils::index::gzip::CheckpointIndexerFactory;
+        auto take = [&](const CheckpointIndexer& indexer) {
+            meta.has_index = true;
+            const internal::IndexedFile seen{
+                stamp, indexer.get_num_lines(), indexer.get_max_bytes(),
+                indexer.get_checkpoint_size(), indexer.get_members().size()};
+            std::lock_guard<std::mutex> lock(root->current_mutex);
+            root->current[file_key] = seen;
+            return seen;
+        };
+        auto known = [&]() -> std::optional<internal::IndexedFile> {
+            std::lock_guard<std::mutex> lock(root->current_mutex);
+            const auto it = root->current.find(file_key);
+            if (it == root->current.end() || it->second.stamp != stamp)
+                return std::nullopt;
+            meta.has_index = true;
+            return it->second;
+        };
+
+        // A file this process built or read is not opened again.
+        std::optional<internal::IndexedFile> seen;
+        if (!input.force_rebuild) seen = known();
+        // Most files of a built root are fresh, so their checks share the
+        // root. A check that meets a writer reads the index as stale and
+        // takes the slow path below, which decides again under the writer
+        // permits.
+        if (!seen && !input.force_rebuild) {
+            co_await root->gate.acquire(1);
+            const internal::RootPermit reading(*root, 1);
+            if (fs::exists(input.index_path)) {
+                seen = fresh_index_record(input.index_path, input.file_path,
+                                          input_stat);
+                if (seen) {
+                    std::lock_guard<std::mutex> lock(root->current_mutex);
+                    root->current[file_key] = *seen;
+                }
+            }
+        }
+        if (!seen) {
+            // Scans of one file that start together would each build or
+            // rebuild its index and remove the other's files.
+            co_await root->gate.acquire(internal::IndexRoot::ALL_PERMITS);
+            const internal::RootPermit writing(
+                *root, internal::IndexRoot::ALL_PERMITS);
+            if (!input.force_rebuild) seen = known();
+            if (!seen) {
                 meta.has_index = fs::exists(input.index_path);
-                std::shared_ptr<dftracer::utils::index::gzip::CheckpointIndexer>
-                    indexer;
+                std::shared_ptr<CheckpointIndexer> indexer;
                 if (!meta.has_index || input.force_rebuild) {
                     if (input.force_rebuild && meta.has_index) {
                         DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
@@ -111,33 +172,27 @@ MetadataCollectorUtility::process_compressed(
                     }
                     DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",
                                              input.file_path.c_str());
-                    indexer =
-                        dftracer::utils::index::gzip::CheckpointIndexerFactory::
-                            create(input.file_path, input.index_path,
-                                   input.checkpoint_size, true);
-                    co_await indexer->build_async();
-                    meta.has_index = true;
+                    indexer = CheckpointIndexerFactory::create(
+                        input.file_path, input.index_path,
+                        input.checkpoint_size, true);
                 } else {
-                    indexer =
-                        dftracer::utils::index::gzip::CheckpointIndexerFactory::
-                            create(input.file_path, input.index_path,
-                                   input.checkpoint_size, false);
                     // The root can exist without this file in it, as when a
                     // concurrent first-touch bootstrap reserved the file id.
                     // The build returns at once for a fresh record.
-                    co_await indexer->build_async();
+                    indexer = CheckpointIndexerFactory::create(
+                        input.file_path, input.index_path,
+                        input.checkpoint_size, false);
                 }
-                total_lines = indexer->get_num_lines();
-                meta.uncompressed_size = indexer->get_max_bytes();
-                meta.checkpoint_size = indexer->get_checkpoint_size();
-                meta.num_checkpoints = indexer->get_members().size();
-                root->current[file_key] = internal::IndexedFile{
-                    stamp, total_lines, meta.uncompressed_size,
-                    meta.checkpoint_size, meta.num_checkpoints};
+                co_await indexer->build_async();
+                seen = take(*indexer);
             }
-            meta.index_valid = true;
-            meta.num_lines = total_lines;
         }
+        const std::size_t total_lines = seen->num_lines;
+        meta.uncompressed_size = seen->max_bytes;
+        meta.checkpoint_size = seen->checkpoint_size;
+        meta.num_checkpoints = seen->num_checkpoints;
+        meta.index_valid = true;
+        meta.num_lines = total_lines;
 
         if (total_lines == 0) {
             DFTRACER_UTILS_LOG_DEBUG("File %s has no lines",
@@ -146,7 +201,7 @@ MetadataCollectorUtility::process_compressed(
             co_return meta;
         }
 
-        std::size_t file_size_bytes = fs::file_size(input.file_path);
+        std::size_t file_size_bytes = input_stat.size;
         double size_mb =
             static_cast<double>(file_size_bytes) / (1024.0 * 1024.0);
 
@@ -163,7 +218,9 @@ MetadataCollectorUtility::process_compressed(
                         .with_file(input.file_path)
                         .with_index(input.index_path)
                         .with_line_range(1, total_lines));
-                while (auto line_opt = co_await line_gen.next()) {
+                for (;;) {
+                    auto line_opt = co_await line_gen.next();
+                    if (!line_opt) break;
                     const auto& line = *line_opt;
                     const char* trimmed;
                     std::size_t trimmed_length;

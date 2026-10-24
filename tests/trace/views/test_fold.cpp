@@ -14,7 +14,7 @@
 #include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 
 namespace {
 
@@ -239,7 +239,7 @@ TEST_SUITE("Fold") {
             void step(const FoldBatch& b) override {
                 for (const auto& e : b.events) {
                     if (e.phase !=
-                        dftracer::utils::trace::RecordPhase::METADATA)
+                        dftracer::utils::trace::RecordPhase::Metadata)
                         continue;
                     std::string type(in->resolve(e.name_id));
                     std::string name, value;
@@ -300,7 +300,7 @@ TEST_SUITE("Fold") {
         REQUIRE_FALSE(r.error());
         FoldEvent e = extract_fold_event(r.value_unsafe(), intern, true);
 
-        CHECK(e.phase == dftracer::utils::trace::RecordPhase::METADATA);
+        CHECK(e.phase == dftracer::utils::trace::RecordPhase::Metadata);
         CHECK(intern.resolve(e.name_id) == "FH");
         CHECK(intern.resolve(e.hhash_id) == "hh9");  // hhash always harvested
 
@@ -440,6 +440,36 @@ TEST_SUITE("Fold") {
         CHECK(got.specials.empty());
         CHECK(got.args.capacity() >= wide_args);
         CHECK(buf.events().size() == 1);
+    }
+
+    TEST_CASE("clearing a buffer cuts back what a huge batch or event grew") {
+        FoldEventBuffer buf;
+        const std::size_t slots = FoldEventBuffer::RETAIN_SLOTS + 100;
+        FoldEvent& first = buf.append();
+        first.args.resize(10 * FoldEventBuffer::RETAIN_ENTRIES);
+        first.schema_leaves.resize(10 * FoldEventBuffer::RETAIN_ENTRIES);
+        for (std::size_t i = 1; i < slots; ++i)
+            CHECK(buf.append().args.capacity() <=
+                  FoldEventBuffer::RETAIN_ENTRIES);
+        CHECK(buf.slot_capacity() >= slots);
+        buf.clear();
+        CHECK(buf.empty());
+        CHECK(buf.slot_capacity() <= FoldEventBuffer::RETAIN_SLOTS);
+
+        for (std::size_t i = 0; i < slots; ++i) {
+            FoldEvent& ev = buf.append();
+            CHECK(ev.args.capacity() <= FoldEventBuffer::RETAIN_ENTRIES);
+            CHECK(ev.schema_leaves.capacity() <=
+                  FoldEventBuffer::RETAIN_ENTRIES);
+        }
+        buf.clear();
+        CHECK(buf.slot_capacity() <= FoldEventBuffer::RETAIN_SLOTS);
+
+        FoldEventBuffer small;
+        small.append().args.resize(FoldEventBuffer::RETAIN_ENTRIES);
+        small.clear();
+        CHECK(small.append().args.capacity() >=
+              FoldEventBuffer::RETAIN_ENTRIES);
     }
 
     TEST_CASE("EventRows over a pick list reads only the picked events") {

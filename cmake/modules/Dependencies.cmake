@@ -353,6 +353,50 @@ endfunction()
 # ==============================================================================
 
 
+# The executables replace the global operator new with our heap. A RocksDB built
+# with ROCKSDB_MALLOC_USABLE_SIZE calls malloc_usable_size on blocks it got from
+# new, which crashes, so refuse such a library at configure time. The build
+# leaves an undefined malloc_usable_size (malloc_size on macOS) in that case.
+function(_check_rocksdb_malloc_usable_size TARGET_NAME)
+  if(NOT TARGET ${TARGET_NAME} OR NOT CMAKE_NM)
+    return()
+  endif()
+  get_target_property(_aliased ${TARGET_NAME} ALIASED_TARGET)
+  if(_aliased)
+    set(TARGET_NAME ${_aliased})
+  endif()
+  set(_location "")
+  foreach(_prop IMPORTED_LOCATION IMPORTED_LOCATION_RELEASE
+                IMPORTED_LOCATION_RELWITHDEBINFO IMPORTED_LOCATION_NOCONFIG
+                IMPORTED_LOCATION_DEBUG)
+    get_target_property(_value ${TARGET_NAME} ${_prop})
+    if(_value)
+      set(_location "${_value}")
+      break()
+    endif()
+  endforeach()
+  if(NOT _location OR NOT EXISTS "${_location}")
+    return()
+  endif()
+  set(_nm_flags -u)
+  if(_location MATCHES "\\.(so|dylib)")
+    set(_nm_flags -D -u)
+  endif()
+  execute_process(
+    COMMAND ${CMAKE_NM} ${_nm_flags} "${_location}"
+    OUTPUT_VARIABLE _undefined
+    ERROR_QUIET)
+  if(_undefined MATCHES "(^|[ \n])_?(malloc_usable_size|malloc_size)(@|[ \n]|$)")
+    message(
+      FATAL_ERROR
+        "RocksDB at ${_location} was built with ROCKSDB_MALLOC_USABLE_SIZE. "
+        "The executables replace operator new with the dftracer-utils heap and "
+        "RocksDB would call malloc_usable_size on its blocks. Rebuild RocksDB "
+        "with -DHAVE_MALLOC_USABLE_SIZE=OFF (scripts/ci/build_rocksdb.sh does) "
+        "or build it from source with DFTRACER_UTILS_LOCAL_PACKAGES=OFF.")
+  endif()
+endfunction()
+
 # Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
 function(_use_prebuilt_rocksdb PREFIX)
   list(PREPEND CMAKE_PREFIX_PATH "${PREFIX}")
@@ -364,6 +408,8 @@ function(_use_prebuilt_rocksdb PREFIX)
     PATHS
     "${PREFIX}"
     NO_DEFAULT_PATH)
+  _check_rocksdb_malloc_usable_size(RocksDB::rocksdb)
+  _check_rocksdb_malloc_usable_size(RocksDB::rocksdb-shared)
   dftracer_utils_ok("Using prebuilt RocksDB from ${PREFIX}")
 
   foreach(tool ldb sst_dump)
@@ -456,6 +502,7 @@ function(need_rocksdb)
           "need_rocksdb: RocksDB was found but no usable target could be created."
       )
     endif()
+    _check_rocksdb_malloc_usable_size(RocksDB::rocksdb)
 
     set(RocksDB_FOUND
         ${RocksDB_FOUND}
@@ -525,6 +572,9 @@ function(need_rocksdb)
         target_compile_definitions(rocksdb PUBLIC ROCKSDB_USE_RTTI)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
           target_compile_options(rocksdb PRIVATE -frtti)
+          # The executables replace operator new with our heap, so a block that
+          # RocksDB got from new is not the C library's to size.
+          target_compile_options(rocksdb PRIVATE -UROCKSDB_MALLOC_USABLE_SIZE)
           target_compile_options(rocksdb PUBLIC -Wno-conversion)
         endif()
         # -Wrestrict is a gcc-12 false positive in rocksdb's std::string code.
@@ -548,6 +598,9 @@ function(need_rocksdb)
         target_compile_definitions(rocksdb-shared PUBLIC ROCKSDB_USE_RTTI)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
           target_compile_options(rocksdb-shared PRIVATE -frtti)
+          # The executables replace operator new with our heap, so a block that
+          # RocksDB got from new is not the C library's to size.
+          target_compile_options(rocksdb-shared PRIVATE -UROCKSDB_MALLOC_USABLE_SIZE)
           target_compile_options(rocksdb-shared PUBLIC -Wno-conversion)
         endif()
         # -Wrestrict is a gcc-12 false positive in rocksdb's std::string code.
@@ -1041,7 +1094,7 @@ function(_try_zlib_ng OUT_VAR)
 endfunction()
 
 function(need_zlib)
-  if(DFTRACER_USE_ZLIB_NG)
+  if(DFTRACER_UTILS_USE_ZLIB_NG)
     _try_zlib_ng(_ZLIB_NG_OK)
     if(_ZLIB_NG_OK)
       set(ZLIB_CPM
@@ -2286,30 +2339,7 @@ function(add_stdfs_if_needed TARGET)
   endif()
 endfunction()
 
-# Report which ObjectPool atomics path object_pool.h auto-selects under the
-# active -march (DWCAS if the 16-byte CAS is lock-free, else the packed 64-bit
-# CAS). We add no ISA flags on purpose: forcing -mcx16/+lse would raise the
-# binary's CPU floor and could SIGILL on older hardware. Both paths are
-# lock-free and correct everywhere; the fast path turns on automatically when
-# the toolchain already targets a capable baseline (Apple Silicon,
-# -march=native).
-macro(check_dwcas)
-  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS)
-    try_compile(_dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
-    set(DFTRACER_UTILS_HAS_DWCAS
-        ${_dftracer_has_dwcas}
-        CACHE INTERNAL
-              "ObjectPool: 16-byte CAS is lock-free under active flags")
-  endif()
-
-  dftracer_utils_section("ObjectPool atomics")
-  if(DFTRACER_UTILS_HAS_DWCAS)
-    dftracer_utils_ok("DWCAS fast path (lock-free 16-byte CAS)")
-  else()
-    dftracer_utils_ok("Packed fallback (lock-free 64-bit CAS, portable)")
-  endif()
-
+macro(link_libatomic)
   # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit;
   # every 64-bit target we ship is inline lock-free and does not need it). Only
   # apply the directory-scope link when dftracer-utils owns the build, never

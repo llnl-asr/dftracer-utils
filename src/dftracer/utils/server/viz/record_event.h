@@ -82,7 +82,7 @@ struct TraceFields {
 
     explicit TraceFields(const dftracer::utils::index::RecordSchema& s) {
         namespace ix = dftracer::utils::index;
-        if (s.decoder != ix::Decoder::PATH) return;
+        if (s.decoder != ix::Decoder::Path) return;
         by_path = true;
         time = s.roles.time;
         duration = s.roles.duration;
@@ -96,12 +96,12 @@ struct TraceFields {
         label = s.roles.name;
         entity_name.clear();
         for (const auto& f : s.fields) {
-            if (f.role == ix::Role::ENTITY) entity_name = f.name;
+            if (f.role == ix::Role::Entity) entity_name = f.name;
             if (label.empty() && f.name == "name") label = f.path;
         }
         for (const auto& f : s.fields)
-            if (label.empty() && f.role == ix::Role::NONE &&
-                f.type == ix::FieldType::STRING)
+            if (label.empty() && f.role == ix::Role::None &&
+                f.type == ix::FieldType::String)
                 label = f.path;
     }
 

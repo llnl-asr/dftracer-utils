@@ -1,11 +1,11 @@
-#include <dftracer/utils/core/common/base64.h>
-#include <dftracer/utils/core/common/hash/hash.h>
-#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>  // dftu_series
 #include <dftracer/utils/dataframe/internal/column_read.h>  // read_i64/u64/f64
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/sketch.h>  // DDSketch, sketch_bucket_keys
+#include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <algorithm>
 #include <bit>
@@ -281,9 +281,9 @@ bool plain8(const Series& c, Plain8& out) {
     if (t != TypeId::Int64 && t != TypeId::Uint64 && t != TypeId::Float64)
         return false;
     const dftu_series& h = *c.handle();
-    if (h.encoding != Encoding::Flat || !h.data) return false;
-    out.data = h.data->data();
-    out.validity = h.validity ? h.validity->data() : nullptr;
+    if (h.encoding != Encoding::Flat || !h.data.block()) return false;
+    out.data = h.data.data();
+    out.validity = h.validity.block() ? h.validity.data() : nullptr;
     out.domain = col_domain(t);
     return true;
 }
@@ -336,12 +336,13 @@ bool plain_key(const Series& c, PlainKey& out) {
     if (plain8(c, out.fixed)) return true;
     const dftu_series& h = *c.handle();
     const TypeId narrow = narrow_varwidth_type(h.type);
-    if ((narrow != TypeId::String && narrow != TypeId::Binary) || !h.data)
+    if ((narrow != TypeId::String && narrow != TypeId::Binary) ||
+        !h.data.block())
         return false;
     if (h.encoding == Encoding::Dictionary) {
         const dftu_series* child = h.child().get();
         if (!child) return false;
-        out.codes = reinterpret_cast<const std::int32_t*>(h.data->data());
+        out.codes = reinterpret_cast<const std::int32_t*>(h.data.data());
         out.dvals.resize(static_cast<std::size_t>(child->length));
         for (std::size_t j = 0; j < out.dvals.size(); ++j) {
             std::int64_t n = 0;
@@ -351,28 +352,28 @@ bool plain_key(const Series& c, PlainKey& out) {
                 out.dvals[j] = std::string_view(p, static_cast<std::size_t>(n));
         }
         out.is_str = true;
-        out.fixed.validity = h.validity ? h.validity->data() : nullptr;
+        out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
         return true;
     }
     if (h.encoding == Encoding::View) {
-        out.views = h.data->data();
+        out.views = h.data.data();
         if (h.blobs)
             for (const auto& b : *h.blobs)
                 out.blob_data.push_back(
-                    reinterpret_cast<const char*>(b->data()));
+                    reinterpret_cast<const char*>(b.data()));
         out.is_str = true;
-        out.fixed.validity = h.validity ? h.validity->data() : nullptr;
+        out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
         return true;
     }
     if (h.encoding != Encoding::Flat) return false;
     out.is_str = true;
-    out.text = reinterpret_cast<const char*>(h.data->data());
-    out.text_size = static_cast<std::int64_t>(h.data->size());
-    out.fixed.validity = h.validity ? h.validity->data() : nullptr;
-    if (h.offsets && h.wide_offsets())
-        out.off64 = reinterpret_cast<const std::int64_t*>(h.offsets->data());
-    else if (h.offsets)
-        out.off32 = reinterpret_cast<const std::int32_t*>(h.offsets->data());
+    out.text = reinterpret_cast<const char*>(h.data.data());
+    out.text_size = static_cast<std::int64_t>(h.data.size());
+    out.fixed.validity = h.validity.block() ? h.validity.data() : nullptr;
+    if (h.offsets.block() && h.wide_offsets())
+        out.off64 = reinterpret_cast<const std::int64_t*>(h.offsets.data());
+    else if (h.offsets.block())
+        out.off32 = reinterpret_cast<const std::int32_t*>(h.offsets.data());
     else
         return false;
     return true;
@@ -1591,9 +1592,8 @@ void agg_merge(AggState& into, const AggState& other) {
     agg_merge(into, other, order);
 }
 
-void agg_merge(AggState& into, const AggState& other_in,
+void agg_merge(AggState& into, const AggState& other,
                const std::vector<std::int64_t>& order) {
-    const AggState& other = settled(other_in);
     into.settle_light();
     if (!other.inited) return;
     if (!into.inited) {

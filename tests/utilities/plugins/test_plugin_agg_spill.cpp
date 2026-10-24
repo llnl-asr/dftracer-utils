@@ -3,10 +3,10 @@
 // back with exactly the aggregate an unbudgeted run produces.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -26,9 +26,8 @@
 #include <vector>
 
 using dftracer::utils::CoroScope;
-using dftracer::utils::NO_SPILL_BUDGET;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedDataFrame;
@@ -109,7 +108,7 @@ FoldEvent evt(StringIntern& intern, const std::string& cat,
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.pid = 1;
     fe.tid = 1;
     fe.ts = dur;
@@ -273,8 +272,8 @@ TEST_CASE("plugin accumulator spills past the memory budget, same result") {
     dftu_plugin p = make_plugin(spill_columns);
 
     std::size_t unbounded_runs = 0;
-    const std::map<std::string, Row> want =
-        run_with_budget(p, NO_SPILL_BUDGET, &unbounded_runs, false);
+    const std::map<std::string, Row> want = run_with_budget(
+        p, dftracer::utils::memory::NO_SPILL_BUDGET, &unbounded_runs, false);
     CHECK(unbounded_runs == 0);
     REQUIRE(want.size() == static_cast<std::size_t>(GROUPS));
 
@@ -302,8 +301,8 @@ TEST_CASE("plugin accumulator spill keeps a nested (list) output column") {
     dftu_plugin p = make_plugin(spill_nested_columns);
 
     std::size_t unbounded_runs = 0;
-    const std::map<std::string, Row> want =
-        run_with_budget(p, NO_SPILL_BUDGET, &unbounded_runs, true);
+    const std::map<std::string, Row> want = run_with_budget(
+        p, dftracer::utils::memory::NO_SPILL_BUDGET, &unbounded_runs, true);
     CHECK(unbounded_runs == 0);
 
     std::size_t spill_runs = 0;

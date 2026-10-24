@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/constants.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -69,15 +69,15 @@ dataframe::DataFrame join_batches(const dataframe::DataFrame& left,
             right.columns[static_cast<std::size_t>(i)].type() !=
                 dataframe::TypeId::String)
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "join/compare key columns must be string-typed");
 
-    const bool anti = type == JoinType::LEFT_ANTI;
-    const bool left_only = type == JoinType::LEFT_SEMI || anti;
+    const bool anti = type == JoinType::LeftAnti;
+    const bool left_only = type == JoinType::LeftSemi || anti;
     const bool want_left_only =
-        type == JoinType::LEFT || type == JoinType::FULL || anti;
+        type == JoinType::Left || type == JoinType::Full || anti;
     const bool want_right_only =
-        type == JoinType::RIGHT || type == JoinType::FULL;
+        type == JoinType::Right || type == JoinType::Full;
 
     std::unordered_map<Key, std::int64_t, KeyHash> ridx;
     ridx.reserve(static_cast<std::size_t>(right.num_rows()));

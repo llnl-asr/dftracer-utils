@@ -1,7 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILESYSTEM_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_TYPES_H
 
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 
 #include <cstdint>
 
@@ -21,32 +22,43 @@ struct FileEntry {
 
     FileEntry() = default;
 
+    /// One stat, however many fields are filled.
     explicit FileEntry(const fs::path& p, bool populate_size = true)
         : path(p), size(0), is_directory(false), is_regular_file(false) {
-        if (fs::exists(p)) {
-            is_directory = fs::is_directory(p);
-            is_regular_file = fs::is_regular_file(p);
-            if (populate_size && is_regular_file) {
-                size = fs::file_size(p);
-                mtime = static_cast<std::uint64_t>(
-                    dftracer::utils::file_mtime_seconds(
-                        fs::last_write_time(p)));
-            }
+        dftracer::utils::InputFileStat st;
+        if (!dftracer::utils::stat_input(p, st)) return;
+        is_directory = st.is_directory;
+        is_regular_file = st.is_regular_file;
+        if (populate_size && is_regular_file) {
+            size = static_cast<std::size_t>(st.size);
+            mtime = static_cast<std::uint64_t>(st.mtime);
         }
     }
 
+    /// The directory entry's cached type decides directories and, without
+    /// sizes, regular files. Anything else costs one stat.
     explicit FileEntry(const fs::directory_entry& entry,
                        bool populate_size = true)
         : path(entry.path()),
           size(0),
           is_directory(false),
           is_regular_file(false) {
-        is_directory = entry.is_directory();
-        is_regular_file = entry.is_regular_file();
+        std::error_code ec;
+        if (entry.is_directory(ec)) {
+            is_directory = true;
+            return;
+        }
+        if (!populate_size && entry.is_regular_file(ec)) {
+            is_regular_file = true;
+            return;
+        }
+        dftracer::utils::InputFileStat st;
+        if (!dftracer::utils::stat_input(path, st)) return;
+        is_directory = st.is_directory;
+        is_regular_file = st.is_regular_file;
         if (populate_size && is_regular_file) {
-            size = static_cast<std::size_t>(entry.file_size());
-            mtime = static_cast<std::uint64_t>(
-                dftracer::utils::file_mtime_seconds(entry.last_write_time()));
+            size = static_cast<std::size_t>(st.size);
+            mtime = static_cast<std::uint64_t>(st.mtime);
         }
     }
 };

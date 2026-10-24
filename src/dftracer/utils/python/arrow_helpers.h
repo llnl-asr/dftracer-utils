@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PYTHON_ARROW_HELPERS_H
 #define DFTRACER_UTILS_PYTHON_ARROW_HELPERS_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <Python.h>

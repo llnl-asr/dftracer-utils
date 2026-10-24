@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_ROUTER_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/common/arrow/partition_writer.h>
 
@@ -26,13 +26,13 @@ struct RouterWriteStats {
 
 struct PartitionConfig {
     enum class Mode {
-        NONE,
-        COLUMN,
-        BUCKETED,
-        VIEW,
+        None,
+        Column,
+        Bucketed,
+        View,
     };
 
-    Mode mode = Mode::NONE;
+    Mode mode = Mode::None;
     std::vector<std::string> partition_columns;
     int num_buckets = 0;
     std::vector<std::pair<std::string, std::optional<std::string>>> views;

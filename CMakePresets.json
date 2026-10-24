@@ -52,6 +52,18 @@
       }
     },
     {
+      "name": "bench",
+      "displayName": "Benchmarks (Release)",
+      "description": "Release build with the standalone benchmarks; the smoke ctests need DFTRACER_UTILS_TESTS",
+      "inherits": "release",
+      "cacheVariables": {
+        "DFTRACER_UTILS_BUILD_BENCHMARKS": "ON",
+        "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_BUILD_PYTHON": "ON",
+        "DFTRACER_UTILS_BUILD_STATIC": "OFF"
+      }
+    },
+    {
       "name": "shared-only",
       "displayName": "Shared Library Only (RelWithDebInfo)",
       "description": "Build only shared library",
@@ -79,7 +91,17 @@
         "DFTRACER_UTILS_TESTS": "ON",
         "DFTRACER_UTILS_DEBUG": "ON",
         "DFTRACER_UTILS_BUILD_PYTHON": "ON",
-        "DFTRACER_UTILS_BUILD_STATIC": "OFF"
+        "DFTRACER_UTILS_BUILD_STATIC": "ON"
+      }
+    },
+    {
+      "name": "tests-single",
+      "displayName": "Tests, single library (RelWithDebInfo)",
+      "description": "Tests with one library dftracer_utils instead of one per area",
+      "inherits": "tests",
+      "binaryDir": "${sourceDir}/build/build-tests-single",
+      "cacheVariables": {
+        "DFTRACER_UTILS_SINGLE_LIBRARY": "ON"
       }
     },
     {
@@ -100,6 +122,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_ASAN": "ON"
       }
     },
@@ -110,6 +133,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_TSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
@@ -121,6 +145,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
       }
@@ -132,6 +157,7 @@
       "inherits": "debug",
       "cacheVariables": {
         "DFTRACER_UTILS_TESTS": "ON",
+        "DFTRACER_UTILS_MEMORY_BACKEND": "system",
         "DFTRACER_UTILS_ENABLE_ASAN": "ON",
         "DFTRACER_UTILS_ENABLE_UBSAN": "ON",
         "DFTRACER_UTILS_COVERAGE": "OFF"
@@ -164,6 +190,21 @@
       "jobs": 0
     },
     {
+      "name": "bench",
+      "displayName": "Benchmarks Build",
+      "configurePreset": "bench",
+      "targets": [
+        "view_api_bench",
+        "index_bench",
+        "duql_eval_bench",
+        "group_transform_bench",
+        "slice_bench",
+        "spill_harness",
+        "dftracer_utils_ext"
+      ],
+      "jobs": 0
+    },
+    {
       "name": "shared-only",
       "displayName": "Shared Library Build",
       "configurePreset": "shared-only",
@@ -179,6 +220,12 @@
       "name": "tests",
       "displayName": "Tests Build",
       "configurePreset": "tests",
+      "jobs": 0
+    },
+    {
+      "name": "tests-single",
+      "displayName": "Tests Build (single library)",
+      "configurePreset": "tests-single",
       "jobs": 0
     },
     {
@@ -218,7 +265,23 @@
       "displayName": "Run Tests",
       "configurePreset": "tests",
       "environment": {
-        "DFTRACER_UTILS_ELASTIC": "0"
+        "DFTRACER_UTILS_ELASTIC": "0",
+        "DFTRACER_UTILS_MEMORY_EXIT_CHECK": "1"
+      },
+      "execution": {
+        "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tests-single",
+      "displayName": "Run Tests (single library)",
+      "configurePreset": "tests-single",
+      "environment": {
+        "DFTRACER_UTILS_ELASTIC": "0",
+        "DFTRACER_UTILS_MEMORY_EXIT_CHECK": "1"
       },
       "execution": {
         "jobs": 0
@@ -275,6 +338,7 @@
       "displayName": "Run UBSAN Tests",
       "configurePreset": "ubsan",
       "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:suppressions=${sourceDir}/tests/ubsan/ubsan.supp",
         "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
@@ -289,10 +353,25 @@
       "displayName": "Run ASAN+UBSAN Tests",
       "configurePreset": "asan-ubsan",
       "environment": {
+        "UBSAN_OPTIONS": "print_stacktrace=1:suppressions=${sourceDir}/tests/ubsan/ubsan.supp",
         "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
         "jobs": 0
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "bench",
+      "displayName": "Run Benchmark Smoke Tests",
+      "configurePreset": "bench",
+      "environment": {
+        "DFTRACER_UTILS_ELASTIC": "0"
+      },
+      "execution": {
+        "jobs": 1
       },
       "output": {
         "outputOnFailure": true

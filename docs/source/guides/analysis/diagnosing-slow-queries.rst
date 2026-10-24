@@ -166,7 +166,7 @@ rescanning. ``View::materialize(group_by, agg)`` (C++) is the build-only form
 when you only want the side effect. This trades one-time build cost for repeated-query speed. Reach for
 it once step 1-4 confirm the per-query cost itself is already as low as it
 can go, not as a first move. Results live in ``.dftindex-cache`` beside the
-index, capped per store by ``DFTRACER_CACHE_MAX_BYTES`` (least recently used
+index, capped per store by ``DFTRACER_UTILS_CACHE_MAX_BYTES`` (least recently used
 entries go first); deleting the folder only costs a rebuild. See
 "Materialized views" in
 :doc:`../analysis/views` and :doc:`../analysis/aggregation`.

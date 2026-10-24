@@ -1,8 +1,10 @@
-#include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <algorithm>
+#include <memory>
 
 namespace dftracer::utils::dataframe {
 
@@ -92,9 +94,14 @@ class FirstRowsSpill {
    public:
     using Already = std::function<std::int64_t(const std::string&)>;
 
+    // `gov` is the owning cursor's; `held` is what that cursor keeps in
+    // memory beside the spool.
     FirstRowsSpill(std::uint64_t budget, std::int64_t keep,
-                   std::int64_t first_id, Already already)
-        : budget_(budget),
+                   std::int64_t first_id, Already already, Governor& gov,
+                   std::uint64_t held)
+        : gov_(gov),
+          held_(held),
+          budget_(budget),
           keep_(keep),
           next_id_(first_id),
           replay_id_(first_id),
@@ -123,6 +130,11 @@ class FirstRowsSpill {
         }
         next_id_ += n;
         spool_.add(std::move(m.columns), n);
+        if (has_cap(budget_) && gov_.check(held_ + spool_.memory_bytes(),
+                                           spool_.memory_bytes()) != 0) {
+            spool_.spill();
+            gov_.spilled(held_ + spool_.memory_bytes());
+        }
     }
 
     coro::CoroTask<void> finish() {
@@ -153,7 +165,9 @@ class FirstRowsSpill {
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) {
         if (runs_.empty()) co_return std::nullopt;
-        while (auto m = co_await replay_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await replay_->next(max_rows);
+            if (!m) break;
             const std::int64_t lo = replay_id_;
             const std::int64_t hi = lo + m->rows;
             replay_id_ = hi;
@@ -236,8 +250,7 @@ class FirstRowsSpill {
         flush();
         out.close();
         heads.clear();
-        std::error_code ec;
-        for (const std::string& path : paths) fs::remove(path, ec);
+        for (const std::string& path : paths) dir_.remove_run(path);
         co_return out_path;
     }
 
@@ -249,7 +262,9 @@ class FirstRowsSpill {
             rows > UNIQUE_SPILL_MIN_LEAF_ROWS) {
             spill::HashPartitions sub(dir_, UNIQUE_SPILL_FANOUT);
             spill::Reader reader(path);
-            while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
+            for (;;) {
+                auto m = co_await reader.next(DEFAULT_MORSEL_ROWS);
+                if (!m) break;
                 std::vector<std::vector<std::int64_t>> pick(
                     UNIQUE_SPILL_FANOUT);
                 for (std::int64_t i = 0; i < m->rows; ++i)
@@ -285,7 +300,9 @@ class FirstRowsSpill {
             any = true;
         };
         spill::Reader reader(path);
-        while (auto m = co_await reader.next(DEFAULT_MORSEL_ROWS)) {
+        for (;;) {
+            auto m = co_await reader.next(DEFAULT_MORSEL_ROWS);
+            if (!m) break;
             const std::int64_t* row_ids = m->columns[0].data<std::int64_t>();
             for (std::int64_t i = 0; i < m->rows; ++i) {
                 const std::string_view key = m->columns[1].string_at(i);
@@ -306,6 +323,8 @@ class FirstRowsSpill {
         if (any) survivor_paths_.push_back(out_path);
     }
 
+    Governor& gov_;
+    std::uint64_t held_;
     std::uint64_t budget_;
     std::int64_t keep_;
     std::int64_t next_id_;
@@ -319,6 +338,13 @@ class FirstRowsSpill {
     std::unique_ptr<Cursor> replay_;
 };
 
+// A key set cannot leave memory: the rest of the input checks against it. So
+// a request posted by another holder frees nothing, and only a refused grow
+// turns the rest of the input to the external path.
+bool refused(Governor& gov, std::uint64_t budget, std::uint64_t keys) {
+    return has_cap(budget) && gov.check(keys, 0) != 0;
+}
+
 // Keeps the first n rows of each distinct key tuple, in input order. Streams:
 // holds one counter per distinct key. A null key is its own key.
 class HeadByCursor : public Cursor {
@@ -330,10 +356,14 @@ class HeadByCursor : public Cursor {
           n_(n),
           budget_(budget) {}
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (n_ <= 0) co_return std::nullopt;
         if (!spilling_) {
-            while (auto m = co_await in_->next(max_rows)) {
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 const std::int64_t rows = m->rows;
                 std::vector<std::string> keys = keys_of(*m);
                 std::vector<std::int64_t> keep;
@@ -350,7 +380,9 @@ class HeadByCursor : public Cursor {
                     }
                 }
                 next_row_id_ += rows;
-                if (budget_ > 0 && fast_bytes_ > budget_ / share::SPILL_STATE)
+                if (budget_ > 0 &&
+                    (fast_bytes_ > budget_ / share::SPILL_STATE ||
+                     refused(gov_, budget_, fast_bytes_)))
                     spilling_ = true;
                 if (keep.empty()) {
                     if (spilling_) break;
@@ -368,11 +400,15 @@ class HeadByCursor : public Cursor {
         }
         if (!external_) {
             external_ = std::make_unique<FirstRowsSpill>(
-                budget_, n_, next_row_id_, [this](const std::string& key) {
+                budget_, n_, next_row_id_,
+                [this](const std::string& key) {
                     const auto it = counts_.find(key);
                     return it == counts_.end() ? std::int64_t{0} : it->second;
-                });
-            while (auto m = co_await in_->next(max_rows)) {
+                },
+                gov_, fast_bytes_);
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 std::vector<std::string> keys = keys_of(*m);
                 external_->add(std::move(*m), std::move(keys));
             }
@@ -404,6 +440,7 @@ class HeadByCursor : public Cursor {
     std::size_t fast_bytes_ = 0;
     std::int64_t next_row_id_ = 0;
     bool spilling_ = false;
+    Governor gov_{"head_by"};
     std::unique_ptr<FirstRowsSpill> external_;
 };
 
@@ -419,13 +456,22 @@ class UniqueCursor : public Cursor {
         : in_(std::move(in)),
           sch_(std::move(sch)),
           key_idx_(std::move(key_idx)),
-          budget_(budget) {
-        if (parallel_backend_installed()) seen_p_.resize(DEDUP_PARTITIONS);
+          budget_(budget),
+          seen_(arena_pool()) {
+        if (parallel_backend_installed()) {
+            seen_p_.reserve(DEDUP_PARTITIONS);
+            for (std::size_t g = 0; g < DEDUP_PARTITIONS; ++g)
+                seen_p_.push_back(std::make_unique<HashArena>(arena_pool()));
+        }
     }
+
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!spilling_) {
-            while (auto m = co_await in_->next(max_rows)) {
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 const std::int64_t n = m->rows;
                 // Build each row's key bytes once, in parallel: one buffer per
                 // chunk of rows (not one allocation per row) plus the row's
@@ -466,7 +512,22 @@ class UniqueCursor : public Cursor {
                            key_off[at];
                 };
                 std::vector<std::uint8_t> keep_mask(nz, 0);
+                // The arenas reserve before they grow: the bound is what they
+                // would hold if every key of the morsel were new.
+                bool refuse = false;
                 if (seen_p_.empty()) {
+                    if (has_cap(budget_)) {
+                        std::size_t key_total = 0;
+                        std::size_t key_max = 0;
+                        for (std::size_t at = 0; at < nz; ++at) {
+                            key_total += key_len[at];
+                            key_max =
+                                std::max<std::size_t>(key_max, key_len[at]);
+                        }
+                        refuse =
+                            refused(gov_, budget_,
+                                    seen_.bytes_after(nz, key_total, key_max));
+                    }
                     for (std::size_t at = 0; at < nz; ++at)
                         if (seen_.insert(hashes[at], key_ptr(at), key_len[at]))
                             keep_mask[at] = 1;
@@ -475,6 +536,21 @@ class UniqueCursor : public Cursor {
                     std::vector<std::vector<std::size_t>> buckets(p);
                     for (std::size_t at = 0; at < nz; ++at)
                         buckets[hashes[at] % p].push_back(at);
+                    if (has_cap(budget_)) {
+                        std::uint64_t bound = 0;
+                        for (std::size_t g = 0; g < p; ++g) {
+                            std::size_t key_total = 0;
+                            std::size_t key_max = 0;
+                            for (std::size_t at : buckets[g]) {
+                                key_total += key_len[at];
+                                key_max =
+                                    std::max<std::size_t>(key_max, key_len[at]);
+                            }
+                            bound += seen_p_[g]->bytes_after(
+                                buckets[g].size(), key_total, key_max);
+                        }
+                        refuse = refused(gov_, budget_, bound);
+                    }
                     parallel_for(
                         static_cast<std::int64_t>(p), 1,
                         [&](std::int64_t pb, std::int64_t pe) {
@@ -482,8 +558,8 @@ class UniqueCursor : public Cursor {
                                 for (std::size_t at :
                                      buckets[static_cast<std::size_t>(g)])
                                     if (seen_p_[static_cast<std::size_t>(g)]
-                                            .insert(hashes[at], key_ptr(at),
-                                                    key_len[at]))
+                                            ->insert(hashes[at], key_ptr(at),
+                                                     key_len[at]))
                                         keep_mask[at] = 1;
                         });
                 }
@@ -496,7 +572,8 @@ class UniqueCursor : public Cursor {
                                    DEDUP_ENTRY_OVERHEAD;
                 }
                 next_row_id_ += n;
-                if (budget_ > 0 && fast_bytes_ > budget_ / share::SPILL_STATE)
+                if (budget_ > 0 &&
+                    (fast_bytes_ > budget_ / share::SPILL_STATE || refuse))
                     spilling_ = true;
                 if (!keep.empty()) {
                     DataFrame mf = frame_of(std::move(m->columns), sch_);
@@ -508,11 +585,15 @@ class UniqueCursor : public Cursor {
         }
         if (!external_) {
             external_ = std::make_unique<FirstRowsSpill>(
-                budget_, 1, next_row_id_, [this](const std::string& key) {
+                budget_, 1, next_row_id_,
+                [this](const std::string& key) {
                     return already_seen(key) ? std::int64_t{1}
                                              : std::int64_t{0};
-                });
-            while (auto m = co_await in_->next(max_rows)) {
+                },
+                gov_, arena_bytes());
+            for (;;) {
+                auto m = co_await in_->next(max_rows);
+                if (!m) break;
                 std::vector<std::string> keys(
                     static_cast<std::size_t>(m->rows));
                 const std::vector<Series> kc = key_cols(m->columns);
@@ -550,16 +631,29 @@ class UniqueCursor : public Cursor {
             hash::fnv1a_mix(hash::fnv1a_hash(key.data(), key.size()));
         const auto len = static_cast<std::uint32_t>(key.size());
         if (!seen_p_.empty())
-            return seen_p_[h % seen_p_.size()].contains(h, key.data(), len);
+            return seen_p_[h % seen_p_.size()]->contains(h, key.data(), len);
         return seen_.contains(h, key.data(), len);
+    }
+
+    // The arenas never leave the cursor, so they live in its Scratch pool.
+    memory::Pool& arena_pool() const {
+        return gov_.pool() ? *gov_.pool() : memory::current_pool();
+    }
+
+    std::uint64_t arena_bytes() const {
+        std::uint64_t total = seen_.bytes();
+        for (const std::unique_ptr<HashArena>& a : seen_p_) total += a->bytes();
+        return total;
     }
 
     std::unique_ptr<Cursor> in_;
     std::vector<std::string> sch_;
     std::vector<std::int64_t> key_idx_;
     std::uint64_t budget_;
+    // Declared before the arenas: its pool closes after they free.
+    Governor gov_{"unique"};
     HashArena seen_;
-    std::vector<HashArena> seen_p_;
+    std::vector<std::unique_ptr<HashArena>> seen_p_;
     std::size_t fast_bytes_ = 0;
     std::int64_t next_row_id_ = 0;
     bool spilling_ = false;

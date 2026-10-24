@@ -23,16 +23,11 @@ function(target_enable_coverage target ENABLE_COVERAGE)
   endif()
 endfunction()
 
-function(set_coverage_compiler_flags ENABLE_COVERAGE)
-  if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(CMAKE_CXX_FLAGS_DEBUG
-        "${CMAKE_CXX_FLAGS_DEBUG} --coverage -fprofile-arcs -ftest-coverage")
-    set(CMAKE_C_FLAGS_DEBUG
-        "${CMAKE_C_FLAGS_DEBUG} --coverage -fprofile-arcs -ftest-coverage")
-    set(CMAKE_EXE_LINKER_FLAGS_DEBUG
-        "${CMAKE_EXE_LINKER_FLAGS_DEBUG} --coverage")
-    set(CMAKE_SHARED_LINKER_FLAGS_DEBUG
-        "${CMAKE_SHARED_LINKER_FLAGS_DEBUG} --coverage")
+function(set_coverage_compiler_flags)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    # Threads share the counters; a racy increment can leave a negative count,
+    # which gcovr rejects. Directory scope reaches every target added later.
+    add_compile_options(-fprofile-update=atomic)
   endif()
 endfunction()
 

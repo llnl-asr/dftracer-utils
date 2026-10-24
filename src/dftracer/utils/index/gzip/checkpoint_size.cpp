@@ -1,5 +1,6 @@
-#include <dftracer/utils/core/common/bits.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <fcntl.h>
@@ -23,8 +24,7 @@ static bool read_isize_last4(int fd, uint32_t& out) {
     if (end < 0) return false;
     unsigned char b[4]{};
     if (::pread(fd, b, 4, end) != 4) return false;
-    out = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) |
-          ((uint32_t)b[3] << 24);
+    out = dftracer::utils::read_u32_le(b);
     return true;
 }
 
@@ -54,9 +54,7 @@ static std::string read_gzip_fname(int fd) {
     if (flg & 0x04) {
         unsigned char x[2];
         if (::pread(fd, x, 2, pos) != 2) return {};
-        auto xlen =
-            static_cast<std::uint16_t>(static_cast<std::uint16_t>(x[0]) |
-                                       (static_cast<std::uint16_t>(x[1]) << 8));
+        auto xlen = dftracer::utils::read_u16_le(x);
         pos += 2 + xlen;
     }
     std::string name;

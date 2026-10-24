@@ -1,12 +1,12 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_DATAFRAME_H
 #define DFTRACER_UTILS_DATAFRAME_DATAFRAME_H
 
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 
 #include <cstddef>
 #include <cstdint>

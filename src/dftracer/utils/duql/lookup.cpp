@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/vectorize.h>
@@ -18,7 +18,7 @@ namespace {
 namespace df = dftracer::utils::dataframe;
 
 [[noreturn]] void fail(const std::string& why) {
-    throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT, "View::duql " + why);
+    throw DFTUtilsException(ErrorCode::InvalidArgument, "View::duql " + why);
 }
 
 bool bit(const df::Series& s, std::int64_t r) {
@@ -313,8 +313,8 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
     const df::DataFrame& f = *t.frame;
     const df::Series& by = f.columns[range];
     const df::Series* arg = value ? &f.columns[*value] : nullptr;
-    const bool tree = read != RangeRead::ROWS && read != RangeRead::COUNT;
-    if ((read == RangeRead::SUM || read == RangeRead::MEAN) && arg) {
+    const bool tree = read != RangeRead::Rows && read != RangeRead::Count;
+    if ((read == RangeRead::Sum || read == RangeRead::Mean) && arg) {
         const df::TypeId type = arg->type();
         const bool number = integral(type) || type == df::TypeId::Float32 ||
                             type == df::TypeId::Float64 ||
@@ -346,17 +346,17 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
             RangeIndex::Node leaf;
             if (arg && !arg->is_null(r)) {
                 switch (read) {
-                    case RangeRead::COUNT_VALUES:
+                    case RangeRead::CountValues:
                         leaf.count = 1;
                         break;
-                    case RangeRead::COUNT_IF: {
+                    case RangeRead::CountIf: {
                         const auto b = ordered_of(*arg, r, ix->owned);
                         const auto* yes = b ? std::get_if<bool>(&*b) : nullptr;
                         leaf.count = yes && *yes ? 1 : 0;
                         break;
                     }
-                    case RangeRead::SUM:
-                    case RangeRead::MEAN:
+                    case RangeRead::Sum:
+                    case RangeRead::Mean:
                         leaf.count = 1;
                         if (ix->integral)
                             leaf.isum = std::visit(
@@ -378,15 +378,15 @@ void index_range(LookupTable& t, RangeRead read, std::size_t range,
                         else
                             leaf.fsum = std::nan("");
                         break;
-                    case RangeRead::MIN:
-                    case RangeRead::MAX:
+                    case RangeRead::Min:
+                    case RangeRead::Max:
                         ix->args.resize(ix->rows.size());
                         ix->args.back() = ordered_of(*arg, r, ix->owned);
                         if (ix->args.back()) leaf.best = at;
                         break;
-                    case RangeRead::NONE:
-                    case RangeRead::ROWS:
-                    case RangeRead::COUNT:
+                    case RangeRead::None:
+                    case RangeRead::Rows:
+                    case RangeRead::Count:
                         break;
                 }
             }
@@ -411,13 +411,13 @@ std::shared_ptr<const LookupTable> make_lookup_table(
     const df::DataFrame& f = *frame;
     std::vector<std::size_t> columns;
     std::optional<std::size_t> range;
-    if (l.range != RangeRead::NONE) {
+    if (l.range != RangeRead::None) {
         range = column_of(f, CORRELATED_RANGE);
         if (!range)
             fail("'" + l.name + "' has no column '" + CORRELATED_RANGE + "'");
     }
     switch (l.kind) {
-        case LookupKind::IN:
+        case LookupKind::In:
             if (!range && f.columns.size() != l.keys.size())
                 fail("'" + l.name + "' gives " +
                      std::to_string(f.columns.size()) +
@@ -426,7 +426,7 @@ std::shared_ptr<const LookupTable> make_lookup_table(
             for (std::size_t i = 0; i < f.columns.size(); ++i)
                 if (!range || i != *range) columns.push_back(i);
             break;
-        case LookupKind::ARROW:
+        case LookupKind::Arrow:
             for (const auto& target : l.target) {
                 const auto c = column_of(f, target);
                 if (!c)
@@ -435,7 +435,7 @@ std::shared_ptr<const LookupTable> make_lookup_table(
                 columns.push_back(*c);
             }
             break;
-        case LookupKind::SCALAR:
+        case LookupKind::Scalar:
             if (!l.keys.empty()) {
                 for (const auto& target : l.target) {
                     const auto c = column_of(f, target);
@@ -454,11 +454,11 @@ std::shared_ptr<const LookupTable> make_lookup_table(
     }
     auto t = std::const_pointer_cast<LookupTable>(
         make_lookup_table(l.name, std::move(frame), columns));
-    if (l.kind == LookupKind::ARROW) t->value = column_of(*t->frame, l.column);
-    if (l.kind == LookupKind::SCALAR && l.keys.empty() &&
+    if (l.kind == LookupKind::Arrow) t->value = column_of(*t->frame, l.column);
+    if (l.kind == LookupKind::Scalar && l.keys.empty() &&
         !t->frame->columns.empty())
         t->value = 0;
-    if (l.kind == LookupKind::SCALAR && !l.keys.empty())
+    if (l.kind == LookupKind::Scalar && !l.keys.empty())
         t->value = column_of(*t->frame, l.column);
     if (range) index_range(*t, l.range, *range, t->value);
     if (t->value) {
@@ -520,12 +520,12 @@ df::Series range_column(const TLookup& t, const LookupTable& table,
     const std::size_t bounds = (t.low ? 1 : 0) + (t.high ? 1 : 0);
     const std::size_t keyed = keys.size() - bounds;
     const std::size_t subject = keys.size() - t.correlated;
-    const bool in = t.kind == LookupKind::IN;
+    const bool in = t.kind == LookupKind::In;
     const bool picks =
-        !in && (t.range == RangeRead::ROWS || t.range == RangeRead::MIN ||
-                t.range == RangeRead::MAX);
-    const bool reals = t.range == RangeRead::MEAN ||
-                       (t.range == RangeRead::SUM && !table.range->integral);
+        !in && (t.range == RangeRead::Rows || t.range == RangeRead::Min ||
+                t.range == RangeRead::Max);
+    const bool reals = t.range == RangeRead::Mean ||
+                       (t.range == RangeRead::Sum && !table.range->integral);
     const auto rows = static_cast<std::size_t>(n);
     std::vector<std::uint8_t> bits((rows + 7) / 8, 0);
     std::vector<std::uint8_t> valid(bits.size(), 0);
@@ -549,9 +549,9 @@ df::Series range_column(const TLookup& t, const LookupTable& table,
         RangeAnswer a;
         if (known == keyed) {
             a = range_answer(t, table, key, low, high);
-        } else if (t.range == RangeRead::COUNT ||
-                   t.range == RangeRead::COUNT_VALUES ||
-                   t.range == RangeRead::COUNT_IF) {
+        } else if (t.range == RangeRead::Count ||
+                   t.range == RangeRead::CountValues ||
+                   t.range == RangeRead::CountIf) {
             a.number = Number{std::int64_t{0}};
         }
         const auto bit = static_cast<std::uint8_t>(1u << (r & 7));
@@ -585,16 +585,16 @@ df::Series lookup_column(const TLookup& t,
                          std::int64_t n) {
     const LookupTable* table = t.slot ? t.slot->table.get() : nullptr;
     if (!table) fail("'" + t.name + "' was read before its rows were bound");
-    if (t.range != RangeRead::NONE) return range_column(t, *table, keys, n);
+    if (t.range != RangeRead::None) return range_column(t, *table, keys, n);
     const df::DataFrame& f = *table->frame;
-    if (t.kind == LookupKind::SCALAR) {
+    if (t.kind == LookupKind::Scalar) {
         if (f.num_rows() == 0 || f.columns.empty())
             return df::Series::nulls(df::TypeId::Bool, n);
         return f.columns[0].take(
             std::vector<std::int64_t>(static_cast<std::size_t>(n), 0));
     }
     const Matches m = match(*table, keys, n);
-    if (t.kind == LookupKind::IN) {
+    if (t.kind == LookupKind::In) {
         std::vector<std::uint8_t> out((static_cast<std::size_t>(n) + 7) / 8, 0);
         std::vector<std::uint8_t> valid(out.size(), 0);
         const std::size_t subject = t.keys.size() - t.correlated;

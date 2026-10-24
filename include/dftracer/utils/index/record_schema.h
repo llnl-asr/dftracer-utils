@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
-#include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <charconv>
 #include <cmath>
@@ -19,18 +19,18 @@ namespace dftracer::utils::index {
 
 /// How a schema's records are decoded: the dftracer event decoder, or every
 /// scalar leaf by exact JSON path.
-enum class Decoder : std::uint8_t { DFTRACER = 0, PATH = 1 };
+enum class Decoder : std::uint8_t { Dftracer = 0, Path = 1 };
 
 /// The type a field declares; a View reads the field as this type. JSON holds
 /// any value, an object or array included, as canonical JSON text.
-enum class FieldType : std::uint8_t { BOOL, INT, FLOAT, STRING, JSON };
+enum class FieldType : std::uint8_t { Bool, Int, Float, String, Json };
 
 /// The trace role a field plays. ENTITY is the process a record belongs to
 /// (dftracer pid), LANE the thread within it (tid) and NAME the event's name.
-enum class Role : std::uint8_t { NONE, TIME, DURATION, ENTITY, LANE, NAME };
+enum class Role : std::uint8_t { None, Time, Duration, Entity, Lane, Name };
 
 /// The unit of a time or duration field.
-enum class TimeUnit : std::uint8_t { NS, US, MS, S };
+enum class TimeUnit : std::uint8_t { Ns, Us, Ms, S };
 
 /// Microseconds in one `unit`.
 double micros_per(TimeUnit unit);
@@ -72,11 +72,11 @@ struct FieldSpec {
     std::string name;
     /// The JSON path, as the records write it; empty means `name`.
     std::string path;
-    FieldType type = FieldType::STRING;
+    FieldType type = FieldType::String;
     /// An optional field is not needed for detection; a schema whose fields
     /// are all optional is detected by any of them.
     bool optional = false;
-    Role role = Role::NONE;
+    Role role = Role::None;
     /// Only for the TIME and DURATION roles; microseconds when unset.
     std::optional<TimeUnit> unit;
     /// Indexed even past the path budget.
@@ -95,8 +95,8 @@ struct Roles {
     std::string lane;
     std::string name;
     std::string phase;
-    TimeUnit time_unit = TimeUnit::US;
-    TimeUnit duration_unit = TimeUnit::US;
+    TimeUnit time_unit = TimeUnit::Us;
+    TimeUnit duration_unit = TimeUnit::Us;
 };
 
 /// What register_schema resolves into a RecordSchema: fields and source
@@ -117,7 +117,7 @@ struct SchemaSpec {
 /// A record format: how to detect it, decode it and read its roles.
 struct RecordSchema {
     std::string id;
-    Decoder decoder = Decoder::PATH;
+    Decoder decoder = Decoder::Path;
     /// Resolved fields, the parent's first, each with its path set.
     std::vector<FieldSpec> fields;
     /// The duql source: row sets (`name = pipeline`) and macros, as canonical
@@ -162,7 +162,7 @@ struct RecordSchema {
 /// Every registered schema: the built-ins "dftracer", "generic" and
 /// "genesis" first, then user schemas in registration order. Schemas stay
 /// registered, and the pointers valid, until the process exits. The first
-/// registry access loads $DFTRACER_SCHEMA_PATH. Thread-safe.
+/// registry access loads $DFTRACER_UTILS_SCHEMA_PATH. Thread-safe.
 std::vector<const RecordSchema*> registered_schemas();
 
 /// The registered schema `id`, or null.
@@ -249,6 +249,12 @@ SchemaDetection explain_schema(std::span<const std::string_view> lines);
 /// read.
 SchemaDetection explain_file_schema(const std::string& file_path);
 
+/// The same over an open file of `size` bytes modified at `mtime_ns`
+/// nanoseconds since the epoch, read with pread. `fd` stays open and owned by
+/// the caller.
+SchemaDetection explain_file_schema(const std::string& file_path, int fd,
+                                    std::uint64_t size, std::int64_t mtime_ns);
+
 /// `d` as a JSON object: chosen (id), objects, records, and scores, each with
 /// id, required (the count of required paths) and share.
 std::string to_json(const SchemaDetection& d);
@@ -258,6 +264,11 @@ const RecordSchema& detect_schema(std::span<const std::string_view> lines);
 
 /// explain_file_schema(file_path).chosen.
 const RecordSchema& detect_file_schema(const std::string& file_path);
+
+/// explain_file_schema(file_path, fd, size, mtime_ns).chosen.
+const RecordSchema& detect_file_schema(const std::string& file_path, int fd,
+                                       std::uint64_t size,
+                                       std::int64_t mtime_ns);
 
 }  // namespace dftracer::utils::index
 

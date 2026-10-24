@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Build scripts/duql.lark with Lark's LALR(1) generator and check samples.
 
-Run: uv run --no-project --with lark python scripts/check_duql_grammar.py
+Run: uv run --no-project --python ">=3.8" --with lark python scripts/check_duql_grammar.py
 Exits non-zero on any grammar conflict, any valid sample that does not
 parse, or any invalid sample that parses.
 """
+
+from __future__ import annotations
 
 import argparse
 import logging

@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -243,7 +243,7 @@ Result<ConfigTree> parse_config_json(const std::string& path,
         return ConfigTree::from_json_string(json);
     } catch (const std::exception& e) {
         return make_error(
-            ErrorCode::PARSE,
+            ErrorCode::Parse,
             "plugin '" + path + "' config does not parse: " + e.what());
     }
 }
@@ -275,18 +275,19 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
     void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         const char* why = dlerror();
-        return make_error(ErrorCode::IO,
+        return make_error(ErrorCode::Io,
                           "plugin '" + path + "' failed to load: " +
                               (why ? why : "unknown dlopen error"));
     }
 
     auto factory = reinterpret_cast<dftu_plugin_factory>(
-        dlsym(handle, DFTRACER_PLUGIN_FACTORY_SYMBOL));
+        dlsym(handle, DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL));
     if (!factory) {
         dlclose(handle);
-        return make_error(ErrorCode::NOT_FOUND,
+        return make_error(ErrorCode::NotFound,
                           "plugin '" + path + "' exports no '" +
-                              DFTRACER_PLUGIN_FACTORY_SYMBOL + "' symbol");
+                              DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL +
+                              "' symbol");
     }
 
     BuildHost build_host(plugin_name_from_path(path));
@@ -316,7 +317,7 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
         unregister_all();
         dlclose(handle);
         return make_error(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "plugin '" + path + "' factory asked for '" + build_host.denied() +
                 "', which the build-phase host does not provide. A factory may "
                 "only register ops, state types and ports; the full host "
@@ -326,7 +327,7 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
     if (!plugin) {
         unregister_all();
         dlclose(handle);
-        return make_error(ErrorCode::INVALID_ARGUMENT,
+        return make_error(ErrorCode::InvalidArgument,
                           "plugin '" + path + "' factory returned null");
     }
 
@@ -336,7 +337,7 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
         unregister_all();
         dlclose(handle);
         return make_error(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "plugin '" + path + "' ABI version " + std::to_string(got) +
                 " does not match host " +
                 std::to_string(DFTRACER_UTILS_PLUGIN_ABI_VERSION));
@@ -346,7 +347,7 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
         if (plugin->destroy) plugin->destroy(plugin->self);
         unregister_all();
         dlclose(handle);
-        return make_error(ErrorCode::INVALID_ARGUMENT,
+        return make_error(ErrorCode::InvalidArgument,
                           "plugin '" + path + "' config: " + bad);
     }
 
@@ -369,7 +370,7 @@ Result<Plugins::Impl::Loaded> load_plugin(const std::string& path,
             unregister_all();
             dlclose(handle);
             return make_error(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "plugin '" + path + "' plan_duql '" + plan +
                     "' does not parse: " + parsed.error().message);
         }
@@ -443,7 +444,7 @@ Result<void> settle_order(Plugins::Impl& impl) {
             for (const std::string& name : name_list(*slot, pl->self))
                 if (is_host_namespace(name))
                     return make_error(
-                        ErrorCode::INVALID_ARGUMENT,
+                        ErrorCode::InvalidArgument,
                         "plugin " + plugin_label(impl, i) + " declares '" +
                             name +
                             "'; the 'dftu.' namespace belongs to the host and "
@@ -457,7 +458,7 @@ Result<void> settle_order(Plugins::Impl& impl) {
             auto [it, fresh] = producer.emplace(name, i);
             if (!fresh)
                 return make_error(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "plugins " + plugin_label(impl, it->second) + " and " +
                         plugin_label(impl, i) + " both provide '" + name +
                         "'. Names are lowercased, so two identifiers that "
@@ -471,7 +472,7 @@ Result<void> settle_order(Plugins::Impl& impl) {
         for (const std::string& name : name_list(pl->consumes, pl->self)) {
             auto it = producer.find(name);
             if (it == producer.end())
-                return make_error(ErrorCode::NOT_FOUND,
+                return make_error(ErrorCode::NotFound,
                                   "plugin " + plugin_label(impl, i) +
                                       " consumes '" + name +
                                       "' which no loaded plugin provides");
@@ -487,7 +488,7 @@ Result<void> settle_order(Plugins::Impl& impl) {
         while (stuck < sorted.size() && sorted[stuck]) ++stuck;
         impl.order.clear();
         return make_error(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "plugin provides/consumes graph has a cycle through " +
                 plugin_label(impl, stuck));
     }
@@ -634,7 +635,7 @@ View Plugins::prune(const View& view) const {
 }
 
 coro::CoroTask<Result<PluginRun>> Plugins::run(const View& view) const {
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     PluginRun out;
     // One registry for the whole scan; every plugin's finalize publishes its
     // merged accumulators here and later plugins read them by name.
@@ -684,7 +685,7 @@ trace::views::Deferred<PluginRun> Plugins::attach(
         // explicit session budget.
         session.attach_fold_factory(
             [plugin, shared, named, name,
-             states](dftracer::utils::StringIntern& intern)
+             states](dftracer::utils::dstd::StringIntern& intern)
                 -> std::unique_ptr<views::detail::Fold> {
                 return std::make_unique<PluginFold>(
                     plugin, intern, shared.get(), named, name, 0, states);

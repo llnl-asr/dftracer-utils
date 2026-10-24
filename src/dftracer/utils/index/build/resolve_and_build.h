@@ -1,14 +1,17 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_RESOLVE_AND_BUILD_H
 #define DFTRACER_UTILS_INDEX_BUILD_RESOLVE_AND_BUILD_H
 
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +21,8 @@ namespace dftracer::utils::index::build {
 struct ResolveAndBuildInput {
     std::string directory;
     std::vector<std::string> files;
+    /// See ResolverInput::entries.
+    std::vector<utilities::filesystem::FileEntry> entries;
     std::string index_dir;
 
     std::size_t checkpoint_size = constants::indexer::DEFAULT_CHECKPOINT_SIZE;
@@ -72,19 +77,6 @@ coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
 coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
                                         std::string file, std::string index_dir,
                                         bool force_rebuild = false);
-
-/// Rewrite any single/oversized-member input to bounded multi-member gzip in a
-/// sibling `split/` dir (non-destructive; the original is untouched), so index
-/// and reader never hold a giant member. Returns the file list with those
-/// inputs replaced by their split copies, plus the (original, split) pairs for
-/// a warning. Call before indexing and read from the returned files so both
-/// agree. `member_size` 0 = default checkpoint size.
-struct MemberNormalizeResult {
-    std::vector<std::string> files;
-    std::vector<std::pair<std::string, std::string>> split;
-};
-coro::CoroTask<MemberNormalizeResult> normalize_members_for_ingest(
-    std::vector<std::string> files, std::uint64_t member_size = 0);
 
 }  // namespace dftracer::utils::index::build
 

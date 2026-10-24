@@ -20,7 +20,7 @@ namespace {
 // args only. Other dotted paths may name a nested object or a flat dotted
 // key, so they are left to the full evaluator (returns false).
 bool compile_eq_leaf(const duql::CompareNode& n, CompiledEqProbe& out) {
-    if (n.op != duql::CompareOp::EQ) return false;
+    if (n.op != duql::CompareOp::Eq) return false;
     const std::string& path = n.field.path;
     const auto dot = path.find('.');
     if (dot == std::string::npos) {

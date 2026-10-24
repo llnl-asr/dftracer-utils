@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_PIPELINE_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -46,7 +46,7 @@ Pipeline lower_fused_folds(const ViewPlan& plan, const ViewDefinition& vdef,
 /// a coroutine holding a reference to a caller's temporary plan dangles as soon
 /// as the call is not itself the awaited full-expression.
 coro::CoroTask<ExportStats> execute(Pipeline pipeline,
-                                    dftracer::utils::StringIntern& intern,
+                                    dftracer::utils::dstd::StringIntern& intern,
                                     const CoverageSet* covered = nullptr,
                                     std::uint64_t limit = 0);
 

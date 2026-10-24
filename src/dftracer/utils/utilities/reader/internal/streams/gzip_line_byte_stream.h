@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_LINE_BYTE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_GZIP_LINE_BYTE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/platform_compat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/utilities/reader/internal/streams/gzip_stream.h>
 
 #include <cstddef>
@@ -54,6 +54,19 @@ class GzipLineByteStream : public GzipStream {
         std::size_t current_pos = seek_anchor_offset();
         std::size_t actual_start = target_start;
 
+        // A piece that starts inside a line owns its lines from the first
+        // newline on: the line it opens belongs to the piece before, which
+        // reads past its end to finish it. A target before that newline, the
+        // start of the piece included, starts at the newline's successor.
+        if (mid_line_start_) {
+            const std::size_t first = co_await first_line_start_after_anchor();
+            co_await restart_compression();
+            if (target_start < first) {
+                if (first > seek_anchor_offset()) co_await skip(first);
+                co_return first;
+            }
+        }
+
         // If target is at the start of the file, no adjustment needed
         if (target_start <= current_pos) {
             co_return target_start;
@@ -69,18 +82,22 @@ class GzipLineByteStream : public GzipStream {
         }
 
         // Use stack allocation for small search buffer
-        alignas(DFTRACER_OPTIMAL_ALIGNMENT) unsigned char
+        alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) unsigned char
             search_buffer[SEARCH_BUFFER_SIZE];
         std::size_t search_bytes;
-        if (co_await inflater_.read(fd_, file_offset_, search_buffer,
-                                    sizeof(search_buffer) - 1, search_bytes)) {
+        const auto read_ok =
+            co_await inflater_.read(fd_, file_offset_, search_buffer,
+                                    sizeof(search_buffer) - 1, search_bytes);
+        if (read_ok) {
             std::size_t relative_target = target_start - current_pos;
             if (relative_target < search_bytes) {
                 // Always use backward search to find line start
                 // This ensures we start at the beginning of a complete line
                 for (int64_t i = static_cast<int64_t>(relative_target); i >= 0;
                      i--) {
-                    if (i == 0 || search_buffer[i - 1] == '\n') {
+                    if ((i == 0 && !(mid_line_start_ &&
+                                     current_pos == seek_anchor_offset())) ||
+                        (i > 0 && search_buffer[i - 1] == '\n')) {
                         actual_start =
                             current_pos + static_cast<std::size_t>(i);
                         break;
@@ -98,9 +115,33 @@ class GzipLineByteStream : public GzipStream {
     }
 
    private:
+    /// Uncompressed offset just past the first newline of the piece the
+    /// stream sits at, read from its start; the end of the file when there is
+    /// none. Leaves the stream past that data, so the caller restarts it.
+    coro::CoroTask<std::size_t> first_line_start_after_anchor() {
+        std::size_t pos = seek_anchor_offset();
+        alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) unsigned char
+            chunk[SEARCH_BUFFER_SIZE];
+        while (pos < max_file_bytes_) {
+            std::size_t got = 0;
+            const bool ok = co_await inflater_.read(fd_, file_offset_, chunk,
+                                                    sizeof(chunk), got);
+            if (!ok || got == 0) break;
+            const void *nl = std::memchr(chunk, '\n', got);
+            if (nl) {
+                co_return pos +
+                    static_cast<std::size_t>(
+                        static_cast<const unsigned char *>(nl) - chunk) +
+                    1;
+            }
+            pos += got;
+        }
+        co_return max_file_bytes_;
+    }
+
     coro::CoroTask<std::size_t> read_line_aligned_data() {
         if (!decompression_initialized_) {
-            throw ReaderError(ReaderError::INITIALIZATION_ERROR,
+            throw ReaderError(ReaderError::InitializationError,
                               "Streaming session not properly initialized");
         }
 
@@ -152,7 +193,7 @@ class GzipLineByteStream : public GzipStream {
         if (partial_size > 0) {
             // A line that fills the buffer can never complete in it.
             if (partial_size >= buffer_.size()) {
-                throw ReaderError(ReaderError::READ_ERROR,
+                throw ReaderError(ReaderError::ReadError,
                                   "a line is longer than the read buffer (" +
                                       std::to_string(buffer_.size()) +
                                       " bytes)");
@@ -179,7 +220,7 @@ class GzipLineByteStream : public GzipStream {
             // A decode failure must not pass for clean EOF (which would
             // silently drop the rest of the file).
             if (!status) {
-                throw ReaderError(ReaderError::COMPRESSION_ERROR,
+                throw ReaderError(ReaderError::CompressionError,
                                   "gzip decode failed mid-stream at position " +
                                       std::to_string(current_position_));
             }

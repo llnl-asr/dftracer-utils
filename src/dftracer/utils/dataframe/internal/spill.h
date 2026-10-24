@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SPILL_H
 
-#include <dftracer/utils/core/common/spill_dir.h>
-#include <dftracer/utils/core/common/spill_file.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/dataframe/agg.h>        // AggState, AggStatePtr
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
@@ -71,13 +71,19 @@ class Dir {
     std::string run_path(int id) const;
     /// A run id no other caller of this directory has taken. Thread-safe.
     int next_run();
+    /// The charge for the files written here (see SpillCharge).
+    SpillCharge& charge() const noexcept { return dir_.charge(); }
+    /// Delete the file `path` in this directory and release its bytes from
+    /// the charge.
+    void remove_run(const std::string& path) const noexcept;
 
    private:
     ScopedSpillSubdir dir_;
     std::atomic<int> runs_{0};
 };
 
-/// Appends morsels (columns + row count) to one run file.
+/// Appends morsels (columns + row count) to one run file, charging the bytes
+/// to the ScopedSpillSubdir that holds it.
 class Writer {
    public:
     explicit Writer(const std::string& path);
@@ -92,6 +98,7 @@ class Writer {
    private:
     struct Codec;
     std::ofstream os_;
+    std::shared_ptr<SpillCharge> charge_;
     std::uint64_t written_ = 0;
     std::string blob_;
     std::unique_ptr<Codec> codec_;
@@ -192,12 +199,21 @@ class Spool {
     /// A cursor replaying every added morsel from the last to the first; the
     /// rows of one morsel stay in their order. The same rules as reader().
     std::unique_ptr<Cursor> reverse_reader();
+    /// Move the morsels held in memory to disk, and every later one with
+    /// them, and return the bytes freed. Does nothing once the spool writes
+    /// to disk already, since the morsels in memory come first, or after a
+    /// reader.
+    std::uint64_t spill();
+    /// The bytes of the morsels held in memory.
+    std::uint64_t memory_bytes() const noexcept { return bytes_; }
     /// Whether the overflow went to disk.
     bool spilled() const noexcept { return spilling_; }
     /// The bytes of every morsel added, in memory or on disk.
     std::uint64_t total_bytes() const noexcept { return total_bytes_; }
 
    private:
+    void open_run();
+
     std::uint64_t budget_;
     std::size_t bytes_ = 0;
     std::uint64_t total_bytes_ = 0;

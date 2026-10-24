@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>
 
@@ -185,7 +185,7 @@ bool node_has_data(const NodeResult& node) {
 bool metrics_all_negligible(const std::vector<MetricComparison>& metrics) {
     for (const auto& mc : metrics) {
         if ((mc.baseline_value != 0.0 || mc.variant_value != 0.0) &&
-            mc.significance > Significance::NEGLIGIBLE) {
+            mc.significance > Significance::Negligible) {
             return false;
         }
     }
@@ -221,7 +221,7 @@ static std::pair<bool, bool> gather_node_stats_impl(const NodeResult& node,
     bool has_reg = false, has_imp = false;
     auto scan = [&](const std::vector<MetricComparison>& metrics) {
         for (const auto& mc : metrics) {
-            if (mc.significance >= Significance::MEDIUM) {
+            if (mc.significance >= Significance::Medium) {
                 if (mc.is_regression)
                     has_reg = true;
                 else
@@ -257,7 +257,7 @@ struct RegressionEntry {
     double pct_change = 0.0;
     double baseline = 0.0;
     double variant = 0.0;
-    Significance sig = Significance::NEGLIGIBLE;
+    Significance sig = Significance::Negligible;
 };
 
 static void collect_regressions(const NodeResult& node,
@@ -268,7 +268,7 @@ static void collect_regressions(const NodeResult& node,
     auto push_regressions = [&](const std::vector<MetricComparison>& metrics,
                                 const std::string& path) {
         for (const auto& mc : metrics) {
-            if (mc.significance >= Significance::MEDIUM && mc.is_regression &&
+            if (mc.significance >= Significance::Medium && mc.is_regression &&
                 (mc.baseline_value != 0.0 || mc.variant_value != 0.0)) {
                 out.push_back({path, mc.metric_name, mc.pct_change,
                                mc.baseline_value, mc.variant_value,
@@ -361,13 +361,13 @@ std::string TreeTableFormatter::format_pct(double pct) const {
 
 std::string TreeTableFormatter::format_significance(Significance sig) const {
     switch (sig) {
-        case Significance::NEGLIGIBLE:
+        case Significance::Negligible:
             return std::string(color_dim()) + "~" + color_reset();
-        case Significance::SMALL:
+        case Significance::Small:
             return "*";
-        case Significance::MEDIUM:
+        case Significance::Medium:
             return "**";
-        case Significance::LARGE:
+        case Significance::Large:
             return "***";
     }
     return "";
@@ -462,9 +462,9 @@ void TreeTableFormatter::render_leaf(std::FILE* out, const MetricComparison& mc,
                                      const std::string& leaf_name,
                                      const ColumnWidths& cw) const {
     const char* col = "";
-    if (mc.significance >= Significance::MEDIUM) {
+    if (mc.significance >= Significance::Medium) {
         col = mc.is_regression ? color_red() : color_green();
-    } else if (mc.significance == Significance::SMALL) {
+    } else if (mc.significance == Significance::Small) {
         col = color_yellow();
     } else {
         col = color_dim();
@@ -737,7 +737,7 @@ void TreeTableFormatter::render(std::FILE* out,
                          show, show == 1 ? "" : "s", color_reset());
             for (int i = 0; i < show; ++i) {
                 const auto& r = regs[static_cast<std::size_t>(i)];
-                const char* sig = r.sig == Significance::LARGE ? "***" : "**";
+                const char* sig = r.sig == Significance::Large ? "***" : "**";
                 std::fprintf(out, "  %s%s%s  %s  %s%+.1f%%%s  %s\n",
                              color_red(), r.path.c_str(), color_reset(),
                              r.metric.c_str(), color_red(), r.pct_change,

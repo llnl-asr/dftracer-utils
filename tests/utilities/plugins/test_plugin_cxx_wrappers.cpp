@@ -4,10 +4,10 @@
 // raw Host method it wraps.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
@@ -33,7 +33,7 @@
 
 namespace views = dftracer::utils::trace::views;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::NamedResultRegistry;
 using dftracer::utils::plugins::OwnedDataFrame;
@@ -57,7 +57,7 @@ FoldEvent evt(StringIntern& intern, std::uint64_t pid, std::uint64_t dur,
     e.dur = dur;
     e.has_dur = true;
     e.name_id = intern.get_or_insert(name);
-    e.phase = RecordPhase::COMPLETE;
+    e.phase = RecordPhase::Complete;
     return e;
 }
 

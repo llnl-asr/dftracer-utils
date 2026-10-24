@@ -95,13 +95,13 @@ ValueMap row(std::size_t r) {
 }
 
 Truth column_truth(const df::Series& mask, std::int64_t r) {
-    if (mask.is_null(r)) return Truth::UNKNOWN;
+    if (mask.is_null(r)) return Truth::Unknown;
     const auto* bits = mask.data<std::uint8_t>();
-    return (bits[r / 8] >> (r % 8)) & 1 ? Truth::YES : Truth::NO;
+    return (bits[r / 8] >> (r % 8)) & 1 ? Truth::Yes : Truth::No;
 }
 
 const char* name(Truth t) {
-    return t == Truth::YES ? "YES" : t == Truth::NO ? "NO" : "UNKNOWN";
+    return t == Truth::Yes ? "YES" : t == Truth::No ? "NO" : "UNKNOWN";
 }
 
 }  // namespace

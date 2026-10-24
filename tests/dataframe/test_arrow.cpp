@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -14,13 +14,13 @@
 
 #include <cstring>
 #include <memory>
-
-using dftracer::utils::dataframe::Buffer;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Encoding;
+using dftracer::utils::dataframe::new_buffer;
 using dftracer::utils::dataframe::OwnedArrow;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::TypeId;
+using dftracer::utils::dataframe::writable;
 
 namespace {
 
@@ -81,7 +81,7 @@ TEST_SUITE("dataframe_arrow_public") {
             OwnedArrow a = s.to_arrow();
             CHECK(std::string(a.schema()->format) == "vu");
             CHECK(a.array()->n_buffers == 5);
-            CHECK(a.array()->buffers[1] == s.handle()->data->data());
+            CHECK(a.array()->buffers[1] == s.handle()->data.data());
             CHECK(a.array()->buffers[2] == f.blob_a.data());
             CHECK(a.array()->buffers[3] == f.blob_b.data());
             const auto* sizes =
@@ -92,7 +92,7 @@ TEST_SUITE("dataframe_arrow_public") {
             Series back = Series::from_arrow(a.schema(), a.array());
             REQUIRE(back.valid());
             CHECK(back.handle()->encoding == Encoding::View);
-            CHECK(back.handle()->data->data() == s.handle()->data->data());
+            CHECK(back.handle()->data.data() == s.handle()->data.data());
             REQUIRE(back.length() == 4);
             CHECK(back.string_at(0) == "short");
             CHECK(back.string_at(1) == VIEW_LONG_A);
@@ -142,7 +142,7 @@ TEST_SUITE("dataframe_arrow_public") {
             Series back = Series::from_arrow(&schema, &arr);
             REQUIRE(back.valid());
             CHECK(arr.release == nullptr);
-            CHECK(back.handle()->data->data() == f.views + 16);
+            CHECK(back.handle()->data.data() == f.views + 16);
             REQUIRE(back.length() == 3);
             CHECK(back.string_at(0) == VIEW_LONG_A);
             CHECK(back.string_at(1) == VIEW_LONG_B);
@@ -161,9 +161,9 @@ TEST_SUITE("dataframe_arrow_public") {
         col->type = TypeId::String;
         col->encoding = Encoding::Dictionary;
         col->length = 4;
-        col->data = Buffer::allocate(16);
+        col->data = new_buffer(16);
         const std::int32_t codes[4] = {2, 1, 1, 0};
-        std::memcpy(col->data->data(), codes, 16);
+        std::memcpy(writable(col->data), codes, 16);
         col->set_child(std::shared_ptr<dftu_series>(values.release()));
         {
             Series dict{col};

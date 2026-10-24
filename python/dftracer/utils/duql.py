@@ -12,7 +12,7 @@ give the same plan and rows::
         .sort(-c("total"))
         .take(10)
     )
-    q.text()      # 'duql 0.1\\nfrom "trace.pfw.gz"\\n| where ...'
+    q.text()      # 'duql 0.0\\nfrom "trace.pfw.gz"\\n| where ...'
     q.collect()   # a DataFrame
 
 Every builder call only builds; ``collect``, ``count``, ``first``, ``stream``
@@ -901,7 +901,7 @@ def load_path(path: str) -> None:
     """Load the ``def`` macros of the ``.duql`` file ``path``, or of every
     ``.duql`` file in the directory ``path``, for every later query of the
     process. They expand after a query's and a source's own macros, like
-    those on ``$DFTRACER_DUQL_PATH``.
+    those on ``$DFTRACER_UTILS_DUQL_PATH``.
 
     Raises:
         DFTUtilsIOError: If a file cannot be read.

@@ -1,0 +1,404 @@
+#ifndef DFTRACER_UTILS_RUNTIME_CORO_ASYNC_GENERATOR_H
+#define DFTRACER_UTILS_RUNTIME_CORO_ASYNC_GENERATOR_H
+
+#include <dftracer/utils/common/exception_helpers.h>
+#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/frame.h>
+#include <dftracer/utils/runtime/coro/pool_resume.h>
+
+#include <atomic>
+#include <coroutine>
+#include <cstddef>
+#include <exception>
+#include <functional>
+#include <new>
+#include <optional>
+#include <type_traits>
+#include <utility>
+
+namespace dftracer::utils::coro {
+
+template <typename T>
+class AsyncGenerator;
+
+// ============================================================================
+// SFINAE traits
+// ============================================================================
+
+namespace detail {
+
+template <typename T>
+struct is_async_generator : std::false_type {};
+
+template <typename T>
+struct is_async_generator<AsyncGenerator<T>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool is_async_generator_v = is_async_generator<T>::value;
+
+/// F() -> AsyncGenerator<T> (zero-arg factory)
+template <typename F, typename T, typename = void>
+struct is_generator_factory : std::false_type {};
+
+template <typename F, typename T>
+struct is_generator_factory<
+    F, T, std::enable_if_t<is_async_generator_v<std::invoke_result_t<F>>>> {
+    static constexpr bool value =
+        std::is_same_v<std::invoke_result_t<F>, AsyncGenerator<T>>;
+};
+
+template <typename F, typename T>
+inline constexpr bool is_generator_factory_v =
+    is_generator_factory<F, T>::value;
+
+/// F(T) -> `AsyncGenerator<U>` (one-arg, returns generator)
+template <typename F, typename T, typename = void>
+struct is_flat_map_fn : std::false_type {};
+
+template <typename F, typename T>
+struct is_flat_map_fn<
+    F, T, std::enable_if_t<is_async_generator_v<std::invoke_result_t<F, T>>>>
+    : std::true_type {};
+
+template <typename F, typename T>
+inline constexpr bool is_flat_map_fn_v = is_flat_map_fn<F, T>::value;
+
+/// F(T) -> U where U is NOT an AsyncGenerator (one-arg, returns plain value)
+template <typename F, typename T, typename = void>
+struct is_map_fn : std::false_type {};
+
+template <typename F, typename T>
+struct is_map_fn<F, T, std::void_t<std::invoke_result_t<F, T>>>
+    : std::bool_constant<!is_async_generator_v<std::invoke_result_t<F, T>>> {};
+
+template <typename F, typename T>
+inline constexpr bool is_map_fn_v = is_map_fn<F, T>::value;
+
+}  // namespace detail
+
+// ============================================================================
+// Free combinator functions
+// ============================================================================
+
+template <typename T, typename F,
+          std::enable_if_t<detail::is_map_fn_v<F, T>, int> = 0>
+AsyncGenerator<std::invoke_result_t<F, T>> map(AsyncGenerator<T> source,
+                                               F func) {
+    for (;;) {
+        auto val = co_await source.next();
+        if (!val) break;
+        co_yield std::invoke(func, std::move(*val));
+    }
+}
+
+template <typename T, typename F,
+          std::enable_if_t<detail::is_flat_map_fn_v<F, T>, int> = 0,
+          typename InnerGen = std::invoke_result_t<F, T>,
+          typename U = typename InnerGen::value_type>
+AsyncGenerator<U> flat_map(AsyncGenerator<T> source, F func) {
+    for (;;) {
+        auto val = co_await source.next();
+        if (!val) break;
+        auto inner = std::invoke(func, std::move(*val));
+        for (;;) {
+            auto out = co_await inner.next();
+            if (!out) break;
+            co_yield std::move(*out);
+        }
+    }
+}
+
+template <typename T, typename F>
+AsyncGenerator<T> filter(AsyncGenerator<T> source, F pred) {
+    for (;;) {
+        auto val = co_await source.next();
+        if (!val) break;
+        if (std::invoke(pred, *val)) {
+            co_yield std::move(*val);
+        }
+    }
+}
+
+template <typename T>
+AsyncGenerator<T> take(AsyncGenerator<T> source, std::size_t n) {
+    std::size_t count = 0;
+    while (count < n) {
+        auto val = co_await source.next();
+        if (!val) break;
+        co_yield std::move(*val);
+        ++count;
+    }
+}
+
+template <typename T, typename F,
+          std::enable_if_t<detail::is_generator_factory_v<F, T>, int> = 0>
+AsyncGenerator<T> concat(AsyncGenerator<T> first, F factory) {
+    for (;;) {
+        auto val = co_await first.next();
+        if (!val) break;
+        co_yield std::move(*val);
+    }
+    auto second = factory();
+    for (;;) {
+        auto val = co_await second.next();
+        if (!val) break;
+        co_yield std::move(*val);
+    }
+}
+
+// ============================================================================
+// AsyncGenerator<T>
+// ============================================================================
+
+/**
+ * AsyncGenerator<T> - Asynchronous lazy sequence generator.
+ *
+ * Supports internal co_await via symmetric transfer. Combinators
+ * (map, flat_map, filter, take, concat) enable fluent composition.
+ *
+ * Operators:
+ *   gen > func        map: T -> U
+ *   gen >> func       flat_map: T -> AsyncGenerator of U
+ *   gen | factory     lazy concat: append factory() after gen exhausted
+ */
+template <typename T>
+class AsyncGenerator {
+   public:
+    using value_type = T;
+
+    struct promise_type : FrameAllocation {
+        alignas(T) std::byte value_storage_[sizeof(T)];
+        bool has_value_ = false;
+        std::exception_ptr exception_;
+        std::coroutine_handle<> continuation_{};
+        /// The CoroTask handoff, once per next(): see CoroTask::await_suspend.
+        std::atomic<bool> handoff_{false};
+        /// The pool and intern table current when the generator was created;
+        /// it enters them each time it resumes.
+        detail::RunContext context_;
+
+        T* value_ptr() noexcept {
+            return std::launder(reinterpret_cast<T*>(value_storage_));
+        }
+        void clear_value() noexcept {
+            if (has_value_) {
+                value_ptr()->~T();
+                has_value_ = false;
+            }
+        }
+        ~promise_type() { clear_value(); }
+
+        AsyncGenerator get_return_object() {
+            return AsyncGenerator{
+                std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+
+        detail::EnterPoolOnStart initial_suspend() noexcept {
+            return {&context_};
+        }
+
+        auto yield_value(T value) noexcept {
+            clear_value();
+            ::new (static_cast<void*>(value_storage_)) T(std::move(value));
+            has_value_ = true;
+            return ToConsumer{&context_};
+        }
+
+        auto final_suspend() noexcept { return ToConsumer{&context_}; }
+
+        template <typename U>
+        auto await_transform(U&& awaitable) noexcept {
+            return detail::in_pool(std::forward<U>(awaitable), context_);
+        }
+
+        void return_void() noexcept {}
+
+        void unhandled_exception() { exception_ = std::current_exception(); }
+
+        // The consumer may destroy the frame once the exchange is done.
+        struct ToConsumer {
+            const detail::RunContext* context;
+
+            bool await_ready() noexcept { return false; }
+            void await_suspend(std::coroutine_handle<promise_type> h) noexcept {
+                auto& p = h.promise();
+                std::coroutine_handle<> next = p.continuation_;
+                if (next &&
+                    p.handoff_.exchange(true, std::memory_order_acq_rel))
+                    next.resume();
+            }
+            void await_resume() noexcept { context->enter(); }
+        };
+    };
+
+    class NextAwaitable {
+       private:
+        std::coroutine_handle<promise_type> handle_;
+
+       public:
+        explicit NextAwaitable(std::coroutine_handle<promise_type> handle)
+            : handle_(handle) {}
+
+        bool await_ready() const noexcept { return !handle_ || handle_.done(); }
+
+        bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
+            if (!handle_ || handle_.done()) return false;
+            auto& p = handle_.promise();
+            p.continuation_ = awaiting;
+            p.handoff_.store(false, std::memory_order_relaxed);
+            handle_.resume();
+            return !p.handoff_.exchange(true, std::memory_order_acq_rel);
+        }
+
+        std::optional<T> await_resume() {
+            if (!handle_) {
+                return std::nullopt;
+            }
+            if (handle_.promise().exception_) {
+                rethrow_and_clear(handle_.promise().exception_);
+            }
+            if (handle_.done()) {
+                return std::nullopt;
+            }
+            auto& promise = handle_.promise();
+            if (promise.has_value_) {
+                std::optional<T> out(std::move(*promise.value_ptr()));
+                promise.clear_value();
+                return out;
+            }
+            return std::nullopt;
+        }
+    };
+
+   private:
+    std::coroutine_handle<promise_type> handle_;
+
+   public:
+    explicit AsyncGenerator(std::coroutine_handle<promise_type> handle)
+        : handle_(handle) {}
+
+    ~AsyncGenerator() {
+        if (handle_) {
+            handle_.destroy();
+        }
+    }
+
+    AsyncGenerator(const AsyncGenerator&) = delete;
+    AsyncGenerator& operator=(const AsyncGenerator&) = delete;
+
+    AsyncGenerator(AsyncGenerator&& other) noexcept : handle_(other.handle_) {
+        other.handle_ = nullptr;
+    }
+
+    AsyncGenerator& operator=(AsyncGenerator&& other) noexcept {
+        if (this != &other) {
+            if (handle_) {
+                handle_.destroy();
+            }
+            handle_ = other.handle_;
+            other.handle_ = nullptr;
+        }
+        return *this;
+    }
+
+    NextAwaitable next() {
+        if (!handle_) {
+            return NextAwaitable{nullptr};
+        }
+        return NextAwaitable{handle_};
+    }
+
+    bool done() const { return !handle_ || handle_.done(); }
+
+    bool has_exception() const {
+        return handle_ && handle_.promise().exception_ != nullptr;
+    }
+
+    void rethrow_if_exception() {
+        if (handle_ && handle_.promise().exception_) {
+            rethrow_and_clear(handle_.promise().exception_);
+        }
+    }
+
+    // ========================================================================
+    // Fluent combinators
+    // ========================================================================
+
+    template <typename F, std::enable_if_t<detail::is_map_fn_v<F, T>, int> = 0>
+    auto map(F&& func) && {
+        return coro::map(std::move(*this), std::forward<F>(func));
+    }
+
+    template <typename F,
+              std::enable_if_t<detail::is_flat_map_fn_v<F, T>, int> = 0>
+    auto flat_map(F&& func) && {
+        return coro::flat_map(std::move(*this), std::forward<F>(func));
+    }
+
+    template <typename F>
+    AsyncGenerator<T> filter(F&& pred) && {
+        return coro::filter(std::move(*this), std::forward<F>(pred));
+    }
+
+    AsyncGenerator<T> take(std::size_t n) && {
+        return coro::take(std::move(*this), n);
+    }
+
+    AsyncGenerator<T> concat(AsyncGenerator<T> other) && {
+        return coro::concat(std::move(*this), [o = std::move(other)]() mutable {
+            return std::move(o);
+        });
+    }
+
+    template <typename F,
+              std::enable_if_t<detail::is_generator_factory_v<F, T>, int> = 0>
+    AsyncGenerator<T> concat(F&& factory) && {
+        return coro::concat(std::move(*this), std::forward<F>(factory));
+    }
+
+    // ========================================================================
+    // Operators
+    // ========================================================================
+
+    /**
+     * operator> : map -- transform each element (T -> U).
+     */
+    template <typename F, std::enable_if_t<detail::is_map_fn_v<F, T>, int> = 0>
+    auto operator>(F&& func) && {
+        return std::move(*this).map(std::forward<F>(func));
+    }
+
+    /**
+     * operator>> : flat_map -- each element produces a sub-generator,
+     * results are flattened (T -> AsyncGenerator of U).
+     */
+    template <typename F,
+              std::enable_if_t<detail::is_flat_map_fn_v<F, T>, int> = 0>
+    auto operator>>(F&& func) && {
+        return std::move(*this).flat_map(std::forward<F>(func));
+    }
+
+    /**
+     * operator| with generator : concat (lazy under the hood).
+     */
+    friend AsyncGenerator<T> operator|(AsyncGenerator<T>&& lhs,
+                                       AsyncGenerator<T>&& rhs) {
+        return coro::concat(std::move(lhs), [r = std::move(rhs)]() mutable {
+            return std::move(r);
+        });
+    }
+
+    /**
+     * operator| with factory : lazy concat
+     * factory() called after lhs is exhausted.
+     */
+    template <typename F,
+              std::enable_if_t<detail::is_generator_factory_v<F, T>, int> = 0>
+    friend AsyncGenerator<T> operator|(AsyncGenerator<T>&& lhs, F&& factory) {
+        return coro::concat(std::move(lhs), std::forward<F>(factory));
+    }
+};
+
+}  // namespace dftracer::utils::coro
+
+#endif  // DFTRACER_UTILS_RUNTIME_CORO_ASYNC_GENERATOR_H

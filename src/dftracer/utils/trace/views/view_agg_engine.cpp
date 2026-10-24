@@ -1,14 +1,14 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -154,7 +154,7 @@ dataframe::Agg to_engine_agg(AggOp op) {
         case AggOp::Active:
             return dataframe::Agg::Active;
     }
-    throw DFTUtilsException::cat(ErrorCode::INTERNAL,
+    throw DFTUtilsException::cat(ErrorCode::Internal,
                                  "agg engine: unknown aggregate op");
 }
 
@@ -216,7 +216,7 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
         }
         default:
             throw DFTUtilsException::cat(
-                ErrorCode::INTERNAL,
+                ErrorCode::Internal,
                 "agg engine: unexpected group-key column type");
     }
     if (col.null_count() == 0) return dataframe::Series::strings(vals);
@@ -334,7 +334,7 @@ std::string cell_to_key_string(const dataframe::Series& col, std::int64_t r) {
             return std::to_string(col.data<std::uint64_t>()[r]);
         default:
             throw DFTUtilsException::cat(
-                ErrorCode::INTERNAL,
+                ErrorCode::Internal,
                 "agg engine: unexpected transform key-column type");
     }
 }
@@ -388,7 +388,7 @@ dataframe::AggOp to_dyn_op(AggOp op) {
         case AggOp::Active:
             break;
     }
-    throw DFTUtilsException::cat(ErrorCode::INTERNAL,
+    throw DFTUtilsException::cat(ErrorCode::Internal,
                                  "agg engine: op has no per-arg dyn reduction");
 }
 
@@ -440,7 +440,7 @@ dataframe::DataFrame finalize_engine_frame(
     const std::size_t fixed = off + ng + n_plan_value + n_plan_text;
     if (r.columns.size() < fixed || r.names.size() != r.columns.size())
         throw DFTUtilsException::cat(
-            ErrorCode::INTERNAL, "agg engine: the grouped result has ",
+            ErrorCode::Internal, "agg engine: the grouped result has ",
             r.columns.size(), " columns and ", r.names.size(),
             " names, the plan needs at least ", fixed);
 
@@ -881,7 +881,7 @@ static double cell_as_double(const dataframe::Series& c, std::int64_t r) {
             return c.data<double>()[r];
         default:
             throw DFTUtilsException::cat(
-                ErrorCode::INTERNAL,
+                ErrorCode::Internal,
                 "agg engine: unexpected numeric column type");
     }
 }
@@ -961,12 +961,14 @@ class TransformSource final : public dataframe::Source {
         coro::CoroTask<std::optional<dataframe::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
-                if (rows_)
-                    if (auto m = co_await rows_->next(max_rows)) {
+                if (rows_) {
+                    auto m = co_await rows_->next(max_rows);
+                    if (m) {
                         m->dyn_state().name_ids = ids_;
                         m->dyn->intern = intern_;
                         co_return m;
                     }
+                }
                 auto batch = co_await batches_.next();
                 if (!batch) co_return std::nullopt;
                 dataframe::DataFrame f = std::move(*batch);
@@ -980,8 +982,8 @@ class TransformSource final : public dataframe::Source {
         }
 
        private:
-        std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-            std::make_shared<dftracer::utils::StringIntern>();
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+            std::make_shared<dftracer::utils::dstd::StringIntern>();
         std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<dataframe::DataFrame> batches_;
         std::vector<AggInputSpec::Transform> tfs_;
@@ -1003,7 +1005,7 @@ class TransformSource final : public dataframe::Source {
 
 dataframe::DataFrame build_agg_input_frame(
     const std::vector<FoldEvent>& events,
-    const dftracer::utils::StringIntern& intern, const AggInputSpec& spec,
+    const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::index::plan::GroupResolver* resolver) {
     dataframe::DataFrame f =
         events_to_frame(events, intern,
@@ -1213,7 +1215,9 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     if (auto df = try_serve_rollup(plan)) co_return std::move(*df);
     {
         dataframe::AggStatePtr served;
-        if (co_await try_serve_aggregate_no_scan(plan, served))
+        const auto try_serve_aggregate_no_scan_ok =
+            co_await try_serve_aggregate_no_scan(plan, served);
+        if (try_serve_aggregate_no_scan_ok)
             co_return finalize_engine_result(*served, plan);
     }
 

@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/string_reader.h>
@@ -59,17 +59,17 @@ dataframe::Series unknown(std::int64_t rows) {
 
 int cmp_code(CompareOp op) {
     switch (op) {
-        case CompareOp::GT:
+        case CompareOp::Gt:
             return DFTU_CMP_GT;
-        case CompareOp::GE:
+        case CompareOp::Ge:
             return DFTU_CMP_GE;
-        case CompareOp::LT:
+        case CompareOp::Lt:
             return DFTU_CMP_LT;
-        case CompareOp::LE:
+        case CompareOp::Le:
             return DFTU_CMP_LE;
-        case CompareOp::EQ:
+        case CompareOp::Eq:
             return DFTU_CMP_EQ;
-        case CompareOp::NE:
+        case CompareOp::Ne:
             return DFTU_CMP_NE;
     }
     return DFTU_CMP_EQ;
@@ -98,7 +98,7 @@ dataframe::Series negate(dataframe::Series s) {
 dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
                                const LiteralValue& v) {
     if (!comparable(col, v)) return unknown(col.length());
-    const bool eq = op == CompareOp::EQ || op == CompareOp::NE;
+    const bool eq = op == CompareOp::Eq || op == CompareOp::Ne;
     if (is_string(col)) {
         const std::string& lit = std::get<std::string>(v);
         dftu_scalar rhs{};
@@ -112,7 +112,7 @@ dataframe::Series compare_mask(const dataframe::Series& col, CompareOp op,
         return m;
     }
     if (is_bool(col) && eq) {
-        const bool want = (op == CompareOp::EQ) == std::get<bool>(v);
+        const bool want = (op == CompareOp::Eq) == std::get<bool>(v);
         return want ? col.share() : negate(col.share());
     }
     if (is_bool(col)) {
@@ -147,7 +147,7 @@ dataframe::Series in_mask(const dataframe::Series& col, const ArrayNode& arr,
     std::optional<dataframe::Series> acc;
     for (const LiteralNode& e : arr.elements) {
         if (!comparable(col, e.value)) continue;
-        dataframe::Series m = compare_mask(col, CompareOp::EQ, e.value);
+        dataframe::Series m = compare_mask(col, CompareOp::Eq, e.value);
         acc = acc ? dataframe::Series{dftu_series_logical(
                         acc->handle(), m.handle(), DFTU_LOGICAL_OR)}
                   : std::move(m);
@@ -248,12 +248,12 @@ dataframe::Series evaluate_mask(const QueryNode& node,
     if (m.handle() && m.handle()->encoding != dataframe::Encoding::Flat)
         m = dataframe::Series{dftu_series_materialize(m.handle())};
     dftu_series* s = m.handle();
-    if (!s || !s->validity) return m;
+    if (!s || !s->validity.block()) return m;
     const std::size_t bytes = dataframe::buffer_bytes(s->type, s->length);
-    auto data = dataframe::Buffer::allocate(bytes);
-    const std::uint8_t* pd = s->data->data();
-    const std::uint8_t* pv = s->validity->data();
-    std::uint8_t* po = data->data();
+    auto data = dataframe::new_buffer(bytes);
+    const std::uint8_t* pd = s->data.data();
+    const std::uint8_t* pv = s->validity.data();
+    std::uint8_t* po = writable(data);
     for (std::size_t i = 0; i < bytes; ++i)
         po[i] = static_cast<std::uint8_t>(pd[i] & pv[i]);
     s->data = std::move(data);

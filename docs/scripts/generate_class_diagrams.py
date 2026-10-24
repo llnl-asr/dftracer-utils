@@ -154,7 +154,6 @@ COMPONENT_GROUPS = [
             "dftracer::utils::PipelineError",
             "dftracer::utils::TimerService",
             "dftracer::utils::ShardedMutex",
-            "dftracer::utils::ObjectPool",
             "dftracer::utils::BufferPool",
             "dftracer::utils::StringIntern",
             "dftracer::utils::StringArena",
@@ -357,24 +356,24 @@ def generate_collaboration(
     return "\n".join(lines) + "\n"
 
 
-# Bottom-to-top: core is the foundation at the base; each arrow points from a
-# library to the one built on top of it (A --> B reads "B is built on A").
+# Bottom-to-top: runtime is the foundation at the base; each arrow points from
+# a library to the one built on top of it (A --> B reads "B is built on A").
 ARCHITECTURE_MMD = """graph BT
     utilities["dftracer_utils_utilities<br/><i>readers, index, aggregation,<br/>comparison, statistics, plugins, dlio, replay</i>"]
     dataframe["dftracer_utils_dataframe<br/><i>Series/DataFrame, Highway SIMD kernels,<br/>Arrow bridge, columnar query execution</i>"]
     query["dftracer_utils_duql<br/><i>predicate IR, string codec, evaluator</i>"]
     json["dftracer_utils_json<br/><i>simdjson-backed parsing</i>"]
-    core["dftracer_utils_core<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
+    runtime["dftracer_utils_runtime<br/><i>coroutines, tasks, task graph, io backend,<br/>pipelines, primitives</i>"]
 
-    core --> json
+    runtime --> json
     json --> query
     query --> dataframe
     dataframe --> utilities
 
     compose["AsyncOp compose model<br/><i>| sequence &nbsp; &amp;&amp; both &nbsp; || either &nbsp; .or_else</i>"]
-    core -.- compose
+    runtime -.- compose
 
-    style core fill:#4a90d9,stroke:#2c5f8a,color:#fff
+    style runtime fill:#4a90d9,stroke:#2c5f8a,color:#fff
     style dataframe fill:#e8f4e8,stroke:#5a9,color:#333
     style utilities fill:#e8f4e8,stroke:#5a9,color:#333
     style query fill:#f0f0f0,stroke:#999,color:#333

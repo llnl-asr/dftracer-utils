@@ -12,14 +12,14 @@
 namespace dftracer::utils::duql {
 
 /// Comparison operators for query expressions.
-enum class CompareOp { EQ, NE, GT, LT, GE, LE };
+enum class CompareOp { Eq, Ne, Gt, Lt, Ge, Le };
 
 /// Pattern-match operators. LIKE/ILIKE use SQL wildcards (% = any run, _ = one
 /// UTF-8 character) and match the whole string; REGEX/IREGEX use the duql
 /// regex dialect and search anywhere in the value; ICONTAINS is
 /// case-insensitive substring containment (the "'sub' in field" form). The I*
 /// variants are case-insensitive.
-enum class MatchOp { LIKE, ILIKE, REGEX, IREGEX, ICONTAINS };
+enum class MatchOp { Like, Ilike, Regex, Iregex, Icontains };
 
 /// A field reference (e.g., "cat", "args.level"), or `any(path)`: the leaf
 /// holds when any scalar element of the array at `path` satisfies it.

@@ -19,15 +19,17 @@ Command line
 .. code-block:: bash
 
    # Replay a directory, honoring the original timing
-   dftracer_replay ./traces -r
+   dftracer_replay ./traces
 
    # Sleep-based replay (no real I/O), as fast as possible
-   dftracer_replay ./traces -r --dftracer-mode --no-sleep
+   dftracer_replay ./traces --dftracer-mode --no-sleep
 
    # Analyze only, do no I/O
    dftracer_replay ./traces --dry-run
 
-The inputs are one or more ``.pfw`` or ``.pfw.gz`` files or directories.
+The inputs are one or more ``.pfw`` or ``.pfw.gz`` files or directories; a directory is read with all its subfolders.
+The files replay in parallel, as many at once as ``--executor-threads``, and each file keeps its own timeline.
+A directory is read with all of its subfolders.
 
 Selected flags
 ~~~~~~~~~~~~~~
@@ -42,9 +44,6 @@ Selected flags
    * - ``inputs``
      - (required)
      - Trace files or directories.
-   * - ``-r``, ``--recursive``
-     - off
-     - Recurse into directories.
    * - ``--no-timing``
      - off
      - Ignore original timing; run as fast as possible.
@@ -113,9 +112,8 @@ returns a ``ReplayResult``.
 reports ``total_events``, ``executed_events``, ``filtered_events``,
 ``failed_events``, per-function and per-category counts, and byte totals.
 
-Replay dispatches through pluggable executors: a ``PosixExecutor`` does real I/O
-and a ``DFTracerExecutor`` does the sleep-based replay. Add your own with
-``engine.add_executor(...)``. To replay respecting the call hierarchy, use
+Each replayed file gets its own executor: a ``PosixExecutor`` does real I/O
+and a ``DFTracerExecutor`` (``dftracer_mode``) does the sleep-based replay. To replay respecting the call hierarchy, use
 ``replay_with_call_tree(trace_dir, pattern)``.
 
 See also

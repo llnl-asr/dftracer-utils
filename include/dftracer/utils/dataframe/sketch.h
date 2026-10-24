@@ -24,6 +24,8 @@
 // reaches it through the compatibility alias in
 // utilities/common/statistics/ddsketch.h.
 
+#include <dftracer/utils/dstd/vector.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -53,6 +55,8 @@ class BasicDDSketch {
    public:
     static constexpr int MAX_BINS = BINS;
     static constexpr bool GROWS = BINS > GROWING_STORE_BINS;
+    /// Spare bins reserve_keys adds above the range it was given.
+    static constexpr int RESERVE_MARGIN = 32;
 
     explicit BasicDDSketch(double relative_accuracy = 0.01);
 
@@ -61,6 +65,11 @@ class BasicDDSketch {
     /// `sketch_bucket_keys` (the SIMD bulk path). `key == INT32_MIN` marks an
     /// exact zero, matching the kernel's sentinel; `value` keeps min / max.
     void add_key(std::int32_t key, double value, std::uint32_t weight = 1);
+    /// Sizes a growing store once for keys in [min_key, max_key], so adds of
+    /// keys inside that range never reallocate or shift. Where the store must
+    /// grow it grows by `RESERVE_MARGIN` bins past max_key, once. Keys
+    /// outside the range still work as in `add`. No-op for a fixed store.
+    void reserve_keys(int min_key, int max_key);
     void merge(const BasicDDSketch& other);
     double quantile(double q) const;
     void reset();
@@ -78,8 +87,18 @@ class BasicDDSketch {
     /// Bins the store holds now; it only grows, up to MAX_BINS.
     std::size_t store_bins() const noexcept { return store_.size(); }
 
+    /// Little-endian bytes: gamma, min, max, count, zero count, offset, bin
+    /// count, then the bins.
     std::vector<std::uint8_t> serialize() const;
-    void serialize_into(std::vector<std::uint8_t>& buf) const;
+    std::size_t serialized_size() const;
+    /// Writes exactly serialized_size() bytes at `out`.
+    void write_to(std::uint8_t* out) const;
+    /// Replaces the contents of `buf` (any byte vector) with the bytes.
+    template <typename Buf>
+    void serialize_into(Buf& buf) const {
+        buf.resize(serialized_size());
+        write_to(buf.data());
+    }
     static BasicDDSketch deserialize(const std::uint8_t* data, std::size_t len);
 
    private:
@@ -94,7 +113,7 @@ class BasicDDSketch {
     /// Logical bin index `k` maps to store_[k - offset_].
     /// When the key range exceeds MAX_BINS, lowest bins are
     /// collapsed into store_[0]. A bin saturates at UINT32_MAX.
-    std::conditional_t<GROWS, std::vector<std::uint32_t>,
+    std::conditional_t<GROWS, dstd::Vector<std::uint32_t>,
                        std::array<std::uint32_t, MAX_BINS>>
         store_{};
     int offset_ = 0;
@@ -111,6 +130,12 @@ class BasicDDSketch {
             store_.resize(std::min<std::size_t>(
                 MAX_BINS,
                 std::max<std::size_t>({want, store_.size() * 2, 16})));
+        }
+    }
+    void grow_to(int n) {
+        if constexpr (GROWS) {
+            if (store_.size() < static_cast<std::size_t>(n))
+                store_.resize(static_cast<std::size_t>(n));
         }
     }
     void add_to_bin(int index, std::uint32_t count);

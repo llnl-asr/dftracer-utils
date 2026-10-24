@@ -1,14 +1,15 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/str_format.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
@@ -30,7 +31,7 @@
 #include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
-#include <dftracer/utils/core/distributed/mpi_transport.h>
+#include <dftracer/utils/runtime/distributed/mpi_transport.h>
 #include <mpi.h>
 #endif
 
@@ -99,10 +100,10 @@ class GenDistArgParse : public cli::ArgParse {
             return false;
         }
         if (memory.memory_budget != 0 &&
-            memory.memory_budget < MIN_MEMORY_BUDGET_BYTES) {
+            memory.memory_budget < memory::MIN_MEMORY_BUDGET_BYTES) {
             DFTRACER_UTILS_LOG_ERROR(
                 "--memory-budget must be at least %zu bytes (64MB)",
-                static_cast<std::size_t>(MIN_MEMORY_BUDGET_BYTES));
+                static_cast<std::size_t>(memory::MIN_MEMORY_BUDGET_BYTES));
             return false;
         }
         if (!shard_text.empty() && !parse_shard()) {
@@ -177,8 +178,10 @@ struct Report {
 coro::CoroTask<void> group_feeder(coro::ChannelProducer<std::size_t> producer,
                                   const std::vector<std::size_t>* order) {
     auto guard = producer.guard();
-    for (const std::size_t i : *order)
-        if (!co_await producer.send(i)) break;
+    for (const std::size_t i : *order) {
+        const auto sent = co_await producer.send(i);
+        if (!sent) break;
+    }
 }
 
 // Peak resident memory of this process so far, in bytes.
@@ -249,15 +252,15 @@ constexpr std::size_t PHASES = 5;
 
 const char* phase_name(Phase p) {
     switch (p) {
-        case Phase::WAIT:
+        case Phase::Wait:
             return "wait";
-        case Phase::READ:
+        case Phase::Read:
             return "read";
-        case Phase::SORT:
+        case Phase::Sort:
             return "sort";
-        case Phase::WALK:
+        case Phase::Walk:
             return "walk";
-        case Phase::WRITE:
+        case Phase::Write:
             return "write";
     }
     return "?";
@@ -307,7 +310,7 @@ class Progress {
 
     void retry(std::size_t w) { slots_[w].live.reset(); }
 
-    void writing(std::size_t w) { slots_[w].live.enter(Phase::WRITE); }
+    void writing(std::size_t w) { slots_[w].live.enter(Phase::Write); }
 
     void end(std::size_t w, std::size_t runs) {
         Slot& s = slots_[w];
@@ -353,10 +356,10 @@ class Progress {
             if (!g) continue;
             const Phase ph = s.live.phase.load(std::memory_order_relaxed);
             ++in_phase[static_cast<std::size_t>(ph)];
-            if (ph == Phase::READ)
+            if (ph == Phase::Read)
                 read += static_cast<double>(
                     std::min(s.live.read_bytes.load(), g->compressed_bytes));
-            else if (ph != Phase::WAIT)
+            else if (ph != Phase::Wait)
                 read += static_cast<double>(g->compressed_bytes);
             calls += static_cast<double>(s.live.calls.load());
             sorted += static_cast<double>(s.live.sorted.load());
@@ -419,13 +422,13 @@ class Progress {
             const Phase ph = s.live.phase.load(std::memory_order_relaxed);
             const double c = static_cast<double>(s.live.calls.load());
             std::string count;
-            if (ph == Phase::READ)
+            if (ph == Phase::Read)
                 count = bytes_of(static_cast<double>(s.live.read_bytes.load()),
                                  static_cast<double>(g->compressed_bytes));
-            else if (ph == Phase::SORT)
+            else if (ph == Phase::Sort)
                 count = count_of(static_cast<double>(s.live.sorted.load()), c) +
                         " calls";
-            else if (ph == Phase::WALK)
+            else if (ph == Phase::Walk)
                 count = count_of(static_cast<double>(s.live.walked.load()), c) +
                         " calls";
             const double in_ph =
@@ -521,7 +524,9 @@ coro::CoroTask<void> group_worker(
         borrowed.fetch_add(n);
         return n;
     };
-    while (auto i = co_await in.receive()) {
+    for (;;) {
+        auto i = co_await in.receive();
+        if (!i) break;
         const genesis::RunGroup& group = (*groups)[*i];
         std::uint64_t share = shares.first(group);
         genesis::GroupProgress* live = progress->begin(w, &group);
@@ -624,7 +629,8 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     // An eighth of the budget for the writers' buffers and in-flight members,
     // the rest for the groups being read. The run and func records, about a
     // hundredth of the bytes, get a quarter of the writers' part.
-    const std::uint64_t total = resolve_spill_budget(cli->memory.memory_budget);
+    const std::uint64_t total =
+        memory::resolve_spill_budget(cli->memory.memory_budget);
     const std::uint64_t head_budget = total / 32;
     const std::uint64_t writer_budget = total / 8 - head_budget;
     const std::uint64_t budget = total - writer_budget - head_budget;
@@ -704,10 +710,9 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     auto* totals_ptr = totals.data();
     auto* progress_ptr = &progress;
     auto* memory_ptr = &memory;
-    co_await ctx.scope([&indices, groups, order_ptr, memory_ptr, shares,
-                        writer_ptr, head_writer_ptr, totals_ptr, threads,
-                        progress_ptr](
-                           CoroScope& scope) -> coro::CoroTask<void> {
+    auto run_scope = [&indices, groups, order_ptr, memory_ptr, shares,
+                      writer_ptr, head_writer_ptr, totals_ptr, threads,
+                      progress_ptr](CoroScope& scope) -> coro::CoroTask<void> {
         scope.spawn([ch = indices->producer(), order_ptr](CoroScope&) mutable {
             return group_feeder(std::move(ch), order_ptr);
         });
@@ -720,7 +725,8 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
             });
         }
         co_return;
-    });
+    };
+    co_await ctx.scope(run_scope);
 
     bool io_error = false;
     std::size_t runs = 0;
@@ -872,7 +878,8 @@ int run_mpi(GenDistArgParse& cli) {
     }
     if (cli.memory.memory_budget == 0)
         cli.memory.memory_budget = std::max<std::uint64_t>(
-            MIN_MEMORY_BUDGET_BYTES, resolve_spill_budget(0) / node_ranks());
+            memory::MIN_MEMORY_BUDGET_BYTES,
+            memory::resolve_spill_budget(0) / node_ranks());
     const Shard shard{static_cast<std::size_t>(rank),
                       static_cast<std::size_t>(size)};
     const std::string part = str_cat(cli.output, ".", rank, ".part");

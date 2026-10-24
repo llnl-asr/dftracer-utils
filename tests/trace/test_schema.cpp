@@ -27,39 +27,39 @@ DFTracerEvent parse_line(simdjson::dom::parser& p, const std::string& line) {
 
 TEST_SUITE("schema") {
     TEST_CASE("phase codec maps integers and legacy letters both ways") {
-        CHECK(phase_from_int(1) == RecordPhase::COMPLETE);
-        CHECK(phase_from_int(2) == RecordPhase::COUNTER);
-        CHECK(phase_from_int(3) == RecordPhase::AGGREGATED);
-        CHECK(phase_from_int(4) == RecordPhase::METADATA);
-        CHECK(phase_from_int(0) == RecordPhase::UNKNOWN);
-        CHECK(phase_from_int(99) == RecordPhase::UNKNOWN);
+        CHECK(phase_from_int(1) == RecordPhase::Complete);
+        CHECK(phase_from_int(2) == RecordPhase::Counter);
+        CHECK(phase_from_int(3) == RecordPhase::Aggregated);
+        CHECK(phase_from_int(4) == RecordPhase::Metadata);
+        CHECK(phase_from_int(0) == RecordPhase::Unknown);
+        CHECK(phase_from_int(99) == RecordPhase::Unknown);
 
-        CHECK(phase_from_letter("X") == RecordPhase::COMPLETE);
-        CHECK(phase_from_letter("C") == RecordPhase::COUNTER);
-        CHECK(phase_from_letter("A") == RecordPhase::AGGREGATED);
-        CHECK(phase_from_letter("M") == RecordPhase::METADATA);
-        CHECK(phase_from_letter("Z") == RecordPhase::UNKNOWN);
-        CHECK(phase_from_letter("") == RecordPhase::UNKNOWN);
+        CHECK(phase_from_letter("X") == RecordPhase::Complete);
+        CHECK(phase_from_letter("C") == RecordPhase::Counter);
+        CHECK(phase_from_letter("A") == RecordPhase::Aggregated);
+        CHECK(phase_from_letter("M") == RecordPhase::Metadata);
+        CHECK(phase_from_letter("Z") == RecordPhase::Unknown);
+        CHECK(phase_from_letter("") == RecordPhase::Unknown);
 
-        CHECK(phase_to_int(RecordPhase::AGGREGATED) == 3);
-        CHECK(phase_to_letter(RecordPhase::COMPLETE) == 'X');
-        CHECK(phase_to_letter(RecordPhase::UNKNOWN) == '\0');
+        CHECK(phase_to_int(RecordPhase::Aggregated) == 3);
+        CHECK(phase_to_letter(RecordPhase::Complete) == 'X');
+        CHECK(phase_to_letter(RecordPhase::Unknown) == '\0');
     }
 
     TEST_CASE("event type codec: integers, cat inference, unknown fallback") {
-        CHECK(event_type_from_int(1) == EventType::DFTRACER);
-        CHECK(event_type_from_int(3) == EventType::LIBC_IO);
-        CHECK(event_type_from_int(10) == EventType::MPI);
-        CHECK(event_type_from_int(0) == EventType::UNKNOWN);
-        CHECK(event_type_from_int(42) == EventType::UNKNOWN);
+        CHECK(event_type_from_int(1) == EventType::Dftracer);
+        CHECK(event_type_from_int(3) == EventType::LibcIo);
+        CHECK(event_type_from_int(10) == EventType::Mpi);
+        CHECK(event_type_from_int(0) == EventType::Unknown);
+        CHECK(event_type_from_int(42) == EventType::Unknown);
 
-        CHECK(event_type_from_cat("POSIX") == EventType::LIBC_IO);
-        CHECK(event_type_from_cat("STDIO") == EventType::LIBC_IO);
-        CHECK(event_type_from_cat("sys") == EventType::PSUTIL);
-        CHECK(event_type_from_cat("MPI") == EventType::MPI);
-        CHECK(event_type_from_cat("whatever") == EventType::UNKNOWN);
+        CHECK(event_type_from_cat("POSIX") == EventType::LibcIo);
+        CHECK(event_type_from_cat("STDIO") == EventType::LibcIo);
+        CHECK(event_type_from_cat("sys") == EventType::Psutil);
+        CHECK(event_type_from_cat("MPI") == EventType::Mpi);
+        CHECK(event_type_from_cat("whatever") == EventType::Unknown);
 
-        CHECK(event_type_to_int(EventType::PSUTIL) == 7);
+        CHECK(event_type_to_int(EventType::Psutil) == 7);
     }
 }
 
@@ -72,8 +72,8 @@ TEST_SUITE("event-format") {
         CHECK(ev.is_complete());
         CHECK_FALSE(ev.is_metadata());
         CHECK_FALSE(ev.is_counter());
-        CHECK(ev.phase == RecordPhase::COMPLETE);
-        CHECK(ev.type == EventType::LIBC_IO);
+        CHECK(ev.phase == RecordPhase::Complete);
+        CHECK(ev.type == EventType::LibcIo);
         CHECK(ev.dur == 5);
         CHECK(ev.has_dur);
     }
@@ -102,7 +102,7 @@ TEST_SUITE("event-format") {
             p,
             R"({"name":"read","cat":"POSIX","ph":"X","pid":1,"tid":1,"ts":1,"dur":2,"args":{}})");
         CHECK(x.is_complete());
-        CHECK(x.type == EventType::UNKNOWN);  // legacy: no type column
+        CHECK(x.type == EventType::Unknown);  // legacy: no type column
 
         auto c = parse_line(
             p, R"({"name":"cpu","cat":"sys","ph":"C","ts":1,"args":{}})");

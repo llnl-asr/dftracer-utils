@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_LEXER_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_LEXER_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/duql/parser.h>
 
 #include <cstddef>
@@ -11,46 +11,46 @@
 namespace dftracer::utils::duql::syntax {
 
 enum class Tok : std::uint8_t {
-    NAME,      ///< identifier; keywords are names the parser recognizes
-    QNAME,     ///< backtick-quoted key, text without the backticks
-    INT,       ///< digits
-    FLOAT,     ///< digits with a fraction or an exponent
-    DURATION,  ///< a number directly followed by ns, us, ms, s, m or h
-    STRING,    ///< text between the quotes, escapes kept as written
-    PARAM,     ///< `$name`, text without the `$`
-    EQ,
-    NE,
-    LT,
-    LE,
-    GT,
-    GE,
-    REGEX,
-    IREGEX,
-    NREGEX,
-    NIREGEX,
-    PLUS,
-    MINUS,
-    STAR,
-    SLASH,
-    SLASH2,
-    PERCENT,
-    COALESCE,
-    ARROW,
-    DOT,
-    DOTDOT,
-    CARET,
-    ASSIGN,
-    FATARROW,
-    PIPE,
-    COMMA,
-    SEMI,
-    LPAREN,
-    RPAREN,
-    LBRACKET,
-    RBRACKET,
-    LBRACE,
-    RBRACE,
-    END,
+    Name,      ///< identifier; keywords are names the parser recognizes
+    Qname,     ///< backtick-quoted key, text without the backticks
+    Int,       ///< digits
+    Float,     ///< digits with a fraction or an exponent
+    Duration,  ///< a number directly followed by ns, us, ms, s, m or h
+    String,    ///< text between the quotes, escapes kept as written
+    Param,     ///< `$name`, text without the `$`
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Regex,
+    Iregex,
+    Nregex,
+    Niregex,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Slash2,
+    Percent,
+    Coalesce,
+    Arrow,
+    Dot,
+    Dotdot,
+    Caret,
+    Assign,
+    Fatarrow,
+    Pipe,
+    Comma,
+    Semi,
+    Lparen,
+    Rparen,
+    Lbracket,
+    Rbracket,
+    Lbrace,
+    Rbrace,
+    End,
 };
 
 struct Token {

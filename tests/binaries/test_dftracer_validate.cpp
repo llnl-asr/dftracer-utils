@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -44,7 +44,7 @@ std::string make_bad_pfw(const fs::path& dir, int id) {
 }
 
 std::string find_validate_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_VALIDATE_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_VALIDATE_PATH",
                                                 "dftracer_validate");
 }
 

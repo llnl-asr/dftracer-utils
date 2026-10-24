@@ -1,5 +1,5 @@
-#ifndef DFTRACER_TESTS_GROUPMAP_ORACLE_H
-#define DFTRACER_TESTS_GROUPMAP_ORACLE_H
+#ifndef DFTRACER_UTILS_TESTS_GROUPMAP_ORACLE_H
+#define DFTRACER_UTILS_TESTS_GROUPMAP_ORACLE_H
 
 // An independent, test-local reimplementation of the pre-convergence GroupMap
 // aggregation fold (the AggAccum map + to_batch materializer that the dataframe
@@ -9,13 +9,13 @@
 // engine aggregation path rather than a wrapper around it.
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/agg_fold.h>
 #include <dftracer/utils/trace/views/aggfold.h>
@@ -51,10 +51,10 @@ using detail::AggSchema;
 using detail::GROUP_SEP;
 using detail::SET_SEP;
 using detail::ViewPlan;
-using dftracer::utils::StringIntern;
 using dftracer::utils::dataframe::FieldNum;
 using dftracer::utils::dataframe::FieldStat;
 using dftracer::utils::dataframe::FieldStatDomain;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::AggSpec;
@@ -734,9 +734,10 @@ inline bool plan_wants_names(const ViewPlan& plan) {
 // pid -> rank from a PR metadata event ({"name":"PR","pid":P,
 // "args":{"name":"rank","value":"N"}}); others are ignored.
 inline void harvest_pr_rank(
-    const detail::FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    const detail::FoldEvent& ev,
+    const dftracer::utils::dstd::StringIntern& intern,
     std::unordered_map<std::uint64_t, std::string>& ranks) {
-    if (ev.name_id == dftracer::utils::StringIntern::NO_ID ||
+    if (ev.name_id == dftracer::utils::dstd::StringIntern::NO_ID ||
         intern.resolve(ev.name_id) != "PR")
         return;
     std::string_view rank;
@@ -772,12 +773,12 @@ class OracleAggFold : public detail::Fold {
     }
     void step(const detail::FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
-            if (ev.phase == RecordPhase::METADATA) {
+            if (ev.phase == RecordPhase::Metadata) {
                 if (want_ranks_) harvest_pr_rank(ev, *intern_, ranks_);
                 if (want_names_) harvest_name(ev);
-                if (phase_target_ != RecordPhase::METADATA) continue;
+                if (phase_target_ != RecordPhase::Metadata) continue;
             }
-            if (phase_target_ != RecordPhase::UNKNOWN &&
+            if (phase_target_ != RecordPhase::Unknown &&
                 ev.phase != phase_target_)
                 continue;
             detail::PodSource src(ev, *intern_);
@@ -899,4 +900,4 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
 
 }  // namespace gmoracle
 
-#endif  // DFTRACER_TESTS_GROUPMAP_ORACLE_H
+#endif  // DFTRACER_UTILS_TESTS_GROUPMAP_ORACLE_H

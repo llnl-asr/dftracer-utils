@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/runtime/pipeline/scheduler.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/scheduler/task_executor.h>
+#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
 #include <atomic>

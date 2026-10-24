@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/varint.h>
 #include <dftracer/utils/utilities/common/statistics/timestamp_histogram.h>
 
 #include <algorithm>
@@ -108,22 +109,11 @@ std::vector<double> TimestampHistogram::expansion_weights(
 // Varint encoding helpers
 namespace {
 
-void encode_varint(std::vector<std::uint8_t>& out, std::uint64_t value) {
-    while (value >= 0x80) {
-        out.push_back(static_cast<std::uint8_t>(value | 0x80));
-        value >>= 7;
-    }
-    out.push_back(static_cast<std::uint8_t>(value));
-}
-
 std::uint64_t decode_varint(const std::uint8_t*& ptr, const std::uint8_t* end) {
     std::uint64_t result = 0;
-    unsigned shift = 0;
-    while (ptr < end) {
-        std::uint8_t byte = *ptr++;
-        result |= static_cast<std::uint64_t>(byte & 0x7F) << shift;
-        if ((byte & 0x80) == 0) return result;
-        shift += 7;
+    if (!read_varint(ptr, end, result)) {
+        ptr = end;
+        return 0;
     }
     return result;
 }
@@ -134,13 +124,13 @@ std::vector<std::uint8_t> TimestampHistogram::serialize() const {
     std::vector<std::uint8_t> out;
     out.reserve(bins_.size() * 6 + 16);
 
-    encode_varint(out, total_count_);
-    encode_varint(out, bins_.size());
+    append_varint(out, total_count_);
+    append_varint(out, bins_.size());
 
     std::uint64_t prev_idx = 0;
     for (const auto& [idx, count] : bins_) {
-        encode_varint(out, idx - prev_idx);
-        encode_varint(out, count);
+        append_varint(out, idx - prev_idx);
+        append_varint(out, count);
         prev_idx = idx;
     }
 

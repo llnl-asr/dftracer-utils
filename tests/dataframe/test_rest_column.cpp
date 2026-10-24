@@ -2,13 +2,13 @@
 // op that keeps rows keeps them, equal to a plan that declares them.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -112,8 +112,8 @@ class PartsCursor : public df::Cursor {
    private:
     std::vector<Part> parts_;
     bool with_list_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::StringIntern>();
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 

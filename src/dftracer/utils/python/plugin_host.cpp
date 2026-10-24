@@ -1,8 +1,7 @@
 #define PY_SSIZE_T_CLEAN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -16,6 +15,8 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -121,12 +122,9 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     std::sort(files.begin(), files.end());
     if (files.empty())
         throw dftracer::utils::DFTUtilsException(
-            dftracer::utils::ErrorCode::NOT_FOUND, "no trace files found");
+            dftracer::utils::ErrorCode::NotFound, "no trace files found");
 
     if (auto_index) {
-        auto norm = co_await dftracer::utils::index::build::
-            normalize_members_for_ingest(files, 0);
-        files = std::move(norm.files);
         co_await dftracer::utils::index::build::ensure_indexes_fresh(
             &scope, "", files, index_dir);
     }

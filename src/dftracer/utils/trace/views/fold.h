@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/view_scan.h>
@@ -171,7 +171,7 @@ class DynamicPrune {
 /// claims run ahead of the oldest open unit.
 coro::CoroTask<ExportStats> fuse(
     const ViewPlan& plan, const ViewDefinition& vdef,
-    std::span<Fold* const> folds, dftracer::utils::StringIntern& intern,
+    std::span<Fold* const> folds, dftracer::utils::dstd::StringIntern& intern,
     const CoverageSet* covered = nullptr, std::uint64_t limit = 0,
     DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
 

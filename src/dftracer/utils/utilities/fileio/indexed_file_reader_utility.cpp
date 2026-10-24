@@ -1,5 +1,6 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -14,8 +15,8 @@ namespace dftracer::utils::utilities::fileio {
 coro::CoroTask<std::shared_ptr<reader::internal::Reader>>
 IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     // Validate input
-    if (!fs::exists(input.file_path)) {
-        throw DFTUtilsException(ErrorCode::NOT_FOUND,
+    if (!dftracer::utils::input_exists(input.file_path)) {
+        throw DFTUtilsException(ErrorCode::NotFound,
                                 "File does not exist: " + input.file_path);
     }
 

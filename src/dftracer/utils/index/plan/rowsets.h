@@ -20,6 +20,9 @@ const RecordSchema* recorded_schema(const store::IndexDatabase& db,
 struct RowSetFile {
     std::string trace;
     std::string index;
+    /// An open descriptor of `trace` the caller owns, or -1. A schema probe
+    /// reads through it instead of opening the file.
+    int fd = -1;
 };
 
 /// The record schema of `files`: each one's recorded schema, or the detected

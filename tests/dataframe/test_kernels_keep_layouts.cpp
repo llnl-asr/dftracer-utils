@@ -75,8 +75,9 @@ Series selection_over(const Series& base, const Idx& idx) {
     adopt_type_from(*o, *base.handle());
     o->encoding = Encoding::Selection;
     o->length = static_cast<std::int64_t>(idx.size());
-    o->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(o->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
+    o->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(o->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
     o->set_child(std::make_shared<dftu_series>(*base.handle()));
     return Series{o};
 }
@@ -115,7 +116,7 @@ struct Case {
 
 const void* blobs_of(const Series& s) { return s.handle()->blobs.get(); }
 const void* child_data_of(const Series& s) {
-    return s.handle()->child()->data->data();
+    return s.handle()->child()->data.data();
 }
 
 std::vector<Case> cases() {
@@ -792,9 +793,9 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         sel->type = TypeId::String;
         sel->encoding = Encoding::Selection;
         sel->length = 3;
-        sel->data = Buffer::allocate(3 * sizeof(std::int64_t));
+        sel->data = new_buffer(3 * sizeof(std::int64_t));
         const std::int64_t idx[3] = {3, 0, -1};
-        std::memcpy(sel->data->data(), idx, sizeof idx);
+        std::memcpy(writable(sel->data), idx, sizeof idx);
         sel->set_child(
             std::shared_ptr<dftu_series>(dftu_series_share(dict.handle())));
         const Series over_dict{sel};
@@ -810,9 +811,9 @@ TEST_SUITE("kernels keep layouts: group-by drivers and size checks") {
         outer->type = TypeId::String;
         outer->encoding = Encoding::Dictionary;
         outer->length = 2;
-        outer->data = Buffer::allocate(2 * sizeof(std::int32_t));
+        outer->data = new_buffer(2 * sizeof(std::int32_t));
         const std::int32_t outer_codes[2] = {1, 0};
-        std::memcpy(outer->data->data(), outer_codes, sizeof outer_codes);
+        std::memcpy(writable(outer->data), outer_codes, sizeof outer_codes);
         outer->set_child(std::shared_ptr<dftu_series>(
             dftu_series_share(over_dict.handle())));
         const Series dict_over_sel{outer};

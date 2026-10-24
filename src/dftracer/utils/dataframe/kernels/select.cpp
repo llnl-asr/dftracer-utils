@@ -4,7 +4,6 @@
 // reverse, shift, top_k/bottom_k, sample. None is a lane kernel: the numeric
 // heavy lifting is delegated to argsort/topk_indices (SIMD) and take/filter.
 
-#include <dftracer/utils/core/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/column_read.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -132,7 +132,7 @@ Series is_in_strings(const dftu_series& v, const dftu_series& values) {
         for (std::int64_t j = 0; j < d->length; ++j)
             entry_hit[static_cast<std::size_t>(j)] =
                 str_at(d, j, s) && set.count(s) > 0;
-        codes = reinterpret_cast<const std::int32_t*>(v.data->data());
+        codes = reinterpret_cast<const std::int32_t*>(v.data.data());
     }
     constexpr std::int64_t GRAIN = 1 << 15;
     auto probe = [&](std::int64_t b, std::int64_t e) {
@@ -142,8 +142,8 @@ Series is_in_strings(const dftu_series& v, const dftu_series& values) {
             if (dict) {
                 const auto code = static_cast<std::uint32_t>(codes[i]);
                 hit = code < entry_hit.size() && entry_hit[code] &&
-                      (!v.validity ||
-                       ((v.validity->data()[i >> 3] >> (i & 7)) & 1));
+                      (!v.validity.block() ||
+                       ((v.validity.data()[i >> 3] >> (i & 7)) & 1));
             } else {
                 hit = str_at(&v, i, t) && set.count(t) > 0;
             }

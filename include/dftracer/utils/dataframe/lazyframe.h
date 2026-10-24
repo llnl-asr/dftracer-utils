@@ -1,13 +1,13 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_LAZYFRAME_H
 #define DFTRACER_UTILS_DATAFRAME_LAZYFRAME_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -38,7 +38,7 @@ struct MorselDyn {
     /// One interned id per column of Morsel::columns, resolved via `intern`;
     /// empty means positional alignment with the plan schema.
     std::vector<std::uint32_t> name_ids;
-    std::shared_ptr<const dftracer::utils::StringIntern> intern;
+    std::shared_ptr<const dftracer::utils::dstd::StringIntern> intern;
 };
 
 /// A chunk of columns flowing through the lazy pipeline. Carries no names - the
@@ -73,8 +73,6 @@ struct Morsel {
 /// nullopt at end; `max_rows` is a size hint. The engine pulls it async
 /// (co_await), so a producer can suspend on real I/O inside next() instead of
 /// blocking a worker thread.
-class ReclaimRegistry;
-
 class Cursor {
    public:
     virtual ~Cursor();
@@ -108,29 +106,18 @@ class Cursor {
     virtual coro::CoroTask<bool> narrow(const Expr&) { co_return false; }
 
     /// The bytes this cursor holds resident beyond one in-flight morsel: a
-    /// build table, a spool, a cache. The driver sums it over the chain
-    /// against the plan's memory budget. 0 (the default) means either
-    /// nothing or unknown; a cursor that cannot measure itself is never
-    /// asked to reclaim.
+    /// build table, a spool, a cache. A stateful cursor reports the
+    /// reservation it holds for that state in the memory governor. 0 (the
+    /// default) means either nothing or unknown.
     virtual std::uint64_t resident_bytes() const { return 0; }
     /// Free up to `want` resident bytes however this cursor can (spill,
     /// compact, drop a cache) and return how many it freed. ADVISORY: a
     /// cursor may free less, or nothing, and the result it produces must not
-    /// change. The driver calls it when the chain's resident total runs past
-    /// the budget, largest holder first. Modelled on Velox's reclaim.
+    /// change. A plugin node may call it on its input through the cursor
+    /// ABI. Modelled on Velox's reclaim.
     virtual coro::CoroTask<std::uint64_t> reclaim(std::uint64_t) {
         co_return 0;
     }
-    /// Enrol this cursor in a plan's reclaim registry: the set of stages the
-    /// driver measures and asks to reclaim. The plan lowering calls it on
-    /// every stage it builds, before a later stage (a plugin node included)
-    /// takes ownership, so a stage is seen wherever it ends up; the cursor
-    /// leaves the registry when it is destroyed. Modelled on Spark's
-    /// MemoryConsumer registering with its TaskMemoryManager.
-    void attach(std::shared_ptr<ReclaimRegistry> registry);
-
-   private:
-    std::shared_ptr<ReclaimRegistry> registry_;
 };
 
 /// The static, scan-free schema of a Source: one Field per column, in order.
@@ -600,7 +587,8 @@ class LazyFrame {
     /// when a sink's in-memory state grows past this many bytes it spills to a
     /// sorted temp run, k-way merged at the end, so peak memory stays bounded.
     /// 0 (the default) means "auto": ~1/3 of available memory. Pass
-    /// NO_SPILL_BUDGET to disable spilling. Same knob and policy as View.
+    /// memory::NO_SPILL_BUDGET to disable spilling. Same knob and policy as
+    /// View.
     LazyFrame memory_budget(std::uint64_t bytes) const;
     /// Explicitly set the budget to ~1/3 of available memory (same as the
     /// default); sugar for readers who want spilling stated at the call site.

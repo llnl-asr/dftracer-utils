@@ -9,7 +9,7 @@ namespace dftracer::utils::dataframe {
 namespace {
 
 constexpr char MAGIC[4] = {'D', 'F', 'T', 'N'};
-constexpr std::uint32_t VERSION = 1;
+constexpr std::uint32_t VERSION = 0;
 
 template <class T>
 void put(std::string& out, T v) {

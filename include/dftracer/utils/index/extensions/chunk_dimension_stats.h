@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_CHUNK_DIMENSION_STATS_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CHUNK_DIMENSION_STATS_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <cmath>
 #include <cstdint>
@@ -99,9 +99,17 @@ struct ChunkDimensionStats {
         return *this;
     }
 
+    static constexpr std::uint32_t NO_SLOT = UINT32_MAX;
+
     /// Record a value observation. Updates min/max, distinct_count,
     /// value_counts.
     void observe(std::string_view value);
+
+    /// As observe. `slot` is where `value` sits in value_counts: NO_SLOT
+    /// finds it by the string and sets it, and any other value skips the
+    /// lookup. A slot holds while value_counts only gains entries, so the
+    /// caller keeps it for one dimension and one value.
+    void observe(std::string_view value, std::uint32_t& slot);
     void observe_range_only(std::uint64_t value);
 
     /// Serialize value_counts to binary format:

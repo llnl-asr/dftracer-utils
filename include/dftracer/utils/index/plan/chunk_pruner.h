@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_CHUNK_PRUNER_H
 #define DFTRACER_UTILS_INDEX_PLAN_CHUNK_PRUNER_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstdint>
 #include <string>

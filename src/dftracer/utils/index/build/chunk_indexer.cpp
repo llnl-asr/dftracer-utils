@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/parser.h>
@@ -69,7 +69,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
         missing_dims = existing->indexed_dims.missing_dimensions(input.config);
 
         const std::uint64_t current_hash =
-            input.config.params_hash(index::store::IndexExtension::BLOOM);
+            input.config.params_hash(index::store::IndexExtension::Bloom);
         bool config_changed =
             existing->config_hash != 0 && existing->config_hash != current_hash;
 
@@ -148,8 +148,8 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
     auto stream = reader->stream(
         utilities::reader::internal::StreamConfig()
             .stream_type(
-                utilities::reader::internal::StreamType::MULTI_LINES_BYTES)
-            .range_type(utilities::reader::internal::RangeType::BYTE_RANGE)
+                utilities::reader::internal::StreamType::MultiLinesBytes)
+            .range_type(utilities::reader::internal::RangeType::ByteRange)
             .buffer_size(input.batch_size)
             .from(input.start_byte)
             .to(input.end_byte));
@@ -181,11 +181,11 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
             }
 
             trace::RecordPhase phase = trace::read_phase(parser);
-            if (phase == trace::RecordPhase::UNKNOWN) {
+            if (phase == trace::RecordPhase::Unknown) {
                 return;
             }
 
-            bool is_metadata = (phase == trace::RecordPhase::METADATA);
+            bool is_metadata = (phase == trace::RecordPhase::Metadata);
 
             if (!is_metadata) {
                 // Re-parse: the phase read above already consumed the

@@ -3,9 +3,9 @@
 // and finalized to a native dataframe result (no Arrow hop).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
@@ -28,7 +28,7 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::AggCol;
 using dftracer::utils::plugins::Host;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -50,7 +50,7 @@ FoldEvent evt(StringIntern& intern, const char* cat, const char* name,
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = dur;
     fe.has_dur = true;
@@ -235,7 +235,7 @@ FoldEvent evt_full(StringIntern& intern, const char* cat, const char* name,
     FoldEvent fe;
     fe.cat_id = intern.get_or_insert(cat);
     fe.name_id = intern.get_or_insert(name);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.pid = pid;
     fe.tid = tid;
     fe.ts = ts;

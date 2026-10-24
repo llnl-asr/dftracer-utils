@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_CATALOG_FOLD_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/views/fold.h>
 
@@ -24,7 +24,7 @@ void observe_catalog_path(index::store::PathStat& stat, std::uint8_t tag);
 class CatalogFold : public trace::views::detail::Fold {
    public:
     /// `params_hash` is the CATALOG hash of the config a full build uses.
-    CatalogFold(dftracer::utils::StringIntern& intern,
+    CatalogFold(dftracer::utils::dstd::StringIntern& intern,
                 std::uint64_t params_hash)
         : intern_(&intern), params_hash_(params_hash) {}
 
@@ -57,7 +57,7 @@ class CatalogFold : public trace::views::detail::Fold {
             paths;
     };
 
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     std::uint64_t params_hash_;
     std::map<std::string, FileState> files_;
 };

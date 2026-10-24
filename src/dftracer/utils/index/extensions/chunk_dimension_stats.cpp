@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/little_endian.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstring>
+#include <limits>
 
 namespace dftracer::utils::index::extensions {
 
@@ -75,21 +76,36 @@ void ChunkDimensionStats::observe(std::string_view value) {
     }
 }
 
+void ChunkDimensionStats::observe(std::string_view value, std::uint32_t& slot) {
+    if (slot != NO_SLOT) {
+        ++present;
+        ++(value_counts->begin() + slot)->second;
+        return;
+    }
+    observe(value);
+    slot = static_cast<std::uint32_t>(value_counts->find(value) -
+                                      value_counts->begin());
+}
+
 void ChunkDimensionStats::observe_range_only(std::uint64_t value) {
     ++present;
     distinct_count++;
-    auto str = std::to_string(value);
+    char buf[std::numeric_limits<std::uint64_t>::digits10 + 2];
+    const auto text = [&] {
+        const auto end = std::to_chars(buf, buf + sizeof(buf), value).ptr;
+        return std::string_view(buf, static_cast<std::size_t>(end - buf));
+    };
     if (min_value.empty()) {
-        min_value = str;
-        max_value = str;
+        min_value = text();
+        max_value = min_value;
     } else {
         std::uint64_t cur_min = 0, cur_max = 0;
         std::from_chars(min_value.data(), min_value.data() + min_value.size(),
                         cur_min);
         std::from_chars(max_value.data(), max_value.data() + max_value.size(),
                         cur_max);
-        if (value < cur_min) min_value = str;
-        if (value > cur_max) max_value = str;
+        if (value < cur_min) min_value = text();
+        if (value > cur_max) max_value = text();
     }
 }
 
@@ -101,24 +117,17 @@ std::vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
 
     buf.reserve(4 + num * 20);
 
-    buf.push_back(static_cast<std::uint8_t>(num & 0xFF));
-    buf.push_back(static_cast<std::uint8_t>((num >> 8) & 0xFF));
-    buf.push_back(static_cast<std::uint8_t>((num >> 16) & 0xFF));
-    buf.push_back(static_cast<std::uint8_t>((num >> 24) & 0xFF));
+    append_u32_le(buf, num);
 
     for (const auto& [key, count] : *value_counts) {
         auto key_len = static_cast<std::uint16_t>(
             std::min<std::size_t>(key.size(), 0xFFFF));
 
-        buf.push_back(static_cast<std::uint8_t>(key_len & 0xFF));
-        buf.push_back(static_cast<std::uint8_t>((key_len >> 8) & 0xFF));
+        append_u16_le(buf, key_len);
 
         buf.insert(buf.end(), key.data(), key.data() + key_len);
 
-        auto c = static_cast<std::uint64_t>(count);
-        for (int i = 0; i < 8; ++i) {
-            buf.push_back(static_cast<std::uint8_t>((c >> (i * 8)) & 0xFF));
-        }
+        append_u64_le(buf, static_cast<std::uint64_t>(count));
     }
 
     return buf;
@@ -140,26 +149,11 @@ ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     // exactly instead of guessing.
     if (4 + member->size() > cap_bytes) return std::nullopt;
     std::vector<std::uint8_t> out(4 + member->size());
-    const auto n = static_cast<std::uint32_t>(raw.size());
-    for (std::size_t i = 0; i < 4; ++i)
-        out[i] = static_cast<std::uint8_t>((n >> (i * 8)) & 0xFF);
+    write_u32_le(out.data(), static_cast<std::uint32_t>(raw.size()));
     std::copy(member->begin(), member->end(), out.begin() + 4);
 
     return out;
 }
-
-namespace {
-std::uint16_t read_u16_le(const std::uint8_t* p) {
-    return static_cast<std::uint16_t>(static_cast<std::uint16_t>(p[0]) |
-                                      static_cast<std::uint16_t>(p[1] << 8));
-}
-std::uint64_t read_u64_le(const std::uint8_t* p) {
-    std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i)
-        v |= static_cast<std::uint64_t>(p[i]) << (i * 8);
-    return v;
-}
-}  // namespace
 
 dftracer::utils::StringViewMap<std::uint64_t>
 ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,

@@ -3,8 +3,8 @@
 // unit through the raw vtables, so this proves the plugin C ABIs work
 // end-to-end from real C, not just from C++.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
@@ -21,7 +21,7 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 namespace coro = dftracer::utils::coro;
 

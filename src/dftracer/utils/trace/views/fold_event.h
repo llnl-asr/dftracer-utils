@@ -2,8 +2,11 @@
 #define DFTRACER_UTILS_TRACE_VIEWS_FOLD_EVENT_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/intern_cache.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/trace/event.h>
@@ -37,7 +40,7 @@ struct FoldEvent {
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
-    RecordPhase phase = RecordPhase::UNKNOWN;
+    RecordPhase phase = RecordPhase::Unknown;
     bool has_dur = false;
     /// A record decoded by exact path (decode_record): every field is in
     /// `args` under its path, and the fixed fields above are unset.
@@ -61,13 +64,13 @@ struct FoldEvent {
     /// an array or object whose `args` entry is its canonical JSON text (a
     /// declared json field).
     enum class Special : std::uint8_t {
-        NULL_VALUE,
-        FALSE_VALUE,
-        TRUE_VALUE,
-        EMPTY_ARRAY,
-        EMPTY_OBJECT,
-        JSON_ARRAY,
-        JSON_OBJECT,
+        NullValue,
+        FalseValue,
+        TrueValue,
+        EmptyArray,
+        EmptyObject,
+        JsonArray,
+        JsonObject,
     };
     struct SpecialValue {
         std::uint32_t key;
@@ -83,6 +86,26 @@ struct FoldEvent {
     /// schema (the index build); empty otherwise.
     std::vector<std::pair<std::uint32_t, std::uint8_t>> schema_leaves;
 };
+
+/// Rewrite every interned id of `ev` through `map`, indexed by the old id.
+inline void remap_ids(FoldEvent& ev, std::span<const std::uint32_t> map) {
+    constexpr std::uint32_t NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
+    const auto at = [&](std::uint32_t& id) {
+        if (id != NO_ID) id = map[id];
+    };
+    at(ev.cat_id);
+    at(ev.name_id);
+    at(ev.fhash_id);
+    at(ev.hhash_id);
+    for (auto* list : {&ev.args, &ev.top_fields})
+        for (auto& [key, value] : *list) {
+            key = map[key];
+            if (auto* text = std::get_if<std::uint32_t>(&value))
+                *text = map[*text];
+        }
+    for (auto& s : ev.specials) s.key = map[s.key];
+    for (auto& leaf : ev.schema_leaves) leaf.first = map[leaf.first];
+}
 
 /// Reset `ev` to a default event, keeping the capacity of its vectors so a
 /// reused slot decodes the next record without allocating.
@@ -103,25 +126,65 @@ inline void reset_fold_event(FoldEvent& ev) {
 }
 
 /// FoldEvents a decoding worker reuses from batch to batch. clear() keeps
-/// every slot, and a slot keeps its vectors' capacity, so steady-state decode
-/// allocates nothing per event. Only the first size() slots are live.
+/// the slots, and a slot keeps its vectors' capacity, so steady-state decode
+/// allocates nothing per event; a batch of more than RETAIN_SLOTS events, or a
+/// slot with a vector of more than RETAIN_ENTRIES, is cut back to those on
+/// clear(). Only the first size() slots are live.
 class FoldEventBuffer {
    public:
+    static constexpr std::size_t RETAIN_SLOTS = 16384;
+    static constexpr std::size_t RETAIN_ENTRIES = 64;
+
     /// The next slot, in whatever state its last use left it; the decoder
-    /// resets it.
+    /// resets it. A new slot starts with the capacities of the one before it,
+    /// so it allocates each vector once rather than growing it per record.
     FoldEvent& append() {
-        if (live_ == slots_.size()) slots_.emplace_back();
+        if (live_ == slots_.size()) {
+            const bool seeded = !slots_.empty();
+            FoldEvent& ev = slots_.emplace_back();
+            if (seeded) {
+                const FoldEvent& prev = slots_[slots_.size() - 2];
+                ev.args.reserve(seed(prev.args.capacity()));
+                ev.top_fields.reserve(seed(prev.top_fields.capacity()));
+                ev.specials.reserve(seed(prev.specials.capacity()));
+                ev.schema_leaves.reserve(seed(prev.schema_leaves.capacity()));
+            }
+        }
         return slots_[live_++];
     }
     /// Drop the slot append() returned last (a record the caller rejects).
     void discard_last() { --live_; }
-    void clear() { live_ = 0; }
+    void clear() {
+        for (std::size_t i = 0; i < live_; ++i) {
+            FoldEvent& ev = slots_[i];
+            trim(ev.args);
+            trim(ev.top_fields);
+            trim(ev.specials);
+            trim(ev.schema_leaves);
+        }
+        live_ = 0;
+        if (slots_.size() > RETAIN_SLOTS) {
+            slots_.resize(RETAIN_SLOTS);
+            slots_.shrink_to_fit();
+        }
+    }
     bool empty() const { return live_ == 0; }
     std::size_t size() const { return live_; }
+    /// Slots allocated, live or idle.
+    std::size_t slot_capacity() const { return slots_.capacity(); }
     const FoldEvent& back() const { return slots_[live_ - 1]; }
     std::span<const FoldEvent> events() const { return {slots_.data(), live_}; }
+    std::span<FoldEvent> events_mut() { return {slots_.data(), live_}; }
 
    private:
+    static std::size_t seed(std::size_t capacity) {
+        return capacity < RETAIN_ENTRIES ? capacity : RETAIN_ENTRIES;
+    }
+    template <class V>
+    static void trim(V& v) {
+        if (v.capacity() > RETAIN_ENTRIES) V().swap(v);
+    }
+
     std::vector<FoldEvent> slots_;
     std::size_t live_ = 0;
 };
@@ -200,11 +263,11 @@ inline simdjson::dom::element resolve_json_path(simdjson::dom::element root,
 /// exact as int64 (a uint64 above INT64_MAX as double), a bool as 0/1. A null,
 /// a bool and an empty array or object also go to `specials`; a non-empty
 /// array or object appends nothing.
+template <class Intern>
 inline void append_scalar_arg(
     std::vector<std::pair<std::uint32_t, FoldEvent::ArgValue>>& into,
     std::vector<FoldEvent::SpecialValue>& specials, std::uint32_t key_id,
-    simdjson::dom::element v, dftracer::utils::StringIntern& intern,
-    bool top = false) {
+    simdjson::dom::element v, Intern& intern, bool top = false) {
     using T = simdjson::dom::element_type;
     using S = FoldEvent::Special;
     switch (v.type()) {
@@ -230,20 +293,19 @@ inline void append_scalar_arg(
         case T::BOOL: {
             const bool b = v.get_bool().value_unsafe();
             into.emplace_back(key_id, static_cast<std::int64_t>(b));
-            specials.push_back(
-                {key_id, b ? S::TRUE_VALUE : S::FALSE_VALUE, top});
+            specials.push_back({key_id, b ? S::TrueValue : S::FalseValue, top});
             break;
         }
         case T::NULL_VALUE:
-            specials.push_back({key_id, S::NULL_VALUE, top});
+            specials.push_back({key_id, S::NullValue, top});
             break;
         case T::ARRAY:
             if (v.get_array().value_unsafe().size() == 0)
-                specials.push_back({key_id, S::EMPTY_ARRAY, top});
+                specials.push_back({key_id, S::EmptyArray, top});
             break;
         case T::OBJECT:
             if (v.get_object().value_unsafe().size() == 0)
-                specials.push_back({key_id, S::EMPTY_OBJECT, top});
+                specials.push_back({key_id, S::EmptyObject, top});
             break;
         case T::BIGINT:
             // Wider than 64 bits: kept exact as its digits.
@@ -257,7 +319,7 @@ inline void append_scalar_arg(
 /// dftracer args are flattened (`path.0`, `path.key`).
 void flatten_container(FoldEvent& ev, std::string path,
                        simdjson::dom::element v,
-                       dftracer::utils::StringIntern& intern);
+                       dftracer::utils::dstd::StringIntern& intern);
 
 /// Capture a field the POD does not natively carry (top-level type/ph/id, or a
 /// nested a.b/a[0]), JSON type preserved. A name that misses at the event root
@@ -266,7 +328,7 @@ void flatten_container(FoldEvent& ev, std::string path,
 /// schema field goes to `top_fields` so a same-named args key cannot shadow it;
 /// everything else to `args`. No-op when the path is absent.
 inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
-                                dftracer::utils::StringIntern& intern,
+                                dftracer::utils::dstd::StringIntern& intern,
                                 const std::string& name) {
     bool ok = false;
     simdjson::dom::element v = resolve_json_path(root, name, ok);
@@ -289,12 +351,18 @@ inline void capture_extra_field(FoldEvent& ev, simdjson::dom::element root,
         append_scalar_arg(into, ev.specials, key_id, v, intern, schema_field);
 }
 
+struct DecodeHints;
+
 /// Enumerate every scalar or null leaf of `root` (arbitrarily nested) into
 /// ev.schema_leaves by exact path for the index build's path catalog; the
 /// axis and structural keys (pid/tid/ts/dur/ph/id) are excluded.
+///
+/// With `hints`, the path id of a top-level scalar is remembered in `hints`, so
+/// a record interns no path string after its first of that key.
 void capture_schema_leaves(FoldEvent& ev, simdjson::dom::element root,
-                           dftracer::utils::StringIntern& intern,
-                           bool skip_args = false);
+                           dftracer::utils::dstd::StringIntern& intern,
+                           bool skip_args = false,
+                           DecodeHints* hints = nullptr);
 
 /// What one decoding worker learns from its records, valid for one intern and
 /// one record schema: the argument count of the previous record, as the next
@@ -314,7 +382,42 @@ struct DecodeHints {
     /// index below FIELD_CACHE_IDS, by map above.
     std::vector<std::uint32_t> arg_leaf;
     ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
+    /// The path id of each top-level key whose value is a scalar. `packed`
+    /// holds a key of up to 8 bytes, zero padded, so it compares as a word.
+    struct TopLeaf {
+        std::string key;
+        std::uint64_t packed;
+        std::uint32_t id;
+    };
+    std::vector<TopLeaf> top_leaf;
+    /// The keys of the record being decoded by append_dftracer_record that are
+    /// catalog paths, in order, kept from its one walk of the record.
+    struct WalkedKey {
+        std::string_view key;
+        simdjson::dom::element value;
+    };
+    dftracer::utils::dstd::Vector<WalkedKey> walked;
+    /// The key at each position of the previous record's args object, with its
+    /// interned id, and of its leaf keys, with their path id. A record of the
+    /// same shape finds its keys by one compare, not by hashing them.
+    struct KeyAt {
+        dftracer::utils::dstd::String key;
+        std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID;
+    };
+    dftracer::utils::dstd::Vector<KeyAt> arg_key_at;
+    dftracer::utils::dstd::Vector<KeyAt> top_key_at;
 };
+
+/// Whether build_fold_event_into, given DecodeHints, walks the record's args
+/// into `schema_leaves` itself: only a non-empty args object, which the leaf
+/// walk would otherwise visit a second time. An empty or non-object args is
+/// left to capture_schema_leaves, which records it.
+inline bool args_leaves_in_walk(bool needs_args, bool has_args,
+                                simdjson::dom::element args) {
+    simdjson::dom::object obj;
+    return needs_args && has_args &&
+           args.get_object().get(obj) == simdjson::SUCCESS && obj.size() > 0;
+}
 
 /// Decode a record of no known trace format into `ev` (reset first), as an
 /// owned data event (by_path): every
@@ -332,7 +435,7 @@ struct DecodeHints {
 /// `schema_leaves` and its value is not decoded.
 void decode_record_into(
     FoldEvent& ev, simdjson::dom::element root,
-    dftracer::utils::StringIntern& intern, bool capture_schema = true,
+    dftracer::utils::dstd::StringIntern& intern, bool capture_schema = true,
     const std::vector<std::string>* paths = nullptr,
     const dftracer::utils::index::RecordSchema* record_schema = nullptr,
     const std::vector<const dftracer::utils::index::FieldSpec*>* path_fields =
@@ -349,11 +452,27 @@ inline constexpr std::size_t INDEX_MAX_CHILDREN = 256;
 /// DFTracerEvent::parse_scalars already. Every string is interned, so the
 /// result outlives `args`'s parser. With `leaves` (and `needs_args`), each
 /// argument leaf also goes into `schema_leaves` as "args.<key>", in the same
-/// walk.
+/// walk. With `cache`, bound to `intern`, a string the cache has seen is not
+/// looked up in `intern` again.
 void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            simdjson::dom::element args, bool has_args,
-                           dftracer::utils::StringIntern& intern,
-                           bool needs_args, DecodeHints* leaves = nullptr);
+                           dftracer::utils::dstd::StringIntern& intern,
+                           bool needs_args, DecodeHints* leaves = nullptr,
+                           dftracer::utils::dstd::InternCache* cache = nullptr);
+
+/// Decode a DFTracer record into the next slot of `batch` in one walk of its
+/// keys and one walk of its args: the scalars, the args (when `needs_args`, and
+/// the fhash and hhash ids always) and, with `capture_schema`, the schema
+/// leaves. The result equals build_fold_event_into and capture_schema_leaves
+/// run on DFTracerEvent::parse_scalars. Returns false, appending no slot, for a
+/// record that is not an object or has no phase. `hints` is the calling
+/// worker's own and is not shared between threads. `cache`, bound to `intern`,
+/// answers a string it has seen before.
+bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
+                            dftracer::utils::dstd::StringIntern& intern,
+                            bool needs_args, bool capture_schema,
+                            DecodeHints& hints,
+                            dftracer::utils::dstd::InternCache* cache);
 
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
 /// is interned, so the result stays valid after the parser that produced `root`
@@ -364,7 +483,7 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
 /// build's column harvest.
 void extract_fold_event_into(
     FoldEvent& ev, simdjson::dom::element root,
-    dftracer::utils::StringIntern& intern, bool needs_args,
+    dftracer::utils::dstd::StringIntern& intern, bool needs_args,
     const std::vector<std::string>* extra_fields = nullptr,
     bool capture_schema = false, DecodeHints* hints = nullptr);
 

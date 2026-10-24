@@ -21,6 +21,7 @@ set(UTILITIES_TEST_SOURCES
 
     # DLIO config generation
     dlio/test_barrier_simulator.cpp
+    dlio/test_trace_loader.cpp
 
     # Sketches
     common/statistics/test_ddsketch.cpp
@@ -56,6 +57,7 @@ set(UTILITIES_TEST_SOURCES
     fileio/test_gzip_line_writer.cpp
     fileio/test_line_format.cpp
     fileio/test_gzip_sink.cpp
+    fileio/test_gzip_crc.cpp
 
     # I/O Parallel
     fileio/parallel/test_layout_sizing.cpp
@@ -76,6 +78,7 @@ set(UTILITIES_TEST_SOURCES
     reader/test_member_cache_integration.cpp
     reader/test_large_gzip_members.cpp
     reader/test_gzip_restart_points.cpp
+    reader/test_sigill_regression.cpp
 
     # Text
     text/test_line_filter.cpp
@@ -481,7 +484,7 @@ if(DFTRACER_UTILS_ENABLE_ARROW)
   endif()
 endif()
 
-# libstdc++'s std::to_chars, inlined through core/common/to_chars.h, trips
+# libstdc++'s std::to_chars, inlined through common/to_chars.h, trips
 # GCC's optimizer-based -Wstrict-overflow=2 inside the system header, which
 # -isystem cannot suppress; the rest of the tests keep =2.
 set_source_files_properties(

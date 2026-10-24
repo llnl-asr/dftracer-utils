@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_ROWSET_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -27,7 +27,7 @@ class RowSetFold : public trace::views::detail::Fold {
     using Value = std::variant<std::monostate, bool, std::int64_t,
                                std::uint64_t, double, std::string>;
 
-    RowSetFold(dftracer::utils::StringIntern& intern,
+    RowSetFold(dftracer::utils::dstd::StringIntern& intern,
                std::vector<IndexedRowSet> rowsets,
                std::uint64_t budget_bytes = 64ull << 20);
 
@@ -77,7 +77,7 @@ class RowSetFold : public trace::views::detail::Fold {
     // once when the row set is distinct, and empties `from`.
     void absorb(std::size_t r, Rows& from);
 
-    dftracer::utils::StringIntern* intern_;
+    dftracer::utils::dstd::StringIntern* intern_;
     std::vector<IndexedRowSet> rowsets_;
     std::vector<Guard> guards_;
     std::uint64_t budget_;

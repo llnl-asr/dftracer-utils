@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/little_endian.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 
 #include <algorithm>
@@ -36,10 +36,13 @@ void ScalableBloomFilter::open_level(std::size_t capacity) {
 }
 
 void ScalableBloomFilter::add(std::string_view value) {
-    if (possibly_contains(value)) return;
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
+    ++hashed_;
+    for (const auto& level : levels_)
+        if (level.filter.possibly_contains(hashes)) return;
 
     auto& active = levels_.back();
-    active.filter.add(value);
+    active.filter.add(hashes);
     ++active.distinct;
     ++distinct_;
 
@@ -49,8 +52,9 @@ void ScalableBloomFilter::add(std::string_view value) {
 }
 
 bool ScalableBloomFilter::possibly_contains(std::string_view value) const {
+    const BloomFilter::Hashes hashes = BloomFilter::hash(value);
     for (const auto& level : levels_) {
-        if (level.filter.possibly_contains(value)) return true;
+        if (level.filter.possibly_contains(hashes)) return true;
     }
     return false;
 }
@@ -134,14 +138,14 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
     for (std::uint32_t i = 0; i < count; ++i) {
         if (cursor + sizeof(std::uint32_t) > size) {
             throw DFTUtilsException(
-                ErrorCode::PARSE,
+                ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level header");
         }
         const std::size_t blob_size = read_u32_le(data + cursor);
         cursor += sizeof(std::uint32_t);
         if (cursor + blob_size > size) {
             throw DFTUtilsException(
-                ErrorCode::PARSE,
+                ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level payload");
         }
         auto filter = BloomFilter::from_blob(data + cursor, blob_size);

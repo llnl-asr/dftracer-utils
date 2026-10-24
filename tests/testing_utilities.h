@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_TESTS_TESTING_UTILITIES_H
 
 #ifdef __cplusplus
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <sys/wait.h>
 #include <unistd.h>
 

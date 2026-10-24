@@ -2,10 +2,11 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_NUMERIC_H
 
 #include <dftracer/utils/dataframe/lazy/common.h>
+#include <dftracer/utils/dstd/little_endian.h>
 
 namespace dftracer::utils::dataframe::lazy_internal {
 
-enum class NumClass { SIGNED, UNSIGNED, FLOAT };
+enum class NumClass { Signed, Unsigned, Float };
 
 inline bool num_class(TypeId t, NumClass& cls) {
     switch (t) {
@@ -13,32 +14,21 @@ inline bool num_class(TypeId t, NumClass& cls) {
         case TypeId::Int16:
         case TypeId::Int32:
         case TypeId::Int64:
-            cls = NumClass::SIGNED;
+            cls = NumClass::Signed;
             return true;
         case TypeId::Uint8:
         case TypeId::Uint16:
         case TypeId::Uint32:
         case TypeId::Uint64:
-            cls = NumClass::UNSIGNED;
+            cls = NumClass::Unsigned;
             return true;
         case TypeId::Float32:
         case TypeId::Float64:
-            cls = NumClass::FLOAT;
+            cls = NumClass::Float;
             return true;
         default:
             return false;
     }
-}
-
-inline std::uint64_t double_bits(double d) {
-    std::uint64_t u;
-    std::memcpy(&u, &d, sizeof u);
-    return u;
-}
-inline double bits_double(std::uint64_t u) {
-    double d;
-    std::memcpy(&d, &u, sizeof d);
-    return d;
 }
 
 // The cells of a numeric column as 64-bit patterns (an int64, a uint64 or a
@@ -139,13 +129,13 @@ inline Series make_numeric(const std::vector<std::uint64_t>& bits,
         std::vector<T> v(bits.size());
         for (std::size_t i = 0; i < bits.size(); ++i) {
             switch (cls) {
-                case NumClass::SIGNED:
+                case NumClass::Signed:
                     v[i] = static_cast<T>(static_cast<std::int64_t>(bits[i]));
                     break;
-                case NumClass::UNSIGNED:
+                case NumClass::Unsigned:
                     v[i] = static_cast<T>(bits[i]);
                     break;
-                case NumClass::FLOAT:
+                case NumClass::Float:
                     v[i] = static_cast<T>(bits_double(bits[i]));
                     break;
             }

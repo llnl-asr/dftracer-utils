@@ -43,7 +43,7 @@ struct Decorrelated {
     /// sub-query gives for its rows in range. `empty` is then null.
     std::optional<CorrelatedBound> low;
     std::optional<CorrelatedBound> high;
-    RangeRead read = RangeRead::NONE;
+    RangeRead read = RangeRead::None;
 };
 
 /// A construct a correlated sub-query may not hold.

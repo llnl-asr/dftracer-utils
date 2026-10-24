@@ -1,13 +1,13 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_CHUNK_INDEXER_H
 #define DFTRACER_UTILS_INDEX_BUILD_CHUNK_INDEXER_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <algorithm>
@@ -23,7 +23,7 @@ namespace dftracer::utils::index::build {
 inline constexpr std::uint64_t STATS_FLOOR_BYTES = 8ULL << 20;
 /// Version of the zonemap, bloom and counts records a build writes; a change
 /// in what they mean bumps it so existing evidence rebuilds.
-inline constexpr std::uint32_t EVIDENCE_FORMAT_VERSION = 1;
+inline constexpr std::uint32_t EVIDENCE_FORMAT_VERSION = 0;
 
 struct ChunkIndexerConfig {
     bool index_name = true;
@@ -77,29 +77,29 @@ struct ChunkIndexerConfig {
             hasher.update(path_budget);
         };
         switch (ext) {
-            case store::IndexExtension::BLOOM:
+            case store::IndexExtension::Bloom:
                 hasher.update(expected_entries_per_chunk);
                 hasher.update(false_positive_rate);
                 hasher.update(auto_max_distinct);
                 selection();
                 break;
-            case store::IndexExtension::COUNTS:
+            case store::IndexExtension::Counts:
                 hasher.update(value_counts_cap);
                 selection();
                 break;
-            case store::IndexExtension::ZONEMAP:
+            case store::IndexExtension::Zonemap:
                 selection();
                 break;
-            case store::IndexExtension::HOST:
-            case store::IndexExtension::MEMBERS:
-            case store::IndexExtension::ROWSET:
-            case store::IndexExtension::POSTINGS:
-            case store::IndexExtension::STATS:
-            case store::IndexExtension::CATALOG:
-            case store::IndexExtension::PROFILE:
-            case store::IndexExtension::METADATA:
-            case store::IndexExtension::PLUGIN:
-            case store::IndexExtension::AGG:
+            case store::IndexExtension::Host:
+            case store::IndexExtension::Members:
+            case store::IndexExtension::Rowset:
+            case store::IndexExtension::Postings:
+            case store::IndexExtension::Stats:
+            case store::IndexExtension::Catalog:
+            case store::IndexExtension::Profile:
+            case store::IndexExtension::Metadata:
+            case store::IndexExtension::Plugin:
+            case store::IndexExtension::Agg:
                 return 0;
         }
         return hasher.get_hash().value;
@@ -109,7 +109,7 @@ struct ChunkIndexerConfig {
     /// (0, 1].
     void validate() const {
         if (!(stats_share > 0.0 && stats_share <= 1.0))
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "stats_share must be in (0, 1], got " +
                                         std::to_string(stats_share));
     }
@@ -128,14 +128,14 @@ inline std::string extra_dimension_name(std::string_view field) {
 /// its path budget and stats share replace the build's.
 inline ChunkIndexerConfig for_schema(ChunkIndexerConfig config,
                                      const RecordSchema& schema) {
-    const bool by_path = schema.decoder == Decoder::PATH;
+    const bool by_path = schema.decoder == Decoder::Path;
     if (by_path) {
         config.fixed_dimensions = false;
         config.auto_prefix.clear();
         store::ExtensionMask kept;
         for (auto ext :
-             {store::IndexExtension::ZONEMAP, store::IndexExtension::BLOOM,
-              store::IndexExtension::COUNTS})
+             {store::IndexExtension::Zonemap, store::IndexExtension::Bloom,
+              store::IndexExtension::Counts})
             if (config.extensions.has(ext)) kept.add(ext);
         config.extensions = kept;
     }

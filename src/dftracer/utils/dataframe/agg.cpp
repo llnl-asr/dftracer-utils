@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/hash/partition.h>
-#include <dftracer/utils/core/common/hash/splitmix64.h>
-#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <bit>
 #include <cstddef>

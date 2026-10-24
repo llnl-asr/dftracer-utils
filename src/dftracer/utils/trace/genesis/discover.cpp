@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/hash/hex64.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>

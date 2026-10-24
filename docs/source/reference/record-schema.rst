@@ -134,7 +134,7 @@ Classes
      - the ``"path"`` template argument
    * - ``role``, ``unit``
      - ``field(role=..., unit=...)``
-     - ``TimeRole<TimeUnit::MS>``, ``DurationRole<...>``, ``EntityRole``,
+     - ``TimeRole<TimeUnit::Ms>``, ``DurationRole<...>``, ``EntityRole``,
        ``LaneRole``, ``NameRole``
    * - ``always_index``
      - ``field(always_index=True)``
@@ -183,7 +183,7 @@ One id has one definition per process: registering the same definition
 again does nothing, and another definition is an error that names both
 sources. Where schemas load from:
 
-- ``DFTRACER_SCHEMA_PATH``: files or directories, ``:``-separated, on first
+- ``DFTRACER_UTILS_SCHEMA_PATH``: files or directories, ``:``-separated, on first
   use.
 - ``<index_dir>/schemas/``: when an index there is opened.
 - Python ``dftracer.utils.schemas.register``/``load`` or a schema class,

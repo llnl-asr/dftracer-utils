@@ -1,8 +1,4 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -13,6 +9,10 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -24,7 +24,6 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::StringIntern;
 using dftracer::utils::coro::CoroTask;
 using dftracer::utils::dataframe::Agg;
 using dftracer::utils::dataframe::agg_argmax;
@@ -44,6 +43,7 @@ using dftracer::utils::dataframe::OpArgs;
 using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::Source;
 using dftracer::utils::dataframe::TypeId;
+using dftracer::utils::dstd::StringIntern;
 
 namespace {
 
@@ -54,8 +54,30 @@ DataFrame run(CoroTask<DataFrame> t) {
     return out;
 }
 
+// Whether the fixed-width values p[i] and q[j] have the same bytes; false for
+// any other type. Equal bytes are equal values, so row_key, which builds a
+// string per cell, is only asked about cells whose bytes differ.
+bool same_bytes(const Series& p, std::int64_t i, const Series& q,
+                std::int64_t j) {
+    switch (p.type()) {
+        case TypeId::Int64:
+        case TypeId::Uint64:
+        case TypeId::Float64:
+            return std::memcmp(p.data<char>() + 8 * i, q.data<char>() + 8 * j,
+                               8) == 0;
+        case TypeId::Int32:
+        case TypeId::Uint32:
+        case TypeId::Float32:
+            return std::memcmp(p.data<char>() + 4 * i, q.data<char>() + 4 * j,
+                               4) == 0;
+        default:
+            return false;
+    }
+}
+
 // Same names, row count, column types, nulls and values. A NaN equals a NaN:
-// its sign and payload depend on the arithmetic path.
+// its sign and payload depend on the arithmetic path. One assertion per
+// column names the first row that differs.
 void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
     REQUIRE(a.names == b.names);
     REQUIRE(a.num_rows() == b.num_rows());
@@ -64,36 +86,47 @@ void expect_frames_equal(const DataFrame& a, const DataFrame& b) {
         x.push_back(a.columns[c].materialize());
         y.push_back(b.columns[c].materialize());
         REQUIRE(x[0].type() == y[0].type());
+        std::int64_t bad = -1;
         if (x[0].type() == TypeId::List) {
             const std::int32_t* xo = x[0].offsets();
             const std::int32_t* yo = y[0].offsets();
             std::vector<Series> xe, ye;
             xe.push_back(x[0].child(0).materialize());
             ye.push_back(y[0].child(0).materialize());
-            for (std::int64_t r = 0; r < a.num_rows(); ++r) {
-                REQUIRE(x[0].is_null(r) == y[0].is_null(r));
-                REQUIRE(xo[r + 1] - xo[r] == yo[r + 1] - yo[r]);
+            for (std::int64_t r = 0; r < a.num_rows() && bad < 0; ++r) {
+                if (x[0].is_null(r) != y[0].is_null(r) ||
+                    xo[r + 1] - xo[r] != yo[r + 1] - yo[r]) {
+                    bad = r;
+                    continue;
+                }
                 for (std::int32_t k = 0; k < xo[r + 1] - xo[r]; ++k)
-                    REQUIRE(
-                        dftracer::utils::dataframe::row_key(xe, xo[r] + k) ==
-                        dftracer::utils::dataframe::row_key(ye, yo[r] + k));
+                    if (!same_bytes(xe[0], xo[r] + k, ye[0], yo[r] + k) &&
+                        dftracer::utils::dataframe::row_key(xe, xo[r] + k) !=
+                            dftracer::utils::dataframe::row_key(ye, yo[r] + k))
+                        bad = r;
             }
-            continue;
+        } else {
+            for (std::int64_t r = 0; r < a.num_rows() && bad < 0; ++r) {
+                if (x[0].is_null(r) != y[0].is_null(r)) {
+                    bad = r;
+                    continue;
+                }
+                if (x[0].is_null(r) || same_bytes(x[0], r, y[0], r)) continue;
+                if (x[0].type() == TypeId::Float64 &&
+                    std::isnan(x[0].data<double>()[r]) &&
+                    std::isnan(y[0].data<double>()[r]))
+                    continue;
+                if (x[0].type() == TypeId::Float32 &&
+                    std::isnan(x[0].data<float>()[r]) &&
+                    std::isnan(y[0].data<float>()[r]))
+                    continue;
+                if (dftracer::utils::dataframe::row_key(x, r) !=
+                    dftracer::utils::dataframe::row_key(y, r))
+                    bad = r;
+            }
         }
-        for (std::int64_t r = 0; r < a.num_rows(); ++r) {
-            REQUIRE(x[0].is_null(r) == y[0].is_null(r));
-            if (x[0].is_null(r)) continue;
-            if (x[0].type() == TypeId::Float64 &&
-                std::isnan(x[0].data<double>()[r]) &&
-                std::isnan(y[0].data<double>()[r]))
-                continue;
-            if (x[0].type() == TypeId::Float32 &&
-                std::isnan(x[0].data<float>()[r]) &&
-                std::isnan(y[0].data<float>()[r]))
-                continue;
-            REQUIRE(dftracer::utils::dataframe::row_key(x, r) ==
-                    dftracer::utils::dataframe::row_key(y, r));
-        }
+        INFO("column " << a.names[c] << " differs first at row " << bad);
+        REQUIRE(bad < 0);
     }
 }
 
@@ -2202,12 +2235,13 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE(
         "group transform under a tiny budget matches the in-memory plan") {
-        // Chunks of about 1 KiB cut every partition (about 130 rows) several
+        // Chunks of about 1 KiB cut every partition (125 rows) several
         // times, so the carry of each function across a cut is exercised:
         // seed rows (running sum/min/max, fill), context rows (shift, diff,
         // rolling), shifted counts and ranks, and the partition-aligned
         // fallback (average and max rank, float rolling sums).
-        const std::int64_t n = 6000;
+        const std::int64_t MANY_GROUPS = 24;
+        const std::int64_t n = MANY_GROUPS * 125;
         auto frame = [&](std::int64_t groups) {
             std::vector<std::int64_t> k(n), v(n);
             std::vector<double> f(n);
@@ -2265,10 +2299,10 @@ TEST_SUITE("lazyframe") {
         };
         const auto same = expect_frames_equal;
         const std::vector<std::vector<std::string>> key_sets = {{"k"}, {}};
-        for (const std::int64_t groups : {std::int64_t{47}, std::int64_t{1}}) {
+        for (const std::int64_t groups : {MANY_GROUPS, std::int64_t{1}}) {
             const DataFrame df = frame(groups);
             for (const std::vector<std::string>& keys : key_sets) {
-                if (keys.empty() && groups != 47) continue;
+                if (keys.empty() && groups != MANY_GROUPS) continue;
                 for (const Case& c : cases) {
                     INFO("op=" << static_cast<int>(c.op) << " n=" << c.n
                                << " method=" << static_cast<int>(c.method)

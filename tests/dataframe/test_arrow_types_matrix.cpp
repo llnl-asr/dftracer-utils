@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -13,11 +13,9 @@
 // every TypeId is_audited() marks true, and is_audited() has no default case,
 // so a newly added TypeId cannot slip through unclassified.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
 #include "builders_arrow_types.h"
 

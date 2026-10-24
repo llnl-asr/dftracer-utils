@@ -72,9 +72,10 @@ bool needs_rechunk(const std::string& path, std::size_t cap) {
     ScopedFd sfd(fd);
     struct stat st;
     REQUIRE(::fstat(sfd.get(), &st) == 0);
-    return gzc::gzip_needs_rechunk(sfd.get(),
-                                   static_cast<std::uint64_t>(st.st_size), cap)
-        .get();
+    return gzc::gzip_first_member(sfd.get(),
+                                  static_cast<std::uint64_t>(st.st_size), cap)
+        .get()
+        .exceeds_cap;
 }
 
 }  // namespace
@@ -89,6 +90,48 @@ TEST_SUITE("gzip_rechunker") {
 
         CHECK(needs_rechunk(gz, 1024));         // member > 1 KB -> yes
         CHECK_FALSE(needs_rechunk(gz, 10 * 1024 * 1024));  // under cap -> no
+
+        fs::remove_all(dir);
+    }
+
+    TEST_CASE("first_member samples past a tiny first member") {
+        auto dir = dftu_utils_test::make_unique_test_path("rechunk_sample");
+        fs::create_directories(dir);
+        const std::string gz = (dir / "wrapped.pfw.gz").string();
+        const auto payload = make_lines(5000);
+        {
+            gzc::GzipMemberCompressor comp;
+            auto head = comp.compress_member("[\n", 2);
+            auto body = comp.compress_member(payload.data(), payload.size());
+            REQUIRE(head.has_value());
+            REQUIRE(body.has_value());
+            std::ofstream ofs(gz, std::ios::binary);
+            ofs.write(reinterpret_cast<const char*>(head->data()),
+                      static_cast<std::streamsize>(head->size()));
+            ofs.write(reinterpret_cast<const char*>(body->data()),
+                      static_cast<std::streamsize>(body->size()));
+        }
+
+        int fd = ::open(gz.c_str(), O_RDONLY);
+        REQUIRE(fd >= 0);
+        ScopedFd sfd(fd);
+        struct stat st;
+        REQUIRE(::fstat(sfd.get(), &st) == 0);
+        const auto size = static_cast<std::uint64_t>(st.st_size);
+        constexpr std::size_t CAP = 10 * 1024 * 1024;
+
+        // Without a sample only the "[" member is read.
+        auto first = gzc::gzip_first_member(sfd.get(), size, CAP).get();
+        CHECK(first.uncompressed == 2);
+        CHECK_FALSE(first.exceeds_cap);
+
+        // With one, the next member counts too, and the cap still applies to
+        // the first member only.
+        auto sampled =
+            gzc::gzip_first_member(sfd.get(), size, 16, 1 << 20).get();
+        CHECK(sampled.uncompressed == 2 + payload.size());
+        CHECK(sampled.compressed == size);
+        CHECK_FALSE(sampled.exceeds_cap);
 
         fs::remove_all(dir);
     }
@@ -114,39 +157,6 @@ TEST_SUITE("gzip_rechunker") {
         for (std::size_t i = 0; i + 1 < last_bytes.size(); ++i) {
             CHECK(last_bytes[i] == '\n');
         }
-
-        fs::remove_all(dir);
-    }
-
-    TEST_CASE(
-        "rechunk_to_dir_if_needed splits into a dir, else passes through") {
-        auto dir = dftu_utils_test::make_unique_test_path("rechunk_ingest");
-        fs::create_directories(dir);
-        const std::string in = (dir / "trace.pfw.gz").string();
-        const auto payload = make_lines(5000);
-        write_single_member_gz(in, payload);
-        const std::string split_dir = (dir / "split").string();
-
-        // Under a small member cap the single member is rewritten to a bounded
-        // multi-member copy in split/, non-destructively.
-        bool did = false;
-        std::string got =
-            gzc::rechunk_to_dir_if_needed(in, split_dir, 8 * 1024, did).get();
-        CHECK(did);
-        CHECK(got == split_dir + "/trace.pfw.gz");
-        REQUIRE(fs::exists(got));
-        auto [content, members] = decode_all(got);
-        CHECK(content == payload);  // bytes preserved
-        CHECK(members > 1);         // now multi-member
-        CHECK(fs::exists(in));      // original untouched
-
-        // A cap above the member size leaves the file alone.
-        bool did2 = false;
-        std::string got2 =
-            gzc::rechunk_to_dir_if_needed(in, split_dir, 10 * 1024 * 1024, did2)
-                .get();
-        CHECK_FALSE(did2);
-        CHECK(got2 == in);
 
         fs::remove_all(dir);
     }

@@ -1,8 +1,6 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -10,6 +8,9 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -135,7 +136,7 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
             case GroupKey::Kind::IoCat:
             case GroupKey::Kind::AccPat:
                 throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT, "group key ",
+                    ErrorCode::InvalidArgument, "group key ",
                     detail::group_col_name(k),
                     " needs dftracer events; schema ", schema.id,
                     " records have paths only");
@@ -143,7 +144,7 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
         if (auto c = detail::resolver_column(k.kind);
             c && !has_rowset(schema, c->rowset, c->key, c->value))
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT, "group key ",
+                ErrorCode::InvalidArgument, "group key ",
                 detail::group_col_name(k), " needs row set ", c->rowset, " (",
                 c->key, ", ", c->value, "); schema ", schema.id,
                 " defines none");
@@ -195,19 +196,15 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (const auto& f : files) {
             if (f.index_path.empty()) continue;
-            std::error_code ec;
-            const auto mtime = fs::last_write_time(f.file_path, ec);
-            if (ec) continue;
-            const auto size = fs::file_size(f.file_path, ec);
-            if (ec) continue;
+            dftracer::utils::InputFileStat file_stat;
+            if (!dftracer::utils::stat_input(f.file_path, file_stat)) continue;
             const std::string logical =
                 st::internal::get_logical_path(f.file_path);
             std::string key = logical;
             key += '\n';
-            key += std::to_string(
-                static_cast<long long>(mtime.time_since_epoch().count()));
+            key += std::to_string(static_cast<long long>(file_stat.mtime));
             key += '\n';
-            key += std::to_string(size);
+            key += std::to_string(file_stat.size);
             key += '\n';
             key += f.index_path;
             key += '\n';
@@ -260,7 +257,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
                     co_await ib::resolve_and_build_index(&scope, std::move(in));
             });
         if (!result.failures.empty())
-            throw DFTUtilsException::cat(ErrorCode::IO, "index of ",
+            throw DFTUtilsException::cat(ErrorCode::Io, "index of ",
                                          result.failures.front().file_path,
                                          " is stale and its rebuild failed: ",
                                          result.failures.front().message);
@@ -386,15 +383,25 @@ ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
     return merged;
 }
 
-// Union the harvested column types across the view's distinct index roots,
-// reading each index's metadata in parallel. Seeds the base axis fields.
+// Union the column types of the view's own files, reading each distinct index
+// root in parallel. An index root also holds files the view does not read, so
+// only the view's files contribute. Seeds the base axis fields.
 ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
-    // Distinct index roots (many files often share one index).
+    // Distinct index roots (many files often share one index), each with the
+    // logical paths of the view's files in it.
     std::vector<std::string> roots;
+    std::vector<std::vector<std::string>> root_files;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
-        if (std::find(roots.begin(), roots.end(), f.index_path) == roots.end())
+        auto pos = std::find(roots.begin(), roots.end(), f.index_path);
+        if (pos == roots.end()) {
             roots.push_back(f.index_path);
+            root_files.emplace_back();
+            pos = roots.end() - 1;
+        }
+        root_files[static_cast<std::size_t>(pos - roots.begin())].push_back(
+            dftracer::utils::index::store::internal::get_logical_path(
+                f.file_path));
     }
 
     ColTypeMap merged;
@@ -411,13 +418,27 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
             [&](std::int64_t begin, std::int64_t end) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
+                    namespace st = dftracer::utils::index::store;
                     try {
-                        dftracer::utils::index::store::IndexDatabase db(
-                            roots[static_cast<std::size_t>(i)],
-                            dftracer::utils::index::store::IndexOpenMode::
-                                ReadOnly);
-                        for (auto& [name, t] : db.query_all_column_types())
-                            local.emplace(std::move(name), t);
+                        st::IndexDatabase db(roots[static_cast<std::size_t>(i)],
+                                             st::IndexOpenMode::ReadOnly);
+                        for (const std::string& logical :
+                             root_files[static_cast<std::size_t>(i)]) {
+                            const int fid = db.get_file_info_id(logical);
+                            if (fid < 0) continue;
+                            ColTypeMap one;
+                            for (auto& [path, t] : db.file_column_types(fid)) {
+                                std::string_view name = path;
+                                if (name.starts_with("args."))
+                                    name.remove_prefix(5);
+                                auto [at, fresh] =
+                                    one.emplace(std::string(name), t);
+                                if (!fresh)
+                                    at->second =
+                                        st::merge_column_type(at->second, t);
+                            }
+                            fold_col_map(local, one);
+                        }
                     } catch (...) {
                         // A missing or unreadable index contributes nothing.
                     }
@@ -442,17 +463,17 @@ void overlay_declared(ColTypeMap& m,
     for (const auto& f : schema.fields) {
         CT t = CT::String;
         switch (f.type) {
-            case ix::FieldType::BOOL:
-            case ix::FieldType::INT:
+            case ix::FieldType::Bool:
+            case ix::FieldType::Int:
                 t = CT::Int64;
                 break;
-            case ix::FieldType::FLOAT:
+            case ix::FieldType::Float:
                 t = CT::Float64;
                 break;
-            case ix::FieldType::STRING:
-                t = f.role == ix::Role::TIME ? CT::Int64 : CT::String;
+            case ix::FieldType::String:
+                t = f.role == ix::Role::Time ? CT::Int64 : CT::String;
                 break;
-            case ix::FieldType::JSON:
+            case ix::FieldType::Json:
                 t = CT::Json;
                 break;
         }
@@ -484,23 +505,23 @@ namespace {
 const char* path_type_name(dftracer::utils::index::store::PathType t) {
     using PT = dftracer::utils::index::store::PathType;
     switch (t) {
-        case PT::NULL_VALUE:
+        case PT::NullValue:
             return "null";
-        case PT::BOOL:
+        case PT::Bool:
             return "bool";
-        case PT::INT:
+        case PT::Int:
             return "int";
-        case PT::UINT:
+        case PT::Uint:
             return "uint";
-        case PT::DOUBLE:
+        case PT::Double:
             return "float";
-        case PT::STRING:
+        case PT::String:
             return "string";
-        case PT::MIXED:
+        case PT::Mixed:
             return "mixed";
-        case PT::OBJECT:
+        case PT::Object:
             return "object";
-        case PT::ARRAY:
+        case PT::Array:
             return "array";
     }
     return "mixed";
@@ -522,7 +543,7 @@ std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
             const int fid = it->second->get_file_info_id(
                 st::internal::get_logical_path(f.file_path));
             if (fid < 0 ||
-                !it->second->extension_state(fid, st::IndexExtension::CATALOG))
+                !it->second->extension_state(fid, st::IndexExtension::Catalog))
                 return f.file_path;
         } catch (...) {
             return f.file_path;
@@ -547,7 +568,7 @@ void ensure_catalog(const ScanPlan& plan_) {
                 const int fid = it->second->get_file_info_id(
                     st::internal::get_logical_path(f.file_path));
                 missing = fid < 0 || !it->second->extension_current(
-                                         fid, st::IndexExtension::CATALOG);
+                                         fid, st::IndexExtension::Catalog);
             }
         } catch (...) {
         }
@@ -561,7 +582,7 @@ void ensure_catalog(const ScanPlan& plan_) {
     only->views_root = plan_->views_root;
     only->memory_budget = plan_->memory_budget;
     only->cancelled = plan_->cancelled;
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     default_runtime().run_blocking(
         "view_ensure_catalog", [&](CoroScope&) -> coro::CoroTask<void> {
             co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
@@ -601,8 +622,8 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     }
     std::map<std::string, SchemaLeaf> leaves;
     for (auto& [path, stat] : merged)
-        if (stat.type != st::PathType::OBJECT &&
-            stat.type != st::PathType::ARRAY)
+        if (stat.type != st::PathType::Object &&
+            stat.type != st::PathType::Array)
             leaves[path] =
                 SchemaLeaf{path, path_type_name(stat.type), stat.count, {}, {}};
     namespace ix = dftracer::utils::index;
@@ -614,7 +635,7 @@ std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
             leaf.path = f.path;
             const std::string below = f.path + ".";
             const bool has_leaves =
-                f.type == ix::FieldType::JSON &&
+                f.type == ix::FieldType::Json &&
                 std::any_of(merged.begin(), merged.end(), [&](const auto& kv) {
                     return kv.first.starts_with(below);
                 });
@@ -656,7 +677,7 @@ std::shared_ptr<const detail::JsonColumns> json_columns(
         if (t != CT::Json) continue;
         const auto* field = schema.field_at(name);
         const bool text =
-            field && field->type == dftracer::utils::index::FieldType::JSON;
+            field && field->type == dftracer::utils::index::FieldType::Json;
         // A dftracer catalog names args bare, so a top-level field of the
         // same name merges in; only the args column is JSON.
         if (by_path)
@@ -701,7 +722,7 @@ std::unordered_map<std::string, dataframe::DataType> column_types(
 }
 
 TimeMetric time_metric(const ScanPlan& plan_) {
-    if (plan_->files.empty()) return TimeMetric::US;
+    if (plan_->files.empty()) return TimeMetric::Us;
     return trace::read_time_metric(plan_->files.front().file_path);
 }
 
@@ -770,7 +791,7 @@ ScanPlan occ_cell(const ScanPlan& plan_, std::uint64_t cell_us) {
 ScanPlan time_scale(const ScanPlan& plan_, double ns_ratio) {
     if (ns_ratio != 1.0 && detail::plan_by_path(*plan_))
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "time_scale scales dftracer ts and dur; schema ",
             detail::plan_record_schema(*plan_).id,
             " gives its time units on its time and duration fields");
@@ -792,7 +813,7 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<AggSpec> specs) {
     for (const AggSpec& s : specs)
         if (is_occupancy_op(s.op)) {
             detail::require_role(*plan_, "an occupancy aggregate",
-                                 detail::TraceRole::DURATION);
+                                 detail::TraceRole::Duration);
             timed = true;
         }
     auto next = clone(plan_);
@@ -830,7 +851,7 @@ AggSpec lower_field_agg(const FieldAggExpr& e) {
         case AggFn::ArgMax:
             return AggSpec(AggOp::ArgMax, e.field(), "", e.by());
     }
-    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+    throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                  "unhandled aggregate function");
 }
 
@@ -877,7 +898,7 @@ ScanPlan agg(const ScanPlan& plan_, std::vector<FieldAggExpr> exprs) {
                     break;
                 default:
                     throw DFTUtilsException::cat(
-                        ErrorCode::INVALID_ARGUMENT,
+                        ErrorCode::InvalidArgument,
                         "F.any supports .count()/.mean()/.sum()/.min()/.max()/"
                         ".var()/.std()/.skew()/.kurt(); name a field for "
                         "argmax "
@@ -909,7 +930,7 @@ ScanPlan agg_numeric_args(const ScanPlan& plan_,
     for (const auto& s : reductions)
         if (!is_dyn_reduction(s.op))
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "agg_numeric_args supports only Count/Sum/Min/Max/SumSq/Mean/"
                 "Var/Std/Skew/Kurt over numeric args; Pct/Hist/ArgMax need a "
                 "named field");
@@ -936,8 +957,9 @@ ScanPlan auto_spill(const ScanPlan& plan_) {
     // ~1/3 of available memory, floored so tiny machines still get a workable
     // in-core window before spilling.
     std::uint64_t budget =
-        static_cast<std::uint64_t>(detect_available_memory() / 3);
-    if (budget < MIN_MEMORY_BUDGET_BYTES) budget = MIN_MEMORY_BUDGET_BYTES;
+        static_cast<std::uint64_t>(memory::detect_available_memory() / 3);
+    if (budget < memory::MIN_MEMORY_BUDGET_BYTES)
+        budget = memory::MIN_MEMORY_BUDGET_BYTES;
     return memory_budget(plan_, budget);
 }
 
@@ -1116,7 +1138,11 @@ coro::AsyncGenerator<dataframe::DataFrame> stream(ScanPlan plan_,
                                                   std::int64_t morsel_rows) {
     dataframe::LazyFrame lf = collect(plan_);
     auto gen = lf.stream(morsel_rows);
-    while (auto df = co_await gen.next()) co_yield std::move(*df);
+    for (;;) {
+        auto df = co_await gen.next();
+        if (!df) break;
+        co_yield std::move(*df);
+    }
 }
 
 coro::CoroTask<dataframe::DataFrame> collect_frame(ScanPlan plan_) {
@@ -1170,11 +1196,10 @@ dataframe::DataFrame merge_flamegraph_partials(
     return detail::merge_flamegraph_partials(partials);
 }
 
-coro::CoroTask<ExportStats> run_folds(ScanPlan plan_,
-                                      std::span<detail::Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      detail::DynamicPrune* dyn_prune,
-                                      coro::CoroSemaphore* gate) {
+coro::CoroTask<ExportStats> run_folds(
+    ScanPlan plan_, std::span<detail::Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern,
+    detail::DynamicPrune* dyn_prune, coro::CoroSemaphore* gate) {
     co_return co_await detail::run_folds(*plan_, folds, intern, dyn_prune,
                                          gate);
 }

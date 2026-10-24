@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PYTHON_ARROW_STREAM_CAPSULE_H
 #define DFTRACER_UTILS_PYTHON_ARROW_STREAM_CAPSULE_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define PY_SSIZE_T_CLEAN

@@ -134,7 +134,7 @@ std::vector<int> bits_of(const Series& mask) {
         if (m.is_null(i))
             out.push_back(2);
         else
-            out.push_back((m.handle()->data->data()[i >> 3] >> (i & 7)) & 1);
+            out.push_back((m.handle()->data.data()[i >> 3] >> (i & 7)) & 1);
     }
     return out;
 }
@@ -275,7 +275,7 @@ TEST_SUITE("string view") {
         const Series s = make_view(SAMPLE, &released);
         std::int64_t expected = 10 * 16 + 2;
         for (const auto& b : *s.handle()->blobs)
-            expected += static_cast<std::int64_t>(b->size());
+            expected += static_cast<std::int64_t>(b.size());
         CHECK(dftu_series_buffer_bytes(s.handle()) == expected);
         const Series filtered = s.filter(s.str_contains("long"));
         CHECK(dftu_series_buffer_bytes(filtered.handle()) ==
@@ -292,8 +292,8 @@ TEST_SUITE("string view") {
         d->type = TypeId::String;
         d->encoding = Encoding::Dictionary;
         d->length = 5;
-        d->data = Buffer::allocate(sizeof(codes));
-        std::memcpy(d->data->data(), codes, sizeof(codes));
+        d->data = new_buffer(sizeof(codes));
+        std::memcpy(writable(d->data), codes, sizeof(codes));
         d->set_child(std::make_shared<dftu_series>(*base.handle()));
         Series dict{d};
         const Rows expected = {values[1], values[0], values[2], values[1],
@@ -316,8 +316,8 @@ TEST_SUITE("string view") {
         d->type = TypeId::String;
         d->encoding = Encoding::Dictionary;
         d->length = 5;
-        d->data = Buffer::allocate(sizeof(codes));
-        std::memcpy(d->data->data(), codes, sizeof(codes));
+        d->data = new_buffer(sizeof(codes));
+        std::memcpy(writable(d->data), codes, sizeof(codes));
         d->set_child(std::make_shared<dftu_series>(*view.handle()));
         const Series dict{d};
         const Series from = Series::strings({"a", "\xC3\xA9"});
@@ -344,8 +344,8 @@ TEST_SUITE("string view") {
         s->type = TypeId::String;
         s->encoding = Encoding::Selection;
         s->length = 4;
-        s->data = Buffer::allocate(sizeof(idx));
-        std::memcpy(s->data->data(), idx, sizeof(idx));
+        s->data = new_buffer(sizeof(idx));
+        std::memcpy(writable(s->data), idx, sizeof(idx));
         s->set_child(std::make_shared<dftu_series>(*base.handle()));
         Series sel{s};
         const Rows expected = {SAMPLE[8], Row(), SAMPLE[3], SAMPLE[1]};
@@ -530,10 +530,10 @@ Series make_large(const Rows& rows, bool binary = false) {
     w->type = binary ? TypeId::LargeBinary : TypeId::LargeString;
     w->encoding = Encoding::Flat;
     w->length = static_cast<std::int64_t>(rows.size());
-    w->offsets = Buffer::allocate((rows.size() + 1) * sizeof(std::int64_t));
+    w->offsets = new_buffer((rows.size() + 1) * sizeof(std::int64_t));
     std::string bytes;
     std::vector<std::uint8_t> valid((rows.size() + 7) / 8, 0);
-    auto* off = reinterpret_cast<std::int64_t*>(w->offsets->data());
+    auto* off = reinterpret_cast<std::int64_t*>(writable(w->offsets));
     off[0] = 0;
     for (std::size_t i = 0; i < rows.size(); ++i) {
         if (rows[i]) {
@@ -544,12 +544,12 @@ Series make_large(const Rows& rows, bool binary = false) {
         }
         off[i + 1] = static_cast<std::int64_t>(bytes.size());
     }
-    w->data = Buffer::allocate(bytes.size());
+    w->data = new_buffer(bytes.size());
     if (!bytes.empty())
-        std::memcpy(w->data->data(), bytes.data(), bytes.size());
+        std::memcpy(writable(w->data), bytes.data(), bytes.size());
     if (w->null_count > 0) {
-        w->validity = Buffer::allocate(valid.size());
-        std::memcpy(w->validity->data(), valid.data(), valid.size());
+        w->validity = new_buffer(valid.size());
+        std::memcpy(writable(w->validity), valid.data(), valid.size());
     }
     return Series{w};
 }
@@ -560,15 +560,16 @@ Series make_selection(const Series& base,
     s->type = base.type();
     s->encoding = Encoding::Selection;
     s->length = static_cast<std::int64_t>(idx.size());
-    s->data = Buffer::allocate(idx.size() * sizeof(std::int64_t));
-    std::memcpy(s->data->data(), idx.data(), idx.size() * sizeof(std::int64_t));
+    s->data = new_buffer(idx.size() * sizeof(std::int64_t));
+    std::memcpy(writable(s->data), idx.data(),
+                idx.size() * sizeof(std::int64_t));
     s->set_child(std::make_shared<dftu_series>(*base.handle()));
     return Series{s};
 }
 
-bool blobs_hold(const Series& s, const std::shared_ptr<Buffer>& b) {
+bool blobs_hold(const Series& s, const BufferView& b) {
     for (const auto& x : *s.handle()->blobs)
-        if (x->data() == b->data()) return true;
+        if (x.data() == b.data()) return true;
     return false;
 }
 

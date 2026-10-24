@@ -1,9 +1,9 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/agg_spill.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>  // spill::Dir
+#include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -101,7 +101,7 @@ struct AggSpiller::Impl {
 };
 
 AggSpiller::AggSpiller(std::uint64_t budget) : impl_(std::make_unique<Impl>()) {
-    impl_->budget = resolve_spill_budget(budget);
+    impl_->budget = memory::resolve_spill_budget(budget);
 }
 AggSpiller::~AggSpiller() = default;
 AggSpiller::AggSpiller(AggSpiller&&) noexcept = default;
@@ -110,7 +110,7 @@ AggSpiller& AggSpiller::operator=(AggSpiller&&) noexcept = default;
 std::size_t AggSpiller::runs() const { return impl_->runs.size(); }
 
 bool AggSpiller::maybe_spill(AggStatePtr& state) {
-    if (!state || impl_->budget == NO_SPILL_BUDGET) return false;
+    if (!state || impl_->budget == memory::NO_SPILL_BUDGET) return false;
     if (agg_approx_bytes(*state) <= impl_->budget) return false;
     std::vector<AggSpec> specs = agg_specs(*state);
     spill::write_agg_run(*state, impl_->new_run_path());

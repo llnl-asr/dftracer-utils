@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_QUERY_UTILITY_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_QUERY_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/statistics/trace_statistics.h>
 
 #include <cstdint>
@@ -12,20 +12,20 @@
 namespace dftracer::utils::trace::statistics {
 
 enum class StatisticsQueryType {
-    SUMMARY,
-    CATEGORIES,
-    NAMES,
-    PID_TIDS,
-    TIME_RANGE,
-    DURATION_STATS,
-    TOP_N_NAMES,
-    TOP_N_CATEGORIES,
-    DETAILED
+    Summary,
+    Categories,
+    Names,
+    PidTids,
+    TimeRange,
+    DurationStats,
+    TopNNames,
+    TopNCategories,
+    Detailed
 };
 
 struct StatisticsQueryInput {
     TraceStatistics stats;
-    StatisticsQueryType query_type = StatisticsQueryType::SUMMARY;
+    StatisticsQueryType query_type = StatisticsQueryType::Summary;
     std::uint64_t top_n = 10;
 };
 

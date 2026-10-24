@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CONFIG_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CONFIG_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
 #include <cstdint>
@@ -95,9 +95,21 @@ struct AggregationConfig {
             text(be.output_name);
         }
         h.update_value(track_process_parents);
+        // An aggregation built without chunk partials is stale.
+        text("partials");
         return h.finish();
     }
 };
+
+/// The start of the window of `timestamp`: it is rounded down to a multiple of
+/// the interval, from the reference timestamp with relative time. An interval
+/// of 0 gives one window per timestamp.
+inline std::uint64_t compute_time_bucket(std::uint64_t timestamp,
+                                         const AggregationConfig& config) {
+    if (config.use_relative_time) timestamp -= config.reference_timestamp;
+    if (config.time_interval_us == 0) return timestamp;
+    return (timestamp / config.time_interval_us) * config.time_interval_us;
+}
 
 }  // namespace dftracer::utils::index::schemas::dft::agg
 

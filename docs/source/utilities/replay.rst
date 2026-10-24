@@ -7,15 +7,15 @@ The replay utility replays DFTracer trace files by reading recorded events and e
 
 .. note::
 
-   The engine is now pipelined with C++20 coroutines and channels: trace
-   reading, JSON parsing, filtering, and execution run as concurrent stages
-   communicating through bounded channels, so a slow executor no longer
-   blocks the reader. JSON parsing uses the shared
-   :cpp:class:`dftracer::utils::json::JsonParser`
-   (on-demand simdjson) which reuses one padded buffer per stage. String
-   handling and file I/O have been re-tuned with a fixed read buffer and
-   ``string_view`` line slicing; the public ``ReplayEngine`` /
-   ``ReplayConfig`` / ``ReplayResult`` API is unchanged.
+   The engine replays its input files in parallel, as many at once as
+   the executor has threads. Each file runs on its own lane: its own
+   executor (so its own open files) and its own timing anchor, so files of
+   different processes keep their own timelines. Within a file, reading and
+   parsing feed execution through a bounded channel, so a slow executor
+   does not block the reader, and timing waits of a millisecond or more
+   suspend on the runtime timer instead of blocking a worker. The results
+   of the files are merged in input order, and ``max_events`` caps the
+   whole run.
 
 .. code-block:: cpp
 
@@ -185,31 +185,6 @@ Replay traces using hierarchical call tree structure for depth-first execution.
 
    result.print_summary();
    // result.total_nodes, result.tree_depth, result.unique_processes
-
-Custom Executors
-----------------
-
-Add custom executors for specific trace types beyond the built-in POSIX and DFTracer executors.
-
-.. code-block:: cpp
-
-   class MyExecutor : public TraceExecutor {
-   public:
-       bool execute(const Trace& trace, const ReplayConfig& config) override {
-           // Custom execution logic
-           return true;
-       }
-
-       bool can_handle(const Trace& trace) const override {
-           return trace.cat == "my_category";
-       }
-
-       std::string get_name() const override { return "MyExecutor"; }
-   };
-
-   ReplayEngine engine(config);
-   engine.add_executor(std::make_unique<MyExecutor>());
-   auto result = engine.replay("trace.pfw.gz");
 
 Replay Modes
 ------------

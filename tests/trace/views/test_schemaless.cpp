@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/schemas/dft/agg/view_agg_tier.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
+#include <dftracer/utils/trace/views/view_agg_partials.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
@@ -94,16 +94,38 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
     return detail::apply_agg_post_ops(std::move(out), *p);
 }
 
-// The aggregation of `p` from the aggregation tier; fails when the tier
-// declines it.
-df::DataFrame tier_only(const scan::ScanPlan& p) {
+// Whether the chunk partials answer `p`; the state they seed when they do.
+bool partials_serve(const scan::ScanPlan& p, df::AggStatePtr& st) {
     namespace detail = dftracer::utils::trace::views::detail;
     detail::ensure_schema(*p);
+    Runtime rt;
+    bool served = false;
+    rt.run_blocking("partials", [&](CoroScope&) -> coro::CoroTask<void> {
+        served = co_await detail::partials_collect(*p, st);
+    });
+    return served;
+}
+
+// The aggregation of `p` from the chunk partials; fails when they decline it.
+df::DataFrame tier_only(const scan::ScanPlan& p) {
+    namespace detail = dftracer::utils::trace::views::detail;
     df::AggStatePtr st;
-    REQUIRE(
-        dftracer::utils::index::schemas::dft::agg::agg_tier_collect(*p, st));
+    REQUIRE(partials_serve(p, st));
     return detail::apply_agg_post_ops(detail::finalize_engine_result(*st, *p),
                                       *p);
+}
+
+// Whether the chunk partials answer the events and profiles of `p`.
+bool typed_serve(const scan::ScanPlan& p, df::DataFrame& regular,
+                 df::DataFrame& profiles) {
+    namespace detail = dftracer::utils::trace::views::detail;
+    detail::ensure_schema(*p);
+    Runtime rt;
+    bool served = false;
+    rt.run_blocking("typed-partials", [&](CoroScope&) -> coro::CoroTask<void> {
+        served = co_await detail::partials_collect_typed(*p, regular, profiles);
+    });
+    return served;
 }
 
 // Each row of `f` as its cells' text, keyed by the `keys` columns' text.
@@ -611,8 +633,6 @@ fields:
 
     TEST_CASE(
         "the aggregation tier answers a path schema's roles like the scan") {
-        namespace detail = dftracer::utils::trace::views::detail;
-        namespace tier = dftracer::utils::index::schemas::dft::agg;
         ix::register_schema(DFT_ROLES, "test");
         ix::register_schema(R"(
 id: loose_roles
@@ -664,21 +684,24 @@ fields:
         CHECK(filtered.num_rows() == 2);
         same_frame(filtered, scan_only(plan(b, keys, aggs, reads)), cols);
 
-        // Five calls a millisecond apart fall in three 2 ms buckets.
-        const auto bucketed = scan::time_bucket(plan(b, keys, aggs), 2000);
-        detail::ensure_schema(*bucketed);
+        // A one second window holds every chunk of the file, so the partials
+        // answer it; a two millisecond window cuts chunks, which only a
+        // re-read of the traces can split, and a path plan reads none.
+        const auto bucketed = scan::time_bucket(plan(b, keys, aggs), 1000000);
         df::DataFrame regular, profiles;
-        REQUIRE(tier::events_profiles_collect(*bucketed, regular, profiles));
-        CHECK(regular.num_rows() == 48);
+        REQUIRE(typed_serve(bucketed, regular, profiles));
+        CHECK(regular.num_rows() == 16);
         same_frame(regular, scan_only(bucketed),
                    {"time_bucket", "name", "pid", "tid"});
+        df::DataFrame cut_regular, cut_profiles;
+        CHECK_FALSE(typed_serve(scan::time_bucket(plan(b, keys, aggs), 2000),
+                                cut_regular, cut_profiles));
 
         // A field with no exact tier copy scans: cat is no role, the loose
         // schema's duration is a float and its entity optional.
         auto declines = [](const scan::ScanPlan& p) {
-            detail::ensure_schema(*p);
             df::AggStatePtr st;
-            return !tier::agg_tier_collect(*p, st);
+            return !partials_serve(p, st);
         };
         // A record without its entity, or with a negative lane, is a null
         // or signed group in the scan, so the tier steps aside.

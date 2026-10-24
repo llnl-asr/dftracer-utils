@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -75,10 +75,10 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                 // The query and window describe data events; metadata the
                 // scan returns lives in chunks of its own.
                 const auto metadata =
-                    input.view.filter_metadata    ? plan::MetadataUse::RECORDS
-                    : input.view.metadata_records ? plan::MetadataUse::ALL
-                    : input.view.include_metadata ? plan::MetadataUse::EVERY
-                                                  : plan::MetadataUse::NONE;
+                    input.view.filter_metadata    ? plan::MetadataUse::Records
+                    : input.view.metadata_records ? plan::MetadataUse::All
+                    : input.view.include_metadata ? plan::MetadataUse::Every
+                                                  : plan::MetadataUse::None;
                 // Named, not built inside co_await: GCC 12 destroys such a
                 // temporary twice.
                 plan::PruneRequest request{
@@ -118,7 +118,7 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             // Fail loudly: swallowing this leaves chunk_spans empty, which
             // reads downstream as a prune and silently drops the file.
             co_return make_error(
-                ErrorCode::INDEXER,
+                ErrorCode::Indexer,
                 std::string("ViewPlanner: index read failed for ") +
                     input.file_path + ": " + e.what());
         }

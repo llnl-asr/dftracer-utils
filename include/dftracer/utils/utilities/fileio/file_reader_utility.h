@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
 
@@ -65,19 +65,19 @@ class FileReaderUtility {
         const filesystem::FileEntry& input) const {
         if (!fs::exists(input.path)) {
             throw DFTUtilsException(
-                ErrorCode::NOT_FOUND,
+                ErrorCode::NotFound,
                 "File does not exist: " + input.path.string());
         }
 
         if (!input.is_regular_file) {
             throw DFTUtilsException(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 "Path is not a regular file: " + input.path.string());
         }
 
         std::ifstream file(input.path, std::ios::binary);
         if (!file) {
-            throw DFTUtilsException(ErrorCode::IO,
+            throw DFTUtilsException(ErrorCode::Io,
                                     "Cannot open file: " + input.path.string());
         }
 

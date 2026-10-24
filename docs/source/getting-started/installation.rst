@@ -49,7 +49,7 @@ build dirs land under ``build/build-<preset>/``).
 
 The build produces five layered component libraries, each as shared and static:
 
-- ``dftracer_utils_core``, the async runtime (coroutines, tasks, I/O backend,
+- ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, RocksDB wrappers, common primitives).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
@@ -124,6 +124,10 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_BUILD_STATIC``
      - ``ON``
      - Build the static libraries.
+   * - ``DFTRACER_UTILS_SINGLE_LIBRARY``
+     - ``OFF``
+     - Build one ``libdftracer_utils`` from every area, and install only that library and its ``dftracer_utils`` package.
+       The per-area packages such as ``dftracer_utils_runtime`` are not built or installed.
    * - ``DFTRACER_UTILS_BUILD_BINARIES``
      - ``ON``
      - Build the ``dftracer_*`` command-line tools.
@@ -171,7 +175,7 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_ENABLE_PCH``
      - ``OFF``
      - Precompiled headers (faster cold builds). ccache cannot cache GCC's, so leave it off when using ccache.
-   * - ``DFTRACER_USE_ZLIB_NG``
+   * - ``DFTRACER_UTILS_USE_ZLIB_NG``
      - ``ON``
      - Use zlib-ng instead of madler/zlib (falls back on failure).
 

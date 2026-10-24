@@ -1,12 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -122,7 +122,7 @@ std::vector<std::string> zonemap_paths(const Indexed& t) {
     const int fid =
         db.get_file_info_id(store::internal::get_logical_path(t.trace));
     REQUIRE(fid >= 0);
-    return db.extension_paths(fid, IndexExtension::ZONEMAP);
+    return db.extension_paths(fid, IndexExtension::Zonemap);
 }
 
 bool has(const std::vector<std::string>& v, const std::string& x) {
@@ -137,7 +137,7 @@ std::map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
         db.get_file_info_id(store::internal::get_logical_path(t.trace));
     std::map<std::uint64_t, index::extensions::kinds::Zone> out;
     for (auto& [chunk, bytes] :
-         db.path_granules(fid, IndexExtension::ZONEMAP, path)) {
+         db.path_granules(fid, IndexExtension::Zonemap, path)) {
         auto zone = index::extensions::kinds::decode_zone(bytes);
         REQUIRE(zone);
         out.emplace(chunk, std::move(*zone));
@@ -181,15 +181,15 @@ std::map<std::string, PathStat> catalog_of(const std::string& trace,
 TEST_SUITE("PathCatalog") {
     TEST_CASE("join follows the lattice") {
         using P = PathType;
-        CHECK(store::join(P::INT, P::DOUBLE) == P::DOUBLE);
-        CHECK(store::join(P::INT, P::UINT) == P::UINT);
-        CHECK(store::join(P::UINT, P::DOUBLE) == P::DOUBLE);
-        CHECK(store::join(P::INT, P::STRING) == P::MIXED);
-        CHECK(store::join(P::BOOL, P::INT) == P::MIXED);
-        CHECK(store::join(P::NULL_VALUE, P::STRING) == P::STRING);
-        CHECK(store::join(P::MIXED, P::NULL_VALUE) == P::MIXED);
-        const P all[] = {P::NULL_VALUE, P::BOOL,   P::INT,  P::UINT,
-                         P::DOUBLE,     P::STRING, P::MIXED};
+        CHECK(store::join(P::Int, P::Double) == P::Double);
+        CHECK(store::join(P::Int, P::Uint) == P::Uint);
+        CHECK(store::join(P::Uint, P::Double) == P::Double);
+        CHECK(store::join(P::Int, P::String) == P::Mixed);
+        CHECK(store::join(P::Bool, P::Int) == P::Mixed);
+        CHECK(store::join(P::NullValue, P::String) == P::String);
+        CHECK(store::join(P::Mixed, P::NullValue) == P::Mixed);
+        const P all[] = {P::NullValue, P::Bool,   P::Int,  P::Uint,
+                         P::Double,    P::String, P::Mixed};
         for (P a : all)
             for (P b : all) {
                 CHECK(store::join(a, b) == store::join(b, a));
@@ -200,7 +200,7 @@ TEST_SUITE("PathCatalog") {
     }
 
     TEST_CASE("a catalog record round-trips") {
-        const PathStat s{PathType::UINT, 0x0c, 123456789012ULL};
+        const PathStat s{PathType::Uint, 0x0c, 123456789012ULL};
         auto back =
             store::layout::decode_path_stat(store::layout::encode_path_stat(s));
         REQUIRE(back);
@@ -222,17 +222,17 @@ TEST_SUITE("PathCatalog") {
             REQUIRE_MESSAGE(cat.count(p), p);
             return cat.at(p).type;
         };
-        CHECK(type_of("args.size") == PathType::INT);
-        CHECK(type_of("args.ratio") == PathType::DOUBLE);
-        CHECK(type_of("args.flag") == PathType::BOOL);
-        CHECK(type_of("args.big") == PathType::UINT);
-        CHECK(type_of("args.io.off") == PathType::INT);
-        CHECK(type_of("args.io.mode") == PathType::STRING);
-        CHECK(type_of("args.hosts.0") == PathType::STRING);
-        CHECK(type_of("args.hosts.1") == PathType::STRING);
-        CHECK(type_of("args.mix") == PathType::MIXED);
-        CHECK(type_of("args.nul") == PathType::NULL_VALUE);
-        CHECK(type_of("type") == PathType::STRING);
+        CHECK(type_of("args.size") == PathType::Int);
+        CHECK(type_of("args.ratio") == PathType::Double);
+        CHECK(type_of("args.flag") == PathType::Bool);
+        CHECK(type_of("args.big") == PathType::Uint);
+        CHECK(type_of("args.io.off") == PathType::Int);
+        CHECK(type_of("args.io.mode") == PathType::String);
+        CHECK(type_of("args.hosts.0") == PathType::String);
+        CHECK(type_of("args.hosts.1") == PathType::String);
+        CHECK(type_of("args.mix") == PathType::Mixed);
+        CHECK(type_of("args.nul") == PathType::NullValue);
+        CHECK(type_of("type") == PathType::String);
         CHECK(cat.at("args.size").count == 200);
         CHECK(cat.at("args.nul").count == 0);
         CHECK(cat.at("args.retry").count == 1);
@@ -259,8 +259,8 @@ TEST_SUITE("PathCatalog") {
         const auto cat = catalog_of(trace, st.index_path);
         REQUIRE(cat.count("args.tags"));
         REQUIRE(cat.count("args.opts"));
-        CHECK(cat.at("args.tags").type == PathType::ARRAY);
-        CHECK(cat.at("args.opts").type == PathType::OBJECT);
+        CHECK(cat.at("args.tags").type == PathType::Array);
+        CHECK(cat.at("args.opts").type == PathType::Object);
         CHECK(cat.at("args.tags").count == 1);
         CHECK(cat.at("args.opts").count == 1);
         store::IndexDatabase db(st.index_path, store::IndexOpenMode::ReadOnly);
@@ -301,7 +301,7 @@ TEST_SUITE("PathCatalog") {
                                     store::IndexOpenMode::ReadOnly);
             const int fid =
                 db.get_file_info_id(store::internal::get_logical_path(trace));
-            const auto zones = db.extension_paths(fid, IndexExtension::ZONEMAP);
+            const auto zones = db.extension_paths(fid, IndexExtension::Zonemap);
             CHECK(std::find(zones.begin(), zones.end(), "a") != zones.end());
             CHECK(std::find(zones.begin(), zones.end(), "b") == zones.end());
             CHECK(db.catalog(fid).size() >= 3);
@@ -359,7 +359,7 @@ TEST_SUITE("PathCatalog") {
                 index::Indexer::open({trace}, o);
                 FAIL("expected an error");
             } catch (const DFTUtilsException& e) {
-                CHECK(e.code() == ErrorCode::INVALID_ARGUMENT);
+                CHECK(e.code() == ErrorCode::InvalidArgument);
                 CHECK(std::string(e.what()).find("stats_share") !=
                       std::string::npos);
             }
@@ -549,7 +549,7 @@ TEST_SUITE("Absence") {
         store::IndexDatabase db(t.index_path, store::IndexOpenMode::ReadOnly);
         const int fid =
             db.get_file_info_id(store::internal::get_logical_path(trace));
-        const auto blooms = db.path_granules(fid, IndexExtension::BLOOM, "m");
+        const auto blooms = db.path_granules(fid, IndexExtension::Bloom, "m");
         REQUIRE(blooms.size() > 1);
         const index::extensions::ScalableBloomFilter configured(1024, 0.01);
         const index::extensions::ScalableBloomFilter three(4, 0.01);

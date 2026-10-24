@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/parser.h>
@@ -64,25 +64,25 @@ bool like_ref(std::string_view p, std::string_view s) {
 
 TEST_SUITE("duql patterns") {
     TEST_CASE("percent spans newlines") {
-        CHECK(truth(R"(m like "a%b")", R"({"m":"a\nb"})") == Truth::YES);
-        CHECK(truth(R"(m like "a%")", R"({"m":"a\n\n"})") == Truth::YES);
+        CHECK(truth(R"(m like "a%b")", R"({"m":"a\nb"})") == Truth::Yes);
+        CHECK(truth(R"(m like "a%")", R"({"m":"a\n\n"})") == Truth::Yes);
     }
 
     TEST_CASE("underscore is one UTF-8 character") {
-        CHECK(truth(R"(m like "h_")", R"({"m":"hé"})") == Truth::YES);
-        CHECK(truth(R"(m like "h__")", R"({"m":"hé"})") == Truth::NO);
-        CHECK(truth(R"(m like "%_")", R"({"m":"é"})") == Truth::YES);
+        CHECK(truth(R"(m like "h_")", R"({"m":"hé"})") == Truth::Yes);
+        CHECK(truth(R"(m like "h__")", R"({"m":"hé"})") == Truth::No);
+        CHECK(truth(R"(m like "%_")", R"({"m":"é"})") == Truth::Yes);
     }
 
     TEST_CASE("escape") {
         CHECK(truth(R"(m like "50!%" escape "!")", R"({"m":"50%"})") ==
-              Truth::YES);
+              Truth::Yes);
         CHECK(truth(R"(m like "50!%" escape "!")", R"({"m":"50x"})") ==
-              Truth::NO);
+              Truth::No);
         CHECK(truth(R"(m like "a!_b" escape "!")", R"({"m":"a_b"})") ==
-              Truth::YES);
+              Truth::Yes);
         CHECK(truth(R"(m like "a!!" escape "!")", R"({"m":"a!"})") ==
-              Truth::YES);
+              Truth::Yes);
         CHECK(has(error_of(R"(m like "a!x" escape "!")"), "escape"));
         CHECK(has(error_of(R"(m like "a" escape "!!")"), "one character"));
         CHECK(to_string(**parse(R"(m like "50!%" escape "!")")) ==
@@ -90,15 +90,15 @@ TEST_SUITE("duql patterns") {
     }
 
     TEST_CASE("no escape character by default") {
-        CHECK(truth(R"(m like "a\b")", R"({"m":"a\\b"})") == Truth::YES);
-        CHECK(truth(R"(m like "a\%")", R"({"m":"a\\xyz"})") == Truth::YES);
+        CHECK(truth(R"(m like "a\b")", R"({"m":"a\\b"})") == Truth::Yes);
+        CHECK(truth(R"(m like "a\%")", R"({"m":"a\\xyz"})") == Truth::Yes);
     }
 
     TEST_CASE("ilike folds ASCII; ~* folds Unicode") {
-        CHECK(truth(R"(m ilike "%READ%")", R"({"m":"pread64"})") == Truth::YES);
-        CHECK(truth(R"(m ilike "%É%")", R"({"m":"é"})") == Truth::NO);
-        CHECK(truth(R"(m ~* "É")", R"({"m":"é"})") == Truth::YES);
-        CHECK(truth(R"("READ" in m)", R"({"m":"pread"})") == Truth::YES);
+        CHECK(truth(R"(m ilike "%READ%")", R"({"m":"pread64"})") == Truth::Yes);
+        CHECK(truth(R"(m ilike "%É%")", R"({"m":"é"})") == Truth::No);
+        CHECK(truth(R"(m ~* "É")", R"({"m":"é"})") == Truth::Yes);
+        CHECK(truth(R"("READ" in m)", R"({"m":"pread"})") == Truth::Yes);
     }
 
     TEST_CASE("the regex dialect") {
@@ -124,12 +124,12 @@ TEST_SUITE("duql patterns") {
 
     TEST_CASE("regex searches; dot is one character") {
         CHECK(truth(R"(name ~ "Send")", R"({"name":"MPI_Send"})") ==
-              Truth::YES);
+              Truth::Yes);
         CHECK(truth(R"(name ~ "^Send")", R"({"name":"MPI_Send"})") ==
-              Truth::NO);
-        CHECK(truth(R"(m ~ "^h.$")", R"({"m":"hé"})") == Truth::YES);
+              Truth::No);
+        CHECK(truth(R"(m ~ "^h.$")", R"({"m":"hé"})") == Truth::Yes);
         CHECK(truth(R"(name !~ "Send")", R"({"name":"MPI_Recv"})") ==
-              Truth::YES);
+              Truth::Yes);
     }
 
     TEST_CASE("a catastrophic pattern is bounded and stable") {
@@ -141,7 +141,7 @@ TEST_SUITE("duql patterns") {
         simdjson::dom::element el;
         REQUIRE(p.parse(record).get(el) == simdjson::SUCCESS);
         const Truth first = evaluate_truth(**ast, JsonValue(el));
-        CHECK(first != Truth::YES);
+        CHECK(first != Truth::Yes);
         for (int i = 0; i < 100; ++i)
             CHECK(evaluate_truth(**ast, JsonValue(el)) == first);
 
@@ -162,13 +162,13 @@ TEST_SUITE("duql patterns") {
     TEST_CASE("extract") {
         const char* r = R"({"p":"/data/run_17/out.h5"})";
         CHECK(truth(R"q(extract(p, "run_([0-9]+)", 1) == "17")q", r) ==
-              Truth::YES);
+              Truth::Yes);
         CHECK(truth(R"(extract(p, "run_[0-9]+") == "run_17")", r) ==
-              Truth::YES);
+              Truth::Yes);
         CHECK(truth(R"q(extract(p, "job_([0-9]+)", 1) == "17")q", r) ==
-              Truth::UNKNOWN);
+              Truth::Unknown);
         CHECK(truth(R"q(extract(p, "run_([0-9]+)", 1) == "17")q",
-                    R"({"p":5})") == Truth::UNKNOWN);
+                    R"({"p":5})") == Truth::Unknown);
         CHECK(has(error_of(R"q(extract(p, "run_([0-9]+)", 2) == "x")q"),
                   "group"));
         CHECK(has(error_of(R"(extract(p, "(a)\1") == "x")"), "dialect"));
@@ -188,7 +188,7 @@ TEST_SUITE("duql patterns") {
             REQUIRE(p);
             CAPTURE(pat);
             CAPTURE(s);
-            CHECK((match(**p, s) == MatchResult::YES) == like_ref(pat, s));
+            CHECK((match(**p, s) == MatchResult::Yes) == like_ref(pat, s));
         }
     }
 
@@ -254,13 +254,13 @@ TEST_CASE("a catastrophic pattern retries on Vectorscan at any length") {
     const std::string no = std::string(10000, 'a') + "!";
     const std::string yes(10000, 'a');
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    CHECK(match(**p, no) == MatchResult::NO);
-    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::NO);
+    CHECK(match(**p, no) == MatchResult::No);
+    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::No);
 #else
-    CHECK(match(**p, no) == MatchResult::LIMIT);
-    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::LIMIT);
+    CHECK(match(**p, no) == MatchResult::Limit);
+    CHECK(match(**p, std::string(60, 'a') + "!") == MatchResult::Limit);
 #endif
-    CHECK(match(**p, yes) == MatchResult::YES);
+    CHECK(match(**p, yes) == MatchResult::Yes);
 }
 
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
@@ -276,41 +276,41 @@ TEST_CASE("the engine path gives exact results") {
     };
     const std::string hard = std::string(10000, 'a') + "!";
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    CHECK(m("^(a|aa)+$", false, hard) == MatchResult::NO);
-    CHECK(m("^(a|aa)+$", true, hard) == MatchResult::NO);
+    CHECK(m("^(a|aa)+$", false, hard) == MatchResult::No);
+    CHECK(m("^(a|aa)+$", true, hard) == MatchResult::No);
 #endif
-    CHECK(m("^(a|aa)+$", false, std::string(10000, 'a')) == MatchResult::YES);
-    CHECK(m("^(a|aa)+$", true, "AAA") == MatchResult::YES);
-    CHECK(m("b+", true, "aBBc") == MatchResult::YES);
-    CHECK(m("b", false, "aBBc") == MatchResult::NO);
-    CHECK(m("b", false, "abc", true) == MatchResult::NO);
-    CHECK(m("a|b", false, "b", true) == MatchResult::YES);
-    CHECK(m("a|b", false, "ab", true) == MatchResult::NO);
-    CHECK(m("a*", false, "xyz") == MatchResult::YES);
-    CHECK(m("", false, "") == MatchResult::YES);
-    CHECK(m("a.b", false, "a\nb") == MatchResult::NO);
-    CHECK(m("(?s)a.b", false, "a\nb") == MatchResult::YES);
-    CHECK(m("a$", false, "a\n") == MatchResult::YES);
-    CHECK(m("a$", false, "a\nb") == MatchResult::NO);
-    CHECK(m("(?m)a$", false, "a\nb") == MatchResult::YES);
-    CHECK(m("(?m)^b", false, "a\nb") == MatchResult::YES);
-    CHECK(m("^b", false, "a\nb") == MatchResult::NO);
-    CHECK(m("\\bfoo\\b", false, "a foo b") == MatchResult::YES);
-    CHECK(m("\\bfoo\\b", false, "afoo") == MatchResult::NO);
+    CHECK(m("^(a|aa)+$", false, std::string(10000, 'a')) == MatchResult::Yes);
+    CHECK(m("^(a|aa)+$", true, "AAA") == MatchResult::Yes);
+    CHECK(m("b+", true, "aBBc") == MatchResult::Yes);
+    CHECK(m("b", false, "aBBc") == MatchResult::No);
+    CHECK(m("b", false, "abc", true) == MatchResult::No);
+    CHECK(m("a|b", false, "b", true) == MatchResult::Yes);
+    CHECK(m("a|b", false, "ab", true) == MatchResult::No);
+    CHECK(m("a*", false, "xyz") == MatchResult::Yes);
+    CHECK(m("", false, "") == MatchResult::Yes);
+    CHECK(m("a.b", false, "a\nb") == MatchResult::No);
+    CHECK(m("(?s)a.b", false, "a\nb") == MatchResult::Yes);
+    CHECK(m("a$", false, "a\n") == MatchResult::Yes);
+    CHECK(m("a$", false, "a\nb") == MatchResult::No);
+    CHECK(m("(?m)a$", false, "a\nb") == MatchResult::Yes);
+    CHECK(m("(?m)^b", false, "a\nb") == MatchResult::Yes);
+    CHECK(m("^b", false, "a\nb") == MatchResult::No);
+    CHECK(m("\\bfoo\\b", false, "a foo b") == MatchResult::Yes);
+    CHECK(m("\\bfoo\\b", false, "afoo") == MatchResult::No);
 
-    CHECK(m("caf\xc3\xa9", false, "un caf\xc3\xa9 noir") == MatchResult::YES);
-    CHECK(m("^.$", false, "\xc3\xa9") == MatchResult::YES);
-    CHECK(m("\xc3\xa9", true, "\xc3\x89") == MatchResult::YES);
+    CHECK(m("caf\xc3\xa9", false, "un caf\xc3\xa9 noir") == MatchResult::Yes);
+    CHECK(m("^.$", false, "\xc3\xa9") == MatchResult::Yes);
+    CHECK(m("\xc3\xa9", true, "\xc3\x89") == MatchResult::Yes);
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::NO);
+    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::No);
 #else
-    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::LIMIT);
+    CHECK(m("^(a|aa)+$", false, hard + "\xc3\xa9") == MatchResult::Limit);
 #endif
-    CHECK(m("^(a|aa)+$", false, hard + "\xc0\xaf") == MatchResult::LIMIT);
+    CHECK(m("^(a|aa)+$", false, hard + "\xc0\xaf") == MatchResult::Limit);
 
-    CHECK(m("^a\\Xc$", false, "abc") == MatchResult::YES);
-    CHECK(m("^a\\Xc$", false, "ac") == MatchResult::NO);
-    CHECK(m("a\\Rb", false, "a\r\nb") == MatchResult::YES);
+    CHECK(m("^a\\Xc$", false, "abc") == MatchResult::Yes);
+    CHECK(m("^a\\Xc$", false, "ac") == MatchResult::No);
+    CHECK(m("a\\Rb", false, "a\r\nb") == MatchResult::Yes);
 
     const df::Series col =
         df::Series::strings(std::vector<std::string_view>{hard, "aa"});
@@ -395,9 +395,9 @@ TEST_CASE("regex_replace substitution forms") {
 TEST_CASE("regex_replace no match keeps the string") {
     MatchResult r;
     CHECK(replace_with("z", "y", "abc", &r) == "abc");
-    CHECK(r == MatchResult::NO);
+    CHECK(r == MatchResult::No);
     CHECK(replace_with("a", "b", "a", &r) == "b");
-    CHECK(r == MatchResult::YES);
+    CHECK(r == MatchResult::Yes);
 }
 
 TEST_CASE("regex_replace empty matches advance one character") {

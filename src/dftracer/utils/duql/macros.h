@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_MACROS_H
 #define DFTRACER_UTILS_DUQL_MACROS_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
@@ -53,8 +53,8 @@ dftracer::utils::expected<void, DuqlError> expand_macros(
     std::string_view text,
     const std::function<bool(std::string_view)>& builtin);
 
-/// The macros of the `.duql` files on `$DFTRACER_DUQL_PATH` (colon separated)
-/// and every path `load_macros` added. Thread-safe.
+/// The macros of the `.duql` files on `$DFTRACER_UTILS_DUQL_PATH` (colon
+/// separated) and every path `load_macros` added. Thread-safe.
 std::vector<Macro> path_macros();
 
 /// Adds the `def`s of the `.duql` file `path`, or of every `.duql` file of a

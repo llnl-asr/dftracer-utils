@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -13,12 +13,10 @@
 // works on them directly - equality, comparison, sort, group_by, a string op,
 // is_in, and take/gather (which sort's reordering relies on).
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 
 namespace df = dftracer::utils::dataframe;
 

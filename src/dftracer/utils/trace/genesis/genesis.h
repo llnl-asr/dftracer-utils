@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_GENESIS_GENESIS_H
 #define DFTRACER_UTILS_TRACE_GENESIS_GENESIS_H
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <atomic>
 #include <chrono>
@@ -112,9 +112,9 @@ struct GroupProgress {
     /// WAIT: the caller waits for its memory share. READ: its files are read.
     /// SORT: its calls go into the sort. WALK: the sorted calls are walked.
     /// WRITE: the caller writes its runs.
-    enum class Phase : std::uint8_t { WAIT, READ, SORT, WALK, WRITE };
+    enum class Phase : std::uint8_t { Wait, Read, Sort, Walk, Write };
 
-    std::atomic<Phase> phase{Phase::WAIT};
+    std::atomic<Phase> phase{Phase::Wait};
     /// steady_clock time, in nanoseconds, when `phase` was entered.
     std::atomic<std::int64_t> phase_since_ns{0};
     /// Compressed bytes of the files read so far.
@@ -137,7 +137,7 @@ struct GroupProgress {
         calls.store(0, std::memory_order_relaxed);
         sorted.store(0, std::memory_order_relaxed);
         walked.store(0, std::memory_order_relaxed);
-        enter(Phase::WAIT);
+        enter(Phase::Wait);
     }
 
     void updated() const {
@@ -164,8 +164,9 @@ std::string run_id(const RunKeys& keys);
 /// path records. Calls beyond their quarter go to a spill file in spill_dir().
 /// A set whose counter series or path records alone exceed their quarter is
 /// skipped with a reason that names the share, and `over_budget` is set; the
-/// rest of the output is not counted. A share below MIN_MEMORY_BUDGET_BYTES
-/// works, but the open readers then hold more than the share.
+/// rest of the output is not counted. A share below
+/// memory::MIN_MEMORY_BUDGET_BYTES works, but the open readers then hold more
+/// than the share.
 ///
 /// `progress`, when given, is updated as the group goes and must outlive the
 /// call.

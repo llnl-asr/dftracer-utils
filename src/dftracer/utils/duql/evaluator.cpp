@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/calendar.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
@@ -30,22 +30,22 @@ namespace dftracer::utils::duql {
 
 namespace {
 
-Truth of(bool b) { return b ? Truth::YES : Truth::NO; }
+Truth of(bool b) { return b ? Truth::Yes : Truth::No; }
 
 Truth t_not(Truth t) {
-    return t == Truth::YES  ? Truth::NO
-           : t == Truth::NO ? Truth::YES
-                            : Truth::UNKNOWN;
+    return t == Truth::Yes  ? Truth::No
+           : t == Truth::No ? Truth::Yes
+                            : Truth::Unknown;
 }
 
 Truth t_and(Truth l, Truth r) {
-    if (l == Truth::NO || r == Truth::NO) return Truth::NO;
-    return l == Truth::YES && r == Truth::YES ? Truth::YES : Truth::UNKNOWN;
+    if (l == Truth::No || r == Truth::No) return Truth::No;
+    return l == Truth::Yes && r == Truth::Yes ? Truth::Yes : Truth::Unknown;
 }
 
 Truth t_or(Truth l, Truth r) {
-    if (l == Truth::YES || r == Truth::YES) return Truth::YES;
-    return l == Truth::NO && r == Truth::NO ? Truth::NO : Truth::UNKNOWN;
+    if (l == Truth::Yes || r == Truth::Yes) return Truth::Yes;
+    return l == Truth::No && r == Truth::No ? Truth::No : Truth::Unknown;
 }
 
 using dftracer::utils::duql::compare_numbers;
@@ -114,49 +114,49 @@ bool plain_string(const LiteralValue& v) {
 template <class V>
 Truth in_values(const ArrayNode& values, const V& v) {
     if (values.set) {
-        if (!plain_string(v)) return Truth::UNKNOWN;
+        if (!plain_string(v)) return Truth::Unknown;
         return of(values.set->values.contains(*as_string(v)));
     }
     bool comparable = false;
     for (const auto& elem : values.elements) {
         const auto c = compare(v, elem);
         if (!c) continue;
-        if (*c == 0) return Truth::YES;
+        if (*c == 0) return Truth::Yes;
         comparable = true;
     }
-    return comparable ? Truth::NO : Truth::UNKNOWN;
+    return comparable ? Truth::No : Truth::Unknown;
 }
 
 Truth apply(CompareOp op, std::optional<int> c) {
-    if (!c) return Truth::UNKNOWN;
+    if (!c) return Truth::Unknown;
     switch (op) {
-        case CompareOp::EQ:
+        case CompareOp::Eq:
             return of(*c == 0);
-        case CompareOp::NE:
+        case CompareOp::Ne:
             return of(*c != 0);
-        case CompareOp::GT:
+        case CompareOp::Gt:
             return of(*c > 0);
-        case CompareOp::LT:
+        case CompareOp::Lt:
             return of(*c < 0);
-        case CompareOp::GE:
+        case CompareOp::Ge:
             return of(*c >= 0);
-        case CompareOp::LE:
+        case CompareOp::Le:
             return of(*c <= 0);
     }
-    return Truth::UNKNOWN;
+    return Truth::Unknown;
 }
 
 // A match reaching its work limit is UNKNOWN.
 Truth pattern_truth(const CompiledPattern& p, std::string_view s) {
     switch (match(p, s)) {
-        case MatchResult::YES:
-            return Truth::YES;
-        case MatchResult::NO:
-            return Truth::NO;
-        case MatchResult::LIMIT:
+        case MatchResult::Yes:
+            return Truth::Yes;
+        case MatchResult::No:
+            return Truth::No;
+        case MatchResult::Limit:
             break;
     }
-    return Truth::UNKNOWN;
+    return Truth::Unknown;
 }
 
 struct VMissing {};
@@ -228,12 +228,12 @@ Value of_element(simdjson::dom::element e) {
 
 Value of_cell(const Cell& c) {
     switch (c.kind) {
-        case Cell::Kind::NULL_VALUE:
+        case Cell::Kind::NullValue:
             return VNull{};
-        case Cell::Kind::ARRAY:
-        case Cell::Kind::OBJECT:
+        case Cell::Kind::Array:
+        case Cell::Kind::Object:
             return scratch.parse(std::get<std::string>(c.value));
-        case Cell::Kind::VALUE:
+        case Cell::Kind::Value:
             break;
     }
     return std::visit(
@@ -249,7 +249,7 @@ Value of_cell(const Cell& c) {
 
 // Walks the steps of `f` past its base, or every step of an element path.
 Value walk(Value v, const TField& f) {
-    const bool element = f.root == FieldRoot::ELEMENT;
+    const bool element = f.root == FieldRoot::Element;
     for (std::size_t i = f.neg_at; i < f.steps.size(); ++i) {
         const auto& step = f.steps[i];
         if ((i != f.neg_at || element) && !step.key.empty()) {
@@ -306,12 +306,12 @@ std::optional<int> cmp(const Value& a, const Value& b) {
 
 Truth truth(const Value& v) {
     if (const auto* b = std::get_if<bool>(&v)) return of(*b);
-    return Truth::UNKNOWN;
+    return Truth::Unknown;
 }
 
 Value of_truth(Truth t) {
-    if (t == Truth::UNKNOWN) return VNull{};
-    return t == Truth::YES;
+    if (t == Truth::Unknown) return VNull{};
+    return t == Truth::Yes;
 }
 
 // An integer as sign and magnitude, so int64 and uint64 mix without loss.
@@ -377,28 +377,28 @@ std::optional<Int> mul(Int a, Int b) {
 Value arith(TermOp op, const Value& l, const Value& r) {
     const auto li = as_int(l);
     const auto ri = as_int(r);
-    if (li && ri && op != TermOp::DIV) {
+    if (li && ri && op != TermOp::Div) {
         const Int a = *li;
         const Int b = *ri;
         std::optional<Int> out;
         switch (op) {
-            case TermOp::ADD:
+            case TermOp::Add:
                 out = add(a, b);
                 break;
-            case TermOp::SUB:
+            case TermOp::Sub:
                 out = add(a, Int{!b.neg, b.mag});
                 break;
-            case TermOp::MUL:
+            case TermOp::Mul:
                 out = mul(a, b);
                 break;
-            case TermOp::IDIV: {
+            case TermOp::Idiv: {
                 if (b.mag == 0) return VNull{};
                 Int q{a.neg != b.neg, a.mag / b.mag};
                 if (q.neg && a.mag % b.mag != 0) ++q.mag;
                 out = q;
                 break;
             }
-            case TermOp::MOD: {
+            case TermOp::Mod: {
                 if (b.mag == 0) return VNull{};
                 std::uint64_t rem = a.mag % b.mag;
                 if (rem != 0 && a.neg != b.neg) rem = b.mag - rem;
@@ -415,19 +415,19 @@ Value arith(TermOp op, const Value& l, const Value& r) {
     const auto b = as_double(r);
     if (!a || !b) return VNull{};
     switch (op) {
-        case TermOp::ADD:
+        case TermOp::Add:
             return of_double(*a + *b);
-        case TermOp::SUB:
+        case TermOp::Sub:
             return of_double(*a - *b);
-        case TermOp::MUL:
+        case TermOp::Mul:
             return of_double(*a * *b);
-        case TermOp::DIV:
+        case TermOp::Div:
             if (*b == 0) return VNull{};
             return of_double(*a / *b);
-        case TermOp::IDIV:
+        case TermOp::Idiv:
             if (*b == 0) return VNull{};
             return of_double(std::floor(*a / *b));
-        case TermOp::MOD: {
+        case TermOp::Mod: {
             if (*b == 0) return VNull{};
             double rem = std::fmod(*a, *b);
             if (rem != 0 && (rem < 0) != (*b < 0)) rem += *b;
@@ -685,7 +685,7 @@ Value table_value(const LookupTable& t, std::int64_t r) {
     const auto& c = t.cells[static_cast<std::size_t>(r)];
     if (!c)
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "View::duql a scan filter reads a list or object column of '" +
                 t.name + "'; read it in a stage after the scan filter");
     return of_cell(*c);
@@ -703,7 +703,7 @@ bool same_value(const LookupTable& t, std::int64_t a, std::int64_t b) {
 const LookupTable& bound_table(const TLookup& l) {
     if (!l.slot || !l.slot->table)
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "View::duql '" + l.name + "' was read before its rows were bound");
     return *l.slot->table;
 }
@@ -928,7 +928,7 @@ class TermEval {
     }
 
     Value node(const TField& f) const {
-        if (f.root != FieldRoot::ELEMENT) return walk(rec_.get(f), f);
+        if (f.root != FieldRoot::Element) return walk(rec_.get(f), f);
         if (!element_) return VMissing{};
         return walk(*element_, f);
     }
@@ -964,13 +964,13 @@ class TermEval {
             return matching(*l, q);
         simdjson::dom::array arr;
         if (!is_array((*this)(*q.subject), arr)) return VNull{};
-        const Truth stop = q.all ? Truth::NO : Truth::YES;
-        Truth out = q.all ? Truth::YES : Truth::NO;
+        const Truth stop = q.all ? Truth::No : Truth::Yes;
+        Truth out = q.all ? Truth::Yes : Truth::No;
         for (auto el : arr) {
             const Value v = of_element(el);
             const Truth t = truth(TermEval(rec_, &v)(*q.cond));
             if (t == stop) return of_truth(stop);
-            if (t == Truth::UNKNOWN) out = Truth::UNKNOWN;
+            if (t == Truth::Unknown) out = Truth::Unknown;
         }
         return of_truth(out);
     }
@@ -990,13 +990,13 @@ class TermEval {
         const auto k = key(l);
         const auto* hits = k ? t.find(*k) : nullptr;
         if (!hits) return VNull{};
-        const Truth stop = q.all ? Truth::NO : Truth::YES;
-        Truth out = q.all ? Truth::YES : Truth::NO;
+        const Truth stop = q.all ? Truth::No : Truth::Yes;
+        Truth out = q.all ? Truth::Yes : Truth::No;
         for (const std::int64_t r : *hits) {
             const Value v = t.value ? table_value(t, r) : Value{VMissing{}};
             const Truth x = truth(TermEval(rec_, &v)(*q.cond));
             if (x == stop) return of_truth(stop);
-            if (x == Truth::UNKNOWN) out = Truth::UNKNOWN;
+            if (x == Truth::Unknown) out = Truth::Unknown;
         }
         return of_truth(out);
     }
@@ -1009,7 +1009,7 @@ class TermEval {
         std::size_t known = 0;
         while (known < keyed && value_key(key, (*this)(*l.keys[known])))
             ++known;
-        if (l.kind == LookupKind::IN && known < l.keys.size() - l.correlated)
+        if (l.kind == LookupKind::In && known < l.keys.size() - l.correlated)
             return VNull{};
         std::optional<Ordered> low;
         std::optional<Ordered> high;
@@ -1019,11 +1019,11 @@ class TermEval {
         RangeAnswer a;
         if (known == keyed)
             a = range_answer(l, t, key, low, high);
-        else if (l.range == RangeRead::COUNT ||
-                 l.range == RangeRead::COUNT_VALUES ||
-                 l.range == RangeRead::COUNT_IF)
+        else if (l.range == RangeRead::Count ||
+                 l.range == RangeRead::CountValues ||
+                 l.range == RangeRead::CountIf)
             a.number = Number{std::int64_t{0}};
-        if (l.kind == LookupKind::IN) return (a.rows > 0) != l.negated;
+        if (l.kind == LookupKind::In) return (a.rows > 0) != l.negated;
         if (a.row >= 0) return table_value(t, a.row);
         if (a.number)
             return std::visit([](auto x) -> Value { return x; }, *a.number);
@@ -1032,13 +1032,13 @@ class TermEval {
 
     Value node(const TLookup& l) const {
         const LookupTable& t = bound_table(l);
-        if (l.range != RangeRead::NONE) return ranged(l, t);
-        if (l.kind == LookupKind::SCALAR && l.keys.empty()) {
+        if (l.range != RangeRead::None) return ranged(l, t);
+        if (l.kind == LookupKind::Scalar && l.keys.empty()) {
             if (t.cells.empty()) return VNull{};
             return table_value(t, 0);
         }
         const auto k = key(l);
-        if (l.kind == LookupKind::IN) {
+        if (l.kind == LookupKind::In) {
             if (!k) {
                 std::string subject;
                 for (std::size_t i = 0; i + l.correlated < l.keys.size(); ++i)
@@ -1058,7 +1058,7 @@ class TermEval {
 
     Value node(const TUnary& u) const {
         const Value v = (*this)(*u.operand);
-        if (u.op == TermOp::NOT) return of_truth(t_not(truth(v)));
+        if (u.op == TermOp::Not) return of_truth(t_not(truth(v)));
         if (const auto i = as_int(v)) return of_int(Int{!i->neg, i->mag});
         if (const auto* d = std::get_if<double>(&v)) return -*d;
         return VNull{};
@@ -1066,33 +1066,33 @@ class TermEval {
 
     Value node(const TBinary& b) const {
         switch (b.op) {
-            case TermOp::AND: {
+            case TermOp::And: {
                 const Truth l = truth((*this)(*b.left));
-                if (l == Truth::NO) return false;
+                if (l == Truth::No) return false;
                 return of_truth(t_and(l, truth((*this)(*b.right))));
             }
-            case TermOp::OR: {
+            case TermOp::Or: {
                 const Truth l = truth((*this)(*b.left));
-                if (l == Truth::YES) return true;
+                if (l == Truth::Yes) return true;
                 return of_truth(t_or(l, truth((*this)(*b.right))));
             }
-            case TermOp::COALESCE: {
+            case TermOp::Coalesce: {
                 Value l = (*this)(*b.left);
                 if (!absent(l)) return l;
                 return (*this)(*b.right);
             }
-            case TermOp::EQ:
-                return of_truth(apply(CompareOp::EQ, compared(b)));
-            case TermOp::NE:
-                return of_truth(apply(CompareOp::NE, compared(b)));
-            case TermOp::LT:
-                return of_truth(apply(CompareOp::LT, compared(b)));
-            case TermOp::LE:
-                return of_truth(apply(CompareOp::LE, compared(b)));
-            case TermOp::GT:
-                return of_truth(apply(CompareOp::GT, compared(b)));
-            case TermOp::GE:
-                return of_truth(apply(CompareOp::GE, compared(b)));
+            case TermOp::Eq:
+                return of_truth(apply(CompareOp::Eq, compared(b)));
+            case TermOp::Ne:
+                return of_truth(apply(CompareOp::Ne, compared(b)));
+            case TermOp::Lt:
+                return of_truth(apply(CompareOp::Lt, compared(b)));
+            case TermOp::Le:
+                return of_truth(apply(CompareOp::Le, compared(b)));
+            case TermOp::Gt:
+                return of_truth(apply(CompareOp::Gt, compared(b)));
+            case TermOp::Ge:
+                return of_truth(apply(CompareOp::Ge, compared(b)));
             default:
                 return arith(b.op, (*this)(*b.left), (*this)(*b.right));
         }
@@ -1104,8 +1104,8 @@ class TermEval {
 
     Value node(const TBetween& b) const {
         const Value v = (*this)(*b.subject);
-        const Truth t = t_and(apply(CompareOp::GE, cmp(v, (*this)(*b.low))),
-                              apply(CompareOp::LE, cmp(v, (*this)(*b.high))));
+        const Truth t = t_and(apply(CompareOp::Ge, cmp(v, (*this)(*b.low))),
+                              apply(CompareOp::Le, cmp(v, (*this)(*b.high))));
         return of_truth(b.negated ? t_not(t) : t);
     }
 
@@ -1119,17 +1119,17 @@ class TermEval {
     Value node(const TIn& in) const {
         const Value v = (*this)(*in.subject);
         bool comparable = false;
-        Truth t = Truth::UNKNOWN;
+        Truth t = Truth::Unknown;
         for (const auto& item : in.list) {
             const auto c = cmp(v, (*this)(*item));
             if (!c) continue;
             comparable = true;
             if (*c == 0) {
-                t = Truth::YES;
+                t = Truth::Yes;
                 break;
             }
         }
-        if (t != Truth::YES && comparable) t = Truth::NO;
+        if (t != Truth::Yes && comparable) t = Truth::No;
         return of_truth(in.negated ? t_not(t) : t);
     }
 
@@ -1147,61 +1147,61 @@ class TermEval {
 
     Value node(const TCall& c) const {
         switch (c.fn) {
-            case Fn::EXISTS:
+            case Fn::Exists:
                 return !std::holds_alternative<VMissing>(arg(c, 0));
-            case Fn::COALESCE:
+            case Fn::Coalesce:
                 for (const auto& a : c.args) {
                     Value v = (*this)(*a);
                     if (!absent(v)) return v;
                 }
                 return VNull{};
-            case Fn::IF:
-                return truth(arg(c, 0)) == Truth::YES ? arg(c, 1) : arg(c, 2);
-            case Fn::CASE:
+            case Fn::If:
+                return truth(arg(c, 0)) == Truth::Yes ? arg(c, 1) : arg(c, 2);
+            case Fn::Case:
                 for (std::size_t i = 0; i + 1 < c.args.size(); i += 2)
-                    if (truth(arg(c, i)) == Truth::YES) return arg(c, i + 1);
+                    if (truth(arg(c, i)) == Truth::Yes) return arg(c, i + 1);
                 return arg(c, c.args.size() - 1);
-            case Fn::ABS: {
+            case Fn::Abs: {
                 const Value v = arg(c, 0);
                 if (const auto i = as_int(v)) return of_int(Int{false, i->mag});
                 if (const auto* d = std::get_if<double>(&v))
                     return std::fabs(*d);
                 return VNull{};
             }
-            case Fn::FLOOR:
-            case Fn::CEIL: {
+            case Fn::Floor:
+            case Fn::Ceil: {
                 const Value v = arg(c, 0);
                 if (as_int(v)) return v;
                 if (const auto* d = std::get_if<double>(&v))
-                    return c.fn == Fn::FLOOR ? std::floor(*d) : std::ceil(*d);
+                    return c.fn == Fn::Floor ? std::floor(*d) : std::ceil(*d);
                 return VNull{};
             }
-            case Fn::ROUND:
+            case Fn::Round:
                 return round_to(arg(c, 0), c.args.size() > 1
                                                ? arg(c, 1)
                                                : Value{std::int64_t{0}});
-            case Fn::MIN:
-            case Fn::MAX:
-                return extreme(c, c.fn == Fn::MIN ? -1 : 1);
-            case Fn::LOG: {
+            case Fn::Min:
+            case Fn::Max:
+                return extreme(c, c.fn == Fn::Min ? -1 : 1);
+            case Fn::Log: {
                 const auto d = as_double(arg(c, 0));
                 if (!d || *d <= 0) return VNull{};
                 return std::log(*d);
             }
-            case Fn::EXP: {
+            case Fn::Exp: {
                 const auto d = as_double(arg(c, 0));
                 if (!d) return VNull{};
                 return std::exp(*d);
             }
-            case Fn::POW: {
+            case Fn::Pow: {
                 const auto a = as_double(arg(c, 0));
                 const auto b = as_double(arg(c, 1));
                 if (!a || !b) return VNull{};
                 return of_double(std::pow(*a, *b));
             }
-            case Fn::LEN:
+            case Fn::Len:
                 return length(arg(c, 0));
-            case Fn::CONCAT: {
+            case Fn::Concat: {
                 std::string out;
                 for (const auto& a : c.args) {
                     const auto t = text_of((*this)(*a), false);
@@ -1210,20 +1210,20 @@ class TermEval {
                 }
                 return scratch.own(std::move(out));
             }
-            case Fn::LOWER:
-            case Fn::UPPER: {
+            case Fn::Lower:
+            case Fn::Upper: {
                 const auto s = str(arg(c, 0));
                 if (!s) return VNull{};
                 std::string out(*s);
                 for (char& ch : out) {
-                    if (c.fn == Fn::LOWER && ch >= 'A' && ch <= 'Z')
+                    if (c.fn == Fn::Lower && ch >= 'A' && ch <= 'Z')
                         ch = static_cast<char>(ch - 'A' + 'a');
-                    if (c.fn == Fn::UPPER && ch >= 'a' && ch <= 'z')
+                    if (c.fn == Fn::Upper && ch >= 'a' && ch <= 'z')
                         ch = static_cast<char>(ch - 'a' + 'A');
                 }
                 return scratch.own(std::move(out));
             }
-            case Fn::TRIM: {
+            case Fn::Trim: {
                 const auto s = str(arg(c, 0));
                 if (!s) return VNull{};
                 constexpr std::string_view WS = " \t\n\r\f\v";
@@ -1231,73 +1231,73 @@ class TermEval {
                 if (b == std::string_view::npos) return std::string_view{};
                 return s->substr(b, s->find_last_not_of(WS) - b + 1);
             }
-            case Fn::STARTS_WITH:
-            case Fn::ENDS_WITH: {
+            case Fn::StartsWith:
+            case Fn::EndsWith: {
                 const auto s = str(arg(c, 0));
                 const auto p = str(arg(c, 1));
                 if (!s || !p) return VNull{};
-                return c.fn == Fn::STARTS_WITH ? s->starts_with(*p)
-                                               : s->ends_with(*p);
+                return c.fn == Fn::StartsWith ? s->starts_with(*p)
+                                              : s->ends_with(*p);
             }
-            case Fn::CONTAINS:
+            case Fn::Contains:
                 return contains(arg(c, 0), arg(c, 1));
-            case Fn::SUBSTR:
+            case Fn::Substr:
                 return substr(c);
-            case Fn::REPLACE:
+            case Fn::Replace:
                 return replace(c);
-            case Fn::FIRST:
-            case Fn::LAST: {
+            case Fn::First:
+            case Fn::Last: {
                 simdjson::dom::array arr;
                 if (!is_array(arg(c, 0), arr) || arr.size() == 0)
                     return VNull{};
                 simdjson::dom::element el;
-                if (arr.at(c.fn == Fn::FIRST ? 0 : arr.size() - 1).get(el) !=
+                if (arr.at(c.fn == Fn::First ? 0 : arr.size() - 1).get(el) !=
                     simdjson::SUCCESS)
                     return VNull{};
                 return of_element(el);
             }
-            case Fn::SUM:
+            case Fn::Sum:
                 return sum(arg(c, 0));
-            case Fn::JSON: {
+            case Fn::Json: {
                 auto t = text_of(arg(c, 0), true);
                 if (!t) return VNull{};
                 return scratch.own(std::move(*t));
             }
-            case Fn::TYPE:
+            case Fn::Type:
                 return type_name(arg(c, 0));
-            case Fn::INT:
+            case Fn::Int:
                 return to_int(arg(c, 0));
-            case Fn::FLOAT:
+            case Fn::Float:
                 return to_float(arg(c, 0));
-            case Fn::STRING: {
+            case Fn::String: {
                 const Value v = arg(c, 0);
                 if (str(v)) return v;
                 auto t = text_of(v, false);
                 if (!t) return VNull{};
                 return scratch.own(std::move(*t));
             }
-            case Fn::SLICE:
+            case Fn::Slice:
                 return slice(arg(c, 0), arg(c, 1),
                              c.args.size() > 2 ? std::optional{arg(c, 2)}
                                                : std::nullopt);
-            case Fn::FLATTEN:
+            case Fn::Flatten:
                 return flatten(arg(c, 0));
-            case Fn::KEYS:
-            case Fn::VALUES:
-                return members(arg(c, 0), c.fn == Fn::KEYS);
-            case Fn::PARSE_JSON:
+            case Fn::Keys:
+            case Fn::Values:
+                return members(arg(c, 0), c.fn == Fn::Keys);
+            case Fn::ParseJson:
                 return parse_json(arg(c, 0));
-            case Fn::SPLIT:
+            case Fn::Split:
                 return split(arg(c, 0), arg(c, 1));
-            case Fn::INDEX_OF:
+            case Fn::IndexOf:
                 return index_of(arg(c, 0), arg(c, 1));
-            case Fn::SORT:
+            case Fn::Sort:
                 return sort_array(arg(c, 0));
-            case Fn::UNIQUE:
+            case Fn::Unique:
                 return unique(arg(c, 0));
-            case Fn::JOIN:
+            case Fn::Join:
                 return join(arg(c, 0), arg(c, 1));
-            case Fn::EXTRACT: {
+            case Fn::Extract: {
                 const auto s = str(arg(c, 0));
                 if (!s || !c.pattern) return VNull{};
                 std::size_t group = 0;
@@ -1307,22 +1307,22 @@ class TermEval {
                     group = static_cast<std::size_t>(g->mag);
                 }
                 std::string_view out;
-                if (extract(*c.pattern, *s, group, out) != MatchResult::YES)
+                if (extract(*c.pattern, *s, group, out) != MatchResult::Yes)
                     return VNull{};
                 return out;
             }
-            case Fn::REGEX_REPLACE: {
+            case Fn::RegexReplace: {
                 const auto s = str(arg(c, 0));
                 if (!s || !c.pattern || !c.substitution) return VNull{};
                 std::string out;
                 const MatchResult r =
                     regex_replace(*c.pattern, *c.substitution, *s, out);
-                if (r == MatchResult::LIMIT) return VNull{};
-                if (r == MatchResult::NO) return *s;
+                if (r == MatchResult::Limit) return VNull{};
+                if (r == MatchResult::No) return *s;
                 return scratch.own(std::move(out));
             }
-            case Fn::DATE_PART:
-            case Fn::FORMAT_TIME: {
+            case Fn::DatePart:
+            case Fn::FormatTime: {
                 const Value x = arg(c, 0);
                 std::int64_t t;
                 if (const auto i = as_int(x)) {
@@ -1339,7 +1339,7 @@ class TermEval {
                     return VNull{};
                 }
                 const CivilTime ct = civil_time(t, c.ns_per_unit);
-                if (c.fn == Fn::DATE_PART)
+                if (c.fn == Fn::DatePart)
                     return date_part(ct, static_cast<DatePart>(c.part));
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
                 std::string out;
@@ -1417,17 +1417,17 @@ struct JsonRecord {
     Truth field(const FieldNode& f, Leaf&& leaf) const {
         const JsonValue v = lookup(f.path);
         if (!f.any) {
-            if (!v.exists() || v.is_null()) return Truth::UNKNOWN;
+            if (!v.exists() || v.is_null()) return Truth::Unknown;
             return leaf(v);
         }
-        if (!v.is_array()) return Truth::UNKNOWN;
+        if (!v.is_array()) return Truth::Unknown;
         const simdjson::dom::array arr = v.element().get_array().value_unsafe();
         for (auto el : arr) {
             const JsonValue ev(el);
             if (ev.is_null() || ev.is_object() || ev.is_array()) continue;
-            if (leaf(ev) == Truth::YES) return Truth::YES;
+            if (leaf(ev) == Truth::Yes) return Truth::Yes;
         }
-        return Truth::NO;
+        return Truth::No;
     }
 
     Value get(const TField& f) const {
@@ -1448,7 +1448,7 @@ bool is_position_of(std::string_view key, std::string_view path) {
            key[path.size()] == '.' && is_position(key.substr(path.size() + 1));
 }
 
-bool scalar(const Cell& c) { return c.kind == Cell::Kind::VALUE; }
+bool scalar(const Cell& c) { return c.kind == Cell::Kind::Value; }
 
 // A flattened record: a field absent from the map is MISSING, and an any()
 // field reads its positions `<path>.<k>` (or without "args.", as event args
@@ -1461,7 +1461,7 @@ struct MapRecord {
         if (!f.any) {
             const auto it = fields.find(f.path);
             if (it == fields.end() || !scalar(it->second))
-                return Truth::UNKNOWN;
+                return Truth::Unknown;
             return leaf(it->second.value);
         }
         const std::string_view path = f.path;
@@ -1472,10 +1472,10 @@ struct MapRecord {
             if (!is_position_of(key, path) && !is_position_of(key, bare))
                 continue;
             array = true;
-            if (scalar(cell) && leaf(cell.value) == Truth::YES)
-                return Truth::YES;
+            if (scalar(cell) && leaf(cell.value) == Truth::Yes)
+                return Truth::Yes;
         }
-        return array ? Truth::NO : Truth::UNKNOWN;
+        return array ? Truth::No : Truth::Unknown;
     }
 
     Value get(const TField& f) const {
@@ -1503,20 +1503,20 @@ Truth eval(const QueryNode& node, const Record& rec) {
                     return t_not(in_values(n.values, v));
                 });
             } else if constexpr (std::is_same_v<T, MatchNode>) {
-                if (!n.compiled) return Truth::UNKNOWN;
+                if (!n.compiled) return Truth::Unknown;
                 return rec.field(n.field, [&](const auto& v) {
                     const auto s = as_string(v);
-                    if (!s) return Truth::UNKNOWN;
+                    if (!s) return Truth::Unknown;
                     const Truth t = pattern_truth(*n.compiled, *s);
                     return n.negated ? t_not(t) : t;
                 });
             } else if constexpr (std::is_same_v<T, AndNode>) {
                 const Truth l = eval(*n.left, rec);
-                if (l == Truth::NO) return Truth::NO;
+                if (l == Truth::No) return Truth::No;
                 return t_and(l, eval(*n.right, rec));
             } else if constexpr (std::is_same_v<T, OrNode>) {
                 const Truth l = eval(*n.left, rec);
-                if (l == Truth::YES) return Truth::YES;
+                if (l == Truth::Yes) return Truth::Yes;
                 return t_or(l, eval(*n.right, rec));
             } else if constexpr (std::is_same_v<T, NotNode>) {
                 return t_not(eval(*n.operand, rec));
@@ -1541,11 +1541,11 @@ Truth evaluate_truth(const QueryNode& node, const ValueMap& fields) {
 
 bool evaluate(const QueryNode& node, const JsonValue& event,
               bool args_fallback) {
-    return evaluate_truth(node, event, args_fallback) == Truth::YES;
+    return evaluate_truth(node, event, args_fallback) == Truth::Yes;
 }
 
 bool evaluate(const QueryNode& node, const ValueMap& fields) {
-    return evaluate_truth(node, fields) == Truth::YES;
+    return evaluate_truth(node, fields) == Truth::Yes;
 }
 
 }  // namespace dftracer::utils::duql

@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -66,7 +66,9 @@ coro::CoroTask<int> merge_shards(const std::string& target,
     }
 
     for (const auto& shard : shards) {
-        if (co_await stream_shard_to_fd(static_cast<int>(out_fd), shard) != 0) {
+        const auto stream_shard_to_fd_rc =
+            co_await stream_shard_to_fd(static_cast<int>(out_fd), shard);
+        if (stream_shard_to_fd_rc != 0) {
             co_await ::dftracer::utils::io::close(static_cast<int>(out_fd));
             co_return -1;
         }

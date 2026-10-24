@@ -5,11 +5,11 @@
 // loaded plugin would.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 // compose.h pulls plugin.h/arrow_abi.h; keep it after fold_adapter.h so
 // nanoarrow's full definitions win over arrow_abi.h's fallback structs.
 #include <dftracer/utils/plugins/compose.h>
@@ -31,7 +31,7 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 namespace coro = dftracer::utils::coro;
 
@@ -168,7 +168,10 @@ dftracer::utils::plugins::Task spawn_then(dftracer::utils::plugins::Host h,
     auto fb = [&] { b_done = 1; };
     dftu_task* ta = h.spawn(fa);
     dftu_task* tb = h.spawn(fb);
-    co_await h.all({ta, tb});
+    // GCC 12.1 rejects a braced list inside a co_await expression ("array used
+    // as initializer"), so the op is built in its own statement.
+    auto both = h.all({ta, tb});
+    co_await both;
     *order = (a_done && b_done) ? 1 : 0;
 
     auto fc = [&] { after = a_done + b_done; };  // sees both prior spawns
@@ -306,7 +309,8 @@ TEST_CASE("plugin cxx: Writer open/chunk/close writes a non-empty file") {
 static dftracer::utils::plugins::Task merge_two(
     dftracer::utils::plugins::Host h, const char* target, const char* a,
     const char* b) {
-    co_await h.merge_shards(target, {a, b});
+    auto merge = h.merge_shards(target, {a, b});
+    co_await merge;
 }
 
 TEST_CASE("plugin cxx: typed compose pipe/when_all/when_any run") {

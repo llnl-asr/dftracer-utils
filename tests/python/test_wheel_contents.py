@@ -29,7 +29,13 @@ FORBIDDEN_SUFFIXES = (".a",)
 REQUIRED_PATTERNS = (
     "dftracer/utils/__init__.py",
     "dftracer/utils/dftracer_utils_ext",
-    "dftracer/lib/libdftracer_utils_core",
+    "dftracer/lib/libdftracer_utils_memory",
+    "dftracer/lib/libdftracer_utils_dstd",
+    "dftracer/lib/libdftracer_utils_common",
+    "dftracer/lib/libdftracer_utils_runtime",
+    "dftracer/lib/libdftracer_utils_json",
+    "dftracer/lib/libdftracer_utils_duql",
+    "dftracer/lib/libdftracer_utils_dataframe",
     "dftracer/lib/libdftracer_utils_utilities",
     "dftracer/bin/dftracer_index",
     "dftracer/bin/ldb",
@@ -43,8 +49,8 @@ REQUIRED_PATTERNS = (
     # The whole include/dftracer/utils tree ships (not a hand-picked subset) so
     # any public C/C++ ABI header compiles standalone from the wheel: spot
     # check headers from directories that were NOT part of the old subset.
-    "dftracer/include/dftracer/utils/core/abi.h",
-    "dftracer/include/dftracer/utils/core/coro/abi.h",
+    "dftracer/include/dftracer/utils/runtime/abi.h",
+    "dftracer/include/dftracer/utils/runtime/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",
     "dftracer/include/dftracer/utils/index/store/index_database.h",

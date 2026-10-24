@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
 #include <sys/stat.h>
@@ -297,7 +297,7 @@ TEST_CASE("GzipLineWriter - errors") {
         o.member_size = 100;
         Written w = write_all(path.string(), o, {"{\"a\":1}"});
         CHECK(!w.err.has_value());
-        CHECK(w.err.error().code == ErrorCode::INVALID_ARGUMENT);
+        CHECK(w.err.error().code == ErrorCode::InvalidArgument);
         fs::remove(path);
     }
     SUBCASE("a worker failure removes the output") {
@@ -822,6 +822,32 @@ TEST_CASE("GzipLineWriter - producer refused when ordered, close needs flush") {
         CHECK(!(co_await w2->close()).has_value());
     });
     CHECK(!fs::exists(path));
+}
+
+TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
+    auto path = dftu_utils_test::make_unique_test_path("glw_dropped.pfw.gz");
+    GzipWriterOptions o;
+    o.member_size = 500;
+    o.workers = 2;
+    std::atomic<bool> on_executor{false};
+    Runtime rt(4);
+    rt.scope("glw_dropped", [&](CoroScope&) -> coro::CoroTask<void> {
+          {
+              auto wr = co_await GzipLineWriter::open(path.string(), o);
+              REQUIRE(wr.has_value());
+              for (std::size_t i = 0; i < 100; ++i)
+                  REQUIRE(co_await wr->append(line(i, 40)));
+              on_executor = Executor::current() != nullptr;
+          }
+          co_return;
+      }).wait();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (fs::exists(path) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK_FALSE(fs::exists(path));
+    CHECK(on_executor.load());
+    rt.shutdown();
 }
 
 TEST_CASE("GzipLineWriter - producers stay within the memory budget") {

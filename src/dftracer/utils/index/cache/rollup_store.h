@@ -84,8 +84,8 @@ std::string cache_dir(const trace::views::detail::ViewPlan& plan);
 /// Empty when there is none.
 std::string rollup_cache_path(const trace::views::detail::ViewPlan& plan);
 
-/// The size each cache store keeps at most: DFTRACER_CACHE_MAX_BYTES (bytes,
-/// or a size such as "512MB"), 2 GiB when unset or malformed.
+/// The size each cache store keeps at most: DFTRACER_UTILS_CACHE_MAX_BYTES
+/// (bytes, or a size such as "512MB"), 2 GiB when unset or malformed.
 std::uint64_t cache_max_bytes();
 
 }  // namespace dftracer::utils::index::cache

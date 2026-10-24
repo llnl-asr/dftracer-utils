@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_ASSOCIATION_TRACKER_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_ASSOCIATION_TRACKER_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/trace/args_map.h>
 

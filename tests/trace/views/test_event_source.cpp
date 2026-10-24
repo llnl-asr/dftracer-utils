@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 
 // DomSource must reproduce a raw top-then-args simdjson extraction
 // byte-for-byte (the same contract the old view_aggregate helpers gave), so the

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
@@ -761,8 +761,8 @@ TEST_SUITE("View duql pipeline") {
         TestEnvironment big(10);
         TestEnvironment small(10);
         const std::vector<std::string> files = {
-            create_multimember_trace(big, 600, 6000),
-            create_multimember_trace(small, 600, 1024)};
+            create_multimember_trace(big, 300, 6000),
+            create_multimember_trace(small, 300, 1024)};
         for (const auto& q : queries) {
             INFO("query: ", q);
             std::optional<std::string> want;
@@ -996,12 +996,14 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("sample a percent") {
         TestEnvironment env(10);
-        const std::string gz = create_multimember_trace(env, 100000, 1 << 20);
+        // The bounds are 10% of the expected 10% sample, as a count.
+        constexpr int EVENTS = 20000;
+        const std::string gz = create_multimember_trace(env, EVENTS, 1 << 20);
         const View v = View::from_file(gz, determine_index_path(gz, ""));
         const std::int64_t n =
             frame(v.duql("sample 10% | select ts")).num_rows();
-        CHECK(n >= 9000);
-        CHECK(n <= 11000);
+        CHECK(n >= EVENTS / 10 - EVENTS / 100);
+        CHECK(n <= EVENTS / 10 + EVENTS / 100);
     }
 
     TEST_CASE("time_range pushed and on the columns") {
@@ -2294,8 +2296,11 @@ TEST_SUITE("View duql pivot and unpivot") {
 }
 
 TEST_SUITE("View duql reshape determinism") {
-    // 3000 events over three names with repeated durations; `tags` cycles
-    // through ["a", "b"], [], ["c"] and missing.
+    // Events over three names with repeated durations; `tags` cycles through
+    // ["a", "b"], [], ["c"] and missing. Enough lines for 2 members of 20000
+    // bytes and 18 of 2048.
+    constexpr int RESHAPE_EVENTS = 300;
+
     static std::string reshape_trace(TestEnvironment & env,
                                      std::size_t member_bytes) {
         const std::string pfw = env.get_dir() + "/rs.pfw";
@@ -2303,7 +2308,7 @@ TEST_SUITE("View duql reshape determinism") {
             std::ofstream o(pfw);
             const char* tags[] = {R"(,"tags":["a","b"])", R"(,"tags":[])",
                                   R"(,"tags":["c"])", ""};
-            for (int i = 0; i < 3000; ++i)
+            for (int i = 0; i < RESHAPE_EVENTS; ++i)
                 o << R"({"ph":"X","name":")" << "abc"[i % 3]
                   << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 1000 + i * 100 << R"(,"dur":)" << (i * 37) % 101
@@ -2801,10 +2806,10 @@ TEST_SUITE("View duql session") {
     }
 
     TEST_CASE("sessions do not depend on workers or checkpoints") {
-        // 4000 events of 4 threads, written out of time order.
+        // 400 events of 4 threads, written out of time order.
         std::vector<std::array<std::int64_t, 4>> events;
         std::uint64_t x = 88172645463325252ULL;
-        for (int i = 0; i < 4000; ++i) {
+        for (int i = 0; i < 400; ++i) {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;

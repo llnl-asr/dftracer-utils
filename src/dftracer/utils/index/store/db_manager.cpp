@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/store/db_manager.h>
 
 #include <cstdlib>
@@ -127,7 +127,7 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
                             break;
                         }
                         throw DFTUtilsException(
-                            ErrorCode::INVALID_ARGUMENT,
+                            ErrorCode::InvalidArgument,
                             "Cannot upgrade RocksDB instance at '" + db_path +
                                 "' from read-only to read-write while it is "
                                 "still "
@@ -191,6 +191,7 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
             database->open(db_path, needs_upgrade
                                         ? RocksDatabase::OpenMode::ReadWrite
                                         : open_mode);
+            opens_.fetch_add(1);
         } catch (...) {
             std::lock_guard<std::mutex> lock(mutex_);
             opening_.erase(db_path);
@@ -231,7 +232,7 @@ std::shared_ptr<RocksDatabase> RocksDBManager::get_or_open(
             if (current.use_count() != 1) {
                 opening_.erase(db_path);
                 cv_.notify_all();
-                throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                throw DFTUtilsException(ErrorCode::InvalidArgument,
                                         "Cannot upgrade RocksDB instance at '" +
                                             db_path +
                                             "' from read-only to read-write "

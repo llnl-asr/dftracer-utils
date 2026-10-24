@@ -1,12 +1,12 @@
 // clang-format off
-#include <dftracer/utils/core/common/int128.h>
+#include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/python/series_detail.h>  // Python.h first
 #include <datetime.h>
 // clang-format on
-#include <dftracer/utils/core/common/hash/fnv1a.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -504,8 +504,9 @@ PyObject* typed_list(const T* d, std::int64_t n, const std::uint8_t* valid,
 bool fast_pylist(const Series& col, PyObject** result) {
     const std::int64_t n = col.length();
     const dftu_series* h = col.handle();
-    const std::uint8_t* valid =
-        col.null_count() > 0 && h->validity ? h->validity->data() : nullptr;
+    const std::uint8_t* valid = col.null_count() > 0 && h->validity.block()
+                                    ? h->validity.data()
+                                    : nullptr;
     if (col.null_count() > 0 && !valid) return false;
     const void* d = dftu_series_data(const_cast<dftu_series*>(h));
     if (!d && n > 0) return false;
@@ -779,7 +780,7 @@ class StringFiller {
         switch (c->encoding) {
             case dataframe::Encoding::Chunked: {
                 const auto* starts =
-                    reinterpret_cast<const std::int64_t*>(c->data->data());
+                    reinterpret_cast<const std::int64_t*>(c->data.data());
                 for (std::size_t k = 0; k < c->nested.size(); ++k)
                     if (!fill(c->nested[k].series.get(), dst + starts[k]))
                         return false;
@@ -812,7 +813,7 @@ class StringFiller {
     bool fill_dictionary(const dftu_series* c, PyObject** dst) {
         const dftu_series* dict = c->child().get();
         const auto* codes =
-            reinterpret_cast<const std::int32_t*>(c->data->data());
+            reinterpret_cast<const std::int32_t*>(c->data.data());
         std::vector<PyObject*> entries(static_cast<std::size_t>(dict->length),
                                        nullptr);
         bool ok = true;
@@ -844,9 +845,10 @@ class StringFiller {
     bool fill_rows(const dftu_series* c, PyObject** dst) {
         if (cache_.empty()) cache_.resize(SLOTS);
         const bool flat = c->encoding == dataframe::Encoding::Flat;
-        const std::uint8_t* valid = flat && c->null_count > 0 && c->validity
-                                        ? c->validity->data()
-                                        : nullptr;
+        const std::uint8_t* valid =
+            flat && c->null_count > 0 && c->validity.block()
+                ? c->validity.data()
+                : nullptr;
         const bool probe = !flat || (c->null_count > 0 && !valid);
         for (std::int64_t i = 0; i < c->length; ++i) {
             PyObject* v;
@@ -929,7 +931,7 @@ PyObject* Series_np_parts(PyObject* self, PyObject* args) {
     const std::int64_t n = col.length();
     const bool has_nulls = col.null_count() > 0;
     const std::uint8_t* valid =
-        has_nulls && h->validity ? h->validity->data() : nullptr;
+        has_nulls && h->validity.block() ? h->validity.data() : nullptr;
     if (has_nulls && !valid) {
         PyErr_SetString(PyExc_TypeError,
                         "Series has nulls but no validity bitmap");
@@ -1165,18 +1167,18 @@ PyObject* build_plain(PyObject** items, Py_ssize_t n, Bits& bits, bool any_bool,
 namespace {
 
 enum class Kind {
-    LIST,
-    DICT,
-    BOOL,
-    INT,
-    FLOAT,
-    STR,
-    BYTES,
-    DATETIME,
-    DATE,
-    TIME,
-    DELTA,
-    DECIMAL
+    List,
+    Dict,
+    Bool,
+    Int,
+    Float,
+    Str,
+    Bytes,
+    Datetime,
+    Date,
+    Time,
+    Delta,
+    Decimal
 };
 
 PyObject* fail(const char* what) {
@@ -1191,22 +1193,22 @@ PyObject* bad_value(const char* what) {
 }
 
 std::optional<Kind> kind_of(PyObject* v, bool& other) {
-    if (PyBool_Check(v)) return Kind::BOOL;
-    if (PyLong_Check(v)) return Kind::INT;
-    if (PyFloat_Check(v)) return Kind::FLOAT;
-    if (PyUnicode_Check(v)) return Kind::STR;
-    if (PyBytes_Check(v)) return Kind::BYTES;
-    if (PyDateTime_Check(v)) return Kind::DATETIME;
-    if (PyDate_Check(v)) return Kind::DATE;
-    if (PyTime_Check(v)) return Kind::TIME;
-    if (PyDelta_Check(v)) return Kind::DELTA;
-    if (PyList_Check(v) || PyTuple_Check(v)) return Kind::LIST;
-    if (PyDict_Check(v)) return Kind::DICT;
+    if (PyBool_Check(v)) return Kind::Bool;
+    if (PyLong_Check(v)) return Kind::Int;
+    if (PyFloat_Check(v)) return Kind::Float;
+    if (PyUnicode_Check(v)) return Kind::Str;
+    if (PyBytes_Check(v)) return Kind::Bytes;
+    if (PyDateTime_Check(v)) return Kind::Datetime;
+    if (PyDate_Check(v)) return Kind::Date;
+    if (PyTime_Check(v)) return Kind::Time;
+    if (PyDelta_Check(v)) return Kind::Delta;
+    if (PyList_Check(v) || PyTuple_Check(v)) return Kind::List;
+    if (PyDict_Check(v)) return Kind::Dict;
     PyObject* cls = decimal_class();
     if (!cls) return std::nullopt;
     const int is = PyObject_IsInstance(v, cls);
     if (is < 0) return std::nullopt;
-    if (is) return Kind::DECIMAL;
+    if (is) return Kind::Decimal;
     other = true;
     return std::nullopt;
 }
@@ -1475,8 +1477,8 @@ PyObject* with_validity(Series series, const Bits& bits, Py_ssize_t n) {
         any = any || !((bits[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1);
     if (!any) return make_series(std::move(series));
     auto* h = new dftu_series(*series.handle());
-    h->validity = dataframe::Buffer::allocate(bits.size());
-    std::memcpy(h->validity->data(), bits.data(), bits.size());
+    h->validity = dataframe::new_buffer(bits.size());
+    std::memcpy(dataframe::writable(h->validity), bits.data(), bits.size());
     std::int64_t nulls = 0;
     for (Py_ssize_t i = 0; i < n; ++i)
         nulls += !((bits[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1);
@@ -1571,7 +1573,7 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
             continue;
         }
         seen[static_cast<int>(*k)] = true;
-        if (*k == Kind::INT) {
+        if (*k == Kind::Int) {
             int overflow = 0;
             const long long x = PyLong_AsLongLongAndOverflow(v, &overflow);
             if (x == -1 && !overflow && PyErr_Occurred()) {
@@ -1583,13 +1585,13 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
         }
     }
     auto has = [&](Kind k) { return seen[static_cast<int>(k)]; };
-    const bool numeric = has(Kind::INT) || has(Kind::FLOAT);
-    const bool decimal = has(Kind::DECIMAL);
+    const bool numeric = has(Kind::Int) || has(Kind::Float);
+    const bool decimal = has(Kind::Decimal);
     const int kinds =
-        int(has(Kind::LIST)) + int(has(Kind::DICT)) + int(has(Kind::BOOL)) +
-        int(numeric && !decimal) + int(decimal) + int(has(Kind::STR)) +
-        int(has(Kind::BYTES)) + int(has(Kind::DATETIME)) +
-        int(has(Kind::DATE)) + int(has(Kind::TIME)) + int(has(Kind::DELTA));
+        int(has(Kind::List)) + int(has(Kind::Dict)) + int(has(Kind::Bool)) +
+        int(numeric && !decimal) + int(decimal) + int(has(Kind::Str)) +
+        int(has(Kind::Bytes)) + int(has(Kind::Datetime)) +
+        int(has(Kind::Date)) + int(has(Kind::Time)) + int(has(Kind::Delta));
     if (!any_value) {
         if (empty == 0)
             return fail("cannot infer a type from an empty or all-None list");
@@ -1601,8 +1603,8 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
             "datetime, date, time, timedelta, Decimal, list or dict, with "
             "None for null");
     }
-    if (kinds != 1 || (decimal && has(Kind::FLOAT)) ||
-        (any_big && any_negative) || (any_big && has(Kind::FLOAT))) {
+    if (kinds != 1 || (decimal && has(Kind::Float)) ||
+        (any_big && any_negative) || (any_big && has(Kind::Float))) {
         return bad_value(
             "list values have different types (or an int too large for int64 "
             "beside a negative or float one)");
@@ -1610,23 +1612,23 @@ PyObject* from_items(PyObject** items, Py_ssize_t n, int want, int empty) {
 
     auto bits = valid_bitmap(static_cast<std::size_t>(n));
     PyObject* built = nullptr;
-    if (has(Kind::LIST)) {
+    if (has(Kind::List)) {
         built = build_lists(items, n, bits);
-    } else if (has(Kind::DICT)) {
+    } else if (has(Kind::Dict)) {
         built = build_structs(items, n, bits);
-    } else if (has(Kind::DATETIME)) {
+    } else if (has(Kind::Datetime)) {
         built = build_datetimes(items, n, bits);
-    } else if (has(Kind::DATE)) {
+    } else if (has(Kind::Date)) {
         built = build_dates(items, n, bits);
-    } else if (has(Kind::TIME)) {
+    } else if (has(Kind::Time)) {
         built = build_times(items, n, bits);
-    } else if (has(Kind::DELTA)) {
+    } else if (has(Kind::Delta)) {
         built = build_deltas(items, n, bits);
     } else if (decimal) {
         built = build_decimals(items, n, bits);
     } else {
-        built = build_plain(items, n, bits, has(Kind::BOOL), has(Kind::INT),
-                            has(Kind::FLOAT), has(Kind::STR), has(Kind::BYTES),
+        built = build_plain(items, n, bits, has(Kind::Bool), has(Kind::Int),
+                            has(Kind::Float), has(Kind::Str), has(Kind::Bytes),
                             any_big);
     }
     if (!built || want == 0) return built;

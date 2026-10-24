@@ -3,11 +3,11 @@
 // and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <memory>
 // After plugin.h/fold_adapter.h so nanoarrow is already set up for arrow_abi.h.
@@ -32,7 +32,7 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::PluginFold;
 namespace coro = dftracer::utils::coro;
@@ -102,7 +102,7 @@ FoldEvent make_event(StringIntern& intern, const char* fhash,
     fe.name_id = intern.get_or_insert("read");
     fe.fhash_id = intern.get_or_insert(fhash);
     fe.hhash_id = intern.get_or_insert(hhash);
-    fe.phase = RecordPhase::COMPLETE;
+    fe.phase = RecordPhase::Complete;
     fe.ts = 1;
     fe.dur = 5;
     fe.has_dur = true;

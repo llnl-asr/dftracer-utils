@@ -3,10 +3,10 @@
 // AggCol / agg:: aggregate builders, and the owning Arrow helpers.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
 #include <dftracer/utils/dataframe/abi.h>
@@ -34,7 +34,7 @@
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::AggCol;
 using dftracer::utils::plugins::AggOp;
 using dftracer::utils::plugins::NamedResultRegistry;
@@ -276,7 +276,7 @@ TEST_CASE("plugin cxx: Batch view iterates typed Events") {
             evs[i].tid = 200 + i;
             evs[i].ts = 1000 + i;
             evs[i].dur = 10 * (i + 1);
-            evs[i].phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+            evs[i].phase = dftracer::utils::trace::RecordPhase::Complete;
             evs[i].has_dur = true;
         }
         ScanUnit unit{};
@@ -318,7 +318,7 @@ TEST_CASE("plugin cxx: Event args expose typed values and dotted lookup") {
 
         FoldEvent fe;
         fe.pid = 7;
-        fe.phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+        fe.phase = dftracer::utils::trace::RecordPhase::Complete;
         fe.args.emplace_back(intern.get_or_insert("ret"), std::int64_t{42});
         fe.args.emplace_back(intern.get_or_insert("fd"), 2.5);
         fe.args.emplace_back(intern.get_or_insert("path"),
@@ -397,7 +397,7 @@ FoldEvent evt(std::uint64_t pid, std::uint64_t dur, std::uint64_t tid) {
     e.dur = dur;
     e.has_dur = true;
     e.tid = tid;
-    e.phase = dftracer::utils::trace::RecordPhase::COMPLETE;
+    e.phase = dftracer::utils::trace::RecordPhase::Complete;
     return e;
 }
 

@@ -1,14 +1,14 @@
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -428,7 +428,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     {
         auto phr = root["ph"];
         if (!phr.error() &&
-            read_phase(phr.value_unsafe()) == RecordPhase::COUNTER) {
+            read_phase(phr.value_unsafe()) == RecordPhase::Counter) {
             auto tr = root["ts"];
             if (tr.error()) return;
             double ts = json_number(tr.value_unsafe());
@@ -483,7 +483,7 @@ static void fold_summary(std::size_t w, std::string_view event, SumBuild& b) {
     {
         auto phr = root["ph"];
         if (!phr.error() &&
-            read_phase(phr.value_unsafe()) == RecordPhase::AGGREGATED) {
+            read_phase(phr.value_unsafe()) == RecordPhase::Aggregated) {
             b.has_aggregated.store(true, std::memory_order_relaxed);
             return;
         }
@@ -788,6 +788,13 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     std::size_t nb = VizSummary::MAX_CELLS / est_lanes;
     nb = std::clamp(nb, VizSummary::MIN_BUCKETS_PER_LANE,
                     VizSummary::MAX_BUCKETS_PER_LANE);
+    // The finest level is 4^EXTRA_LEVELS times nb. Buckets under 1 us hold
+    // nothing more, and each level keeps dense counter vectors, so a short
+    // trace would otherwise cost ~130 MB of memory and cache file.
+    nb = std::min<std::size_t>(
+        nb,
+        std::max<std::size_t>(VizSummary::MIN_BUCKETS_PER_LANE,
+                              (gmax - gmin) >> (2 * VizSummary::EXTRA_LEVELS)));
 
     const TraceFields fields(index.record_schema());
     SumBuild b(fields);
@@ -1183,9 +1190,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
             jb.append_comma();
             jb.append_key_value("dur", end_ts - start_ts);
             jb.append_comma();
-            jb.append_key_value("ph", phase_to_int(RecordPhase::COMPLETE));
+            jb.append_key_value("ph", phase_to_int(RecordPhase::Complete));
             jb.append_comma();
-            jb.append_key_value("type", event_type_to_int(EventType::DFTRACER));
+            jb.append_key_value("type", event_type_to_int(EventType::Dftracer));
             jb.append_comma();
             jb.escape_and_append_with_quotes("args");
             jb.append_colon();

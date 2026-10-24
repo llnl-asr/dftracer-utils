@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_BYTES_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_BYTES_ITERATOR_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -79,11 +79,11 @@ class IndexedFileBytesIterator {
           has_buffered_line_(false),
           attempted_read_(false) {
         if (!reader_) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "Reader cannot be null");
         }
         if (start_byte_ >= end_byte_) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "Invalid byte range");
         }
 
@@ -98,13 +98,13 @@ class IndexedFileBytesIterator {
         stream_ = reader_->stream(
             dftracer::utils::utilities::reader::internal::StreamConfig()
                 .stream_type(dftracer::utils::utilities::reader::internal::
-                                 StreamType::LINE_BYTES)
+                                 StreamType::LineBytes)
                 .range_type(dftracer::utils::utilities::reader::internal::
-                                RangeType::BYTE_RANGE)
+                                RangeType::ByteRange)
                 .from(start_byte_)
                 .to(end_byte_));
         if (!stream_) {
-            throw DFTUtilsException(ErrorCode::IO, "Failed to create stream");
+            throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
         }
     }
 
@@ -173,7 +173,7 @@ class IndexedFileBytesIterator {
      */
     Line next() {
         if (!has_next()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "No more lines available");
         }
 

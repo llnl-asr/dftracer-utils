@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_DETAILED_STATISTICS_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_DETAILED_STATISTICS_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
 

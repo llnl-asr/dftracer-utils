@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #include <dftracer/utils/utilities/common/arrow/ipc_reader.h>

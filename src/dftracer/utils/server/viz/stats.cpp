@@ -1,14 +1,14 @@
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -278,7 +278,7 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
     // window.
     const VizSummary* s = co_await ensure_viz_summary(index);
     auto to_native = [&](double us) {
-        return index.time_metric() == TraceIndex::TimeMetric::US
+        return index.time_metric() == TraceIndex::TimeMetric::Us
                    ? us
                    : static_cast<double>(
                          index.us_to_native(static_cast<std::uint64_t>(us)));
@@ -314,83 +314,84 @@ coro::CoroTask<HttpResponse> handle_viz_stats(const HttpRequest& req,
                   .time_range(scan_begin, end);
     if (view.query) sv = sv.filter(*view.query);
 
-    auto scan = co_await sv.map_batches<StatMap>(
-        [begin, end, scan_begin, interval_native, &gcol, cov_bw, &fields](
-            StatMap& acc, const std::vector<std::string_view>& events) {
-            thread_local dftracer::utils::json::RecordParser parser;
-            thread_local std::string buf;
-            fields.for_each_event(events, [&](std::string_view ev) {
-                // simdjson's SIMD stages read up to SIMDJSON_PADDING bytes past
-                // the JSON; a bare std::string leaves those uninitialised.
-                // Zero- pad the reused buffer and parse only the event's
-                // length.
-                const std::size_t len = ev.size();
-                buf.assign(ev);
-                buf.resize(len + simdjson::SIMDJSON_PADDING);
-                auto res = parser.parse(buf.data(), len,
-                                        /*realloc_if_needed=*/false);
-                if (res.error()) return;
-                auto root = res.value_unsafe();
-                if (!root.is_object()) return;
-                auto tr = root["ts"];
-                if (tr.error()) return;
-                double ts = json_number(tr.value_unsafe());
-                // Events opening before the scan-back window are the whole-run
-                // enclosers served from long_events below; skip here to not
-                // double-count (chunk pruning still reads their chunk).
-                if (ts < scan_begin) return;
-                bool is_agg = false;
-                auto phr = root["ph"];
-                if (!phr.error()) {
-                    if (phr.is_int64())
-                        is_agg = phr.get_int64().value_unsafe() == 3;
-                    else if (phr.is_uint64())
-                        is_agg = phr.get_uint64().value_unsafe() == 3;
-                    else if (phr.is_string())
-                        is_agg = phr.get_string().value_unsafe() == "A";
-                }
-                std::string key = extract_group_value(root, gcol);
-                if (is_agg) {
-                    if (interval_native <= 0) return;
-                    double lo = std::max(begin, ts);
-                    double hi = std::min(end, ts + interval_native);
-                    if (hi <= lo) return;
-                    double f = (hi - lo) / interval_native;
-                    double cnt = 1, sum = 0, dmin = 0, dmax = 0;
-                    auto args = root["args"];
-                    if (!args.error() && args.is_object()) {
-                        auto c = args["dftu_cnt"];
-                        if (!c.error()) cnt = json_number(c.value_unsafe());
-                        auto sm = args["dur_sum"];
-                        if (!sm.error())
-                            sum = json_number(sm.value_unsafe());
-                        else {
-                            auto d = args["dur"];
-                            if (!d.error()) sum = json_number(d.value_unsafe());
-                        }
-                        auto mn = args["dur_min"];
-                        if (!mn.error()) dmin = json_number(mn.value_unsafe());
-                        auto mx = args["dur_max"];
-                        if (!mx.error()) dmax = json_number(mx.value_unsafe());
+    auto fold_events = [begin, end, scan_begin, interval_native, &gcol, cov_bw,
+                        &fields](StatMap& acc,
+                                 const std::vector<std::string_view>& events) {
+        thread_local dftracer::utils::json::RecordParser parser;
+        thread_local std::string buf;
+        fields.for_each_event(events, [&](std::string_view ev) {
+            // simdjson's SIMD stages read up to SIMDJSON_PADDING bytes past
+            // the JSON; a bare std::string leaves those uninitialised.
+            // Zero- pad the reused buffer and parse only the event's
+            // length.
+            const std::size_t len = ev.size();
+            buf.assign(ev);
+            buf.resize(len + simdjson::SIMDJSON_PADDING);
+            auto res = parser.parse(buf.data(), len,
+                                    /*realloc_if_needed=*/false);
+            if (res.error()) return;
+            auto root = res.value_unsafe();
+            if (!root.is_object()) return;
+            auto tr = root["ts"];
+            if (tr.error()) return;
+            double ts = json_number(tr.value_unsafe());
+            // Events opening before the scan-back window are the whole-run
+            // enclosers served from long_events below; skip here to not
+            // double-count (chunk pruning still reads their chunk).
+            if (ts < scan_begin) return;
+            bool is_agg = false;
+            auto phr = root["ph"];
+            if (!phr.error()) {
+                if (phr.is_int64())
+                    is_agg = phr.get_int64().value_unsafe() == 3;
+                else if (phr.is_uint64())
+                    is_agg = phr.get_uint64().value_unsafe() == 3;
+                else if (phr.is_string())
+                    is_agg = phr.get_string().value_unsafe() == "A";
+            }
+            std::string key = extract_group_value(root, gcol);
+            if (is_agg) {
+                if (interval_native <= 0) return;
+                double lo = std::max(begin, ts);
+                double hi = std::min(end, ts + interval_native);
+                if (hi <= lo) return;
+                double f = (hi - lo) / interval_native;
+                double cnt = 1, sum = 0, dmin = 0, dmax = 0;
+                auto args = root["args"];
+                if (!args.error() && args.is_object()) {
+                    auto c = args["dftu_cnt"];
+                    if (!c.error()) cnt = json_number(c.value_unsafe());
+                    auto sm = args["dur_sum"];
+                    if (!sm.error())
+                        sum = json_number(sm.value_unsafe());
+                    else {
+                        auto d = args["dur"];
+                        if (!d.error()) sum = json_number(d.value_unsafe());
                     }
-                    auto& a = acc[key];
-                    a.add(cnt * f, sum * f, dmin, dmax);
-                    a.mark(lo, hi, begin, cov_bw);
-                } else {
-                    auto dr = root["dur"];
-                    if (dr.error()) return;
-                    double dur = json_number(dr.value_unsafe());
-                    double lo = std::max(begin, ts);
-                    double hi = std::min(end, ts + dur);
-                    // An instant counts at its time.
-                    if (hi < lo || (hi == lo && dur > 0)) return;
-                    auto& a = acc[key];
-                    a.add(1.0, hi - lo, dur, dur);
-                    a.mark(lo, hi, begin, cov_bw);
+                    auto mn = args["dur_min"];
+                    if (!mn.error()) dmin = json_number(mn.value_unsafe());
+                    auto mx = args["dur_max"];
+                    if (!mx.error()) dmax = json_number(mx.value_unsafe());
                 }
-            });
-        },
-        merge_stats, slots, 0);
+                auto& a = acc[key];
+                a.add(cnt * f, sum * f, dmin, dmax);
+                a.mark(lo, hi, begin, cov_bw);
+            } else {
+                auto dr = root["dur"];
+                if (dr.error()) return;
+                double dur = json_number(dr.value_unsafe());
+                double lo = std::max(begin, ts);
+                double hi = std::min(end, ts + dur);
+                // An instant counts at its time.
+                if (hi < lo || (hi == lo && dur > 0)) return;
+                auto& a = acc[key];
+                a.add(1.0, hi - lo, dur, dur);
+                a.mark(lo, hi, begin, cov_bw);
+            }
+        });
+    };
+    auto scan =
+        co_await sv.map_batches<StatMap>(fold_events, merge_stats, slots, 0);
     StatMap byKey = std::move(scan.value);
 
     // Whole-run enclosers that opened before the scan-back window. The scan's

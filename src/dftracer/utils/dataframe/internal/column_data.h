@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_COLUMN_DATA_H
 
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dataframe/types.h>
 
@@ -57,17 +57,16 @@ struct dftu_series {
     /// FLAT/CONSTANT values, the SELECTION (int64) or DICTIONARY (int32) index
     /// buffer, the byte data of a variable-width String/Binary column, or the
     /// CHUNKED chunk starts (int64, one per chunk plus the length).
-    std::shared_ptr<dftracer::utils::dataframe::Buffer> data;
+    dftracer::utils::dataframe::BufferView data;
     /// Offsets (length+1 entries) of a variable-width column: int32 for
     /// String, Binary, List and Map; int64 for LargeString, LargeBinary and
     /// LargeList. Null for a fixed-width type.
-    std::shared_ptr<dftracer::utils::dataframe::Buffer> offsets;
+    dftracer::utils::dataframe::BufferView offsets;
     /// Arrow-layout validity bitmap (1 = valid); null when there are no nulls.
-    std::shared_ptr<dftracer::utils::dataframe::Buffer> validity;
+    dftracer::utils::dataframe::BufferView validity;
     /// VIEW: the data buffers the 16-byte views in `data` point into, shared
     /// by every column made from this one. Null for any other encoding.
-    std::shared_ptr<
-        const std::vector<std::shared_ptr<dftracer::utils::dataframe::Buffer>>>
+    std::shared_ptr<const std::vector<dftracer::utils::dataframe::BufferView>>
         blobs;
     /// A flat Struct's fields, in order; a CHUNKED column's chunks, in order;
     /// otherwise at most one entry, the base of a SELECTION or DICTIONARY or
@@ -93,8 +92,7 @@ struct dftu_series {
     }
     /// CHUNKED: the chunk holding row `i`; `local` gets the row inside it.
     const dftu_series& chunk_at(std::int64_t i, std::int64_t& local) const {
-        const auto* starts =
-            reinterpret_cast<const std::int64_t*>(data->data());
+        const auto* starts = reinterpret_cast<const std::int64_t*>(data.data());
         const std::size_t k = static_cast<std::size_t>(
             std::upper_bound(starts, starts + nested.size() + 1, i) - starts -
             1);
@@ -181,8 +179,8 @@ inline dftu_series* make_chunked(
     auto* out = new dftu_series();
     adopt_type_from(*out, *chunks.front());
     out->encoding = Encoding::Chunked;
-    out->data = Buffer::allocate((chunks.size() + 1) * sizeof(std::int64_t));
-    auto* starts = reinterpret_cast<std::int64_t*>(out->data->data());
+    out->data = new_buffer((chunks.size() + 1) * sizeof(std::int64_t));
+    auto* starts = reinterpret_cast<std::int64_t*>(writable(out->data));
     std::int64_t at = 0;
     for (std::size_t k = 0; k < chunks.size(); ++k) {
         starts[k] = at;

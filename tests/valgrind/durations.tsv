@@ -67,7 +67,7 @@ reader/test_reader	42.2
 trace/views/test_schema_view	38.0
 trace/views/test_dynamic_prune	37.8
 utilities/fileio/test_indexed_file_reader	37.6
-core/test_string_intern	37.5
+common/test_string_intern	37.5
 trace/views/test_typed_rows	37.0
 server/test_viz_stats_fastpath	36.8
 trace/views/test_duql_paths	35.2
@@ -79,7 +79,6 @@ index/test_record_schema	28.6
 dataframe/test_join_spill	27.1
 utilities/common/statistics/test_mixture	27.0
 utilities/reader/test_large_gzip_members	26.5
-trace/aggregators/test_dft_trace_writer	26.1
 utilities/indexer/test_rocksdb_storage	25.9
 utilities/plugins/test_plugin_agg_spill	25.5
 utilities/fileio/lines/sources/test_async_indexed_file_line_generator	25.3
@@ -116,9 +115,7 @@ dataframe/test_variance_stable	15.5
 utilities/plugins/test_plugin_order	15.2
 utilities/indexer/test_sst_ingest_spike	15.2
 utilities/indexer/test_hash_table_aggregation	15.2
-trace/aggregators/test_aggregator_utility	15.1
 trace/test_trace_config	15.0
-trace/aggregators/test_event_aggregator_utility	14.9
 utilities/plugins/test_plugin_public_config	14.8
 utilities/plugins/test_plugin_c_abi	14.7
 utilities/plugins/test_plugin_transform	14.6
@@ -138,7 +135,7 @@ dataframe/test_lazyframe	11.8
 duql/test_vectorize	11.4
 duql/test_duql_golden	11.4
 duql/test_evaluator	11.1
-core/test_runtime	11.1
+runtime/test_runtime	11.1
 index/test_prefilter	10.9
 duql/test_query	10.6
 dataframe/test_expr_string_ops	10.6
@@ -156,7 +153,7 @@ index/test_schema_class	9.7
 dataframe/test_lazy_frame_ops	9.7
 dataframe/test_join_null_keys	9.7
 coro/test_coro_syntax	9.7
-core/test_runtime_abi	9.6
+runtime/test_runtime_abi	9.6
 trace/aggregators/test_system_metrics_merge_operator	9.5
 dataframe/test_string_simd	9.5
 task_graph/test_task_graph	9.4
@@ -191,7 +188,7 @@ dataframe/test_join	8.1
 dataframe/test_agg_state	8.0
 dataframe/test_agg_extended_ops	8.0
 coro/test_when_any_heterogeneous	8.0
-core/test_logging	8.0
+common/test_logging	8.0
 utilities/plugins/test_plugin_state	7.9
 utilities/plugins/test_plugin_providers	7.9
 utilities/plugins/test_plugin_cxx_wrappers	7.9
@@ -215,7 +212,7 @@ dataframe/test_filter_columns	7.7
 dataframe/test_collect_spill	7.7
 dataframe/test_arrow_types_compute	7.7
 coro/test_yield	7.7
-core/test_task_abi	7.7
+runtime/test_task_abi	7.7
 utilities/fileio/test_line_format	7.6
 trace/test_chunk_verifier	7.6
 dataframe/test_rank_nan	7.6
@@ -235,7 +232,7 @@ dataframe/test_groupby_string_encodings	7.5
 dataframe/test_frame_ops	7.5
 dataframe/test_concat_large_string	7.5
 dataframe/test_collect_concat	7.5
-core/test_filesystem_info	7.5
+common/test_filesystem_info	7.5
 utilities/plugins/test_plugin_results	7.4
 utilities/fileio/parallel/test_striped_writer	7.4
 utilities/fileio/parallel/test_sharded_writer	7.4
@@ -249,19 +246,17 @@ dataframe/test_distinct_on_ids	7.4
 dataframe/test_arrow_types_reshape	7.4
 dataframe/test_arrow	7.4
 coro/test_channel	7.4
-core/test_str_format	7.4
-core/test_memory_budget	7.4
+common/test_str_format	7.4
+common/test_memory_budget	7.4
 utilities/reader/test_member_decode_cache	7.3
 utilities/fileio/test_truncated_member	7.3
 trace/comparator/test_is_data_transfer_op	7.3
-trace/aggregators/test_variance_tier	7.3
-trace/aggregators/test_aggregation_serialization	7.3
 pipeline/test_pipeline_elasticity	7.3
 dataframe/test_string_view	7.3
 dataframe/test_concat_text	7.3
 dataframe/test_arrow_types_windowed	7.3
 dataframe/test_arrow_large_types_compute	7.3
-core/test_eviction_policy	7.3
+dstd/test_eviction_policy	7.3
 utilities/compression/test_libdeflate_gzip	7.2
 utilities/common/arrow/test_arrow_attribution	7.2
 pipeline/test_simple_scope	7.2
@@ -271,7 +266,7 @@ dataframe/test_set_union	7.2
 dataframe/test_native_frame	7.2
 dataframe/test_arrow_types_tail	7.2
 dataframe/test_arrow_types	7.2
-core/test_hex64	7.2
+dstd/test_hex64	7.2
 utilities/plugins/test_plugin_ops	7.1
 utilities/fileio/lines/sources/test_async_streaming_gz_line_generator	7.1
 utilities/common/statistics/test_log2_histogram	7.1
@@ -288,14 +283,11 @@ dataframe/test_cut_flags	7.1
 dataframe/test_cast_pairs	7.1
 coro/test_generator	7.1
 coro/test_coro	7.1
-core/test_object_pool	7.1
 utilities/plugins/test_plugin_abi_gate	7.0
 utilities/common/statistics/test_timestamp_histogram	7.0
 utilities/common/arrow/test_arrow_column_builder	7.0
 trace/views/test_row_build	7.0
 trace/comparator/test_tree_table_formatter	7.0
-trace/aggregators/test_aggregation_rollup	7.0
-trace/aggregators/test_aggregation_key	7.0
 server/test_query_params	7.0
 server/test_http_response	7.0
 server/test_http_parser	7.0
@@ -325,7 +317,6 @@ trace/test_time_metric	6.8
 trace/statistics/test_trace_statistics	6.8
 trace/indexing/test_shard_manifest	6.8
 trace/comparator/test_comparison_result	6.8
-trace/aggregators/test_aggregation_augmentation	6.8
 layout/test_sizes	6.8
 trace/comparator/test_comparison_config	6.7
 index/test_layout	6.7

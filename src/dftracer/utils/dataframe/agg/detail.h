@@ -2,11 +2,11 @@
 #define DFTRACER_UTILS_DATAFRAME_AGG_DETAIL_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/hash/hash_combine.h>
 
 #include <algorithm>
 #include <bit>
@@ -1137,8 +1137,12 @@ class AggState {
         }
         const std::size_t db = static_cast<std::size_t>(g) * nf;
         const std::size_t sb = static_cast<std::size_t>(j) * nf;
-        for (std::size_t fj = 0; fj < nf; ++fj)
-            fstats[db + fj].merge(other.fstats[sb + fj]);
+        for (std::size_t fj = 0; fj < nf; ++fj) {
+            FieldStat unpacked;
+            fstats[db + fj].merge(other.light_on
+                                      ? (unpacked = other.light_stat(sb + fj))
+                                      : other.fstats[sb + fj]);
+        }
         if (has_fl) {
             for (std::size_t fj = 0; fj < nf; ++fj) {
                 const std::size_t d = db + fj, s = sb + fj;

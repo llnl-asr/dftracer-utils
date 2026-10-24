@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_TYPED_COLLECT_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -25,7 +25,7 @@ namespace dftracer::utils::trace::views::detail {
 /// outlive the build_* calls.
 class TypedCollectFold : public Fold {
    public:
-    explicit TypedCollectFold(const dftracer::utils::StringIntern& intern)
+    explicit TypedCollectFold(const dftracer::utils::dstd::StringIntern& intern)
         : intern_(&intern) {}
 
     bool accepts(const ScanShape&) const override { return true; }
@@ -39,17 +39,17 @@ class TypedCollectFold : public Fold {
     void step(const FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
             switch (ev.phase) {
-                case RecordPhase::COMPLETE:
+                case RecordPhase::Complete:
                     regular_.push(ev);
                     break;
-                case RecordPhase::AGGREGATED:
+                case RecordPhase::Aggregated:
                     aggregated_.push(ev);
                     break;
-                case RecordPhase::COUNTER:
+                case RecordPhase::Counter:
                     counters_.push(ev);
                     break;
-                case RecordPhase::UNKNOWN:
-                case RecordPhase::METADATA:
+                case RecordPhase::Unknown:
+                case RecordPhase::Metadata:
                     break;
             }
         }
@@ -113,7 +113,7 @@ class TypedCollectFold : public Fold {
         }
 
         dftracer::utils::dataframe::DataFrame to_frame(
-            const dftracer::utils::StringIntern& intern) && {
+            const dftracer::utils::dstd::StringIntern& intern) && {
             namespace df = dftracer::utils::dataframe;
             // from_borrowed moves the vector in and borrows its buffer; a
             // vector move keeps that buffer, so data() taken first stays valid.
@@ -145,7 +145,7 @@ class TypedCollectFold : public Fold {
         }
     };
 
-    const dftracer::utils::StringIntern* intern_;
+    const dftracer::utils::dstd::StringIntern* intern_;
     Cols regular_, aggregated_, counters_;
 };
 

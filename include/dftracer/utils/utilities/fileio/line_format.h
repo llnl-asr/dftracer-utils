@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINE_FORMAT_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINE_FORMAT_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <charconv>
 #include <cstddef>
@@ -235,7 +235,7 @@ class BasicLineFormat {
             fmt, [&](char c) { f.text_.push_back(c); },
             [&] { f.end_.push_back(f.text_.size()); });
         if (err)
-            return make_error(ErrorCode::INVALID_ARGUMENT,
+            return make_error(ErrorCode::InvalidArgument,
                               std::string("line format: ") + err);
         f.end_.push_back(f.text_.size());
         return f;

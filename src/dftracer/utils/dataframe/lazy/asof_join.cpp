@@ -8,8 +8,8 @@ using namespace lazy_internal;
 
 namespace {
 
-// One sorted morsel of the right side, or a compact copy of the rows an
-// interval join admitted from one. The views read the columns of `cols`.
+// One sorted morsel of the right side, or a compact copy of the active rows
+// of an interval join. The views read the columns of `cols`.
 struct Seg {
     std::vector<Series> cols;
     std::vector<ColumnView> keys;
@@ -18,6 +18,7 @@ struct Seg {
     std::int64_t rows = 0;
     std::int64_t live = 0;
     std::uint64_t bytes = 0;
+    bool copy = false;
 };
 using SegPtr = std::shared_ptr<Seg>;
 
@@ -235,7 +236,8 @@ class OrderedJoin : public Cursor {
                 lb_.reset();
                 continue;
             }
-            if (!co_await load_left()) co_return std::nullopt;
+            const auto load_left_ok = co_await load_left();
+            if (!load_left_ok) co_return std::nullopt;
         }
     }
 
@@ -257,7 +259,9 @@ class OrderedJoin : public Cursor {
             co_return false;
         rep_ = lb_;
         rep_row_ = r;
-        while (co_await feed_.fill(max_rows_)) {
+        for (;;) {
+            const auto fill_ok = co_await feed_.fill(max_rows_);
+            if (!fill_ok) break;
             const Seg& s = *feed_.seg();
             if (ops::compare_keys(L.by, r, s.keys, feed_.i()) <= 0) break;
             feed_.advance();
@@ -296,7 +300,9 @@ class OrderedJoin : public Cursor {
             b->m = std::move(*m);
             lb_ = std::move(b);
             li_ = 0;
-            if (!checked_ && co_await feed_.fill(max_rows_)) {
+            bool filled = false;
+            if (!checked_) filled = co_await feed_.fill(max_rows_);
+            if (filled) {
                 check_types(*lb_, *feed_.seg());
                 checked_ = true;
             }
@@ -451,7 +457,8 @@ class AsofCursor : public OrderedJoin {
     coro::CoroTask<void> step() override {
         const LeftBlock& L = *lb_;
         const std::int64_t r = li_++;
-        if (co_await enter_group(r)) {
+        const auto enter_group_ok = co_await enter_group(r);
+        if (enter_group_ok) {
             have_back_ = false;
             back_first_ = back_last_ = Held{};
         }
@@ -461,7 +468,8 @@ class AsofCursor : public OrderedJoin {
         }
         const ColumnView& lt = *L.t;
         for (;;) {
-            if (!co_await feed_.fill(max_rows_)) break;
+            const auto fill_ok = co_await feed_.fill(max_rows_);
+            if (!fill_ok) break;
             const SegPtr& s = feed_.seg();
             const std::int64_t j = feed_.i();
             if (!same_group(L, r, *s, j) || s->t->is_missing(j) ||
@@ -479,11 +487,14 @@ class AsofCursor : public OrderedJoin {
             if (have_back_ &&
                 back_last_.seg->t->compare(back_last_.i, lt, r) == 0) {
                 fwd = back_first_;
-            } else if (co_await feed_.fill(max_rows_)) {
-                const SegPtr& s = feed_.seg();
-                const std::int64_t j = feed_.i();
-                if (same_group(L, r, *s, j) && !s->t->is_missing(j))
-                    fwd = Held{s, j};
+            } else {
+                const bool filled = co_await feed_.fill(max_rows_);
+                if (filled) {
+                    const SegPtr& s = feed_.seg();
+                    const std::int64_t j = feed_.i();
+                    if (same_group(L, r, *s, j) && !s->t->is_missing(j))
+                        fwd = Held{s, j};
+                }
             }
         }
         const Held* cand = nullptr;
@@ -520,9 +531,9 @@ class AsofCursor : public OrderedJoin {
 
 // Each left point pairs with every right interval [lo, hi] that holds it in
 // its by-group, ordered by (lo, hi, right position). The intervals that have
-// started and not ended stay as the active set: a min-heap on hi, whose rows
-// are copied compactly out of the right morsels so a long interval does not
-// keep its whole morsel.
+// started and not ended stay as the active set: a min-heap on hi. Its rows
+// point into the right morsels until the feed leaves them, and a sweep then
+// copies them compactly, so a long interval does not keep its whole morsel.
 class IntervalCursor : public OrderedJoin {
    public:
     IntervalCursor(std::unique_ptr<Cursor> left, LazyFrame right_sorted,
@@ -536,6 +547,13 @@ class IntervalCursor : public OrderedJoin {
    protected:
     bool busy() const override { return emitting_; }
 
+    // Pairs point into the morsels the feed left, so only a flush lets a
+    // sweep copy their rows out; past the pin share the output flushes.
+    bool full() const override {
+        return out_left_.size() >= row_cap_ ||
+               (!out_left_.empty() && left_bytes_ > pin_cap_);
+    }
+
     void after_flush() override { sweep(); }
 
     coro::CoroTask<void> step() override {
@@ -543,13 +561,16 @@ class IntervalCursor : public OrderedJoin {
             emit_more();
             co_return;
         }
-        if (out_left_.empty() && chunks_.size() > sweep_at_) {
+        if (out_left_.empty() &&
+            (chunks_.size() > sweep_at_ || left_bytes_ > pin_cap_)) {
             sweep();
             sweep_at_ = 2 * chunks_.size() + 64;
         }
         const LeftBlock& L = *lb_;
         const std::int64_t r = li_++;
-        if (co_await enter_group(r)) {
+        const auto enter_group_ok = co_await enter_group(r);
+        track_left();
+        if (enter_group_ok) {
             for (const Entry& e : active_) --e.seg->live;
             active_.clear();
             ordered_.clear();
@@ -558,6 +579,7 @@ class IntervalCursor : public OrderedJoin {
         const bool has_point = !L.t->is_missing(r);
         if (has_point) {
             co_await admit(L, r);
+            track_left();
             while (!active_.empty() && active_.front().seg->hi->compare(
                                            active_.front().i, *L.t, r) < 0) {
                 std::pop_heap(active_.begin(), active_.end(), hi_greater);
@@ -607,53 +629,125 @@ class IntervalCursor : public OrderedJoin {
         if (emit_pos_ >= ordered_.size()) emitting_ = false;
     }
 
+    // Sums the bytes of the right morsels the feed left that active rows
+    // still point into, only when the feed or chunks_ changed since the last
+    // sum.
+    void track_left() {
+        const Seg* at = feed_.seg().get();
+        if (at == left_at_ && chunks_.size() == left_n_) return;
+        left_at_ = at;
+        left_n_ = chunks_.size();
+        left_bytes_ = 0;
+        for (const SegPtr& c : chunks_)
+            if (!c->copy && c.get() != at) left_bytes_ += c->bytes;
+    }
+
+    // Runs only with no pending pairs.
     void sweep() {
         chunks_.erase(
             std::remove_if(chunks_.begin(), chunks_.end(),
                            [](const SegPtr& c) { return c->live == 0; }),
             chunks_.end());
+        copy_active();
+        left_at_ = nullptr;
+        track_left();
+    }
+
+    // Copies the active rows of the morsels the feed left, and of mostly dead
+    // copies, into one copy.
+    void copy_active() {
+        std::vector<const Seg*> from;
+        for (const SegPtr& c : chunks_)
+            if (c != feed_.seg() && (!c->copy || 2 * c->live < c->rows))
+                from.push_back(c.get());
+        if (from.empty()) return;
+        const auto slot = [&](const Seg* s) {
+            const auto it = std::find(from.begin(), from.end(), s);
+            return it == from.end()
+                       ? -1
+                       : static_cast<std::int64_t>(it - from.begin());
+        };
+        std::vector<std::vector<std::int64_t>> rows(from.size());
+        for (const Entry& e : active_) {
+            const std::int64_t k = slot(e.seg);
+            if (k >= 0) rows[static_cast<std::size_t>(k)].push_back(e.i);
+        }
+        std::vector<std::int64_t> base(from.size(), 0);
+        std::int64_t total = 0;
+        for (std::size_t k = 0; k < from.size(); ++k) {
+            std::sort(rows[k].begin(), rows[k].end());
+            base[k] = total;
+            total += static_cast<std::int64_t>(rows[k].size());
+        }
+        auto c = std::make_shared<Seg>();
+        c->cols.resize(from.front()->cols.size());
+        std::vector<std::size_t> copied = lay_.rout;
+        copied.push_back(lay_.rt);
+        copied.push_back(lay_.rhi);
+        std::sort(copied.begin(), copied.end());
+        copied.erase(std::unique(copied.begin(), copied.end()), copied.end());
+        for (std::size_t col : copied) {
+            std::vector<Series> pieces;
+            pieces.reserve(from.size());
+            for (std::size_t k = 0; k < from.size(); ++k)
+                pieces.push_back(from[k]->cols[col].take(rows[k]));
+            if (pieces.size() == 1) {
+                c->cols[col] = std::move(pieces.front());
+                continue;
+            }
+            std::vector<const Series*> ptrs;
+            for (const Series& p : pieces) ptrs.push_back(&p);
+            c->cols[col] = concat_columns(ptrs);
+        }
+        c->t.emplace(c->cols[lay_.rt]);
+        c->hi.emplace(c->cols[lay_.rhi]);
+        c->rows = total;
+        c->live = total;
+        c->copy = true;
+        const auto move = [&](Entry& e) {
+            const std::int64_t k = slot(e.seg);
+            if (k < 0) return;
+            const std::vector<std::int64_t>& v =
+                rows[static_cast<std::size_t>(k)];
+            e.i = base[static_cast<std::size_t>(k)] +
+                  (std::lower_bound(v.begin(), v.end(), e.i) - v.begin());
+            e.seg = c.get();
+        };
+        for (Entry& e : active_) move(e);
+        if (emitting_) {
+            for (Entry& e : ordered_) move(e);
+        } else {
+            ordered_.clear();
+            dirty_ = true;
+        }
+        chunks_.erase(
+            std::remove_if(chunks_.begin(), chunks_.end(),
+                           [&](const SegPtr& x) { return slot(x.get()) >= 0; }),
+            chunks_.end());
+        chunks_.push_back(std::move(c));
     }
 
     // Moves every right row with lo <= the point into the active set.
     coro::CoroTask<void> admit(const LeftBlock& L, std::int64_t r) {
-        std::vector<std::int64_t> adm;
-        SegPtr from;
-        while (co_await feed_.fill(max_rows_)) {
+        for (;;) {
+            const auto fill_ok = co_await feed_.fill(max_rows_);
+            if (!fill_ok) break;
             const SegPtr& s = feed_.seg();
             const std::int64_t j = feed_.i();
             if (!same_group(L, r, *s, j) || s->t->is_missing(j) ||
                 s->t->compare(j, *L.t, r) > 0)
                 break;
             if (!s->hi->is_missing(j)) {
-                if (from && from != s) {
-                    admit_rows(*from, adm);
-                    adm.clear();
-                }
-                from = s;
-                adm.push_back(j);
+                if (std::find(chunks_.begin(), chunks_.end(), s) ==
+                    chunks_.end())
+                    chunks_.push_back(s);
+                ++s->live;
+                active_.push_back(Entry{s.get(), j, seq_++});
+                std::push_heap(active_.begin(), active_.end(), hi_greater);
+                dirty_ = true;
             }
             feed_.advance();
         }
-        if (!adm.empty()) admit_rows(*from, adm);
-    }
-
-    void admit_rows(const Seg& from, const std::vector<std::int64_t>& rows) {
-        auto c = std::make_shared<Seg>();
-        c->cols.resize(from.cols.size());
-        for (std::size_t col : lay_.rout)
-            c->cols[col] = from.cols[col].take(rows);
-        c->cols[lay_.rt] = from.cols[lay_.rt].take(rows);
-        c->cols[lay_.rhi] = from.cols[lay_.rhi].take(rows);
-        c->t.emplace(c->cols[lay_.rt]);
-        c->hi.emplace(c->cols[lay_.rhi]);
-        c->rows = static_cast<std::int64_t>(rows.size());
-        c->live = c->rows;
-        for (std::int64_t k = 0; k < c->rows; ++k) {
-            active_.push_back(Entry{c.get(), k, seq_++});
-            std::push_heap(active_.begin(), active_.end(), hi_greater);
-        }
-        chunks_.push_back(std::move(c));
-        dirty_ = true;
     }
 
     bool outer_;
@@ -666,6 +760,9 @@ class IntervalCursor : public OrderedJoin {
     std::int64_t emit_row_ = 0;
     std::int64_t seq_ = 0;
     bool dirty_ = true;
+    std::uint64_t left_bytes_ = 0;
+    const Seg* left_at_ = nullptr;
+    std::size_t left_n_ = 0;
 };
 
 constexpr const char* ASOF_WHO = "asof";

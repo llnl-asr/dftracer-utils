@@ -1,4 +1,3 @@
-#include <dftracer/utils/core/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>                   // dftu_series_data
 #include <dftracer/utils/dataframe/field_stat.h>            // FieldStat
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -10,6 +9,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>  // argsort, parallel_packed_sort
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 
 #include <algorithm>
 #include <atomic>
@@ -59,18 +59,18 @@ std::vector<double> nonnull_values(const Series& v) {
     const std::int64_t chunks = (n + GRAIN - 1) / GRAIN;
     std::vector<std::vector<double>> parts(static_cast<std::size_t>(chunks));
     const dftu_series& h = *v.handle();
-    const std::uint8_t* valid = h.encoding == Encoding::Flat && h.validity
-                                    ? h.validity->data()
-                                    : nullptr;
+    const std::uint8_t* valid =
+        h.encoding == Encoding::Flat && h.validity.block() ? h.validity.data()
+                                                           : nullptr;
     const bool flat64 =
-        h.encoding == Encoding::Flat && h.data &&
+        h.encoding == Encoding::Flat && h.data.block() &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64);
     parallel_for(n, GRAIN, [&](std::int64_t b, std::int64_t e) {
         std::vector<double>& out = parts[static_cast<std::size_t>(b / GRAIN)];
         out.reserve(static_cast<std::size_t>(e - b));
         if (flat64) {
             const auto* d =
-                reinterpret_cast<const std::uint8_t*>(h.data->data());
+                reinterpret_cast<const std::uint8_t*>(h.data.data());
             const bool is_f = v.type() == TypeId::Float64;
             for (std::int64_t i = b; i < e; ++i) {
                 if (valid && !((valid[i >> 3] >> (i & 7)) & 1)) continue;
@@ -265,8 +265,9 @@ double quantile(const Series& v, double q) {
         v.encoding() == Encoding::Flat &&
         (v.type() == TypeId::Float64 || v.type() == TypeId::Int64)) {
         const auto total = static_cast<std::size_t>(v.length());
-        const std::uint8_t* validity =
-            v.handle()->validity ? v.handle()->validity->data() : nullptr;
+        const std::uint8_t* validity = v.handle()->validity.block()
+                                           ? v.handle()->validity.data()
+                                           : nullptr;
         auto [a, b] = v.type() == TypeId::Float64
                           ? two_order_statistics(v.data<double>(), total,
                                                  validity, lo, sortable_key)
@@ -372,7 +373,8 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
             for (std::size_t t = 0; t < keep.size(); ++t) {
                 const std::int64_t i = keep[t];
                 out[static_cast<std::size_t>(i)] = r[t];
-                ok[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+                ok[static_cast<std::size_t>(i >> 3)] |=
+                    static_cast<std::uint8_t>(1u << (i & 7));
             }
             return Series::flat(TypeId::Float64, out.data(), n, ok.data());
         }
@@ -432,7 +434,8 @@ Series rank(const Series& v, RankMethod method, bool descending, bool pct) {
     std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     for (std::int64_t i = 0; i < n; ++i)
         if (!v.is_null(i))
-            valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
     return Series::flat(TypeId::Float64, ranks.data(), n, valid.data());
 }
 
@@ -467,7 +470,8 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
         if (a < 0) a = 0;
         std::int64_t i = a;
         for (; i < n && (i & 7); ++i)
-            valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
         const std::int64_t full_end = n & ~std::int64_t{7};
         if (i < full_end) {
             std::memset(&valid[static_cast<std::size_t>(i >> 3)], 0xFF,
@@ -475,7 +479,8 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
             i = full_end;
         }
         for (; i < n; ++i)
-            valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
     }
 
     // The values as doubles: a dense Float64 column is read in place, any
@@ -502,8 +507,8 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
     res->type = TypeId::Float64;
     res->encoding = Encoding::Flat;
     res->length = n;
-    res->data = Buffer::allocate(static_cast<std::size_t>(n) * sizeof(double));
-    double* out = reinterpret_cast<double*>(res->data->data());
+    res->data = new_buffer(static_cast<std::size_t>(n) * sizeof(double));
+    double* out = reinterpret_cast<double*>(writable(res->data));
     constexpr std::int64_t GRAIN_ROWS = std::int64_t{1} << 16;
     const std::int64_t grain = std::max(GRAIN_ROWS, window * 4);
     if (op == RollingOp::Sum || op == RollingOp::Mean) {
@@ -559,8 +564,8 @@ Series rolling(const Series& v, std::int64_t window, RollingOp op) {
         if (!((valid[static_cast<std::size_t>(i >> 3)] >> (i & 7)) & 1))
             ++res->null_count;
     if (res->null_count > 0) {
-        res->validity = Buffer::allocate(valid.size());
-        std::memcpy(res->validity->data(), valid.data(), valid.size());
+        res->validity = new_buffer(valid.size());
+        std::memcpy(writable(res->validity), valid.data(), valid.size());
     }
     return Series{res};
 }
@@ -615,7 +620,8 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
         std::int64_t a = std::max<std::int64_t>(window - 1, 0);
         std::int64_t i = a;
         for (; i < n && (i & 7); ++i)
-            valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
         const std::int64_t full_end = n & ~std::int64_t{7};
         if (i < full_end) {
             std::memset(&valid[static_cast<std::size_t>(i >> 3)], 0xFF,
@@ -623,7 +629,8 @@ Series rolling_window(const Series& v, std::int64_t window, Agg agg,
             i = full_end;
         }
         for (; i < n; ++i)
-            valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
     }
 
     std::vector<double> vals;
@@ -843,7 +850,8 @@ Series ewm_mean(const Series& v, double alpha) {
         }
         if (w_sum > 0.0) {
             out[static_cast<std::size_t>(i)] = mean;
-            valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
         }
     }
     return Series::flat(TypeId::Float64, out.data(), n, valid.data());
@@ -925,7 +933,8 @@ Series ewm_std(const Series& v, double alpha) {
                 const double denom = w_sum[ui] - w2_sum[ui] / w_sum[ui];
                 if (denom > 0.0) {
                     out[ui] = std::sqrt(out[ui] / denom);
-                    valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+                    valid[static_cast<std::size_t>(i >> 3)] |=
+                        static_cast<std::uint8_t>(1u << (i & 7));
                 } else {
                     out[ui] = 0.0;
                 }
@@ -958,7 +967,9 @@ Series ewm_std(const Series& v, double alpha) {
             out[static_cast<std::size_t>(i)] = std::sqrt(s / denom);
             have = true;
         }
-        if (have) valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+        if (have)
+            valid[static_cast<std::size_t>(i >> 3)] |=
+                static_cast<std::uint8_t>(1u << (i & 7));
         if (have && denom <= 0.0)
             out[static_cast<std::size_t>(i)] =
                 out[static_cast<std::size_t>(i - 1)];
@@ -992,7 +1003,8 @@ Series cut(const Series& v, const Series& breaks, std::int32_t flags) {
             --bin;
         }
         out[static_cast<std::size_t>(i)] = bin;
-        valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+        valid[static_cast<std::size_t>(i >> 3)] |=
+            static_cast<std::uint8_t>(1u << (i & 7));
     }
     return Series::flat(TypeId::Int32, out.data(), n, valid.data());
 }
@@ -1019,7 +1031,8 @@ Series qcut(const Series& v, std::int32_t q) {
         auto it = std::upper_bound(edges.begin(), edges.end(), x);
         out[static_cast<std::size_t>(i)] =
             static_cast<std::int32_t>(it - edges.begin());
-        valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+        valid[static_cast<std::size_t>(i >> 3)] |=
+            static_cast<std::uint8_t>(1u << (i & 7));
     }
     return Series::flat(TypeId::Int32, out.data(), n, valid.data());
 }
@@ -1048,7 +1061,8 @@ Series interpolate(const Series& v) {
     std::vector<double> out(static_cast<std::size_t>(n), 0.0);
     std::vector<std::uint8_t> valid(static_cast<std::size_t>((n + 7) / 8), 0);
     auto mark = [&](std::int64_t i) {
-        valid[static_cast<std::size_t>(i >> 3)] |= (1u << (i & 7));
+        valid[static_cast<std::size_t>(i >> 3)] |=
+            static_cast<std::uint8_t>(1u << (i & 7));
     };
     const bool has_nulls = v.null_count() > 0;
     // Fast path: no nulls -> a plain widening copy.

@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/indexed_file_line_iterator.h>
 #include <doctest/doctest.h>
@@ -148,7 +148,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_buffer_size(4096);
 
             CHECK(config.reader() == reader);
-            CHECK(config.range_type() == RangeType::LINE_RANGE);
+            CHECK(config.range_type() == RangeType::LineRange);
             CHECK(config.start() == 2);
             CHECK(config.end() == 4);
             CHECK(config.buffer_size() == 4096);
@@ -178,7 +178,7 @@ TEST_SUITE("IndexedFileLineIterator") {
                               .with_byte_range(0, 200)  // Read first 200 bytes
                               .with_buffer_size(8192);
 
-            CHECK(config.range_type() == RangeType::BYTE_RANGE);
+            CHECK(config.range_type() == RangeType::ByteRange);
             CHECK(config.start() == 0);
             CHECK(config.end() == 200);
 
@@ -198,7 +198,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             IndexedFileLineIteratorConfig config;
 
             CHECK(config.reader() == nullptr);
-            CHECK(config.range_type() == RangeType::LINE_RANGE);
+            CHECK(config.range_type() == RangeType::LineRange);
             CHECK(config.start() == 1);
             CHECK(config.end() == 0);
             CHECK(config.buffer_size() == 1024 * 1024);  // 1MB default
@@ -308,7 +308,7 @@ TEST_SUITE("IndexedFileLineIterator") {
             IndexedFileLineIterator iter(config);
 
             CHECK(iter.total_count() == 11);  // Lines 5-15 inclusive
-            CHECK(iter.range_type() == RangeType::LINE_RANGE);
+            CHECK(iter.range_type() == RangeType::LineRange);
         }
     }
 

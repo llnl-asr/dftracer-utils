@@ -84,6 +84,8 @@ option(
   ON)
 option(DFTRACER_UTILS_BUILD_SHARED "Build shared library" ON)
 option(DFTRACER_UTILS_BUILD_STATIC "Build static library" ON)
+option(DFTRACER_UTILS_SINGLE_LIBRARY
+       "Build one library dftracer_utils instead of one per area" OFF)
 option(DFTRACER_UTILS_BUILD_BINARIES "Build command-line binaries" ON)
 option(DFTRACER_UTILS_BUILD_PYTHON "Build Python bindings" OFF)
 option(DFTRACER_UTILS_ENABLE_PCH "Enable precompiled headers" OFF)
@@ -95,6 +97,18 @@ option(DFTRACER_UTILS_VALGRIND_MODE
        OFF)
 if(DFTRACER_UTILS_VALGRIND_MODE)
   add_compile_definitions(DFTRACER_UTILS_VALGRIND_MODE=1)
+endif()
+set(DFTRACER_UTILS_MEMORY_BACKEND
+    "page_heap"
+    CACHE STRING
+    "Default memory backend: page_heap or system; the environment variable of the same name overrides it at start")
+set_property(CACHE DFTRACER_UTILS_MEMORY_BACKEND PROPERTY STRINGS page_heap
+                                                          system)
+if(NOT DFTRACER_UTILS_MEMORY_BACKEND MATCHES "^(page_heap|system)$")
+  message(
+    FATAL_ERROR
+      "DFTRACER_UTILS_MEMORY_BACKEND must be page_heap or system, not '${DFTRACER_UTILS_MEMORY_BACKEND}'"
+  )
 endif()
 set(DFTRACER_UTILS_ROCKSDB_VERSION
     "11.1.2"
@@ -109,7 +123,7 @@ set(DFTRACER_UTILS_DEPS_PREFIX
     "$ENV{DFTRACER_UTILS_DEPS_PREFIX}"
     CACHE PATH "Directory that keeps dependency installs between builds")
 option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
-option(DFTRACER_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
+option(DFTRACER_UTILS_USE_ZLIB_NG "Use zlib-ng (compat) instead of madler/zlib; falls back to madler on failure" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_VECTORSCAN "Use Vectorscan for duql regexes and the raw prefilter" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
@@ -219,9 +233,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PythonHelpers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/Sanitizer.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules/PrecompiledHeader.cmake)
 
-# Enable the lock-free 16-byte CAS (DWCAS) fast path for ObjectPool when the
-# target supports it; otherwise the header transparently uses a packed fallback.
-check_dwcas()
+link_libatomic()
 
 configure_sanitizers()
 print_sanitizer_status()
@@ -245,19 +257,21 @@ endif()
 if(DFTRACER_UTILS_DEBUG)
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/configure_files/dftracer_utils_config.dbg.h.in"
-    "${CMAKE_BINARY_DIR}/include/dftracer/utils/core/common/config.h"
+    "${CMAKE_BINARY_DIR}/include/dftracer/utils/common/config.h"
     @ONLY)
 else()
   configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/configure_files/dftracer_utils_config.h.in"
-    "${CMAKE_BINARY_DIR}/include/dftracer/utils/core/common/config.h"
+    "${CMAKE_BINARY_DIR}/include/dftracer/utils/common/config.h"
     @ONLY)
 endif()
 
 dftracer_utils_interface_versions("${CMAKE_CURRENT_SOURCE_DIR}/VERSION"
                                   "${CMAKE_BINARY_DIR}/include")
 
-set_coverage_compiler_flags(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
+if(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
+  set_coverage_compiler_flags()
+endif()
 
 check_std_filesystem()
 
@@ -269,7 +283,8 @@ dftracer_utils_item("Compiler       "
 dftracer_utils_item("Target arch    " "${CMAKE_SYSTEM_PROCESSOR}")
 dftracer_utils_item(
   "Libraries      "
-  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC}")
+  "shared=${DFTRACER_UTILS_BUILD_SHARED} static=${DFTRACER_UTILS_BUILD_STATIC} single=${DFTRACER_UTILS_SINGLE_LIBRARY}"
+)
 dftracer_utils_item(
   "Binaries / PyExt"
   "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}")
@@ -284,12 +299,6 @@ dftracer_utils_item("Async I/O      "
                     "io_uring=${DFTRACER_UTILS_HAVE_IO_URING} kqueue=${DFTRACER_UTILS_HAVE_KQUEUE}"
 )
 dftracer_utils_item("Lustre API     " "${DFTRACER_UTILS_HAVE_LUSTREAPI}")
-if(DFTRACER_UTILS_HAS_DWCAS)
-  set(_dftracer_atomics_path "DWCAS (lock-free 16-byte CAS)")
-else()
-  set(_dftracer_atomics_path "packed (lock-free 64-bit CAS, portable)")
-endif()
-dftracer_utils_item("Atomics path   " "${_dftracer_atomics_path}")
 
 add_subdirectory(src)
 

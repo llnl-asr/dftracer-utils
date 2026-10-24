@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/byte_view.h>
 
 #include <fstream>
 #include <iterator>

@@ -1,12 +1,9 @@
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_partition.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_key.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -20,6 +17,8 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/python/sst_distribution.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -86,8 +85,8 @@ std::string artifact_field(std::size_t family) {
            "_sst";
 }
 
-/// Convert a Python artifacts dict to the C++ Artifacts struct. Missing,
-/// None, or empty-string entries become nullopt. Returns false on type
+/// Convert a Python artifacts dict to the C++ Artifacts struct. Missing
+/// or None entries and empty strings are dropped. Returns false on type
 /// errors (exception set).
 bool artifacts_from_dict(PyObject *dict,
                          IndexDatabaseSstWriterContext::Artifacts *out) {
@@ -99,15 +98,24 @@ bool artifacts_from_dict(PyObject *dict,
         const auto field = artifact_field(f);
         PyObject *val = PyDict_GetItemString(dict, field.c_str());  // borrowed
         if (!val || val == Py_None) continue;
-        if (!PyUnicode_Check(val)) {
-            PyErr_Format(PyExc_TypeError, "artifacts['%s'] must be str or None",
+        if (!PyList_Check(val)) {
+            PyErr_Format(PyExc_TypeError,
+                         "artifacts['%s'] must be a list of str or None",
                          field.c_str());
             return false;
         }
-        const char *s = as_utf8(val);
-        if (!s) return false;
-        if (s[0] == '\0') continue;
-        out->sst[f] = std::string(s);
+        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(val); ++i) {
+            PyObject *item = PyList_GET_ITEM(val, i);  // borrowed
+            if (!PyUnicode_Check(item)) {
+                PyErr_Format(PyExc_TypeError,
+                             "artifacts['%s'] must be a list of str",
+                             field.c_str());
+                return false;
+            }
+            const char *s = as_utf8(item);
+            if (!s) return false;
+            if (s[0] != '\0') out->sst[f].emplace_back(s);
+        }
     }
     return true;
 }
@@ -116,9 +124,15 @@ PyObject *artifacts_to_dict(const IndexDatabaseSstWriterContext::Artifacts &a) {
     PyObject *dict = PyDict_New();
     if (!dict) return NULL;
     for (std::size_t f = 0; f < a.sst.size(); ++f) {
-        const auto &slot = a.sst[f];
-        PyObject *v = slot.has_value() ? PyUnicode_FromString(slot->c_str())
-                                       : (Py_INCREF(Py_None), Py_None);
+        PyObject *v = PyList_New(static_cast<Py_ssize_t>(a.sst[f].size()));
+        for (std::size_t i = 0; v && i < a.sst[f].size(); ++i) {
+            PyObject *item = PyUnicode_FromString(a.sst[f][i].c_str());
+            if (!item) {
+                Py_CLEAR(v);
+                break;
+            }
+            PyList_SET_ITEM(v, static_cast<Py_ssize_t>(i), item);
+        }
         if (!v ||
             PyDict_SetItemString(dict, artifact_field(f).c_str(), v) != 0) {
             Py_XDECREF(v);
@@ -568,11 +582,11 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::index::schemas::dft::agg::intern_for_index(
                 index_dir);
         // The fold writes aggregation SSTs through the batch build's own SST
-        // sink (routed to aggregation.sst / system_metrics.sst), so they land
+        // sink (routed to blob.sst / system_metrics.sst), so they land
         // in `artifacts->list` with bloom/dict - no separate per-file sink.
         batch_config->agg_fold_factory =
             [agg_config_ptr, agg_intern](
-                dftracer::utils::StringIntern &build_intern, int file_id)
+                dftracer::utils::dstd::StringIntern &build_intern, int file_id)
             -> std::unique_ptr<
                 dftracer::utils::index::schemas::dft::agg::AggregationFold> {
             return std::make_unique<
@@ -761,24 +775,23 @@ static PyObject *enumerate_gzip_members_fn(PyObject * /*self*/, PyObject *args,
                          const std::vector<std::string> *paths,
                          std::vector<std::vector<GzipMember>> *out)
                           -> dftracer::utils::coro::CoroTask<void> {
-                          co_await scope.scope(
+                          auto scan_scope =
                               [paths, out](dftracer::utils::CoroScope &child)
-                                  -> dftracer::utils::coro::CoroTask<void> {
-                                  for (std::size_t i = 0; i < paths->size();
-                                       ++i) {
-                                      const std::string &path = (*paths)[i];
-                                      auto *slot = &(*out)[i];
-                                      child.spawn(
-                                          [path,
-                                           slot](dftracer::utils::CoroScope &)
-                                              -> dftracer::utils::coro::CoroTask<
-                                                  void> {
-                                              co_await scan_one_gzip_file(path,
-                                                                          slot);
-                                          });
-                                  }
-                                  co_return;
-                              });
+                              -> dftracer::utils::coro::CoroTask<void> {
+                              for (std::size_t i = 0; i < paths->size(); ++i) {
+                                  const std::string &path = (*paths)[i];
+                                  auto *slot = &(*out)[i];
+                                  child.spawn(
+                                      [path, slot](dftracer::utils::CoroScope &)
+                                          -> dftracer::utils::coro::CoroTask<
+                                              void> {
+                                          co_await scan_one_gzip_file(path,
+                                                                      slot);
+                                      });
+                              }
+                              co_return;
+                          };
+                          co_await scope.scope(scan_scope);
                           co_return;
                       },
                       &files, &results),
@@ -988,7 +1001,8 @@ static PyMethodDef SstDistributionMethods[] = {
     {"enable_aggregation_deterministic_ids",
      DFTU_PYCFUNCTION(enable_aggregation_deterministic_ids_fn), METH_NOARGS,
      "enable_aggregation_deterministic_ids() -> None\n"
-     "Flip the global aggregation StringIntern into deterministic-id mode "
+     "Flip the global aggregation dstd::StringIntern into deterministic-id "
+     "mode "
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},
     {"move_artifacts", DFTU_PYCFUNCTION(move_artifacts_fn),

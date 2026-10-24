@@ -73,7 +73,7 @@ jobs:
     uses: ./.github/workflows/wheel.yml
     secrets: inherit
     with:
-      os: macos-14
+      os: macos-15
       publish: true
 
   # The C and C++ install layout per platform, for the GitHub pre-release.
@@ -107,7 +107,7 @@ jobs:
     uses: ./.github/workflows/package.yml
     secrets: inherit
     with:
-      os: macos-14
+      os: macos-15
       name: macos-arm64
 
   build_sdist:
@@ -162,6 +162,7 @@ jobs:
         with:
           name: cibw-sdist
           path: dist/*.tar.gz
+          retention-days: 1
 
   deploy:
     name: Publish to PyPI

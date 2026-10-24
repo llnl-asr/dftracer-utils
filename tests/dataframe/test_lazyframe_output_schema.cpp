@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -13,10 +13,8 @@
 #include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <nanoarrow/nanoarrow.h>
 #endif
 
 using namespace dftracer::utils::dataframe;

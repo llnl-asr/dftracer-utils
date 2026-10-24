@@ -2,7 +2,7 @@
 // rebuild of only the tier, and readers that use it only when it is current.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -15,6 +15,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -81,7 +82,7 @@ void plant_sentinel(const std::string& trace) {
     const int fid = file_id(trace);
     IndexDatabase db(index_of(trace));
     auto w = db.begin_write();
-    index::store::records::put_path_granule(*w, IndexExtension::BLOOM, fid,
+    index::store::records::put_path_granule(*w, IndexExtension::Bloom, fid,
                                             SENTINEL, 0, "x");
     w->commit();
 }
@@ -89,7 +90,7 @@ void plant_sentinel(const std::string& trace) {
 bool has_sentinel(const std::string& trace) {
     const int fid = file_id(trace);
     IndexDatabase db(index_of(trace), index::store::IndexOpenMode::ReadOnly);
-    return !db.path_granules(fid, IndexExtension::BLOOM, SENTINEL).empty();
+    return !db.path_granules(fid, IndexExtension::Bloom, SENTINEL).empty();
 }
 
 std::optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
@@ -158,11 +159,11 @@ TEST_SUITE("AggExtension") {
             const int fid = file_id(gz);
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
-            w->put(layout::Family::REGISTRY,
+            w->put(layout::Family::Registry,
                    layout::manifest_key(static_cast<std::uint32_t>(fid),
-                                        layout::Ext::AGG),
+                                        layout::Ext::Agg),
                    layout::encode_manifest(
-                       {stale, built->params_hash, layout::ExtStatus::READY}));
+                       {stale, built->params_hash, layout::ExtStatus::Ready}));
             w->commit();
         }
         auto reopened = Indexer::open({gz}, with_aggregation(1000000));
@@ -194,11 +195,11 @@ TEST_SUITE("AggExtension") {
             IndexDatabase db(index_of(a));
             auto w = db.begin_write();
             w->put(
-                layout::Family::REGISTRY,
+                layout::Family::Registry,
                 layout::manifest_key(static_cast<std::uint32_t>(fid),
-                                     layout::Ext::AGG),
+                                     layout::Ext::Agg),
                 layout::encode_manifest({built->version + 1, built->params_hash,
-                                         layout::ExtStatus::READY}));
+                                         layout::ExtStatus::Ready}));
             w->commit();
         }
         auto reopened = Indexer::open({a, b}, with_aggregation(1000000));
@@ -206,34 +207,7 @@ TEST_SUITE("AggExtension") {
         CHECK(count_reads({a, b}) == 100);
     }
 
-    TEST_CASE("a corrupt aggregation tier names the index directory") {
-        namespace layout = dftracer::utils::index::store::layout;
-        TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir(), "bad", 50, 1000);
-        Indexer::open({gz}, with_aggregation(1'000'000)).build();
-        {
-            IndexDatabase db(index_of(gz));
-            auto w = db.begin_write();
-            // An operand the aggregation merge operator cannot read.
-            w->merge(layout::Family::AGGREGATION, "\xFF\xFE", "garbage");
-            w->commit();
-        }
-        IndexDatabase db(index_of(gz), index::store::IndexOpenMode::ReadOnly);
-        bool threw = false;
-        try {
-            (void)index::schemas::dft::agg::tier::read_config(*db.db());
-        } catch (const std::exception& e) {
-            threw = true;
-            const std::string message = e.what();
-            CHECK(message.find(index_of(gz)) != std::string::npos);
-            CHECK(message.find("corrupt") != std::string::npos);
-            CHECK(message.find("delete that directory and build the index "
-                               "again") != std::string::npos);
-        }
-        CHECK(threw);
-    }
-
-    TEST_CASE("a corrupt aggregation tier is cleared and built again") {
+    TEST_CASE("an unreadable aggregation config is built again") {
         namespace layout = dftracer::utils::index::store::layout;
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "fix", 50, 1000);
@@ -242,8 +216,17 @@ TEST_SUITE("AggExtension") {
         {
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
-            w->merge(layout::Family::AGGREGATION, "\xFF\xFE", "garbage");
+            // A record with no value header is in no format the reader knows.
+            auto key = layout::file_prefix(
+                layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
+            key.append("config");
+            w->put(layout::Family::Blob, key, "garbage");
             w->commit();
+        }
+        {
+            IndexDatabase db(index_of(gz),
+                             index::store::IndexOpenMode::ReadOnly);
+            CHECK_FALSE(index::schemas::dft::agg::tier::read_config(*db.db()));
         }
         auto ix = Indexer::open({gz}, with_aggregation(1'000'000));
         ix.build();

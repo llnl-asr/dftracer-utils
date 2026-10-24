@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 #define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/coro/async_mutex.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/server/viz_result_cache.h>
 #include <dftracer/utils/server/viz_summary.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -98,10 +98,10 @@ class TraceIndex {
     TimeMetric time_metric() const { return time_metric_; }
     std::uint64_t native_to_us(std::uint64_t v) const {
         return dftracer::utils::trace::scale_between(time_metric_,
-                                                     TimeMetric::US, v);
+                                                     TimeMetric::Us, v);
     }
     std::uint64_t us_to_native(std::uint64_t v) const {
-        return dftracer::utils::trace::scale_between(TimeMetric::US,
+        return dftracer::utils::trace::scale_between(TimeMetric::Us,
                                                      time_metric_, v);
     }
 
@@ -147,7 +147,7 @@ class TraceIndex {
     std::unordered_map<std::string, std::size_t> path_to_index_;
     std::uint64_t global_min_ts_ = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t global_max_ts_ = 0;
-    TimeMetric time_metric_ = TimeMetric::US;
+    TimeMetric time_metric_ = TimeMetric::Us;
     const dftracer::utils::index::RecordSchema* record_schema_ = nullptr;
     std::size_t max_concurrent_;
     std::size_t checkpoint_size_;

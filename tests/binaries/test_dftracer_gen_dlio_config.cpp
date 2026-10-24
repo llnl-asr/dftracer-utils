@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -102,8 +102,8 @@ std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
 }
 
 std::string find_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_GEN_DLIO_CONFIG_PATH",
-                                                "dftracer_gen_dlio_config");
+    return dftu_utils_test::find_binary_by_name(
+        "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH", "dftracer_gen_dlio_config");
 }
 
 int run_binary(const std::string& binary,
@@ -126,7 +126,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_gen_dlio_config not found. Set "
-                "DFTRACER_GEN_DLIO_CONFIG_PATH to locate it.");
+                "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH to locate it.");
             return;
         }
         CHECK(!binary.empty());

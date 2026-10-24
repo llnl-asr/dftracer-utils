@@ -86,7 +86,7 @@ are built; data without a current manifest entry is never read.
 
    // Read-only queries
    int fid = db.get_file_info_id("trace.pfw.gz");
-   bool has_bloom = db.extension_current(fid, IndexExtension::BLOOM);
+   bool has_bloom = db.extension_current(fid, IndexExtension::Bloom);
 
 TraceReader
 -----------

@@ -9,6 +9,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Walk each record's keys once and its args once in the index fold's parse, where it walked the record twice and the args up to twice.
+  A one-thread build of the 8,404 minife traces spends 138 s in the parse where it spent 166 s and takes 157 s where it took 185 s, with the stored index unchanged.
+- Stop a worker that waits in `get()` for a task from spinning on the CPU.
+  It now sleeps until that task finishes or new work comes, so a 200 ms wait costs under 2 ms of CPU where it cost 205 ms.
+- Cut the CPU an index build spends per event by about 25% on minife traces at one thread: schema leaf paths are interned once per record shape and key, chunk statistics and dimension counts find their entries by interned id, a bloom insert hashes its value once and a value already in a chunk's bloom is not probed again. The stored index is unchanged.
+- Bound the parse memory of each worker in an index build and a cold first query: a chunk is parsed in pieces of at most 1 MiB and 8192 lines, `parse_many` reads batches of 128 KiB on the calling thread, a record longer than a batch is parsed alone, and event buffers cut back what a huge batch or event grew when they are returned.
+  The peak of a build no longer grows by about 100 MB for each extra worker.
+- Admit the files of an index build and a cold first query by the bytes each holds under the memory budget instead of one per worker, let workers with no file parse pieces of files in flight, and give the strings of a file the same ids whatever the parse order.
+  A build under any memory budget, a 1 MiB one included, stores the same index as an unbounded build: spill runs are never smaller than 4 MiB, so a tiny budget no longer writes thousands of SSTs that a scan could not open at once, and a cold first export commits its sink at its limit instead of after every file.
+- Cut the serial stages of `dftracer_index`: the directory walk stats the entries of a folder in batches of 16 over the executor, and the final ingest links the staged SSTs into the database without the reopen and fsync RocksDB adds to each file (the SST writer already synced them) and removes the staged names in parallel.
+  On the 8,404 minife traces at 48 threads the walk takes 0.53 s where it took 1.3 s, the ingest of 1,124 SSTs 3.0 s where it took 5.2 s, and the run 9.2 s where it took 12.1 s. The stored index is unchanged.
+- Rebuild the indexes and caches made before this change on first use.
+  Every interface and format version of the library is now 0, and a stored index, view cache, viz summary or frame in another version is not read.
+  A missing or unreadable manifest or format record also means a rebuild.
+
+- Make the tools stat each input file once and open it once per pass over its bytes.
+  The directory walk reads the size and mtime of a file in one stat, and the later steps reuse them where they used to stat it again.
+  `dftracer_index` opens each file once and reads its hash, schema and gzip index from that open file, and `dftracer_view` and `dftracer_split` keep the descriptor of the first look at a file for the pass that follows.
+  On a parallel file system this cuts the metadata calls per input (a Corona run of 500 files made 12 stat calls and 4 opens per file in `dftracer_index`, and 57 stat calls per file in `dftracer_stats`).
+  `dftracer_stats` reads the files once to build the category and the pid and tid counts, where it read them twice.
+- Keep one file in flight per worker in the first run of `dftracer_view` and any View over unindexed traces, with each worker writing its files into its own SST sink and one ingest per index root, where the run took files in waves of 16 and wrote each file's index under one lock.
+  Each worker merges the aggregate states of its files as they finish, a sink commits once it holds 32 MiB of memory (it counted only keys and values before), and the export first run takes the same path with one open of each index root.
+  A worker that fails stops the others.
+  A read-only open of an index caps the files RocksDB keeps open at half the descriptor limit, so an index of thousands of SSTs opens under a limit of 1,024.
+- Index the trace files in subfolders of `-d` before `dftracer_event_count` counts, as the other tools do, where it indexed only the top folder up front and built the rest as it counted.
+- Check whether `dftracer_split` input files lie in the output folder by their walked path, and the output folder by its canonical path, instead of resolving every input file.
+  A symlink that points into the output folder through a different spelling is no longer skipped.
+- Replay the input files of `dftracer_replay` in parallel, as many at once as `--executor-threads`.
+  Each file keeps its own open files and its own timeline, so files of different processes or times no longer wait on the first file's clock.
+  `--max-events` still caps the whole run.
+- Split traces without building an index.
+  `dftracer_split` reads each file once and writes chunk files of about `--chunk-size` as it goes, where it built an index of every file first and planned its chunks from it.
+  Chunk files are named `<app>-<group>_chunk<k>.pfw.gz`, and they no longer start with a `[` line or end with a `]` line.
+  A chunk file ends at the gzip member end nearest to `--chunk-size`, so its size is within about half a member of the request.
+- Bound the memory of the `dftracer_split` chunk writers by `--memory-budget`.
+  A group of files starts only while the budget holds its writer, and one group always runs.
+  Each writer used to assume a third of the memory, and the tracked heap reached 705 GiB on a 68 GB set.
+- Compress each gzip member into a buffer that is reused, and hand a full member to its compress job without a copy.
+- Write the bloom tier of a small file through the shared index write, so many small files share SST files.
+  Only a file that spills while it is parsed writes runs of its own.
+  On 1.09 GB of 77 KB traces (8,404 files) on Lustre, `dftracer_index` takes 189 s instead of 544 s with 96 threads and 84 s instead of 413 s with 16.
+- Check the indexes of many files of one index root at once, so only a file that must build its index waits for the root.
+  On the same set, `dftracer_event_count` takes 37 s instead of 101 s and `dftracer_info` takes 31 s instead of 91 s.
+- Compress the upper RocksDB levels with zstd level 1 and no dictionary, and keep level 9 with a dictionary for the bottom level only.
+- Let only one idle executor worker poll on the short timer, so a quiet pool does not wake all of its workers.
+- Read the trace files in all subfolders of `-d` in `dftracer_index`, `dftracer_event_count`, `dftracer_info`, `dftracer_stats`, `dftracer_split`, `dftracer_comparator` and `dftracer_run`, as `dftracer_view` and `dftracer_validate` already did.
+  Folders that hold index data or split output are skipped.
+- Read a gzip member larger than the checkpoint size through the restart points its index holds, in bounded memory, and write no copy of it.
+  The line-range reader starts at a restart piece, and a read that starts at one drops the line it opens, which belongs to the piece before.
+  The tools read a plain trace only after it is gzipped (`dftracer_pgzip`).
+  `dftracer_index`, `dftracer_view` and `dftracer_run` no longer write a gzip copy under `split/`.
+- Build the index of a set of files with every worker busy: a worker takes a block of consecutive file ids, writes each file into its block's SSTs as it finishes and frees its state, so memory grows with the workers and not with the files, and the SSTs of the blocks do not overlap, so the ingest leaves no files in level 0.
+  `dftracer_index` on the 8,404-file minife set takes 14 s instead of 60 s at 48 threads.
+- Shrink the fixed cost of a string table from about 1.5 MB to about 120 KB, because its directories are now made as strings arrive.
+  An index build makes one table per file, so a set of thousands of small files held several GB in empty tables.
+- Rename the environment variables, CMake options and macros that began with `DFTRACER_` to begin with `DFTRACER_UTILS_`, so they do not clash with DFTracer.
+  Set `DFTRACER_UTILS_CACHE_MAX_BYTES`, `DFTRACER_UTILS_DUQL_PATH`, `DFTRACER_UTILS_SCHEMA_PATH`, `DFTRACER_UTILS_INDEX_STAGE`, `DFTRACER_UTILS_INDEX_SCRATCH`, `DFTRACER_UTILS_INDEX_SIZE_FACTOR`, `DFTRACER_UTILS_JIT_CACHE`, `DFTRACER_UTILS_PLUGIN_INCLUDE` and `-DDFTRACER_UTILS_USE_ZLIB_NG`, and use `DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL` in plugins.
+- Make each stateful lazy op (sort, top-k, group by, joins, `asof`, `interval`, window, `head_by`, `unique`, `is_duplicated`, pivot and compare agg) hold its state in a pool of its query and spill when the memory manager asks for bytes back.
+  A second query that needs memory over the budget now makes the first one spill instead of going past the budget.
+- Make `unique` and `is_duplicated` use up to half the peak memory, because their keys now sit in a chunked arena that never moves and their hash table grows four times at a time once it is large.
+  On a 1 GiB budget, `unique` peaks at 163 MiB instead of 336 MiB on macOS and at 133 MiB instead of 163 MiB on Linux.
+- Give memory back to the system at once when a run of 8 MiB or more is freed in the page heap, and purge cached pages before the heap maps past the budget.
+- Give each `dftracer_genesis_gen_dist` group a memory pool with the limit of its share, so the memory of each group shows in `memory::pool_stats()`.
+- Let an index build free its idle fold buffers when the memory manager asks for bytes back.
 - Push `unique()` and `drop_duplicates()` into the trace scan, so a distinct row query dedups each worker's rows before they become frame rows.
   The result keeps the first occurrence in unit order, a key column the scan cannot key exactly falls back to the host cursor, and the host `unique` cursor now keys rows by a 64-bit hash with no per-row string allocation.
   On the 17 GB genesis sweep, `filter(gtype == "counter").select("run", "metric").unique()` takes 33.5 s instead of 592 s, uses 74 cores instead of 10 and peaks at 11.0 GB instead of 13.8 GB.
@@ -47,9 +111,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   This read path serves `dftracer_genesis_gen_dist` and every unindexed trace read.
   One 932 MB member reads in 0.92 s instead of 1.29 s with a third less peak memory and page faults, and a file of 16 MB members peaks at 113 MB instead of 147 MB ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Keep on PyPI only the newest `<tag>.postN.devX` prerelease of the previous release when a release is published, and delete the older ones, so the project stays under its PyPI storage limit.
+- Move the shared helper headers from `dftracer/utils/core/common/` to `dftracer/utils/common/`, and `dftracer/utils/core/env.h` to `dftracer/utils/common/env.h`.
+  Change your includes to the new paths.
+  The namespaces did not change.
+- Move `dftracer/utils/core/utilities/compose.h` to `dftracer/utils/core/compose.h`, and `dftracer/utils/core/utilities/monitor.h` to `dftracer/utils/core/coro/monitor.h`.
+  Change your includes to the new paths.
+- Add the library `dftracer_utils_common` for the shared helpers, with its own pkg-config and `find_package` names.
+  The `core` library links it, and the `json` and `duql` libraries link it instead of `core`.
+  Add `dftracer_utils_common` to your link line if you use only the helpers.
+- Take the SONAME and the macOS compatibility version of each shared library from the `abi` line of `VERSION`, and its version from the `api` line.
+  The file names change, for example `libdftracer_utils_core.so.0.0.1`, so link again and update any script that names a file.
+  Linux shared libraries now link with `-z defs`, so a shared library with an undefined symbol fails at link time.
+- Rename the library `dftracer_utils_core` to `dftracer_utils_runtime`, with its pkg-config and `find_package` names, and move its headers from `dftracer/utils/core/` to `dftracer/utils/runtime/`.
+  The include-all header `dftracer/utils/core/core.h` is removed, so include the headers you use.
+- Make `when_any` cancel its losers and wait for them to stop before it returns, so no loser runs after `when_any` returns.
+  A loser stops at its next wait when it has a cancel token or a `cancel()`, and a loser with neither runs to its end.
+  A `CoroTask` loser stops at its next wait with no exception, and one that never started does not run.
+  `timeout()` gets a `cancel()`, so `when_any(op, timeout(5s))` returns when `op` does and no longer waits 5 s.
+- Allocate coroutine frames (`CoroTask`, `Coro`, `AsyncGenerator` and the `when_all` wrapper) from the page heap and count them in the memory pool of their task.
+  With `DFTRACER_UTILS_MEMORY_DEBUG=1` a destroyed frame is poisoned and kept out of reuse until its pool closes, so a late resume crashes on the poison.
+  A scratch pool that closes while a frame made under it is still alive now reports a leak.
+- Speed up small allocations in the page heap by 3 to 6% on macOS.
+- Make a `CoroScope` that spawned children and is destroyed without `join()` abort the process in every build, where it used to log a warning and let its children run on.
+  A scope now comes only from `run_coro_scope`, `with_scope`, `Runtime::scope()` or a spawn; an owner that joins the scope itself uses `CoroScope::long_lived()`.
+- Make a `GzipLineWriter` or `PaddedStripedWriter` destroyed without `close()` on an executor thread hand its cleanup to a task instead of blocking that thread.
+  Off an executor thread it still waits for the cleanup, and with no runtime left it leaks its state with a warning.
+- Make executor shutdown wake every waiting coroutine with a cancelled error and wait until it ends before it frees the frame.
+  This covers a semaphore, `AsyncMutex`, `Channel`, `AsyncOnce`, `SpawnFuture`, a timeout, `when_all`, `when_any`, a memory reservation and a read that waits for a peer.
+  A memory reservation that shutdown cancels now reports `memory::Status::Cancelled` instead of `OverBudget`.
+- Speed up repeated `duql` queries that use a lookup side.
+  A query reads the lookup store read-only and opens it for writing only to store a side it did not find, so repeated queries reuse one open handle and no process holds the store's write lock between queries.
+- Speed up trace scans by not zero-filling the read and decode buffers of each scan unit.
+- Move `StringIntern` to `dftracer/utils/dstd/string_intern.h` in the `dftracer::utils::dstd` namespace.
+  Include the new header and name `dstd::StringIntern`, because `common/string_intern.h` is gone.
+- Make `StringIntern::insert_at_id` return `Ok`, `Conflict` or `OutOfRange` instead of throwing.
+- Speed up `when_all` and `when_any` over a list of tasks, because tasks that end at once now share one wrapper coroutine.
+  A `when_all` of 8 tasks that are already done now makes 9 frame allocations instead of 16.
 
 ### Added
 
+- Add `DFTRACER_UTILS_IO_BACKEND` to force the I/O backend, such as the thread pool for a run traced with DFTracer's preload.
+- Add `DFTRACER_UTILS_MEMORY_REPORT` to print the allocator's live, measured and limit bytes, the page heap's peak mapped bytes and its peak bytes in use at exit.
+  The mapped peak counts address space, which reached 705 GiB on a split run that used 100 GB, so read `used_peak` for memory use.
+- Add the library `dftracer_utils_memory`, the allocator that the other libraries will use, with its own pkg-config and `find_package` names.
+  The `common` and `core` libraries link it.
+  The CMake option `DFTRACER_UTILS_MEMORY_BACKEND` and the environment variable of the same name pick its backend, `page_heap` or `system`; the variable wins, and a value that is not one of the two stops the process at the first allocation.
+  The sanitizer presets use `system`.
+- Add the memory manager of `dftracer_utils_memory`, with pools that count the bytes of a query, reclaimers that give bytes back and a measure of the process memory.
+  The variables `DFTRACER_UTILS_MEM_BUDGET`, `DFTRACER_UTILS_MEM_HARD_LIMIT`, `DFTRACER_UTILS_MEM_LIMIT_HEADROOM` and `DFTRACER_UTILS_MEM_SPILL_HEADROOM` set its limits and take bytes or a unit such as `4GB`.
+- Add the debug mode `DFTRACER_UTILS_MEMORY_DEBUG=1`, which finds a write past the end of a block, a use after free and a double free in the heap, and `DFTRACER_UTILS_MEMORY_EXIT_CHECK=1`, which fails a test run that leaks.
+  The page heap also reports to AddressSanitizer and Valgrind, so both tools see its blocks.
+- Add the allocator classes `memory::Allocator`, `memory::PoolAllocator` and `memory::Arena` to `dftracer_utils_memory`.
+  `memory::Allocator` charges the pool of the current `memory::Scope` and `memory::PoolAllocator` charges one pool that you name.
+  `memory::Arena` hands out blocks from chunks in a pool of its own and frees them all at once on `reset()`.
+  `memory::allocate` also takes a pool to charge, and `memory::reallocate` resizes a block in place when it fits.
+- Add `memory::Block`, a reference-counted block with a 64-byte aligned payload, and `memory::BufferView`, a view of part of one.
+  Dataframe columns now hold these views: their memory is charged to the pool of the current `memory::Scope`, and a slice, `head` or `tail` allocates nothing and runs 15% to 60% faster.
+  Memory that Arrow or a C ABI caller hands in is not charged.
+- `interval` joins run about 40% faster and use less memory when many intervals are open, because they no longer copy each right row on its own.
+- Add the `dstd` containers on that allocator, such as `dstd::Vector`, `dstd::String`, `dstd::HashMap`, `dstd::Map`, `dstd::Deque`, `dstd::UniquePtr` and `dstd::SharedPtr`, and the types `dstd::Function`, `dstd::Any` and `dstd::RawBuffer`.
+  A `dstd::HashMap` keyed by `dstd::String` finds a key from a `std::string_view` without a copy.
+- Add the library `dftracer_utils_dstd`, between `memory` and `common`, with its own pkg-config and `find_package` names.
+  It holds the hashing, eviction policy, `expected`, base64 and generic headers that the other libraries share, and it links only `memory`.
+  Include paths change: the generic headers moved from `dftracer/utils/common/` and `dftracer/utils/core/` to `dftracer/utils/dstd/`, and `timer_service.h` moved to `dftracer/utils/core/`.
+- Add `dstd::PoolVector`, `dstd::PoolHashMap` and `dstd::PoolHashSet`, which charge one pool that you name through `memory::PoolAllocator`.
+- Charge a coroutine's memory to the pool that was current when it was made, on every thread it resumes on.
+  `memory::PoolTag` and `memory::enter_pool` carry the pool, and a task made with no pool charges the root's general pool.
+- Make `memory::Pool::reserve` ask the holders of the pool to give bytes back when a request does not fit, and return `Status::Pending` while they do.
+  `memory::Pool::try_reserve` asks nobody and fails at once, for a holder that spills by itself.
+- Add `reserve_async(pool, bytes, deadline)` in `dftracer/utils/runtime/coro/reserve_async.h`, which a coroutine awaits until its bytes fit or the deadline passes.
+  Waiters get their bytes first in, first out, and a request larger than the pool limit or the budget fails at once with `Status::OverBudget`.
+- Add `memory::Pool::raise_limit` to raise the limit of an open pool.
+- Add `memory::ExternalSlot::add` with the kinds `Counted`, which counts toward the budget, and `Reported`, which only shows in `memory::Stats::external`.
+- Show spilled bytes in `memory::Stats::external` under the slot `spill`.
+  When the spill directory is on tmpfs, the spilled bytes also count toward the budget, and the process warns once with the directory and `DFTRACER_UTILS_SPILL_DIR`.
+- Add the CMake option `DFTRACER_UTILS_SINGLE_LIBRARY`, off by default, to build one library `dftracer_utils` instead of one library for each area.
+  The `dftracer_utils::shared` and `dftracer_utils::static` targets, the CLI tools and the Python extension link only that library.
+  A build with the option on installs only `dftracer_utils`, with its own pkg-config and `find_package` names, and no per-area packages.
 - Take the pandas names `col(...).isin`, `startswith`, `endswith`, `between`, `isnull`, `notnull`, `cumsum`, `cummax`, `cummin`, `cumprod`, `ffill`, `bfill` and `astype` in column expressions.
   `col(...).str` takes every pandas string method that the engine has, such as `startswith`, `lower`, `strip`, `len` and `split` ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Round to any number of places with `Series.round(decimals)` and `DataFrame.round(decimals)`, with halves to even as numpy and pandas do.
@@ -79,8 +217,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Past 60 rows it prints the first 5 and the last 5 rows with a `...` row and a `[N rows x M columns]` footer, and it reads only the rows that it shows ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Show a `DataFrame` as an HTML table in Jupyter, with the same rows and cells as its printed form ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 
+### Removed
+
+- Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
+  Drop them from scripts that call it.
+- Remove `ReplayEngine::add_executor` and `ReplayEngine::process_trace_line`.
+  Each replayed file now gets its own POSIX or DFTracer executor.
+- Remove the `--index-dir` and `--force` options of `dftracer_split`, since it builds no index.
+  Drop them from scripts that call it.
+  `--checkpoint-size` stays and sets the gzip member size.
+- Remove `ChunkManifestMapperUtility`, `DFTracerChunkManifest` and `DFTracerChunkSpec`.
+  `ChunkExtractorUtility` takes a list of gzip files and returns the chunk files it wrote.
+- Remove `tracked_bytes.h`, its gauges and the CMake option `DFTRACER_UTILS_TRACKED_BYTES`.
+  Read the bytes of each pool with `memory::pool_stats()` instead.
+- Remove `MemoryPool` (`memory_pool.h`).
+  Use a `memory::Pool` child with a limit and a `memory::Reservation` instead.
+
 ### Fixed
 
+- Fix `dftracer_index` exiting with status 0 when a file failed to index, and `dftracer_split` reporting 0 chunk files for a plain input.
+  Both now print that the file is not gzip and exit with status 1.
+- Fix a stack overflow crash of `dftracer_stats` and `dftracer_comparator` on thousands of files that share one index root.
+- Fix the executor watchdog taking a busy executor for a deadlocked one when a long task runs with `--executor-threads 1`, which aborted `dftracer_split`.
+- Fix the CLI tools dumping core on an error that leaves the tool, such as a watchdog timeout.
+  They now print the error and exit with status 1.
+- Fix `memory::Stats::measured` and `unattributed` counting other processes when the process runs in a cgroup, such as a batch job or a container.
+  `measured` is now this process only, and the new `limit_used` holds the memory counted against `limit`, which the near-limit signal reads.
+- Fix memory that was freed early in `dftracer_validate`, other tools and the index build when built with GCC 12.
+  A lambda with a by-value capture inside a `co_await` was destroyed twice, and the `coro_lambdas` check now rejects it.
+- Fix a data race in `when_all` over a list of tasks that return `bool`.
+  Each result now has its own storage, so two tasks that end at the same time no longer write one byte.
+- Fix index databases that were written with zlib, and aggregation rows that were written with no compression, in builds with zstd enabled.
+- Fix a crash or a "RunLoop stalled" error when several threads each ran a plan or a scan with `get()` and shared an `AsyncMutex`.
+  An unlock now resumes a waiter on its own executor, and a thread that drives a `RunLoop` waits for a waiter that another thread wakes.
+- Fix a read of string offsets from an unaligned address when a spilled or cached frame was read back.
+  A string or binary column read its offsets in place from the saved bytes, and the length of a column name could put them at any byte.
+- Fix a crash with SIGILL when a build with GCC 12 read a gzip trace from the middle of the file.
+  The compiler laid out the frame of the restart step in two ways, so a reused frame could stop the program.
 - Fix the first query or build on a new index failing with `lock hold by current process` when a read-write open of the index ran while an older read-write handle of it was still closing.
   It happened on an index that a rebuild had reset while a reader still held it, such as the first `TraceViewer` read of 29 files with relative paths ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Match `_` and `%` literally in a `TraceViewer.filter` of `col(...).str.starts_with`, `ends_with` and `contains`.
@@ -149,6 +322,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   It also reads `raw/<set>/*.pfw.gz` for a set whose `compacted/<set>.pfw.gz` is missing instead of skipping the set ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Build the static zlib-ng archive as position-independent code, so a shared library links it when zlib-ng made no shared target (`BUILD_SHARED_LIBS` off) ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Grow an elastic runtime for a burst of tasks sent before its parked worker starts to run. The burst stayed on one worker for up to one `elastic_keepalive` (250 ms by default) before the pool grew.
+- Fix a select-all frame that listed `args.*` columns of other traces.
+  A plan declared the columns of every file in its index root, which holds all traces of one directory.
+  It now declares only the columns of its own files.
+- Fix a memory leak when a scan stops while RocksDB still prefetches index blocks.
+  An aborted read did not get its callback, so RocksDB never freed the state of that read.
 
 ## [0.0.14] - 2026-10-10
 

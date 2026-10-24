@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/duql/pattern_engine.h>
 #include <dftracer/utils/duql/substr_simd.h>
 #include <hwy/highway.h>
@@ -406,9 +407,9 @@ MatchResult run_regex(const RegexCode& code, std::string_view s,
     const int rc =
         pcre2_match(code.code, reinterpret_cast<PCRE2_SPTR>(s.data()), s.size(),
                     offset, 0, md, tm.context);
-    if (rc >= 0) return MatchResult::YES;
-    if (rc == PCRE2_ERROR_NOMATCH) return MatchResult::NO;
-    return MatchResult::LIMIT;
+    if (rc >= 0) return MatchResult::Yes;
+    if (rc == PCRE2_ERROR_NOMATCH) return MatchResult::No;
+    return MatchResult::Limit;
 }
 
 bool has_required(const CompiledPattern& p, std::string_view s) {
@@ -435,7 +436,7 @@ int hit(unsigned, unsigned long long, unsigned long long, unsigned, void* ctx) {
 // letters. Property patterns with case folding never use Vectorscan; other
 // property patterns, \X, and case-folded patterns with non-ASCII literals keep
 // non-ASCII values on PCRE2.
-enum class HsUse { ALL, ASCII_ONLY, NEVER };
+enum class HsUse { All, AsciiOnly, Never };
 
 // Whether `pattern` has an unbounded dot gap (`.*`, `.+`, `.{n,}`), the shape
 // on which Vectorscan beats the PCRE2 JIT on long values; on alternations and
@@ -485,9 +486,9 @@ HsUse hs_use(std::string_view pattern, bool icase) {
         }
     }
     const bool folds = icase || inline_flags;
-    if (props && folds) return HsUse::NEVER;
-    if (props || (wide_literal && folds)) return HsUse::ASCII_ONLY;
-    return HsUse::ALL;
+    if (props && folds) return HsUse::Never;
+    if (props || (wide_literal && folds)) return HsUse::AsciiOnly;
+    return HsUse::All;
 }
 
 hs_database_t* compile_hs(std::string_view pattern, bool icase, bool whole) {
@@ -523,7 +524,7 @@ bool hs_match(const RegexCode& code, std::string_view s, MatchResult& out) {
     bool found = false;
     const hs_error_t rc = hs_scan_grow(code.hs, s, hit, &found);
     if (rc != HS_SUCCESS && rc != HS_SCAN_TERMINATED) return false;
-    out = found ? MatchResult::YES : MatchResult::NO;
+    out = found ? MatchResult::Yes : MatchResult::No;
     return true;
 }
 
@@ -539,7 +540,7 @@ bool hs_allowed(const RegexCode& code, std::string_view s) {
                                                 std::string_view s) {
     MatchResult r;
     if (rc.hs && hs_allowed(rc, s) && hs_match(rc, s, r)) return r;
-    return MatchResult::LIMIT;
+    return MatchResult::Limit;
 }
 #endif
 
@@ -563,14 +564,14 @@ PatternResult compile_like(std::string_view pattern, bool icase,
                  pattern[i + 1] != esc))
                 return dftracer::utils::unexpected(PatternError{
                     "the escape character must precede '%', '_' or itself", i});
-            toks.push_back({GlobKind::LITERAL, pattern[++i]});
+            toks.push_back({GlobKind::Literal, pattern[++i]});
         } else if (c == '%') {
-            if (toks.empty() || toks.back().kind != GlobKind::ANY_RUN)
-                toks.push_back({GlobKind::ANY_RUN});
+            if (toks.empty() || toks.back().kind != GlobKind::AnyRun)
+                toks.push_back({GlobKind::AnyRun});
         } else if (c == '_') {
-            toks.push_back({GlobKind::ANY_ONE});
+            toks.push_back({GlobKind::AnyOne});
         } else {
-            toks.push_back({GlobKind::LITERAL, c});
+            toks.push_back({GlobKind::Literal, c});
         }
     }
     CompiledPattern p;
@@ -578,10 +579,10 @@ PatternResult compile_like(std::string_view pattern, bool icase,
     std::vector<std::string> runs(1);
     bool any_one = false;
     for (const GlobToken& t : toks) {
-        if (t.kind == GlobKind::LITERAL) {
+        if (t.kind == GlobKind::Literal) {
             runs.back() += icase ? fold(t.ch) : t.ch;
         } else {
-            any_one |= t.kind == GlobKind::ANY_ONE;
+            any_one |= t.kind == GlobKind::AnyOne;
             if (!runs.back().empty()) runs.emplace_back();
         }
     }
@@ -591,32 +592,31 @@ PatternResult compile_like(std::string_view pattern, bool icase,
             if (p.required.empty() || r.size() > p.required[0].size())
                 p.required = {r};
     const bool starts_run =
-        !toks.empty() && toks.front().kind == GlobKind::ANY_RUN;
-    const bool ends_run =
-        !toks.empty() && toks.back().kind == GlobKind::ANY_RUN;
+        !toks.empty() && toks.front().kind == GlobKind::AnyRun;
+    const bool ends_run = !toks.empty() && toks.back().kind == GlobKind::AnyRun;
     if (icase)
         for (auto& t : toks)
-            if (t.kind == GlobKind::LITERAL) t.ch = fold(t.ch);
+            if (t.kind == GlobKind::Literal) t.ch = fold(t.ch);
     if (any_one) {
-        p.kind = Kind::GLOB;
+        p.kind = Kind::Glob;
         p.glob = std::move(toks);
         p.segments = std::move(runs);
     } else if (runs.empty()) {
-        p.kind = starts_run ? Kind::CONTAINS : Kind::EXACT;
+        p.kind = starts_run ? Kind::Contains : Kind::Exact;
     } else if (runs.size() == 1 && !starts_run && !ends_run) {
-        p.kind = Kind::EXACT;
+        p.kind = Kind::Exact;
         p.literal = std::move(runs[0]);
     } else if (runs.size() == 1 && !starts_run) {
-        p.kind = Kind::PREFIX;
+        p.kind = Kind::Prefix;
         p.literal = std::move(runs[0]);
     } else if (runs.size() == 1 && !ends_run) {
-        p.kind = Kind::SUFFIX;
+        p.kind = Kind::Suffix;
         p.literal = std::move(runs[0]);
     } else if (runs.size() == 1) {
-        p.kind = Kind::CONTAINS;
+        p.kind = Kind::Contains;
         p.literal = std::move(runs[0]);
     } else {
-        p.kind = Kind::SEGMENTS;
+        p.kind = Kind::Segments;
         p.glob = std::move(toks);
         p.segments = std::move(runs);
         p.anchored_start = !starts_run;
@@ -627,7 +627,7 @@ PatternResult compile_like(std::string_view pattern, bool icase,
 
 PatternResult compile_contains(std::string_view text, bool icase) {
     CompiledPattern p;
-    p.kind = Kind::CONTAINS;
+    p.kind = Kind::Contains;
     p.icase = icase;
     p.literal = icase ? folded(text) : std::string(text);
     if (!icase && !text.empty()) p.required = {std::string(text)};
@@ -665,12 +665,12 @@ PatternResult compile_regex(std::string_view pattern, bool icase, bool whole) {
 #endif
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     const HsUse use = hs_use(pattern, icase);
-    if (use != HsUse::NEVER) code->hs = compile_hs(pattern, icase, whole);
-    code->ascii_only = use == HsUse::ASCII_ONLY;
+    if (use != HsUse::Never) code->hs = compile_hs(pattern, icase, whole);
+    code->ascii_only = use == HsUse::AsciiOnly;
     code->gap = has_dot_gap(pattern);
 #endif
     CompiledPattern p;
-    p.kind = Kind::REGEX;
+    p.kind = Kind::Regex;
     p.icase = icase;
     p.regex = std::move(code);
     if (!icase) p.required = scan.literals();
@@ -749,13 +749,13 @@ bool detail::valid_utf8(std::string_view s) {
 
 MatchResult detail::match_regex_pcre2(const CompiledPattern& p,
                                       std::string_view s) {
-    if (!has_required(p, s)) return MatchResult::NO;
+    if (!has_required(p, s)) return MatchResult::No;
     pcre2_match_data* md = nullptr;
     return run_regex(*p.regex, s, 0, md);
 }
 
 MatchResult detail::match_regex(const CompiledPattern& p, std::string_view s) {
-    if (!has_required(p, s)) return MatchResult::NO;
+    if (!has_required(p, s)) return MatchResult::No;
     const RegexCode& rc = *p.regex;
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
     if (s.size() >= HS_MIN_VALUE && rc.gap && rc.hs) [[unlikely]] {
@@ -766,7 +766,7 @@ MatchResult detail::match_regex(const CompiledPattern& p, std::string_view s) {
     pcre2_match_data* md = nullptr;
     const MatchResult r = run_regex(rc, s, 0, md);
 #ifdef DFTRACER_UTILS_ENABLE_VECTORSCAN
-    if (r == MatchResult::LIMIT) [[unlikely]]
+    if (r == MatchResult::Limit) [[unlikely]]
         return exact_after_limit(rc, s);
 #endif
     return r;
@@ -774,27 +774,27 @@ MatchResult detail::match_regex(const CompiledPattern& p, std::string_view s) {
 
 MatchResult extract(const CompiledPattern& p, std::string_view s,
                     std::size_t group, std::string_view& out) {
-    if (p.kind != Kind::REGEX || group > p.regex->groups || !has_required(p, s))
-        return MatchResult::NO;
+    if (p.kind != Kind::Regex || group > p.regex->groups || !has_required(p, s))
+        return MatchResult::No;
     pcre2_match_data* md = nullptr;
     const MatchResult r = run_regex(*p.regex, s, 0, md);
-    if (r != MatchResult::YES) return r;
+    if (r != MatchResult::Yes) return r;
     const PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
-    if (ov[2 * group] == PCRE2_UNSET) return MatchResult::NO;
+    if (ov[2 * group] == PCRE2_UNSET) return MatchResult::No;
     out = s.substr(ov[2 * group], ov[2 * group + 1] - ov[2 * group]);
-    return MatchResult::YES;
+    return MatchResult::Yes;
 }
 
 MatchResult findall(const CompiledPattern& p, std::string_view s,
                     const std::function<void(std::string_view)>& fn) {
-    if (p.kind != Kind::REGEX || !has_required(p, s)) return MatchResult::NO;
+    if (p.kind != Kind::Regex || !has_required(p, s)) return MatchResult::No;
     std::size_t offset = 0;
     bool any = false;
     while (offset <= s.size()) {
         pcre2_match_data* md = nullptr;
         const MatchResult r = run_regex(*p.regex, s, offset, md);
-        if (r == MatchResult::LIMIT) return r;
-        if (r == MatchResult::NO) break;
+        if (r == MatchResult::Limit) return r;
+        if (r == MatchResult::No) break;
         const PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
         fn(s.substr(ov[0], ov[1] - ov[0]));
         any = true;
@@ -802,36 +802,35 @@ MatchResult findall(const CompiledPattern& p, std::string_view s,
                  : ov[1] < s.size() ? next_char(s, ov[1])
                                     : s.size() + 1;
     }
-    return any ? MatchResult::YES : MatchResult::NO;
+    return any ? MatchResult::Yes : MatchResult::No;
 }
 
 std::optional<LiteralTest> literal_test(const CompiledPattern& p) {
     switch (p.kind) {
-        case Kind::EXACT:
-            return LiteralTest{LiteralTest::Op::EQUALS, p.literal, p.icase};
-        case Kind::PREFIX:
-            return LiteralTest{LiteralTest::Op::STARTS_WITH, p.literal,
-                               p.icase};
-        case Kind::SUFFIX:
-            return LiteralTest{LiteralTest::Op::ENDS_WITH, p.literal, p.icase};
-        case Kind::CONTAINS:
-            return LiteralTest{LiteralTest::Op::CONTAINS, p.literal, p.icase};
-        case Kind::SEGMENTS:
-        case Kind::GLOB:
-        case Kind::REGEX:
+        case Kind::Exact:
+            return LiteralTest{LiteralTest::Op::Equals, p.literal, p.icase};
+        case Kind::Prefix:
+            return LiteralTest{LiteralTest::Op::StartsWith, p.literal, p.icase};
+        case Kind::Suffix:
+            return LiteralTest{LiteralTest::Op::EndsWith, p.literal, p.icase};
+        case Kind::Contains:
+            return LiteralTest{LiteralTest::Op::Contains, p.literal, p.icase};
+        case Kind::Segments:
+        case Kind::Glob:
+        case Kind::Regex:
             break;
     }
     return std::nullopt;
 }
 
 std::size_t capture_count(const CompiledPattern& p) {
-    return p.kind == Kind::REGEX ? p.regex->groups : 0;
+    return p.kind == Kind::Regex ? p.regex->groups : 0;
 }
 
 std::vector<std::pair<std::size_t, std::string>> capture_names(
     const CompiledPattern& p) {
     std::vector<std::pair<std::size_t, std::string>> names;
-    if (p.kind != Kind::REGEX) return names;
+    if (p.kind != Kind::Regex) return names;
     std::uint32_t count = 0, size = 0;
     PCRE2_SPTR table = nullptr;
     pcre2_pattern_info(p.regex->code, PCRE2_INFO_NAMECOUNT, &count);
@@ -839,7 +838,7 @@ std::vector<std::pair<std::size_t, std::string>> capture_names(
     pcre2_pattern_info(p.regex->code, PCRE2_INFO_NAMETABLE, &table);
     for (std::uint32_t i = 0; i < count; ++i) {
         const PCRE2_SPTR e = table + static_cast<std::size_t>(i) * size;
-        names.emplace_back((static_cast<std::size_t>(e[0]) << 8) | e[1],
+        names.emplace_back(read_u16_be(e),
                            reinterpret_cast<const char*>(e + 2));
     }
     std::sort(names.begin(), names.end());
@@ -851,7 +850,7 @@ dftracer::utils::expected<Substitution, PatternError> compile_substitution(
     auto fail = [](std::string msg, std::size_t at) {
         return dftracer::utils::unexpected(PatternError{std::move(msg), at});
     };
-    if (p.kind != Kind::REGEX)
+    if (p.kind != Kind::Regex)
         return fail("a replacement needs a regex pattern", 0);
     const auto names = capture_names(p);
     Substitution sub;
@@ -925,9 +924,9 @@ dftracer::utils::expected<Substitution, PatternError> compile_substitution(
 MatchResult regex_replace(const CompiledPattern& p, const Substitution& sub,
                           std::string_view s, std::string& out) {
     out.clear();
-    if (p.kind != Kind::REGEX || !has_required(p, s)) {
+    if (p.kind != Kind::Regex || !has_required(p, s)) {
         out.assign(s);
-        return MatchResult::NO;
+        return MatchResult::No;
     }
     std::size_t offset = 0;
     std::size_t copied = 0;
@@ -935,8 +934,8 @@ MatchResult regex_replace(const CompiledPattern& p, const Substitution& sub,
     while (offset <= s.size()) {
         pcre2_match_data* md = nullptr;
         const MatchResult r = run_regex(*p.regex, s, offset, md);
-        if (r == MatchResult::LIMIT) return r;
-        if (r == MatchResult::NO) break;
+        if (r == MatchResult::Limit) return r;
+        if (r == MatchResult::No) break;
         const PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
         out.append(s.substr(copied, ov[0] - copied));
         for (const auto& piece : sub.pieces) {
@@ -962,10 +961,10 @@ MatchResult regex_replace(const CompiledPattern& p, const Substitution& sub,
     }
     if (!any) {
         out.assign(s);
-        return MatchResult::NO;
+        return MatchResult::No;
     }
     out.append(s.substr(copied));
-    return MatchResult::YES;
+    return MatchResult::Yes;
 }
 
 const std::vector<std::string>& required_literals(const CompiledPattern& p) {

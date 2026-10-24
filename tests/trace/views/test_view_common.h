@@ -1,8 +1,6 @@
-#ifndef DFTRACER_TESTS_VIEW_COMMON_H
-#define DFTRACER_TESTS_VIEW_COMMON_H
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
+#ifndef DFTRACER_UTILS_TESTS_VIEW_COMMON_H
+#define DFTRACER_UTILS_TESTS_VIEW_COMMON_H
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/database.h>
@@ -10,9 +8,12 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -25,34 +26,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;
 using namespace dftracer::utils::trace::views;
 using namespace dftu_utils_test;
-
-// A view test binary has no cli_main guard, so a test that touches the
-// aggregation tier cache (which holds read-only agg DBs open for reuse) would
-// leak those DBs at exit. Close them once all tests finish but while doctest's
-// main - and every RocksDB static - is still alive; test_run_end runs
-// in-process before teardown, avoiding the static-destruction-order races an
-// atexit hook would hit. Mirrors cli_main's guard for the CLIs.
-namespace test_view_common_detail {
-struct RocksDbCleanupListener : doctest::IReporter {
-    explicit RocksDbCleanupListener(const doctest::ContextOptions&) {}
-    void test_run_end(const doctest::TestRunStats&) override {
-        dftracer::utils::index::store::mark_process_exiting_for_rocksdb();
-    }
-    void report_query(const doctest::QueryData&) override {}
-    void test_run_start() override {}
-    void test_case_start(const doctest::TestCaseData&) override {}
-    void test_case_reenter(const doctest::TestCaseData&) override {}
-    void test_case_end(const doctest::CurrentTestCaseStats&) override {}
-    void test_case_exception(const doctest::TestCaseException&) override {}
-    void subcase_start(const doctest::SubcaseSignature&) override {}
-    void subcase_end() override {}
-    void log_assert(const doctest::AssertData&) override {}
-    void log_message(const doctest::MessageData&) override {}
-    void test_case_skipped(const doctest::TestCaseData&) override {}
-};
-}  // namespace test_view_common_detail
-DOCTEST_REGISTER_LISTENER("rocksdb_cleanup", 1,
-                          test_view_common_detail::RocksDbCleanupListener);
 
 namespace test_view_common {
 
@@ -254,4 +227,4 @@ inline const SharedIndexedTrace& shared_trace() {
 }  // namespace test_view_common
 using namespace test_view_common;
 
-#endif  // DFTRACER_TESTS_VIEW_COMMON_H
+#endif  // DFTRACER_UTILS_TESTS_VIEW_COMMON_H

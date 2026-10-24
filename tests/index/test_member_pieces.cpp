@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -44,10 +44,10 @@ TEST_SUITE("member pieces") {
         arts.checkpoint_size = 1000;
         arts.total_lines = 40;
         arts.total_uc_size = 4000;
-        arts.members = {record(0, 0, 0, GzipRecordKind::MEMBER, 0),
-                        record(1, 100, 1000, GzipRecordKind::HEAD, 0),
-                        record(2, 200, 2000, GzipRecordKind::RESTART, 5),
-                        record(3, 300, 3000, GzipRecordKind::RESTART, 0)};
+        arts.members = {record(0, 0, 0, GzipRecordKind::Member, 0),
+                        record(1, 100, 1000, GzipRecordKind::Head, 0),
+                        record(2, 200, 2000, GzipRecordKind::Restart, 5),
+                        record(3, 300, 3000, GzipRecordKind::Restart, 0)};
         std::string window(32768, '\0');
         for (std::size_t i = 0; i < window.size(); ++i)
             window[i] = static_cast<char>(i * 31);
@@ -88,11 +88,11 @@ TEST_SUITE("member pieces") {
         IndexDatabase db((root / ".dftindex").string());
 
         GzipBuildArtifacts split;
-        split.members = {record(0, 0, 0, GzipRecordKind::HEAD, 0),
-                         record(1, 100, 1000, GzipRecordKind::RESTART, 3)};
+        split.members = {record(0, 0, 0, GzipRecordKind::Head, 0),
+                         record(1, 100, 1000, GzipRecordKind::Restart, 3)};
         split.restart_windows = {{1, std::string(32768, 'w')}};
         GzipBuildArtifacts whole;
-        whole.members = {record(0, 0, 0, GzipRecordKind::MEMBER, 0)};
+        whole.members = {record(0, 0, 0, GzipRecordKind::Member, 0)};
 
         int fid = -1;
         for (const auto* arts : {&split, &whole}) {
@@ -104,7 +104,7 @@ TEST_SUITE("member pieces") {
         }
         const auto got = db.query_gzip_members(fid);
         REQUIRE(got.size() == 1);
-        CHECK(got[0].kind == GzipRecordKind::MEMBER);
+        CHECK(got[0].kind == GzipRecordKind::Member);
         CHECK_FALSE(db.query_restart_window(fid, 1).has_value());
     }
 }

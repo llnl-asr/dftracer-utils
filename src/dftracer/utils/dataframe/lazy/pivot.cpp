@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 
 namespace dftracer::utils::dataframe {
@@ -27,6 +28,8 @@ class PivotCursor : public Cursor {
           on_(std::move(on)),
           values_(std::move(values)),
           agg_(std::move(agg)) {}
+
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
@@ -120,7 +123,9 @@ class PivotCursor : public Cursor {
 
         ankerl::unordered_dense::set<std::string> seen;
         std::vector<Series> distinct;
-        while (auto m = co_await first_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await first_->next(max_rows);
+            if (!m) break;
             const Series& ic = m->columns[static_cast<std::size_t>(ii)];
             const Series& oc = m->columns[static_cast<std::size_t>(ci)];
             const Series& vc = m->columns[static_cast<std::size_t>(vi)];
@@ -140,6 +145,10 @@ class PivotCursor : public Cursor {
                 cols.push_back(vc.take(keep));
             }
             spool_.add(std::move(cols), static_cast<std::int64_t>(keep.size()));
+            if (has_cap(budget_) && gov_.check(spool_.memory_bytes()) != 0) {
+                spool_.spill();
+                gov_.spilled(spool_.memory_bytes());
+            }
         }
         first_.reset();
 
@@ -224,6 +233,7 @@ class PivotCursor : public Cursor {
         if (!keep.empty()) chunks.push_back(col.take(keep));
     }
 
+    Governor gov_{"pivot"};
     std::unique_ptr<Cursor> first_, sorted_;
     spill::Spool spool_;
     std::uint64_t budget_;

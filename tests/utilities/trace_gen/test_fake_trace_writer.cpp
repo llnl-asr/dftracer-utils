@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
 #include <doctest/doctest.h>
@@ -70,5 +70,27 @@ TEST_SUITE("trace_gen::TraceWriter") {
         }
         CHECK(event_lines == NUM_EVENTS);
         CHECK(saw_metadata);
+    }
+
+    TEST_CASE("escapes control characters in string fields") {
+        TestEnvironment env(0);
+        const std::string gz_path = env.get_dir() + "/escaped.pfw.gz";
+        {
+            TraceWriter writer(gz_path);
+            EventArgs a;
+            a.id = 1;
+            a.name =
+                "a\nb\x01"
+                "c\td";
+            a.cat = "POSIX";
+            a.hhash = "hh0";
+            emit_event(writer, a);
+        }
+
+        TraceReader reader({.file_path = gz_path});
+        auto lines = collect_lines(reader.read_lines()).get();
+
+        REQUIRE(lines.size() == 1);
+        CHECK(lines[0].find(R"("name":"a\nb\u0001c\td")") != std::string::npos);
     }
 }

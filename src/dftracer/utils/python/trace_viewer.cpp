@@ -1,7 +1,6 @@
 #define PY_SSIZE_T_CLEAN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/duql/macros.h>
@@ -23,6 +22,7 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/trace_viewer.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -614,13 +614,13 @@ PyObject* tv_time_unit(PyObject* self, PyObject* arg) {
     const std::string t(s);
     trace::TimeMetric target;
     if (t == "ns")
-        target = trace::TimeMetric::NS;
+        target = trace::TimeMetric::Ns;
     else if (t == "us")
-        target = trace::TimeMetric::US;
+        target = trace::TimeMetric::Us;
     else if (t == "ms")
-        target = trace::TimeMetric::MS;
+        target = trace::TimeMetric::Ms;
     else if (t == "sec" || t == "s")
-        target = trace::TimeMetric::SEC;
+        target = trace::TimeMetric::Sec;
     else {
         PyErr_SetString(PyExc_ValueError, "time_unit must be ns/us/ms/sec/s");
         return nullptr;

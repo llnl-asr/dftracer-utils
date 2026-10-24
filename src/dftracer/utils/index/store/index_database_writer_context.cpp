@@ -1,6 +1,8 @@
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/db_error.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 
 #include <utility>
 
@@ -21,6 +23,7 @@ IndexDatabaseWriterContext::~IndexDatabaseWriterContext() = default;
 void IndexDatabaseWriterContext::put(layout::Family family,
                                      std::string_view key,
                                      std::string_view value) {
+    note_bytes(key.size() + value.size());
     auto status = db_->put(batch_, layout::family_name(family), key, value);
     if (!status.ok()) internal::throw_db_error("Failed to stage put", status);
 }
@@ -28,6 +31,7 @@ void IndexDatabaseWriterContext::put(layout::Family family,
 void IndexDatabaseWriterContext::merge(layout::Family family,
                                        std::string_view key,
                                        std::string_view operand) {
+    note_bytes(key.size() + operand.size());
     auto status = db_->merge(batch_, layout::family_name(family), key, operand);
     if (!status.ok()) internal::throw_db_error("Failed to stage merge", status);
 }
@@ -35,10 +39,19 @@ void IndexDatabaseWriterContext::merge(layout::Family family,
 void IndexDatabaseWriterContext::delete_range(layout::Family family,
                                               std::string_view begin,
                                               std::string_view end) {
+    note_bytes(begin.size() + end.size());
     auto status =
         db_->delete_range(batch_, layout::family_name(family), begin, end);
     if (!status.ok())
         internal::throw_db_error("Failed to stage range delete", status);
+}
+
+void IndexDatabaseWriterContext::del(layout::Family family,
+                                     std::string_view key) {
+    note_bytes(key.size());
+    auto status = db_->del(batch_, layout::family_name(family), key);
+    if (!status.ok())
+        internal::throw_db_error("Failed to stage delete", status);
 }
 
 void IndexDatabaseWriterContext::commit() {
@@ -46,7 +59,7 @@ void IndexDatabaseWriterContext::commit() {
     auto status = db_->commit_batch(batch_);
     committed_ = true;
     if (!status.ok()) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+        throw IndexerError(IndexerError::Type::DatabaseError,
                            "Failed to commit WriteBatch: " + status.ToString());
     }
 }
@@ -58,21 +71,21 @@ void IndexDatabaseWriterContext::init_schema() {
         // A database holding data without a format key has another layout:
         // stamping it would make that data look current, so it stays
         // outdated and is rebuilt.
-        auto it = db_->new_iterator();
-        it->SeekToFirst();
-        if (it->Valid()) return;
+        if (internal::any_key_with_prefix("Failed to scan the index",
+                                          db_->new_iterator(), {}))
+            return;
         std::string body;
-        layout::append_u32(body, IndexDatabase::FORMAT_VERSION);
-        put(layout::Family::REGISTRY, layout::format_key(),
-            layout::with_header(layout::Ext::HOST, layout::host::FORMAT, body));
+        append_u32_be(body, IndexDatabase::FORMAT_VERSION);
+        put(layout::Family::Registry, layout::format_key(),
+            layout::with_header(layout::Ext::Host, layout::host::FORMAT, body));
         for (auto ext :
-             {layout::Ext::MEMBERS, layout::Ext::ROWSET, layout::Ext::ZONEMAP,
-              layout::Ext::BLOOM, layout::Ext::COUNTS, layout::Ext::POSTINGS,
-              layout::Ext::STATS}) {
+             {layout::Ext::Members, layout::Ext::Rowset, layout::Ext::Zonemap,
+              layout::Ext::Bloom, layout::Ext::Counts, layout::Ext::Postings,
+              layout::Ext::Stats}) {
             std::string id;
-            layout::append_u16(id, static_cast<std::uint16_t>(ext));
-            put(layout::Family::REGISTRY, layout::ext_registry_key(ext),
-                layout::with_header(layout::Ext::HOST, layout::host::EXT, id));
+            append_u16_be(id, static_cast<std::uint16_t>(ext));
+            put(layout::Family::Registry, layout::ext_registry_key(ext),
+                layout::with_header(layout::Ext::Host, layout::host::EXT, id));
         }
     } else if (!status.ok()) {
         internal::throw_db_error("Failed to read format version", status);
@@ -94,7 +107,7 @@ int IndexDatabaseWriterContext::file_id_for(std::string_view logical_path) {
         std::string next;
         status = db_->get(layout::next_file_id_key(), &next);
         if (status.ok()) {
-            if (auto body = layout::payload(next, layout::Ext::HOST,
+            if (auto body = layout::payload(next, layout::Ext::Host,
                                             layout::host::NEXT_FILE_ID))
                 cached_next_file_id_ = layout::read_u32(*body);
         } else if (!status.IsNotFound()) {
@@ -103,9 +116,9 @@ int IndexDatabaseWriterContext::file_id_for(std::string_view logical_path) {
     }
     const auto file_id = static_cast<std::uint32_t>(cached_next_file_id_++);
     std::string body;
-    layout::append_u32(body, file_id + 1);
-    put(layout::Family::REGISTRY, layout::next_file_id_key(),
-        layout::with_header(layout::Ext::HOST, layout::host::NEXT_FILE_ID,
+    append_u32_be(body, file_id + 1);
+    put(layout::Family::Registry, layout::next_file_id_key(),
+        layout::with_header(layout::Ext::Host, layout::host::NEXT_FILE_ID,
                             body));
     return static_cast<int>(file_id);
 }

@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_ARROW_H
 
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/common/arrow/attribution.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>

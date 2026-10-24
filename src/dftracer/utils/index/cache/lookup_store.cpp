@@ -1,7 +1,8 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/cache/lru.h>
@@ -10,6 +11,7 @@
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
@@ -28,7 +30,7 @@ namespace {
 std::string value_key(std::uint64_t sig) {
     std::string key;
     key.push_back('\x01');
-    codec::put_be64(key, sig);
+    append_u64_be(key, sig);
     return key;
 }
 
@@ -42,7 +44,7 @@ std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
 std::optional<std::uint64_t> lookup_signature(
     const trace::views::detail::ViewPlan& plan, std::string_view side_text) {
     if (!plan.record_schema)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "lookup signature: the plan's record schema "
                                 "is not resolved");
     std::string sig;
@@ -109,7 +111,8 @@ std::optional<std::string> read_lookup(rdb::RocksDatabase& db,
 
 bool lookup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
     std::string value;
-    return db.get(value_key(sig), &value, rdb::cf::ROLLUP).ok();
+    return rdb::internal::get_checked("lookup read", db, value_key(sig), &value,
+                                      rdb::cf::ROLLUP);
 }
 
 void persist_lookup(rdb::RocksDatabase& db, std::uint64_t sig,

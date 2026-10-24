@@ -57,7 +57,7 @@ Overview
 ----------------------------
 
 A plugin is a shared library exporting one symbol, ``dftracer_plugin`` (the
-``DFTRACER_PLUGIN_FACTORY_SYMBOL`` the loader resolves via ``dlsym``). It
+``DFTRACER_UTILS_PLUGIN_FACTORY_SYMBOL`` the loader resolves via ``dlsym``). It
 receives the parsed config tree (NULL when none given) and returns a
 ``dftu_plugin``. The host then drives that plugin as a data-parallel fold:
 
@@ -1341,7 +1341,7 @@ template against ``plugin.h``:
 
 ``dftracer_plugin build`` compiles a source straight to a loadable ``.so``,
 resolving the plugin include directory for you (bundled with an installed wheel,
-or walked up from a source checkout; override with the ``DFTRACER_PLUGIN_INCLUDE``
+or walked up from a source checkout; override with the ``DFTRACER_UTILS_PLUGIN_INCLUDE``
 environment variable):
 
 .. code-block:: bash

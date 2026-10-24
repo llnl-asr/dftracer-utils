@@ -21,15 +21,15 @@ namespace detail {
 // its serialization is literal-first).
 inline const char* match_op_str(MatchOp op, bool negated) {
     switch (op) {
-        case MatchOp::LIKE:
+        case MatchOp::Like:
             return negated ? "not like" : "like";
-        case MatchOp::ILIKE:
+        case MatchOp::Ilike:
             return negated ? "not ilike" : "ilike";
-        case MatchOp::REGEX:
+        case MatchOp::Regex:
             return negated ? "!~" : "~";
-        case MatchOp::IREGEX:
+        case MatchOp::Iregex:
             return negated ? "!~*" : "~*";
-        case MatchOp::ICONTAINS:
+        case MatchOp::Icontains:
             break;
     }
     return "??";
@@ -81,7 +81,7 @@ inline void node_to_string(std::ostringstream& os, const QueryNode& node) {
                 os << field_text(n.field) << " not in ";
                 array_to_string(os, n.values);
             } else if constexpr (std::is_same_v<T, MatchNode>) {
-                if (n.op == MatchOp::ICONTAINS) {
+                if (n.op == MatchOp::Icontains) {
                     string_to_string(os, n.pattern);
                     os << (n.negated ? " not in " : " in ")
                        << field_text(n.field);
@@ -122,17 +122,17 @@ inline void node_to_string(std::ostringstream& os, const QueryNode& node) {
 /// Human-readable string for a CompareOp (e.g., "==", "!=").
 inline const char* compare_op_str(CompareOp op) {
     switch (op) {
-        case CompareOp::EQ:
+        case CompareOp::Eq:
             return "==";
-        case CompareOp::NE:
+        case CompareOp::Ne:
             return "!=";
-        case CompareOp::GT:
+        case CompareOp::Gt:
             return ">";
-        case CompareOp::LT:
+        case CompareOp::Lt:
             return "<";
-        case CompareOp::GE:
+        case CompareOp::Ge:
             return ">=";
-        case CompareOp::LE:
+        case CompareOp::Le:
             return "<=";
     }
     return "??";

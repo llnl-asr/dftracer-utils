@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_FILE_SOURCE_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_FILE_SOURCE_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/io/io.h>
 
 #include <string>
 
@@ -16,7 +16,7 @@ inline coro::CoroTask<ScopedFd> async_open_read(const std::string& file_path) {
     ssize_t fd =
         co_await ::dftracer::utils::io::open(file_path.c_str(), O_RDONLY);
     if (fd < 0) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 "Cannot open file: " + file_path);
     }
     co_return ScopedFd(static_cast<int>(fd));
@@ -27,7 +27,7 @@ inline coro::CoroTask<ScopedFd> async_open_read(const std::string& file_path) {
 inline DFTUtilsException make_read_error(const std::string& file_path,
                                          ssize_t neg_errno) {
     return DFTUtilsException(
-        ErrorCode::IO, "Read error on file: " + file_path + " (errno=" +
+        ErrorCode::Io, "Read error on file: " + file_path + " (errno=" +
                            std::to_string(static_cast<int>(-neg_errno)) + ")");
 }
 

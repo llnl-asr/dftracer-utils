@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
@@ -15,6 +14,7 @@
 #include <dftracer/utils/dataframe/kernels/sort.h>
 #include <dftracer/utils/dataframe/kernels/stats.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -3222,10 +3222,11 @@ TEST_CASE("string_at reads a LargeString dictionary") {
     h->type = TypeId::LargeString;
     h->length = 3;
     const std::int64_t offs[4] = {0, 1, 2, 3};
-    h->offsets = dftracer::utils::dataframe::Buffer::allocate(sizeof(offs));
-    std::memcpy(h->offsets->data(), offs, sizeof(offs));
-    h->data = dftracer::utils::dataframe::Buffer::allocate(3);
-    std::memcpy(h->data->data(), "pqp", 3);
+    h->offsets = dftracer::utils::dataframe::new_buffer(sizeof(offs));
+    std::memcpy(dftracer::utils::dataframe::writable(h->offsets), offs,
+                sizeof(offs));
+    h->data = dftracer::utils::dataframe::new_buffer(3);
+    std::memcpy(dftracer::utils::dataframe::writable(h->data), "pqp", 3);
     Series large{h};
     Series dict = large.dictionary_encode();
     REQUIRE(dict.encoding() == Encoding::Dictionary);

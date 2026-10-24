@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_EVENT_SOURCE_H
 #define DFTRACER_UTILS_TRACE_VIEWS_EVENT_SOURCE_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -58,7 +58,7 @@ class DomSource {
 
     RecordPhase phase() const {
         auto p = root_["ph"];
-        return p.error() ? RecordPhase::UNKNOWN
+        return p.error() ? RecordPhase::Unknown
                          : read_phase(json::JsonValue(p.value_unsafe()));
     }
 
@@ -204,7 +204,8 @@ class DomSource {
 /// to keep off this path.
 class PodSource {
    public:
-    PodSource(const FoldEvent& ev, const dftracer::utils::StringIntern& intern)
+    PodSource(const FoldEvent& ev,
+              const dftracer::utils::dstd::StringIntern& intern)
         : ev_(ev), intern_(intern) {}
 
     RecordPhase phase() const { return ev_.phase; }
@@ -286,7 +287,7 @@ class PodSource {
 
     /// Whether the event holds `field`, found the way append_value finds it.
     bool has(std::string_view field) const {
-        constexpr auto NO_ID = dftracer::utils::StringIntern::NO_ID;
+        constexpr auto NO_ID = dftracer::utils::dstd::StringIntern::NO_ID;
         if (ev_.by_path) return find_arg_by(field) != nullptr;
         if (field == "cat") return ev_.cat_id != NO_ID;
         if (field == "name") return ev_.name_id != NO_ID;
@@ -354,7 +355,7 @@ class PodSource {
 
     const FoldEvent::ArgValue* find_arg_by(std::string_view field) const {
         const std::uint32_t id = intern_lookup(field);
-        if (id == dftracer::utils::StringIntern::NO_ID) return nullptr;
+        if (id == dftracer::utils::dstd::StringIntern::NO_ID) return nullptr;
         for (const auto& [key_id, v] : ev_.args)
             if (key_id == id) return &v;
         return nullptr;
@@ -362,7 +363,7 @@ class PodSource {
 
     const FoldEvent::ArgValue* find_top(std::string_view field) const {
         const std::uint32_t id = intern_lookup(field);
-        if (id == dftracer::utils::StringIntern::NO_ID) return nullptr;
+        if (id == dftracer::utils::dstd::StringIntern::NO_ID) return nullptr;
         for (const auto& [key_id, v] : ev_.top_fields)
             if (key_id == id) return &v;
         return nullptr;
@@ -383,7 +384,7 @@ class PodSource {
     std::uint32_t intern_lookup(std::string_view field) const {
         // The event's arg keys are already interned, so resolving a query field
         // to an id is a lookup, not an insert; an unknown field simply misses.
-        return const_cast<dftracer::utils::StringIntern&>(intern_)
+        return const_cast<dftracer::utils::dstd::StringIntern&>(intern_)
             .get_or_insert(field);
     }
 
@@ -394,7 +395,7 @@ class PodSource {
     }
 
     bool append_id(std::string& out, std::uint32_t id) const {
-        if (id == dftracer::utils::StringIntern::NO_ID) return false;
+        if (id == dftracer::utils::dstd::StringIntern::NO_ID) return false;
         out.append(intern_.resolve(id));
         return true;
     }
@@ -426,29 +427,29 @@ class PodSource {
     }
 
     const FoldEvent& ev_;
-    const dftracer::utils::StringIntern& intern_;
+    const dftracer::utils::dstd::StringIntern& intern_;
 };
 
 /// The array or object at `path` rebuilt from the event's flattened keys
 /// (`path.0`, `path.key`), or nullopt when none lies under it.
 std::optional<duql::Cell> container_cell(
-    const FoldEvent& ev, const dftracer::utils::StringIntern& intern,
+    const FoldEvent& ev, const dftracer::utils::dstd::StringIntern& intern,
     std::string_view path);
 
 inline duql::Cell special_cell(FoldEvent::Special s) {
     switch (s) {
-        case FoldEvent::Special::NULL_VALUE:
+        case FoldEvent::Special::NullValue:
             return duql::Cell::null();
-        case FoldEvent::Special::FALSE_VALUE:
+        case FoldEvent::Special::FalseValue:
             return false;
-        case FoldEvent::Special::TRUE_VALUE:
+        case FoldEvent::Special::TrueValue:
             return true;
-        case FoldEvent::Special::EMPTY_ARRAY:
+        case FoldEvent::Special::EmptyArray:
             return duql::Cell::json("[]", true);
-        case FoldEvent::Special::EMPTY_OBJECT:
+        case FoldEvent::Special::EmptyObject:
             return duql::Cell::json("{}", false);
-        case FoldEvent::Special::JSON_ARRAY:
-        case FoldEvent::Special::JSON_OBJECT:
+        case FoldEvent::Special::JsonArray:
+        case FoldEvent::Special::JsonObject:
             break;
     }
     return duql::Cell::null();
@@ -459,17 +460,17 @@ inline duql::Cell special_cell(FoldEvent::Special s) {
 /// bool or an array or object as itself; an absent field is left out, so it
 /// is missing, as on the JSON path. `scratch` is reused across calls.
 inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
-                        const dftracer::utils::StringIntern& intern,
+                        const dftracer::utils::dstd::StringIntern& intern,
                         duql::ValueMap& scratch) {
     using dftracer::utils::dataframe::FieldStatDomain;
     PodSource src(ev, intern);
     scratch.clear();
     for (std::string_view f : q.fields()) {
         if (const auto* sp = src.special(f)) {
-            if (*sp == FoldEvent::Special::JSON_ARRAY ||
-                *sp == FoldEvent::Special::JSON_OBJECT)
+            if (*sp == FoldEvent::Special::JsonArray ||
+                *sp == FoldEvent::Special::JsonObject)
                 scratch[f] = duql::Cell::json(
-                    src.value(f), *sp == FoldEvent::Special::JSON_ARRAY);
+                    src.value(f), *sp == FoldEvent::Special::JsonArray);
             else
                 scratch[f] = special_cell(*sp);
             continue;
@@ -519,8 +520,8 @@ inline bool pod_matches(const duql::Query& q, const FoldEvent& ev,
             scratch[name] = std::move(lit);
         }
         for (const auto& s : ev.specials) {
-            if (s.top || s.kind == FoldEvent::Special::JSON_ARRAY ||
-                s.kind == FoldEvent::Special::JSON_OBJECT)
+            if (s.top || s.kind == FoldEvent::Special::JsonArray ||
+                s.kind == FoldEvent::Special::JsonObject)
                 continue;
             const std::string_view name = intern.resolve(s.key);
             if (name.size() > bare.size() && name.starts_with(bare) &&

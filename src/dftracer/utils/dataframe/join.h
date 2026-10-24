@@ -2,9 +2,9 @@
 #define DFTRACER_UTILS_DATAFRAME_JOIN_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 
 #include <atomic>
 #include <cstdint>

@@ -1,18 +1,20 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace dftracer::utils;
@@ -156,18 +158,18 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
             "padded_join",
             [&](CoroScope&) -> CoroTask<void> {
                 auto w = make_padded_striped_writer(STRIPE);
-                CoroScope jobs;
-                if (co_await w->open(path, WORKERS, true, &jobs) != 0) {
+                auto jobs = CoroScope::long_lived();
+                if (co_await w->open(path, WORKERS, true, jobs.get()) != 0) {
                     result = 1;
                     co_return;
                 }
                 std::atomic<int> failures{0};
                 for (std::size_t i = 0; i < WORKERS; ++i)
-                    jobs.spawn([&, i](CoroScope&) -> CoroTask<void> {
+                    jobs->spawn([&, i](CoroScope&) -> CoroTask<void> {
                         if (co_await w->write_chunk(i, as_bv(members[i])) != 0)
                             failures.fetch_add(1);
                     });
-                co_await jobs.join();
+                co_await jobs->join();
                 if (failures.load() != 0) {
                     result = 2;
                     co_return;
@@ -316,6 +318,40 @@ std::vector<std::uint8_t> exact_member(const std::string& head, char fill,
 }
 
 }  // namespace
+
+TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
+    std::string path = tmp_path("test_padded_dropped.json.gz");
+    std::remove(path.c_str());
+    const std::string payload = "{\"dropped\":1}\n";
+    const auto member = gzip_member(payload);
+    std::atomic<bool> on_executor{false};
+    int result = -1;
+    Runtime runtime(4);
+    runtime
+        .scope("padded_dropped",
+               [&](CoroScope& s) -> CoroTask<void> {
+                   auto w = make_padded_striped_writer(STRIPE);
+                   if (co_await w->open(path, 2, true, &s) != 0) {
+                       result = 1;
+                       co_return;
+                   }
+                   result =
+                       co_await w->write_chunk(0, as_bv(member)) == 0 ? 0 : 2;
+                   on_executor = Executor::current() != nullptr;
+                   w.reset();
+               })
+        .get();
+    REQUIRE(result == 0);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (gunzip_all(path).find(payload) == std::string::npos &&
+           std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    CHECK(gunzip_all(path).find(payload) != std::string::npos);
+    CHECK(on_executor.load());
+    runtime.shutdown();
+    fs::remove(path);
+}
 
 TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
     // Each chunk leaves 65560 + k bytes of its stripe, one full-size padding

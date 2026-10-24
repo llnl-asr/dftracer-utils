@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/format_detector.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/format_detector.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -15,11 +15,11 @@ std::shared_ptr<CheckpointIndexer> CheckpointIndexerFactory::create(
                                      : index_path;
 
     switch (format) {
-        case ArchiveFormat::GZIP:
+        case ArchiveFormat::Gzip:
             return std::make_shared<index::gzip::GzipIndexer>(
                 archive_path, final_idx_path, checkpoint_size, force);
 
-        case ArchiveFormat::UNKNOWN:
+        case ArchiveFormat::Unknown:
         default:
             DFTRACER_UTILS_LOG_ERROR(
                 "Unsupported or unrecognized archive format for file: %s",
@@ -35,15 +35,15 @@ ArchiveFormat CheckpointIndexerFactory::detect_format(
 
 std::string CheckpointIndexerFactory::generate_index_path(
     const std::string &archive_path, ArchiveFormat format) {
-    if (format == ArchiveFormat::UNKNOWN) {
+    if (format == ArchiveFormat::Unknown) {
         format = FormatDetector::detect(archive_path);
     }
 
     switch (format) {
-        case ArchiveFormat::GZIP:
+        case ArchiveFormat::Gzip:
             return trace::internal::determine_index_path(archive_path, "");
 
-        case ArchiveFormat::UNKNOWN:
+        case ArchiveFormat::Unknown:
         default:
             DFTRACER_UTILS_LOG_WARN(
                 "Unknown format for %s, using root-local .dftindex",

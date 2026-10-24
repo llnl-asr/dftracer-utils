@@ -1,25 +1,25 @@
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/when_any.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/io/ops.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
 #include <dftracer/utils/plugins/plugin/map.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/coro/when_any.h>
+#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/runtime/io/ops.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -67,7 +67,7 @@ coro::CoroTask<void>* as_task(::dftu_task* t) {
 const char* host_resolve(void* h, dftu_str id, std::uint32_t* out_len) {
     if (out_len) *out_len = 0;
     if (id == DFTU_STR_NONE ||
-        id >= dftracer::utils::StringIntern::FAST_CAPACITY)
+        id >= dftracer::utils::dstd::StringIntern::FAST_CAPACITY)
         return nullptr;
     auto& intern = static_cast<PluginFold*>(h)->intern_table();
     std::string_view sv = intern.resolve(id);
@@ -672,9 +672,12 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
         dftracer::utils::default_runtime().run_blocking(
             "dft-plugin-ipc", [&](CoroScope&) -> coro::CoroTask<void> {
                 arr::IpcWriter writer;
-                if (co_await writer.open(p) != 0) co_return;
-                if (co_await writer.write_batch(res) != 0) co_return;
-                if (co_await writer.close() != 0) co_return;
+                const auto open_rc = co_await writer.open(p);
+                if (open_rc != 0) co_return;
+                const auto write_rc = co_await writer.write_batch(res);
+                if (write_rc != 0) co_return;
+                const auto close_rc = co_await writer.close();
+                if (close_rc != 0) co_return;
                 rc = 0;
             });
         ArrowSchemaMove(res.get_schema(), s);
@@ -760,7 +763,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                 views::detail::FoldEventBuffer batch_events;
                 namespace ix = dftracer::utils::index;
                 const ix::RecordSchema& schema = ix::detect_file_schema(p);
-                const bool by_path = schema.decoder == ix::Decoder::PATH;
+                const bool by_path = schema.decoder == ix::Decoder::Path;
                 const ix::RecordSchema* declared =
                     schema.fields.empty() ? nullptr : &schema;
                 views::View v = views::View::from_file(p);
@@ -897,13 +900,13 @@ namespace {
 coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
                                  const void* in, void* out) {
     using Kind = ComposeOp::Kind;
-    if (op->kind == Kind::LEAF) {
+    if (op->kind == Kind::Leaf) {
         int rc = 0;
         ::dftu_task* t = op->fn ? op->fn(op->state, in, out, &rc) : nullptr;
         if (t) co_await *as_task(t);
         co_return rc;
     }
-    if (op->kind == Kind::THEN) {
+    if (op->kind == Kind::Then) {
         ComposeOp* a = op->children[0];
         ComposeOp* b = op->children[1];
         std::vector<char> mid(a->out_size);
@@ -911,7 +914,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
         if (rc != 0) co_return rc;
         co_return co_await eval_compose(self, b, mid.data(), out);
     }
-    if (op->kind == Kind::WHEN_ALL) {
+    if (op->kind == Kind::WhenAll) {
         // Each child writes its own disjoint slice of the concatenated output.
         std::vector<coro::CoroTask<int>> kids;
         kids.reserve(op->children.size());
@@ -948,7 +951,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::LEAF;
+        op.kind = ComposeOp::Kind::Leaf;
         op.fn = fn;
         op.state = state;
         op.free_state = free_state;
@@ -980,7 +983,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::THEN;
+        op.kind = ComposeOp::Kind::Then;
         op.in_ty = oa->in_ty;
         op.out_ty = ob->out_ty;
         op.in_size = oa->in_size;
@@ -1015,7 +1018,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::WHEN_ALL;
+        op.kind = ComposeOp::Kind::WhenAll;
         op.in_ty = first->in_ty;
         op.out_ty = DFTU_T_BYTES;
         op.in_size = first->in_size;
@@ -1048,7 +1051,7 @@ coro::CoroTask<int> eval_compose(PluginFold* self, ComposeOp* op,
     try {
         compose_ops_.emplace_back();
         ComposeOp& op = compose_ops_.back();
-        op.kind = ComposeOp::Kind::WHEN_ANY;
+        op.kind = ComposeOp::Kind::WhenAny;
         op.in_ty = first->in_ty;
         op.out_ty = first->out_ty;
         op.in_size = first->in_size;
@@ -1137,7 +1140,7 @@ int PluginFold::close_trace_writer(::dftu_trace_writer* w) {
 }
 
 PluginFold::PluginFold(const dftu_plugin* plugin,
-                       dftracer::utils::StringIntern& intern,
+                       dftracer::utils::dstd::StringIntern& intern,
                        SharedResultRegistry* results,
                        NamedResultRegistry* named_results,
                        std::string plugin_name, std::uint64_t memory_budget,
@@ -1280,8 +1283,8 @@ void PluginFold::step(const FoldBatch& batch) {
         namespace views = dftracer::utils::trace::views::detail;
         col_scratch_.clear();
         for (const auto& fe : batch.events) {
-            if (fe.phase == trace::RecordPhase::METADATA ||
-                fe.phase == trace::RecordPhase::UNKNOWN)
+            if (fe.phase == trace::RecordPhase::Metadata ||
+                fe.phase == trace::RecordPhase::Unknown)
                 continue;
             if (query_ && !passes_query(fe)) continue;
             col_scratch_.push_back(fe);
@@ -1377,8 +1380,8 @@ dataframe::DataFrame PluginFold::rewritten_batch(
 void PluginFold::reclaim_slice() {
     if (!slice_ || !plugin_->bytes) return;
     const std::uint64_t budget =
-        dftracer::utils::resolve_spill_budget(memory_budget_);
-    if (budget == dftracer::utils::NO_SPILL_BUDGET) return;
+        dftracer::utils::memory::resolve_spill_budget(memory_budget_);
+    if (budget == dftracer::utils::memory::NO_SPILL_BUDGET) return;
     const std::uint64_t held = plugin_->bytes(slice_);
     if (held <= budget) return;
     const std::uint64_t freed =

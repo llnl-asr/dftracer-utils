@@ -1,11 +1,11 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/io/io_backend.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/server/http_connection.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/signal_handler.h>
@@ -29,7 +29,7 @@ using namespace dftracer::utils::server;
 
 class ServerArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::REQUIRED};
+    cli::DirectoryArgs directory{cli::DirMode::Required};
     cli::PipelineArgs pipeline;
 
     std::string index_dir;
@@ -138,7 +138,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         cli::build_pipeline_config("DFTracer Server", cli->pipeline);
     // Steady-load, latency-sensitive service: keep the full pool warm rather
     // than paying the elastic grow ramp on every request.
-    pipeline_config.with_io_backend(io::IoBackendType::THREADPOOL)
+    pipeline_config.with_io_backend(io::IoBackendType::Threadpool)
         .with_io_batch_size(1)
         .with_watchdog(false)
         .with_eager()
@@ -207,12 +207,12 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
                 co_await prewarm_viz_summary(*index_ptr);
             });
 #endif
-            co_await listener.accept_loop(
-                ctx,
+            auto on_connection =
                 [router_ptr](int client_fd,
                              struct sockaddr_in addr) -> coro::CoroTask<void> {
-                    co_await handle_connection(client_fd, addr, *router_ptr);
-                });
+                co_await handle_connection(client_fd, addr, *router_ptr);
+            };
+            co_await listener.accept_loop(ctx, on_connection);
         },
         "Server");
 

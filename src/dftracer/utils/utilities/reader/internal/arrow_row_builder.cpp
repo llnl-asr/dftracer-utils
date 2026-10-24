@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/utilities/reader/internal/arrow_row_builder.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -26,25 +27,25 @@ namespace {
 
 // --- Row type constants (must match Python TYPE_* constants) ---
 enum RowType : std::int8_t {
-    ROW_EVENT = 0,
-    ROW_FILE_HASH = 1,
-    ROW_HOST_HASH = 2,
-    ROW_STRING_HASH = 3,
-    ROW_METADATA = 4,
-    ROW_PROC_METADATA = 5,
-    ROW_PROFILE = 6,
-    ROW_SYSTEM = 7,
+    RowEvent = 0,
+    RowFileHash = 1,
+    RowHostHash = 2,
+    RowStringHash = 3,
+    RowMetadata = 4,
+    RowProcMetadata = 5,
+    RowProfile = 6,
+    RowSystem = 7,
 };
 
 // --- IO category constants (must match Python IOCategory values) ---
 enum IOCat : std::int8_t {
-    IO_READ = 1,
-    IO_WRITE = 2,
-    IO_METADATA = 3,
-    IO_PCTL = 4,
-    IO_IPC = 5,
-    IO_OTHER = 6,
-    IO_SYNC = 7,
+    IoRead = 1,
+    IoWrite = 2,
+    IoMetadata = 3,
+    IoPctl = 4,
+    IoIpc = 5,
+    IoOther = 6,
+    IoSync = 7,
 };
 
 std::int8_t get_io_cat(std::string_view func) {
@@ -55,17 +56,17 @@ std::int8_t get_io_cat(std::string_view func) {
     static const ankerl::unordered_dense::map<std::string_view, std::int8_t>
         op_to_cat = [] {
             ankerl::unordered_dense::map<std::string_view, std::int8_t> m;
-            for (auto op : posix_ops::READ) m.emplace(op, IO_READ);
-            for (auto op : posix_ops::WRITE) m.emplace(op, IO_WRITE);
-            for (auto op : posix_ops::SYNC) m.emplace(op, IO_SYNC);
-            for (auto op : posix_ops::PCTL) m.emplace(op, IO_PCTL);
-            for (auto op : posix_ops::IPC) m.emplace(op, IO_IPC);
-            for (auto op : posix_ops::METADATA) m.emplace(op, IO_METADATA);
+            for (auto op : posix_ops::READ) m.emplace(op, IoRead);
+            for (auto op : posix_ops::WRITE) m.emplace(op, IoWrite);
+            for (auto op : posix_ops::SYNC) m.emplace(op, IoSync);
+            for (auto op : posix_ops::PCTL) m.emplace(op, IoPctl);
+            for (auto op : posix_ops::IPC) m.emplace(op, IoIpc);
+            for (auto op : posix_ops::METADATA) m.emplace(op, IoMetadata);
             return m;
         }();
     auto it = op_to_cat.find(func);
     return it != op_to_cat.end() ? it->second
-                                 : static_cast<std::int8_t>(IO_OTHER);
+                                 : static_cast<std::int8_t>(IoOther);
 }
 
 bool str_iequal(std::string_view a, const char *b) {
@@ -149,7 +150,7 @@ void append_profile_columns(
     for (const char **pk = profile_keys; *pk; ++pk) {
         auto it = int_map.find(*pk);
         if (it != int_map.end()) {
-            auto idx = builder.add_or_get_column(*pk, ColumnType::INT64);
+            auto idx = builder.add_or_get_column(*pk, ColumnType::Int64);
             builder.append_int64(idx, it->second);
         }
     }
@@ -165,7 +166,7 @@ void append_system_columns(
     for (const char **sk = sys_keys; *sk; ++sk) {
         auto it = float_map.find(*sk);
         if (it != float_map.end()) {
-            auto idx = builder.add_or_get_column(*sk, ColumnType::DOUBLE);
+            auto idx = builder.add_or_get_column(*sk, ColumnType::Double);
             builder.append_double(idx, it->second);
         }
     }
@@ -180,7 +181,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // --- Single-pass extraction: capture top-level fields and args in one
     // member walk (dispatch on key, any field order). ---
     dftracer::utils::trace::RecordPhase phase =
-        dftracer::utils::trace::RecordPhase::UNKNOWN;
+        dftracer::utils::trace::RecordPhase::Unknown;
     std::string_view name_sv, cat_sv;
     std::optional<std::int64_t> pid_opt, tid_opt, ts_opt, dur_opt;
     ParsedArgs args;
@@ -206,8 +207,8 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         });
 
     // --- Type classification ---
-    bool is_M = (phase == dftracer::utils::trace::RecordPhase::METADATA);
-    bool is_C = (phase == dftracer::utils::trace::RecordPhase::COUNTER);
+    bool is_M = (phase == dftracer::utils::trace::RecordPhase::Metadata);
+    bool is_C = (phase == dftracer::utils::trace::RecordPhase::Counter);
     bool is_event = !is_M && !is_C;
 
     if (is_M && name_sv == "CM" && args.name && *args.name == "time_metric" &&
@@ -215,25 +216,25 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         time_scale.metric = trace::parse_time_metric(*args.value);
     }
 
-    std::int8_t row_type = ROW_EVENT;
+    std::int8_t row_type = RowEvent;
     if (is_M) {
         if (name_sv == "FH")
-            row_type = ROW_FILE_HASH;
+            row_type = RowFileHash;
         else if (name_sv == "HH")
-            row_type = ROW_HOST_HASH;
+            row_type = RowHostHash;
         else if (name_sv == "SH")
-            row_type = ROW_STRING_HASH;
+            row_type = RowStringHash;
         else if (name_sv == "PR")
-            row_type = ROW_PROC_METADATA;
+            row_type = RowProcMetadata;
         else
-            row_type = ROW_METADATA;
+            row_type = RowMetadata;
     } else if (is_C) {
-        row_type = str_iequal(cat_sv, "sys") ? ROW_SYSTEM : ROW_PROFILE;
+        row_type = str_iequal(cat_sv, "sys") ? RowSystem : RowProfile;
     }
-    bool is_hash = (row_type >= ROW_FILE_HASH && row_type <= ROW_STRING_HASH) ||
-                   row_type == ROW_PROC_METADATA;
-    bool is_profile = (row_type == ROW_PROFILE);
-    bool is_sys = (row_type == ROW_SYSTEM);
+    bool is_hash = (row_type >= RowFileHash && row_type <= RowStringHash) ||
+                   row_type == RowProcMetadata;
+    bool is_profile = (row_type == RowProfile);
+    bool is_sys = (row_type == RowSystem);
 
     // Name: metadata rows use args.name if available
     std::string_view out_name = name_sv;
@@ -243,28 +244,28 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     if (out_name.empty()) return false;  // skip rows without name
 
     // --- Declare all output columns ---
-    auto ci_type = builder.add_or_get_column("type", ColumnType::INT64);
-    auto ci_cat = builder.add_or_get_column("cat", ColumnType::STRING);
-    auto ci_name = builder.add_or_get_column("name", ColumnType::STRING);
-    auto ci_pid = builder.add_or_get_column("pid", ColumnType::INT64);
-    auto ci_tid = builder.add_or_get_column("tid", ColumnType::INT64);
-    auto ci_hash = builder.add_or_get_column("hash", ColumnType::STRING);
-    auto ci_value = builder.add_or_get_column("value", ColumnType::STRING);
+    auto ci_type = builder.add_or_get_column("type", ColumnType::Int64);
+    auto ci_cat = builder.add_or_get_column("cat", ColumnType::String);
+    auto ci_name = builder.add_or_get_column("name", ColumnType::String);
+    auto ci_pid = builder.add_or_get_column("pid", ColumnType::Int64);
+    auto ci_tid = builder.add_or_get_column("tid", ColumnType::Int64);
+    auto ci_hash = builder.add_or_get_column("hash", ColumnType::String);
+    auto ci_value = builder.add_or_get_column("value", ColumnType::String);
     auto ci_host_hash =
-        builder.add_or_get_column("host_hash", ColumnType::STRING);
+        builder.add_or_get_column("host_hash", ColumnType::String);
     auto ci_file_hash =
-        builder.add_or_get_column("file_hash", ColumnType::STRING);
-    auto ci_epoch = builder.add_or_get_column("epoch", ColumnType::INT64);
-    auto ci_step = builder.add_or_get_column("step", ColumnType::INT64);
-    auto ci_ts = builder.add_or_get_column("ts", ColumnType::INT64);
-    auto ci_dur = builder.add_or_get_column("dur", ColumnType::INT64);
-    auto ci_te = builder.add_or_get_column("te", ColumnType::INT64);
+        builder.add_or_get_column("file_hash", ColumnType::String);
+    auto ci_epoch = builder.add_or_get_column("epoch", ColumnType::Int64);
+    auto ci_step = builder.add_or_get_column("step", ColumnType::Int64);
+    auto ci_ts = builder.add_or_get_column("ts", ColumnType::Int64);
+    auto ci_dur = builder.add_or_get_column("dur", ColumnType::Int64);
+    auto ci_te = builder.add_or_get_column("te", ColumnType::Int64);
     [[maybe_unused]] auto ci_trange =
-        builder.add_or_get_column("trange", ColumnType::INT64);
-    auto ci_io_cat = builder.add_or_get_column("io_cat", ColumnType::INT64);
-    auto ci_size = builder.add_or_get_column("size", ColumnType::INT64);
-    auto ci_offset = builder.add_or_get_column("offset", ColumnType::INT64);
-    auto ci_image_id = builder.add_or_get_column("image_id", ColumnType::INT64);
+        builder.add_or_get_column("trange", ColumnType::Int64);
+    auto ci_io_cat = builder.add_or_get_column("io_cat", ColumnType::Int64);
+    auto ci_size = builder.add_or_get_column("size", ColumnType::Int64);
+    auto ci_offset = builder.add_or_get_column("offset", ColumnType::Int64);
+    auto ci_image_id = builder.add_or_get_column("image_id", ColumnType::Int64);
 
     // --- Populate core columns ---
     builder.append_int64(ci_type, row_type);
@@ -289,7 +290,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // hash / value
     if (is_hash && args.value && !args.value->empty())
         builder.append_string(ci_hash, *args.value);
-    if (row_type == ROW_METADATA && args.value && !args.value->empty())
+    if (row_type == RowMetadata && args.value && !args.value->empty())
         builder.append_string(ci_value, *args.value);
 
     // host_hash / file_hash
@@ -330,9 +331,8 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     if (is_event) {
         bool is_posix_stdio =
             str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
-        std::int8_t io_cat = is_posix_stdio
-                                 ? get_io_cat(out_name)
-                                 : static_cast<std::int8_t>(IO_OTHER);
+        std::int8_t io_cat = is_posix_stdio ? get_io_cat(out_name)
+                                            : static_cast<std::int8_t>(IoOther);
         // Size uses the shared io-cat rule (size_sum > posix/stdio read|write
         // ret > image_size) so the reader and the View aggregator's "size"
         // cannot drift.
@@ -356,9 +356,8 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     if (is_profile) {
         bool is_posix_stdio =
             str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
-        std::int8_t io_cat = is_posix_stdio
-                                 ? get_io_cat(out_name)
-                                 : static_cast<std::int8_t>(IO_OTHER);
+        std::int8_t io_cat = is_posix_stdio ? get_io_cat(out_name)
+                                            : static_cast<std::int8_t>(IoOther);
         builder.append_int64(ci_io_cat, io_cat);
         append_profile_columns(builder, args.int_map);
     }
@@ -409,15 +408,15 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
                         v = static_cast<std::int64_t>(static_cast<double>(v) *
                                                       opts.time_scale);
                     std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::INT64);
+                        builder.add_or_get_column(key_sv, ColumnType::Int64);
                     builder.append_int64(idx, v);
                 } else if (num.is_uint64()) {
                     std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::UINT64);
+                        builder.add_or_get_column(key_sv, ColumnType::Uint64);
                     builder.append_uint64(idx, num.get_uint64());
                 } else {
                     std::size_t idx =
-                        builder.add_or_get_column(key_sv, ColumnType::DOUBLE);
+                        builder.add_or_get_column(key_sv, ColumnType::Double);
                     builder.append_double(idx, num.get_double());
                 }
                 break;
@@ -428,12 +427,12 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
                 auto str = str_result.value_unsafe();
                 if (opts.dict_strings) {
                     std::size_t idx = builder.add_or_get_column(
-                        key_sv, ColumnType::DICT_STRING);
+                        key_sv, ColumnType::DictString);
                     builder.append_dict_string(idx, str);
                     break;
                 }
                 std::size_t idx =
-                    builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    builder.add_or_get_column(key_sv, ColumnType::String);
                 builder.append_string(idx, str);
                 break;
             }
@@ -442,7 +441,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
                 if (bool_result.error()) break;
                 auto b = bool_result.value_unsafe();
                 std::size_t idx =
-                    builder.add_or_get_column(key_sv, ColumnType::BOOL);
+                    builder.add_or_get_column(key_sv, ColumnType::Bool);
                 builder.append_bool(idx, b);
                 break;
             }
@@ -455,7 +454,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
             case simdjson::ondemand::json_type::array: {
                 auto json_str = SVH::to_json_string(val);
                 std::size_t idx =
-                    builder.add_or_get_column(key_sv, ColumnType::STRING);
+                    builder.add_or_get_column(key_sv, ColumnType::String);
                 if (json_str) {
                     builder.append_string(
                         idx, arena.push(json_str->data(), json_str->size()));

@@ -1,8 +1,8 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/common/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/common/arrow/parallel_reader.h>
 

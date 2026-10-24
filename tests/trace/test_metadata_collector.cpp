@@ -1,13 +1,20 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <future>
+#include <mutex>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include "testing_utilities.h"
 
@@ -112,7 +119,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.valid_events == 100);
 
             // Collecting metadata for a gzip trace builds its index.
-            CHECK(output.format == ArchiveFormat::GZIP);
+            CHECK(output.format == ArchiveFormat::Gzip);
             CHECK(output.has_index == true);
             CHECK(output.compressed_size > 0);
             CHECK(output.uncompressed_size > 0);
@@ -155,7 +162,7 @@ TEST_SUITE("MetadataCollector") {
             CHECK(output.valid_events > 0);
 
             // Verify extended fields for compressed files
-            CHECK(output.format == ArchiveFormat::GZIP);
+            CHECK(output.format == ArchiveFormat::Gzip);
             CHECK(output.has_index == true);
             CHECK(output.index_valid == true);
             CHECK(output.index_path == index_path);
@@ -206,7 +213,7 @@ TEST_SUITE("MetadataCollector") {
                 CHECK(output.success == true);
                 CHECK(output.has_index == true);
                 CHECK(output.index_valid == true);
-                CHECK(output.format == ArchiveFormat::GZIP);
+                CHECK(output.format == ArchiveFormat::Gzip);
                 CHECK(output.num_lines == 25);
             }
         }
@@ -254,5 +261,67 @@ TEST_SUITE("MetadataCollector") {
 
             fs::remove_all(test_dir);
         }
+    }
+}
+
+TEST_SUITE("MetadataCollectorRoot") {
+    TEST_CASE(
+        "fresh files of one root are checked alongside a reader, and a "
+        "build waits for readers") {
+        const std::string dir =
+            dftu_utils_test::make_unique_test_path("test_metadata_root")
+                .string();
+        fs::create_directories(dir);
+        const std::string index_path = dir + "/root.dftindex";
+        constexpr int FILES = 8;
+
+        std::vector<std::string> files;
+        for (int i = 0; i < FILES; ++i) {
+            const std::string sub = dir + "/f" + std::to_string(i);
+            fs::create_directories(sub);
+            files.push_back(create_test_trace_file(sub, 20 + i));
+        }
+        auto collect = [&](const std::string& file) {
+            MetadataCollectorUtility collector;
+            return collector(MetadataCollectorUtilityInput::from_file(file)
+                                 .with_index(index_path))
+                .get();
+        };
+        for (const auto& file : files) REQUIRE(collect(file).success);
+
+        // The collector keys the root by its normalized path.
+        auto root = internal::index_root(
+            index::store::internal::normalize_index_root(index_path));
+        // Forget what this process saw, so each check reads the index.
+        {
+            std::lock_guard<std::mutex> lock(root->current_mutex);
+            root->current.clear();
+        }
+        // Another reader of the root, such as a freshness check in flight.
+        REQUIRE(root->gate.try_acquire(1));
+
+        for (int i = 0; i < FILES; ++i) {
+            auto future = std::async(std::launch::async, collect, files[i]);
+            REQUIRE(future.wait_for(std::chrono::seconds(10)) ==
+                    std::future_status::ready);
+            const auto out = future.get();
+            CHECK(out.success);
+            CHECK(out.num_lines == static_cast<std::size_t>(20 + i));
+        }
+
+        const std::string sub = dir + "/new";
+        fs::create_directories(sub);
+        const std::string fresh = create_test_trace_file(sub, 7);
+        auto build = std::async(std::launch::async, collect, fresh);
+        CHECK(build.wait_for(std::chrono::milliseconds(300)) ==
+              std::future_status::timeout);
+        root->gate.release(1);
+        REQUIRE(build.wait_for(std::chrono::seconds(10)) ==
+                std::future_status::ready);
+        const auto built = build.get();
+        CHECK(built.success);
+        CHECK(built.num_lines == 7);
+
+        fs::remove_all(dir);
     }
 }

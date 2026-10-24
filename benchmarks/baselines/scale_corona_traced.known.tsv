@@ -1,0 +1,2 @@
+# tool	set	threads	rc	reason, as measured on b33cabbc+wip; each reason names the commit that fixed it
+split	minife_tuolumne	1	134	the watchdog took the one busy executor thread for a deadlock after 600 s and the PipelineError it raised reached terminate; fixed by bdf332f7 and 53dbf4d9

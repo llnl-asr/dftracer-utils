@@ -26,7 +26,8 @@ constexpr bool within() {
     return true;
 }
 
-constexpr std::size_t SERIES_BUDGET = 120;
+// 3 BufferViews of 24 B replace 3 shared_ptrs of 16 B.
+constexpr std::size_t SERIES_BUDGET = 144;
 constexpr std::size_t DATA_TYPE_BUDGET = 40;
 // std::string is 24 bytes in libc++ and 32 in libstdc++, so a budget counts
 // its strings by sizeof and stays tight on both.

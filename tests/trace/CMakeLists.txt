@@ -15,6 +15,7 @@ set(TRACE_TEST_SOURCES
     test_time_metric.cpp
     test_bootstrap_parallelism.cpp
     test_bootstrap_peak.cpp
+    test_index_root_stat.cpp
 
     # Indexing
     indexing/test_bloom_filter.cpp

@@ -139,6 +139,7 @@ coro::CoroTask<ResolverResult> resolve_dropping_outdated(ResolverInput input,
         index::store::RocksDBManager::instance().reset(root);
         std::error_code ec;
         fs::remove_all(root, ec);
+        forget_input(root);
         if (ec) {
             throw DFTUtilsException(ErrorCode::Io,
                                     "failed to remove outdated index " + root +

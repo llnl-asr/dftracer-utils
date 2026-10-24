@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
@@ -533,6 +534,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 index::store::RocksDBManager::instance().reset(root);
                 std::error_code ec;
                 fs::remove_all(root, ec);
+                forget_input(root);
             }
         }
     }

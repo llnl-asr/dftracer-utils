@@ -28,17 +28,19 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
                   input.index_path);
 
     // Step 1: Check if index needs to be built/rebuilt
-    bool need_build = !fs::exists(normalized_index_path) || input.force_rebuild;
+    bool need_build =
+        !input_exists(normalized_index_path) || input.force_rebuild;
 
     if (need_build) {
         // Remove old index if forcing rebuild
-        if (input.force_rebuild && fs::exists(normalized_index_path)) {
+        if (input.force_rebuild && input_exists(normalized_index_path)) {
             // Force rebuild must discard the manager-owned DB instance
             // before removing the root directory so the next open is a
             // true reopen, not a reuse of the previous live handle.
             dftracer::utils::index::store::RocksDBManager::instance().reset(
                 normalized_index_path);
             fs::remove_all(normalized_index_path);
+            forget_input(normalized_index_path);
         }
 
         // Build new index

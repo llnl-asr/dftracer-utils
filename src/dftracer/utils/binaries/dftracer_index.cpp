@@ -237,10 +237,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     };
 
     // Discover input files
-    filesystem::PatternDirectoryScannerUtility scanner;
-    filesystem::PatternDirectoryScannerUtilityInput scan_input{
-        log_dir, filesystem::trace_file_patterns(), true};
-    auto matched_entries = co_await scanner(scan_input);
+    auto matched_entries =
+        cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
 
     std::vector<std::string> input_files;
     std::vector<std::size_t> scanned_sizes;

@@ -92,7 +92,11 @@ struct PromiseBase : FrameAllocation {
         const bool cancelled = cancelled_;
         auto parent_cancel = parent_cancel_;
         finished_.store(true, std::memory_order_release);
-        if (next && handoff_.exchange(true, std::memory_order_acq_rel)) {
+        if (!next) {
+            notify_task_finished();
+            return;
+        }
+        if (handoff_.exchange(true, std::memory_order_acq_rel)) {
             if (cancelled && parent_cancel != nullptr && parent_cancel(next))
                 return;
             next.resume();

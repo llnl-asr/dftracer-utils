@@ -1,8 +1,12 @@
+#include <dftracer/utils/dstd/no_destructor.h>
 #include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/executor/run_loop.h>
 
 #include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <mutex>
 
 namespace dftracer::utils::coro {
 
@@ -37,6 +41,61 @@ std::chrono::microseconds get_timeslice_duration() noexcept {
 void* suppress_executor() noexcept {
     auto* old = Executor::set_current(nullptr);
     return static_cast<void*>(old);
+}
+
+namespace {
+
+struct DriverPark {
+    std::mutex mutex;
+    std::condition_variable cv;
+};
+
+constinit std::atomic<std::uint32_t> g_parked_drivers{0};
+// Set by the first wake after a park and cleared by the next park, so a
+// burst of enqueues takes the park mutex once, not once each.
+constinit std::atomic<bool> g_wake_sent{false};
+
+// Never destroyed: a pool thread may still wake it during static teardown.
+DriverPark& driver_park() noexcept {
+    static NoDestructor<DriverPark> park;
+    return *park;
+}
+
+}  // namespace
+
+void notify_task_finished() noexcept {
+    // Orders the caller's store of `finished` before the count read; pairs
+    // with the fence in park_driver.
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (g_parked_drivers.load(std::memory_order_relaxed) != 0)
+        wake_parked_drivers();
+}
+
+void wake_parked_drivers() noexcept {
+    if (g_parked_drivers.load(std::memory_order_acquire) == 0 ||
+        g_wake_sent.exchange(true, std::memory_order_acq_rel))
+        return;
+    DriverPark& park = driver_park();
+    {
+        std::lock_guard<std::mutex> lock(park.mutex);
+    }
+    park.cv.notify_all();
+}
+
+bool park_driver(bool (*ready)(void*), void* arg,
+                 std::chrono::milliseconds timeout) {
+    DriverPark& park = driver_park();
+    std::unique_lock<std::mutex> lock(park.mutex);
+    g_parked_drivers.fetch_add(1, std::memory_order_relaxed);
+    // Cleared on the way in, so a wake sent before this park cannot keep
+    // later wakes from reaching it. The exchange also acquires what a waker
+    // that skipped its notify had published.
+    g_wake_sent.exchange(false, std::memory_order_acq_rel);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    const bool woke = ready(arg) || park.cv.wait_for(lock, timeout) !=
+                                        std::cv_status::timeout;
+    g_parked_drivers.fetch_sub(1, std::memory_order_relaxed);
+    return woke;
 }
 
 void restore_executor(void* saved) noexcept {

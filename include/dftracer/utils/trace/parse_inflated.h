@@ -6,6 +6,7 @@
 #include <simdjson.h>
 
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -18,8 +19,10 @@ namespace dftracer::utils::trace {
 inline void strip_array_delimiters(char* buf, std::size_t len) {
     for (std::size_t i = 0; i < len;) {
         std::size_t line_start = i;
-        std::size_t line_end = i;
-        while (line_end < len && buf[line_end] != '\n') ++line_end;
+        const void* nl = std::memchr(buf + i, '\n', len - i);
+        std::size_t line_end =
+            nl ? static_cast<std::size_t>(static_cast<const char*>(nl) - buf)
+               : len;
 
         bool has_bracket = false;
         for (std::size_t j = line_start; j < line_end; ++j) {

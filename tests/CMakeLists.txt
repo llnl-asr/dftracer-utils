@@ -281,6 +281,7 @@ set(TEST_CPP_SOURCES
     index/test_prefilter.cpp
     index/test_prefilter_fuzz.cpp
     index/test_event_cost.cpp
+    index/test_parse_walks.cpp
     index/test_serial_stages.cpp
     )
 

@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_STORE_DATABASE_H
 
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <rocksdb/db.h>
 #include <rocksdb/env.h>
@@ -88,6 +89,16 @@ class RocksDatabase {
     ::rocksdb::Status compact(
         std::string_view column_family = index::store::cf::DEFAULT);
 
+    /// Sets the column family's `disable_auto_compactions` and stores the
+    /// value it had in `*previous`. Turning it back on schedules the
+    /// compactions that were held back.
+    ::rocksdb::Status set_auto_compactions_disabled(
+        std::string_view column_family, bool disabled, bool* previous);
+
+    /// Waits for the running flushes and compactions to end, and for none to
+    /// start that was not already scheduled.
+    ::rocksdb::Status wait_for_compactions();
+
     /// SST files the column family holds at `level`, from RocksDB's
     /// "rocksdb.num-files-at-level<N>"; 0 when the property is unavailable.
     std::size_t files_at_level(std::string_view column_family, int level) const;
@@ -132,6 +143,26 @@ class RocksDatabase {
     ::rocksdb::DB* db_ = nullptr;
     StringViewMap<::rocksdb::ColumnFamilyHandle*> column_families_;
     CfOptionsOverride cf_options_override_;
+};
+
+/// Holds back the automatic compactions of every column family of `db` while
+/// it lives, so a run of ingests meets no running compaction. Each family goes
+/// back to the value it had. Throws when a family cannot be paused.
+class AutoCompactionPause {
+   public:
+    explicit AutoCompactionPause(std::shared_ptr<RocksDatabase> db);
+    AutoCompactionPause(const AutoCompactionPause&) = delete;
+    AutoCompactionPause& operator=(const AutoCompactionPause&) = delete;
+    /// Resumes without throwing; an error is dropped.
+    ~AutoCompactionPause();
+
+    /// Restores every family, also when one fails, and returns the first
+    /// error. A second call does nothing.
+    ::rocksdb::Status resume();
+
+   private:
+    std::shared_ptr<RocksDatabase> db_;
+    dstd::Vector<std::pair<std::string_view, bool>> previous_;
 };
 
 }  // namespace dftracer::utils::index::store

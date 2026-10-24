@@ -30,15 +30,25 @@ bool export_bootstrap_eligible(const ViewPlan& plan);
 bool collect_bootstrap_eligible(const ViewPlan& plan);
 
 /// Files the first-touch bootstrap has in flight, for tests: the most at once
-/// since the last reset, and the sinks it committed.
+/// since the last reset, the sinks it committed, the ingests it made, and the
+/// ingests that started while another file was in flight, and the most
+/// ingests at once.
 struct BootstrapCounters {
     std::atomic<std::size_t> in_flight{0};
     std::atomic<std::size_t> max_in_flight{0};
     std::atomic<std::size_t> sink_commits{0};
+    std::atomic<std::size_t> ingest_calls{0};
+    std::atomic<std::size_t> ingests_during_parse{0};
+    std::atomic<std::size_t> ingests_in_flight{0};
+    std::atomic<std::size_t> max_ingests_in_flight{0};
     void reset() {
         in_flight.store(0, std::memory_order_relaxed);
         max_in_flight.store(0, std::memory_order_relaxed);
         sink_commits.store(0, std::memory_order_relaxed);
+        ingest_calls.store(0, std::memory_order_relaxed);
+        ingests_during_parse.store(0, std::memory_order_relaxed);
+        ingests_in_flight.store(0, std::memory_order_relaxed);
+        max_ingests_in_flight.store(0, std::memory_order_relaxed);
     }
 };
 BootstrapCounters& bootstrap_counters();

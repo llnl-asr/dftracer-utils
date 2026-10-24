@@ -545,6 +545,55 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
                              nullptr);
 }
 
+::rocksdb::Status RocksDatabase::set_auto_compactions_disabled(
+    std::string_view column_family, bool disabled, bool* previous) {
+    auto* handle = column_family_handle(column_family);
+    *previous = db_->GetOptions(handle).disable_auto_compactions;
+    return db_->SetOptions(
+        handle, {{"disable_auto_compactions", disabled ? "true" : "false"}});
+}
+
+::rocksdb::Status RocksDatabase::wait_for_compactions() {
+    ::rocksdb::WaitForCompactOptions opts;
+    opts.abort_on_pause = false;
+    opts.flush = false;
+    return db_->WaitForCompact(opts);
+}
+
+AutoCompactionPause::AutoCompactionPause(std::shared_ptr<RocksDatabase> db)
+    : db_(std::move(db)) {
+    for (const auto cf : RocksDatabase::default_column_families()) {
+        bool previous = false;
+        auto status = db_->set_auto_compactions_disabled(cf, true, &previous);
+        if (!status.ok()) {
+            resume();
+            throw DFTUtilsException(
+                ErrorCode::Io, "Failed to pause compaction of column family '" +
+                                   std::string(cf) + "': " + status.ToString());
+        }
+        previous_.emplace_back(cf, previous);
+    }
+}
+
+AutoCompactionPause::~AutoCompactionPause() {
+    try {
+        resume();
+    } catch (...) {
+    }
+}
+
+::rocksdb::Status AutoCompactionPause::resume() {
+    auto first = ::rocksdb::Status::OK();
+    for (const auto& [cf, was_disabled] : previous_) {
+        bool unused = false;
+        auto status =
+            db_->set_auto_compactions_disabled(cf, was_disabled, &unused);
+        if (!status.ok() && first.ok()) first = status;
+    }
+    previous_.clear();
+    return first;
+}
+
 std::size_t RocksDatabase::files_at_level(std::string_view column_family,
                                           int level) const {
     std::string value;

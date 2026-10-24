@@ -77,6 +77,20 @@ std::vector<scan::FileEntry> scan_dir(const std::string& dir) {
     return entries;
 }
 
+// The scan as the CLIs run it: from a coroutine that get() drives on the main
+// thread, through scan_on_pool, which fans it out over the CLI's pool.
+coro::CoroTask<std::vector<scan::FileEntry>> cli_scan_task(std::string dir) {
+    auto entries = scan::scan_on_pool<scan::PatternDirectoryScannerUtility>(
+        WORKERS, 2,
+        scan::PatternDirectoryScannerUtilityInput(
+            std::move(dir), std::vector<std::string>{".pfw"}, true, false));
+    co_return entries;
+}
+
+std::vector<scan::FileEntry> cli_scan(const std::string& dir) {
+    return cli_scan_task(dir).get();
+}
+
 }  // namespace
 
 TEST_SUITE("SerialStages") {
@@ -112,6 +126,25 @@ TEST_SUITE("SerialStages") {
             CHECK(entries[i].mtime > 0);
         }
         CHECK(batches > 2);
+    }
+
+    TEST_CASE("a CLI scan stats its files on more than one thread") {
+        dftu_utils_test::TestEnvironment env(10);
+        const std::string dir = env.get_dir() + "/cli_scan";
+        fs::create_directories(dir + "/a");
+        fs::create_directories(dir + "/b");
+        for (int i = 0; i < SCAN_FILES; ++i)
+            write_sized_file(
+                dir + (i % 2 ? "/a/f" : "/b/f") + std::to_string(i) + ".pfw",
+                static_cast<std::size_t>(i) + 1);
+
+        scan::scan_stat_threads().clear();
+        // A CLI drives its run coroutine with get() on the main thread, with
+        // no executor running there but the main run loop.
+        const auto entries = cli_scan(dir);
+
+        CHECK(entries.size() == SCAN_FILES);
+        CHECK(scan::scan_stat_threads().count() > 1);
     }
 
     TEST_CASE("an ingest links its staged SSTs without a reopen and fsync") {

@@ -788,11 +788,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
 
-        PatternDirectoryScannerUtility scanner;
-        PatternDirectoryScannerUtilityInput scan_input{
-            directory, trace_file_patterns(), /*rec=*/true,
-            /*with_size=*/false};
-        auto matched = co_await scanner(scan_input);
+        auto matched = cli::scan_trace_files_on_pool(cli->pipeline, directory,
+                                                     /*populate_size=*/false);
 
         for (const auto& entry : matched) {
             files.push_back(entry.path.string());

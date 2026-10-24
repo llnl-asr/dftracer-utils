@@ -260,10 +260,7 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
     std::vector<std::string> input_files;
     {
-        utilities::filesystem::PatternDirectoryScannerUtility scanner;
-        auto matched = co_await scanner(
-            utilities::filesystem::PatternDirectoryScannerUtilityInput{
-                log_dir, utilities::filesystem::trace_file_patterns(), true});
+        auto matched = cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
         // Never read back this run's own output. The output directory is
         // resolved once and a file is tested by its walked path, so no input
         // file or the input root is resolved again. A symlink that points into

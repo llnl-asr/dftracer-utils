@@ -609,6 +609,26 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
     }
 }
 
+// Threads a directory scan stats with at most. More of them stat no faster and
+// cost seconds of system time in contention on the file system's metadata
+// (Corona, 8,404 files: 12 threads match the wall time of 48 at 5 s less
+// system time).
+inline constexpr std::size_t SCAN_POOL_THREADS = 12;
+
+// The trace files under `directory`, scanned recursively on a pool of its own
+// (see scan_on_pool). The scan does no I/O of its own beyond the stats, so the
+// pool has one I/O thread.
+inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
+    const PipelineArgs& pipeline, const std::string& directory,
+    bool populate_size = true) {
+    return utilities::filesystem::scan_on_pool<
+        utilities::filesystem::PatternDirectoryScannerUtility>(
+        std::min(pipeline.executor_threads, SCAN_POOL_THREADS), 1,
+        utilities::filesystem::PatternDirectoryScannerUtilityInput{
+            directory, utilities::filesystem::trace_file_patterns(), true,
+            populate_size});
+}
+
 // Parallel per-subdirectory scan of `directory` for trace files via
 // ctx.spawn (context lets a recursive walk fan out per subdirectory); sizes
 // are not populated. Returns the matched paths.

@@ -3,8 +3,10 @@
 
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -15,7 +17,9 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace dftracer::utils::utilities::filesystem {
@@ -41,6 +45,33 @@ inline bool is_excluded_scan_dir(const fs::path& p) {
 inline std::atomic<std::size_t>& scan_stat_batches() {
     static std::atomic<std::size_t> batches{0};
     return batches;
+}
+
+/// The threads that have run a stat batch in this process. A scan whose
+/// batches all run on one thread stats its files serially. For tests.
+class ScanStatThreads {
+   public:
+    void note() {
+        std::lock_guard<std::mutex> lock(mu_);
+        ids_.insert(std::this_thread::get_id());
+    }
+    std::size_t count() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return ids_.size();
+    }
+    void clear() {
+        std::lock_guard<std::mutex> lock(mu_);
+        ids_.clear();
+    }
+
+   private:
+    mutable std::mutex mu_;
+    dftracer::utils::dstd::Set<std::thread::id> ids_;
+};
+
+inline ScanStatThreads& scan_stat_threads() {
+    static ScanStatThreads threads;
+    return threads;
 }
 
 struct DirectoryScannerUtilityInput {
@@ -144,6 +175,7 @@ class DirectoryScannerUtility {
                                 std::size_t begin, std::size_t end,
                                 bool populate_size) {
         scan_stat_batches().fetch_add(1, std::memory_order_relaxed);
+        scan_stat_threads().note();
         StatBatch out;
         for (std::size_t i = begin; i < end; ++i) {
             const fs::directory_entry& entry = listing[i];
@@ -217,6 +249,33 @@ class DirectoryScannerUtility {
         co_return files;
     }
 };
+
+/// Scans `input` with a `Scanner` (a scanner utility that takes a CoroScope)
+/// on a pool of its own with `executor_threads` workers and `io_threads` I/O
+/// threads, and blocks until done. A CLI drives its run coroutine with get()
+/// on the main thread, whose run loop is one thread, so a scan awaited there
+/// stats every file one at a time. Here the stat batches fan out over the pool.
+template <class Scanner, class Input>
+coro::CoroTask<void> scan_on_pool_task(CoroScope& scope, Input input,
+                                       std::vector<FileEntry>* entries) {
+    Scanner scanner;
+    *entries = co_await scanner(scope, input);
+}
+
+template <class Scanner, class Input>
+std::vector<FileEntry> scan_on_pool(std::size_t executor_threads,
+                                    std::size_t io_threads, Input input) {
+    std::vector<FileEntry> entries;
+    ExecutorConfig config;
+    config.num_threads = executor_threads;
+    config.io_pool_size = io_threads;
+    Runtime pool(config, /*enable_watchdog=*/false);
+    pool.run_blocking("scan trace files", [&](CoroScope& scope) {
+        return scan_on_pool_task<Scanner, Input>(scope, std::move(input),
+                                                 &entries);
+    });
+    return entries;
+}
 
 }  // namespace dftracer::utils::utilities::filesystem
 

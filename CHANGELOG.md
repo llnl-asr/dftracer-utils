@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Stat the files of a directory scan on the pool of `dftracer_view`, `dftracer_index`, `dftracer_split` and `dftracer_run` instead of one at a time on the main thread.
+  A cold `dftracer_view` of the 8,404 minife traces at 48 threads starts its parse after 0.3 s where it took 0.8 to 2.6 s and takes 11.6 s where it took 14.4 s, and `dftracer_index` takes 8.4 s where it took 8.7 s with the same index.
 - Walk each record's keys once and its args once in the index fold's parse, where it walked the record twice and the args up to twice.
   A one-thread build of the 8,404 minife traces spends 138 s in the parse where it spent 166 s and takes 157 s where it took 185 s, with the stored index unchanged.
 - Stop a worker that waits in `get()` for a task from spinning on the CPU.

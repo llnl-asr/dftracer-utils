@@ -613,8 +613,11 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 }
 
 void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
-    constexpr int IDLE_POLL_MS = 1;
     memory::Pool& general = memory::Manager::get().general();
+    // Backs off like an idle worker. A task with no awaiter that ends, new
+    // work and shutdown wake the park; the timeout still re-checks the queue
+    // for the enqueue that worker_thread's park comment describes.
+    std::chrono::milliseconds park = IDLE_PARK_MIN;
 
     while (!done()) {
         const std::uint64_t observed_signal =
@@ -630,6 +633,7 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
             }
             drain_thread_local_destroys();
             drain_destroy_queue();
+            park = IDLE_PARK_MIN;
             continue;
         }
 
@@ -639,14 +643,26 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
 
         if (io_backend_) {
             io_backend_->flush();
-            io_backend_->poll(IDLE_POLL_MS);
-            continue;
+            if (io_backend_->poll(0) > 0) {
+                park = IDLE_PARK_MIN;
+                continue;
+            }
         }
-        // Bounded for the same reason as worker_thread's park: a run_queue_
-        // enqueue can be missed with the item already queued, so re-check.
-        std::unique_lock<std::mutex> lock(idle_mutex_);
-        if (work_signal_.load(std::memory_order_acquire) == observed_signal)
-            idle_cv_.wait_for(lock, IDLE_PARK_MIN);
+        struct Wait {
+            const std::function<bool()>& done;
+            const ThreadPoolExecutor& self;
+            std::uint64_t observed_signal;
+        } wait{done, *this, observed_signal};
+        const bool woke = coro::park_driver(
+            [](void* arg) {
+                const auto& w = *static_cast<const Wait*>(arg);
+                return w.done() ||
+                       !w.self.running_.load(std::memory_order_acquire) ||
+                       w.self.work_signal_.load(std::memory_order_acquire) !=
+                           w.observed_signal;
+            },
+            &wait, park);
+        park = woke ? IDLE_PARK_MIN : std::min(park * 2, IDLE_PARK_MAX);
     }
     drain_thread_local_destroys();
 }
@@ -692,12 +708,14 @@ void ThreadPoolExecutor::signal_global_work() {
 void ThreadPoolExecutor::wake_one_worker() {
     work_signal_.notify_one();
     idle_cv_.notify_one();
+    coro::wake_parked_drivers();
 }
 
 void ThreadPoolExecutor::wake_all_workers() {
     work_signal_.fetch_add(1, std::memory_order_release);
     work_signal_.notify_all();
     idle_cv_.notify_all();
+    coro::wake_parked_drivers();
     // Wake workers parked in acquire_permit so they re-check running_/retire.
     permits_.notify_all();
 }

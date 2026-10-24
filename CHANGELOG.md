@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Walk each record's keys once and its args once in the index fold's parse, where it walked the record twice and the args up to twice.
   A one-thread build of the 8,404 minife traces spends 138 s in the parse where it spent 166 s and takes 157 s where it took 185 s, with the stored index unchanged.
+- Stop a worker that waits in `get()` for a task from spinning on the CPU.
+  It now sleeps until that task finishes or new work comes, so on macOS a 200 ms wait costs under 2 ms of CPU where it cost 205 ms.
 - Cut the CPU an index build spends per event by about 25% on minife traces at one thread: schema leaf paths are interned once per record shape and key, chunk statistics and dimension counts find their entries by interned id, a bloom insert hashes its value once and a value already in a chunk's bloom is not probed again. The stored index is unchanged.
 - Bound the parse memory of each worker in an index build and a cold first query: a chunk is parsed in pieces of at most 1 MiB and 8192 lines, `parse_many` reads batches of 128 KiB on the calling thread, a record longer than a batch is parsed alone, and event buffers cut back what a huge batch or event grew when they are returned.
   The peak of a build no longer grows by about 100 MB for each extra worker.

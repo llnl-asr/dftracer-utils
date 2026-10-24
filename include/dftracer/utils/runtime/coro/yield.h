@@ -73,6 +73,21 @@ void yield_to_executor(std::coroutine_handle<> h) noexcept;
 void drive_to_completion(std::coroutine_handle<> h,
                          const std::atomic<bool>& finished);
 
+/// Wakes the threads parked in an executor's drive_until after a task with
+/// no awaiter ended, so a blocked get() sees it without polling. Call it
+/// after the release store of `finished`. Cheap when nobody is parked.
+void notify_task_finished() noexcept;
+
+/// Wakes the threads parked in drive_until, for new work or a shutdown.
+void wake_parked_drivers() noexcept;
+
+/// Parks a thread in drive_until until `ready(arg)` holds, a task with no
+/// awaiter ends, wake_parked_drivers() is called or `timeout` passes. `ready`
+/// is checked after the thread counts as parked, so a wake-up that races
+/// with the park is not lost. False when the timeout passed.
+bool park_driver(bool (*ready)(void*), void* arg,
+                 std::chrono::milliseconds timeout);
+
 // ============================================================================
 // yield() and maybe_yield() awaitables
 // ============================================================================

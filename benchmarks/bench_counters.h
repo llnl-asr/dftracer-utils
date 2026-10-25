@@ -140,11 +140,21 @@ void *operator new(std::size_t size, std::align_val_t align) {
     return p;
 }
 
-void operator delete(void *p) noexcept { std::free(p); }
-void operator delete(void *p, std::size_t) noexcept { std::free(p); }
-void operator delete(void *p, std::align_val_t) noexcept { std::free(p); }
-void operator delete(void *p, std::size_t, std::align_val_t) noexcept {
+namespace dftu::bench {
+__attribute__((noinline)) inline void free_block(void *p) noexcept {
     std::free(p);
+}
+}  // namespace dftu::bench
+
+void operator delete(void *p) noexcept { dftu::bench::free_block(p); }
+void operator delete(void *p, std::size_t) noexcept {
+    dftu::bench::free_block(p);
+}
+void operator delete(void *p, std::align_val_t) noexcept {
+    dftu::bench::free_block(p);
+}
+void operator delete(void *p, std::size_t, std::align_val_t) noexcept {
+    dftu::bench::free_block(p);
 }
 
 #endif  // DFTRACER_UTILS_BENCH_COUNT_NEW

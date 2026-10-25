@@ -247,6 +247,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Fixed
 
 - Fix a coroutine that waits on a timer hanging forever when the timer is set while the timer thread goes to sleep.
+- Fix a file read or write waiting forever while the worker that started it runs a step that blocks.
+  A worker now starts the I/O its step queued when the step ends, where it started it only after 16 queued operations or when it had no work.
 - Fix every CLI tool crashing with a stack overflow when it runs under the DFTracer preload on Linux.
   The tracer's `munmap` wrapper allocated, which called the heap again before the heap's own `munmap` returned, and the heap now maps its memory with system calls that a wrapper does not see.
 - Fix a second `dftracer_index` run on unchanged files indexing every file again.

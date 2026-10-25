@@ -507,6 +507,9 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                                                   pending_resume.done());
                 }
             }
+            // A batch held until this worker idles would wait behind a later
+            // slice that blocks, so ops submitted in this slice start now.
+            if (io_backend_) io_backend_->flush();
             // Destroy coroutine frames that FinalAwaiter deferred to this
             // thread.  Safe: resume() has fully returned, so the frame
             // is suspended at final_suspend and no code references it.

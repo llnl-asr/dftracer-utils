@@ -70,8 +70,9 @@ class Ring {
     std::size_t sqes_size_ = 0;
 
     // Batched submission: count of SQEs prepared but not yet
-    // submitted to the kernel via io_uring_enter.
-    unsigned pending_count_ = 0;
+    // submitted to the kernel via io_uring_enter. Written under the
+    // backend's submit lock; atomic so flush() can skip the lock when empty.
+    std::atomic<unsigned> pending_count_{0};
 
    public:
     Ring() = default;
@@ -96,10 +97,15 @@ class Ring {
     /// Increment pending count after preparing an SQE.
     /// Call after get_sqe() + prep_*() to record that this SQE
     /// should be submitted on the next flush().
-    void mark_pending() { ++pending_count_; }
+    void mark_pending() {
+        pending_count_.store(pending_count_.load(std::memory_order_relaxed) + 1,
+                             std::memory_order_relaxed);
+    }
 
     /// Number of SQEs prepared but not yet submitted.
-    unsigned pending_count() const { return pending_count_; }
+    unsigned pending_count() const {
+        return pending_count_.load(std::memory_order_relaxed);
+    }
 
     /// Submit all pending SQEs to the kernel in a single
     /// io_uring_enter syscall. Returns the number of SQEs

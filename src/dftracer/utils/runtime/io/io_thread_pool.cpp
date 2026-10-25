@@ -40,10 +40,13 @@ void IoThreadPool::submit(std::function<void()> fn) {
             // Immediate mode (legacy behavior).
             should_notify = true;
         } else {
-            ++unflushed_count_;
-            if (unflushed_count_ >= batch_threshold_) {
-                unflushed_count_ = 0;
+            const unsigned unflushed =
+                unflushed_count_.load(std::memory_order_relaxed) + 1;
+            if (unflushed >= batch_threshold_) {
+                unflushed_count_.store(0, std::memory_order_relaxed);
                 should_notify = true;
+            } else {
+                unflushed_count_.store(unflushed, std::memory_order_relaxed);
             }
         }
     }
@@ -57,11 +60,12 @@ void IoThreadPool::submit(std::function<void()> fn) {
 }
 
 std::size_t IoThreadPool::flush() {
+    if (unflushed_count_.load(std::memory_order_relaxed) == 0) return 0;
     std::size_t count;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        count = unflushed_count_;
-        unflushed_count_ = 0;
+        count = unflushed_count_.load(std::memory_order_relaxed);
+        unflushed_count_.store(0, std::memory_order_relaxed);
     }
     wake(count);
     return count;

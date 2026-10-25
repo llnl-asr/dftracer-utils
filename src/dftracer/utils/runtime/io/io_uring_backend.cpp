@@ -146,9 +146,9 @@ struct io_uring_sqe* Ring::get_sqe() {
 }
 
 int Ring::flush() {
-    if (pending_count_ == 0) return 0;
-    unsigned to_submit = pending_count_;
-    pending_count_ = 0;
+    const unsigned to_submit = pending_count_.load(std::memory_order_relaxed);
+    if (to_submit == 0) return 0;
+    pending_count_.store(0, std::memory_order_relaxed);
     // Memory barrier: make SQE writes visible to kernel
     __atomic_store_n(sq_tail_, *sq_tail_, __ATOMIC_RELEASE);
     return sys_io_uring_enter(ring_fd_, to_submit, 0, 0);
@@ -314,6 +314,7 @@ void IoUringBackend::maybe_flush_locked() {
 }
 
 int IoUringBackend::flush() {
+    if (ring_.pending_count() == 0) return 0;
     std::lock_guard<std::mutex> lock(submit_mutex_);
     int ret = ring_.flush();
     if (ret < 0) {

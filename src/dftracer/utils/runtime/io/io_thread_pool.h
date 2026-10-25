@@ -73,7 +73,8 @@ class IoThreadPool {
 
     std::size_t num_threads_;
     unsigned batch_threshold_;
-    unsigned unflushed_count_ = 0;  // protected by mutex_
+    // Written under mutex_; atomic so flush() can skip the lock when empty.
+    std::atomic<unsigned> unflushed_count_{0};
     std::vector<std::thread> threads_;
     std::queue<std::function<void()>> queue_;
     std::mutex mutex_;

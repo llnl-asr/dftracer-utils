@@ -1,14 +1,21 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/coro.h>
+#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
+#include <testing_utilities.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <thread>
 #include <vector>
 
@@ -126,5 +133,40 @@ TEST_SUITE("ExecutorWakeups") {
         CHECK(cpu < MAX_CPU);
         CHECK(switches < MAX_SWITCHES);
         CHECK(median < MAX_MEDIAN_LATENCY);
+    }
+    TEST_CASE("an I/O op starts without waiting for its worker to idle") {
+        // The write is submitted in one slice and a later slice on the same
+        // worker blocks until the write lands. A batch flushed only when the
+        // worker idles never starts, so the wait runs out.
+        constexpr auto DEADLINE = 3s;
+        const auto path =
+            dftu_utils_test::make_unique_test_path("io_flush_per_slice");
+        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        REQUIRE(fd >= 0);
+        static const char BYTE = 'x';
+
+        Runtime rt(1);
+        bool landed = false;
+        rt.run_blocking("io_flush", [&](CoroScope& s) -> coro::CoroTask<void> {
+            s.spawn([fd](CoroScope&) -> coro::CoroTask<void> {
+                co_await io::pwrite(fd, &BYTE, 1, 0);
+            });
+            co_await coro::yield();
+            const auto until = std::chrono::steady_clock::now() + DEADLINE;
+            struct stat st{};
+            while (std::chrono::steady_clock::now() < until) {
+                if (::stat(path.c_str(), &st) == 0 && st.st_size == 1) {
+                    landed = true;
+                    break;
+                }
+                std::this_thread::sleep_for(1ms);
+            }
+            co_await s.join();
+        });
+        rt.shutdown();
+        ::close(fd);
+        std::error_code ec;
+        std::filesystem::remove(path, ec);
+        CHECK(landed);
     }
 }

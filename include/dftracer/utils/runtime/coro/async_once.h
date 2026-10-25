@@ -60,7 +60,10 @@ class AsyncOnce {
             co_return value_;
         }
 
-        co_await Awaiter{this};
+        // A named awaiter: GCC 12.1 destroys a co_await temporary twice, and
+        // this destructor unparks the executor.
+        Awaiter waiter{this};
+        co_await waiter;
         co_return value_;
     }
 

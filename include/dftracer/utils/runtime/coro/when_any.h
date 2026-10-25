@@ -284,8 +284,9 @@ class WhenAnyAwaitable {
                 }
                 bool won = false;
                 try {
-                    auto outcome = co_await detail::CancelAware<Awaitable>{
+                    detail::CancelAware<Awaitable> aware{
                         state->awaitables[index]};
+                    auto outcome = co_await aware;
 
                     bool expected = false;
                     won = state->completed.compare_exchange_strong(
@@ -587,8 +588,8 @@ class WhenAnyTupleAwaitable {
             }
             bool won = false;
             try {
-                auto outcome = co_await detail::CancelAware<A>{
-                    std::get<I>(*state->awaitables_)};
+                detail::CancelAware<A> aware{std::get<I>(*state->awaitables_)};
+                auto outcome = co_await aware;
                 won = state->claim();
                 if (won) {
                     if (outcome) {

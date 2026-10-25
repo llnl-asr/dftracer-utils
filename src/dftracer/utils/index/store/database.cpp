@@ -137,8 +137,8 @@ namespace {
 /// One cache for the process. Left unset, every column family gets its own
 /// 8 MB default, which no realistic working set fits in.
 std::shared_ptr<::rocksdb::Cache>& shared_block_cache() {
-    static std::shared_ptr<::rocksdb::Cache> cache =
-        ::rocksdb::NewLRUCache(constants::rocksdb::BLOCK_CACHE_BYTES);
+    static std::shared_ptr<::rocksdb::Cache> cache = ::rocksdb::NewLRUCache(
+        g_block_cache_bytes.load(std::memory_order_relaxed));
     return cache;
 }
 

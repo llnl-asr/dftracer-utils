@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_DATABASE_H
 #define DFTRACER_UTILS_INDEX_STORE_DATABASE_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/column_families.h>
@@ -11,6 +12,8 @@
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
 
+#include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -18,6 +21,11 @@
 #include <vector>
 
 namespace dftracer::utils::index::store {
+
+/// Size of the process's one block cache, read when the first database opens.
+/// A test lowers it so its peaks measure our code, not cached blocks.
+inline std::atomic<std::size_t> g_block_cache_bytes{
+    constants::rocksdb::BLOCK_CACHE_BYTES};
 
 void mark_process_exiting_for_rocksdb();
 

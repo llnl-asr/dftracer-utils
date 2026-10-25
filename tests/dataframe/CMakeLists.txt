@@ -76,7 +76,6 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     target_compile_options(${target_name} PRIVATE --coverage -fprofile-arcs
                                                    -ftest-coverage)
     target_link_libraries(${target_name} PRIVATE --coverage)
-    target_compile_definitions(${target_name} PRIVATE DFTRACER_UTILS_COVERAGE_BUILD)
   endif()
 
   set(test_working_directory

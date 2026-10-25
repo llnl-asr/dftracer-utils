@@ -289,7 +289,11 @@ TEST_CASE("a frame destroyed while it waits leaks nothing") {
     CHECK(!resumed.load());
     CHECK(root().reserved() == 0);
     // The warm-up frame may still be counted in `before`: a worker destroys
-    // it just after get() returns. A leak can only add blocks.
+    // it just after get() returns. A leak can only add blocks, and a leaked
+    // block never comes back, while one another thread frees late does.
+    const auto settle = Clock::now() + 5s;
+    while (general.blocks() > before && Clock::now() < settle)
+        std::this_thread::sleep_for(10ms);
     CHECK(general.blocks() <= before);
 }
 

@@ -197,6 +197,7 @@ set(TEST_CPP_SOURCES
     runtime/test_io_backend_env.cpp
     runtime/test_watchdog.cpp
     runtime/test_executor_wakeups.cpp
+    runtime/test_timer_service.cpp
     common/test_logging.cpp
     common/test_error.cpp
     common/test_intern_table.cpp

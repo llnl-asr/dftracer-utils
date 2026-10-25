@@ -2,6 +2,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -9,8 +10,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 

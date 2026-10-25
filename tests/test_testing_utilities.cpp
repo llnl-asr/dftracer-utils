@@ -3,12 +3,11 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <string>
-
-#include "testing_runtime.h"
-#include "testing_utilities.h"
 
 using namespace dftu_utils_test;
 

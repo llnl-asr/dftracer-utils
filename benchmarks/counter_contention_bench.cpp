@@ -40,6 +40,8 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
+#include <memory_probe.h>
+#include <memory_workloads.h>
 
 #include <algorithm>
 #include <array>
@@ -57,9 +59,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#include "memory_probe.h"
-#include "memory_workloads.h"
 
 using namespace dftracer::utils;
 using dftracer::utils::coro::CoroTask;

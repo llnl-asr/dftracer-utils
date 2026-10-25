@@ -11,14 +11,13 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
-
-#include "test_plugin_common.h"
 
 #ifdef REFERENCE_PLUGIN_PATH
 

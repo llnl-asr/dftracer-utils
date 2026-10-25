@@ -5,13 +5,12 @@
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdlib>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 

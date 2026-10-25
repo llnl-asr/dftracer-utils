@@ -3,11 +3,10 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <string>
 #include <system_error>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 

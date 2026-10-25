@@ -6,14 +6,13 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 

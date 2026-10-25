@@ -31,6 +31,8 @@
 #include <dftracer/utils/dataframe/series.h>
 #endif
 
+#include <testing_utilities.h>
+
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -39,8 +41,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;

@@ -21,6 +21,8 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <trace/views/groupmap_oracle.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <array>
@@ -28,9 +30,6 @@
 #include <functional>
 #include <map>
 #include <utility>
-
-#include "groupmap_oracle.h"
-#include "test_view_common.h"
 
 namespace aggparity {
 

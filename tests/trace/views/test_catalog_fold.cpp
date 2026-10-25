@@ -7,13 +7,12 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <map>
 #include <string>
 #include <tuple>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 

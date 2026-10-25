@@ -3,8 +3,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
-
-#include "testing_utilities.h"
+#include <testing_utilities.h>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::internal;

@@ -4,13 +4,12 @@
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-
-#include "../memory/fresh_process.h"
 
 namespace dut = dftracer::utils;
 namespace mem = dftracer::utils::memory;

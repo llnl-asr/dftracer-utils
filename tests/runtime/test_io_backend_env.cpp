@@ -3,12 +3,11 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-
-#include "../memory/fresh_process.h"
 
 using namespace dftracer::utils;
 

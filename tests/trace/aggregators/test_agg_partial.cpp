@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/memory/heap.h>
 #include <doctest/doctest.h>
+#include <trace/aggregators/aggregation_oracle.h>
 
 #include <algorithm>
 #include <cmath>
@@ -20,8 +21,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#include "aggregation_oracle.h"
 
 using namespace dftracer::utils::index::schemas::dft::agg;
 using dftracer::utils::dataframe::FieldStat;

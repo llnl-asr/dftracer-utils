@@ -14,6 +14,8 @@
 //   pressure_read_bench --smoke   (5 runs of 100 reads, checks each read is
 //   nonzero)
 
+#include <memory_probe.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -21,8 +23,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "memory_probe.h"
 
 #ifndef __APPLE__
 #include <fcntl.h>

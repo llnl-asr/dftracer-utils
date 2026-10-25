@@ -3,11 +3,10 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 using namespace test_view_common;
 namespace stats = dftracer::utils::trace::statistics;

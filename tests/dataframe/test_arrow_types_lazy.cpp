@@ -12,6 +12,7 @@
 // eager sweep (6d2859fc..95f09311) never touched lazy/streaming or spill, so
 // a divergence found here is a lazy or spill bug, not eager's.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -21,8 +22,6 @@
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <nanoarrow/nanoarrow.h>
-
-#include "builders_arrow_types.h"
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;

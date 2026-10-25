@@ -11,6 +11,7 @@ find_package(ZLIB 1.2 REQUIRED)
 # ##############################################################################
 
 add_library(testing_utilities STATIC testing_utilities.cpp)
+target_include_directories(testing_utilities PUBLIC ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(
   testing_utilities
   PUBLIC dftracer_utils
@@ -141,6 +142,12 @@ add_test(
   COMMAND
     sh -c
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/dstd\" \"$0/src/dftracer/utils/dstd\" | grep -vE '<dftracer/utils/(dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from dstd/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME no_quoted_includes
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*\"' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"quoted include; use <dftracer/utils/...> or the path from tests/ or benchmarks/:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME memory_no_upward

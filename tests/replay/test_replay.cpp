@@ -3,14 +3,13 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <chrono>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "testing_utilities.h"
 
 namespace {
 /// Traces must be gzip. Drop-in for the std::ofstream these fixtures used:

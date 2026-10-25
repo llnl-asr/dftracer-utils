@@ -3,6 +3,7 @@
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -13,8 +14,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include "fresh_process.h"
 
 using namespace dftracer::utils::memory;
 

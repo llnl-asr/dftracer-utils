@@ -5,14 +5,13 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
+#include <trace/views/test_view_common.h>
 
 #include <cstdint>
 #include <map>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "views/test_view_common.h"
 
 namespace bootstrap_test {
 

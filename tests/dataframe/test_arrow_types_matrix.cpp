@@ -13,11 +13,10 @@
 // every TypeId is_audited() marks true, and is_audited() has no default case,
 // so a newly added TypeId cannot slip through unclassified.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <nanoarrow/nanoarrow.h>
-
-#include "builders_arrow_types.h"
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;

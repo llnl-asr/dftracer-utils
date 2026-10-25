@@ -1,10 +1,9 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
+#include <dftracer/utils/dataframe/ops/ops_common.h>
 
 #include <algorithm>
 #include <stdexcept>
-
-#include "ops_common.h"
 
 namespace dftracer::utils::dataframe {
 

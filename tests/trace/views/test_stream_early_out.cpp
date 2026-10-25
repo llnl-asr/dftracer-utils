@@ -1,13 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
-
-#include "test_view_common.h"
 
 namespace {
 

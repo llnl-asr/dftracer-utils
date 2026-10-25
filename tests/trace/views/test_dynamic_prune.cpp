@@ -19,6 +19,7 @@
 #include <dftracer/utils/trace/views/view_scanner_utility.h>
 #include <dftracer/utils/trace/views/view_source.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <array>
@@ -30,8 +31,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-
-#include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
 using dftracer::utils::dstd::StringIntern;

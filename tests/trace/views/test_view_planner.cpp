@@ -8,10 +8,9 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <testing_utilities.h>
 
 #include <string>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;

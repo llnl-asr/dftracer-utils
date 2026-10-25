@@ -1,11 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 

@@ -18,6 +18,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <testing_utilities.h>
 
 #include <cstdint>
 #include <cstring>
@@ -29,8 +30,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;

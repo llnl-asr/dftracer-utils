@@ -22,6 +22,7 @@
 #include <doctest/doctest.h>
 #include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
+#include <trace/aggregators/aggregation_oracle.h>
 
 #include <algorithm>
 #include <chrono>
@@ -38,8 +39,6 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#include "aggregation_oracle.h"
 
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;

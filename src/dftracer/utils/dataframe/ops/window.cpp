@@ -1,6 +1,7 @@
 #include <dftracer/utils/dataframe/frame_ops.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/kernels/running.h>
+#include <dftracer/utils/dataframe/ops/ops_common.h>
 
 #include <algorithm>
 #include <cmath>
@@ -9,8 +10,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-
-#include "ops_common.h"
 
 namespace dftracer::utils::dataframe {
 

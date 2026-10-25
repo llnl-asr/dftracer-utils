@@ -41,6 +41,7 @@
 //                                     result must be positive and correct)
 
 #define DFTRACER_UTILS_BENCH_COUNT_NEW
+#include <bench_counters.h>
 #include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -54,8 +55,6 @@
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#include "bench_counters.h"
 
 #ifdef __APPLE__
 #include <pthread/qos.h>

@@ -114,7 +114,7 @@ jobs:
       - name: Pack the build
         run: |
           dir=build/${{ (inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest') && 'build-coverage' || 'build-tests' }}
-          tar --exclude='*.o' --exclude='.git' -cf build.tar "$dir" .cpmsource
+          tar --exclude='*.o' --exclude='*.gcda' --exclude='.git' -cf build.tar "$dir" .cpmsource
           ls -lh build.tar
 
       - uses: actions/upload-artifact@v6.0.0
@@ -215,6 +215,12 @@ jobs:
 
       - name: Unpack the build
         run: tar -xf build.tar && rm build.tar
+
+      # The checkout above is newer than the build job's .gcno notes, and gcov
+      # rejects notes older than their source.
+      - name: Date the coverage notes after the checkout
+        if: inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest'
+        run: find build/build-coverage -name '*.gcno' -exec touch {} +
 
       # Route cores to a known dir (overrides apport/systemd-coredump) so a
       # crash in a test binary or a spawned server yields a gdb-able core.

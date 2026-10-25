@@ -260,11 +260,10 @@ TEST_SUITE("AggPartialsStore") {
             IndexDatabase db(index_path);
             const auto config = agg::tier::read_config(*db.db());
             REQUIRE(config);
-            const auto old_hash = config->params_hash ^ 1;
-            agg::tier::write_config(
-                *db.db(),
-                {config->time_interval_us, old_hash, config->group_by_file});
-            agg::tier::put_files(*db.db(), ids, old_hash);
+            auto old = *config;
+            old.params_hash ^= 1;
+            agg::tier::write_config(*db.db(), old);
+            agg::tier::put_files(*db.db(), ids, old.params_hash);
             auto w = db.begin_write();
             const auto begin = layout::kind_prefix(layout::Ext::Agg,
                                                    layout::agg_kind::PARTIAL);

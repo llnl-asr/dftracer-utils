@@ -48,6 +48,14 @@ void check_served(std::size_t bytes, Make make) {
     CHECK(live() + bytes <= held);
 }
 
+// C++ lets the compiler drop a new and delete pair whose block does not
+// escape, and clang does at -O2; the empty asm makes the block escape.
+template <class T>
+T* escape(T* p) {
+    asm volatile("" : "+r"(p) : : "memory");
+    return p;
+}
+
 // The empty asm keeps the call to new from becoming a tail call, which would
 // make its caller the caller of plant.
 __attribute__((noinline)) char* plant() {
@@ -119,7 +127,7 @@ TEST_SUITE("GlobalNew") {
     TEST_CASE("a block above the page heap size classes is served") {
         const std::size_t base = live();
         const std::uint64_t count = debug_allocation_count();
-        char* big = new char[BIG_BYTES];
+        char* big = escape(new char[BIG_BYTES]);
         for (std::size_t i = 0; i < BIG_BYTES; i += 4096) big[i] = 1;
         big[BIG_BYTES - 1] = 1;
         const std::size_t held = live();
@@ -131,11 +139,11 @@ TEST_SUITE("GlobalNew") {
 
     TEST_CASE("an over-aligned new keeps its alignment and is counted") {
         const std::uint64_t count = debug_allocation_count();
-        Wide* w = new Wide;
+        Wide* w = escape(new Wide);
         CHECK(reinterpret_cast<std::uintptr_t>(w) % OVER_ALIGN == 0);
         CHECK(debug_allocation_count() > count);
         delete w;
-        Wide* many = new Wide[4];
+        Wide* many = escape(new Wide[4]);
         CHECK(reinterpret_cast<std::uintptr_t>(many) % OVER_ALIGN == 0);
         delete[] many;
     }
@@ -143,7 +151,7 @@ TEST_SUITE("GlobalNew") {
     TEST_CASE("a nothrow new is served and counted") {
         const std::size_t base = live();
         const std::uint64_t count = debug_allocation_count();
-        char* p = new (std::nothrow) char[5000];
+        char* p = escape(new (std::nothrow) char[5000]);
         REQUIRE(p != nullptr);
         CHECK(debug_allocation_count() > count);
         CHECK(live() >= base + 5000);
@@ -153,7 +161,9 @@ TEST_SUITE("GlobalNew") {
     }
 
     TEST_CASE("a nothrow new above the limit returns null") {
-        char* p = new (std::nothrow) char[std::size_t{1} << 62];
+        // Volatile, so the size is not a constant the compiler rejects.
+        volatile std::size_t huge = std::size_t{1} << 62;
+        char* p = new (std::nothrow) char[huge];
         CHECK(p == nullptr);
     }
 

@@ -73,10 +73,12 @@ class TimerService {
 
     void stop() {
         bool expected = true;
-        if (!running_.compare_exchange_strong(expected, false)) {
-            return;
+        {
+            std::lock_guard<std::mutex> lock(wake_mutex_);
+            if (!running_.compare_exchange_strong(expected, false)) {
+                return;
+            }
         }
-
         wake_cv_.notify_all();
 
         if (timer_thread_.joinable()) {
@@ -97,7 +99,10 @@ class TimerService {
 
         pending_timers_.enqueue(
             TimerRequest{id, expiry, std::move(callback), cancel_token});
-        has_new_timers_.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(wake_mutex_);
+            has_new_timers_.store(true, std::memory_order_release);
+        }
         wake_cv_.notify_one();
 
         return id;

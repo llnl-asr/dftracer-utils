@@ -391,9 +391,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
 
   # test_big_member_reads inflates several large gzip members: 13 s alone on
   # macOS, 41 s on Corona under the full suite, past 120 s on a 4-core CI
-  # runner. test_catalog takes 82 to past 120 s on the same runners.
+  # runner. test_catalog takes 82 to past 120 s on the same runners, and
+  # test_build_memory past 120 s under coverage.
   if(bin_exec STREQUAL "index/test_big_member_reads"
-     OR bin_exec STREQUAL "index/test_catalog")
+     OR bin_exec STREQUAL "index/test_catalog"
+     OR bin_exec STREQUAL "index/test_build_memory")
     set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
   endif()
 

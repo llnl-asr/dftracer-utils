@@ -41,13 +41,13 @@ using Params = StringViewMap<ParamValue>;
 
 /// Parse a duql filter into an AST. Throws nothing; a syntax error, or a
 /// construct this engine cannot evaluate yet, is the error value.
-dftracer::utils::expected<QueryNodePtr, DuqlError> parse(
+dftracer::utils::dstd::Expected<QueryNodePtr, DuqlError> parse(
     std::string_view input);
 
 /// parse with `$name` parameters bound to `params`; an unbound parameter is
 /// an error.
-dftracer::utils::expected<QueryNodePtr, DuqlError> parse(std::string_view input,
-                                                         const Params& params);
+dftracer::utils::dstd::Expected<QueryNodePtr, DuqlError> parse(
+    std::string_view input, const Params& params);
 
 }  // namespace dftracer::utils::duql
 

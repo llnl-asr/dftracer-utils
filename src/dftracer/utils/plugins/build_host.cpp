@@ -17,7 +17,7 @@ namespace {
 BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
 
 ::dftu_error denied_error() {
-    return ::dftu_error{dftracer::utils::CORE_DOMAIN.id,
+    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
                         static_cast<std::int32_t>(DFTU_COND_UNSUPPORTED),
                         DFTU_COND_UNSUPPORTED,
                         "not available at load: the factory host offers "

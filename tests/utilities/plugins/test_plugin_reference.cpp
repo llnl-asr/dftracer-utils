@@ -115,7 +115,8 @@ TEST_CASE("reference_plugin: every service reports OK") {
                         ConfigTree::from_json_string(R"({"workdir": ")" +
                                                      env.get_dir() + R"("})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
@@ -139,7 +140,8 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
                             R"({"workdir": ")" + env.get_dir() +
                             R"(", "force_missing": "dftu.svc.agg@1"})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});

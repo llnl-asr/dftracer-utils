@@ -14,10 +14,10 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::Condition;
 using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
+using dftracer::utils::dstd::Condition;
 namespace duql = dftracer::utils::duql;
 namespace dataframe = dftracer::utils::dataframe;
 

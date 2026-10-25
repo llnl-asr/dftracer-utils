@@ -140,9 +140,9 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
 
     auto queried = trace::run_agg_query(query).get();
     if (!queried) {
-        throw DFTUtilsException(
-            ErrorCode::Io,
-            "dlio: aggregation query failed: " + queried.error().format());
+        throw DFTUtilsException(ErrorCode::Io,
+                                "dlio: aggregation query failed: " +
+                                    std::string(queried.error().format()));
     }
     trace::AggQueryResult& result = *queried;
     out.chunks_reread = result.stats.chunks_reread;

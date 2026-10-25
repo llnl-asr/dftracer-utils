@@ -43,7 +43,7 @@ Result<memory::Config> memory_config_from_env() {
     };
     for (const Field& f : fields) {
         auto bytes = read_bytes(f.name);
-        if (!bytes) return unexpected<DFTUtilsError>(std::move(bytes).error());
+        if (!bytes) return dstd::Unexpected(std::move(bytes).error());
         *f.target = *bytes;
     }
     return config;
@@ -55,7 +55,7 @@ Result<void> configure_memory_from_env() {
     std::call_once(once, [] {
         auto config = memory_config_from_env();
         if (!config) {
-            first = unexpected<DFTUtilsError>(std::move(config).error());
+            first = dstd::Unexpected(std::move(config).error());
             return;
         }
         memory::configure(*config);

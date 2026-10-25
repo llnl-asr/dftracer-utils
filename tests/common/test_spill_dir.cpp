@@ -77,7 +77,7 @@ TEST_CASE("a set variable that cannot be used is an error naming it") {
     EnvGuard env(file.string().c_str());
     auto dir = spill_dir();
     REQUIRE_FALSE(dir.has_value());
-    CHECK(dir.error().message.find("DFTRACER_UTILS_SPILL_DIR") !=
+    CHECK(dir.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           std::string::npos);
 }
 
@@ -121,7 +121,7 @@ TEST_CASE("a RAM-backed fallback is never the spill directory") {
     CHECK(*dir == disk);
     auto none = choose_spill_dir("", "", {ram});
     REQUIRE_FALSE(none.has_value());
-    CHECK(none.error().message.find("DFTRACER_UTILS_SPILL_DIR") !=
+    CHECK(none.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           std::string::npos);
     CHECK_FALSE(fs::exists(ram));
 }
@@ -133,7 +133,7 @@ TEST_CASE("no usable spill directory is an error naming the variable") {
     std::ofstream(file) << "x";
     auto dir = choose_spill_dir("", "", {(file / "sub").string()});
     REQUIRE_FALSE(dir.has_value());
-    CHECK(dir.error().message.find("DFTRACER_UTILS_SPILL_DIR") !=
+    CHECK(dir.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           std::string::npos);
 }
 

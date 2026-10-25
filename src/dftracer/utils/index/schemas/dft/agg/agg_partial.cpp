@@ -537,17 +537,17 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     }
 }
 
-expected<AggPartial, ErrorCode> AggPartial::deserialize(
+dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     dstd::Span<const std::uint8_t> bytes, double relative_accuracy) {
     return deserialize(bytes, relative_accuracy, Fields{});
 }
 
-expected<AggPartial, ErrorCode> AggPartial::deserialize(
+dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     dstd::Span<const std::uint8_t> bytes, double relative_accuracy,
     Fields keep) {
     LeReader r(bytes.data(), bytes.size());
     AggPartial p(relative_accuracy);
-    const auto bad = [] { return unexpected(ErrorCode::Parse); };
+    const auto bad = [] { return dstd::Unexpected(ErrorCode::Parse); };
 
     std::uint8_t flags = 0;
     if (!r.u8(flags) || (flags & ~KNOWN_FLAGS) != 0) return bad();

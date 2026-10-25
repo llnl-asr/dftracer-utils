@@ -2944,21 +2944,21 @@ class Lowering {
 namespace {
 
 // The macros in scope for a query with `defs`, after the source's `source`.
-dftracer::utils::expected<MacroScopes, duql::DuqlError> scopes_of(
+dftracer::utils::dstd::Expected<MacroScopes, duql::DuqlError> scopes_of(
     std::vector<Def>& defs, std::string_view text,
     std::vector<duql::Macro> source) {
     auto own = duql::macros_of(defs, text, "the query");
-    if (!own) return dftracer::utils::unexpected(own.error());
+    if (!own) return dftracer::utils::dstd::Unexpected(own.error());
     MacroScopes scopes{std::move(*own), std::move(source), duql::path_macros()};
     for (const auto& scope : scopes)
         for (const auto& m : scope) {
             if (syntax::is_stage_word(m.name))
-                return dftracer::utils::unexpected(
+                return dftracer::utils::dstd::Unexpected(
                     make_error(text, 0, 0,
                                "macro '" + m.name + "' in " + m.origin +
                                    " has the name of a stage"));
             if (builtin_name(m.name))
-                return dftracer::utils::unexpected(make_error(
+                return dftracer::utils::dstd::Unexpected(make_error(
                     text, 0, 0,
                     "macro '" + m.name + "' in " + m.origin +
                         " has the name of a built-in function; rename it"));
@@ -2966,13 +2966,13 @@ dftracer::utils::expected<MacroScopes, duql::DuqlError> scopes_of(
     return scopes;
 }
 
-dftracer::utils::expected<void, duql::DuqlError> expand(
+dftracer::utils::dstd::Expected<void, duql::DuqlError> expand(
     syntax::Pipeline& p, const MacroScopes& scopes, std::string_view text) {
     return duql::expand_macros(p, scopes, text, builtin_name);
 }
 
 // Fills `x in $p` from the list and `x like $p` from the string bound to `p`.
-dftracer::utils::expected<void, duql::DuqlError> bind_params(
+dftracer::utils::dstd::Expected<void, duql::DuqlError> bind_params(
     syntax::Pipeline& p, const duql::Params& params, std::string_view text) {
     std::optional<duql::DuqlError> error;
     auto value = [&](const std::string& name,
@@ -3062,18 +3062,18 @@ dftracer::utils::expected<void, duql::DuqlError> bind_params(
         }
     };
     syntax::each_slot(p, visit);
-    if (error) return dftracer::utils::unexpected(std::move(*error));
+    if (error) return dftracer::utils::dstd::Unexpected(std::move(*error));
     return {};
 }
 
 }  // namespace
 
-dftracer::utils::expected<duql::Program, duql::DuqlError> compile_program(
+dftracer::utils::dstd::Expected<duql::Program, duql::DuqlError> compile_program(
     std::string_view text, const duql::Params& params, const duql::Roles* roles,
     std::string_view source, const duql::PluginCatalog* plugins,
     const LeafPaths* leaves) {
     auto tree = syntax::parse(text);
-    if (!tree) return dftracer::utils::unexpected(tree.error());
+    if (!tree) return dftracer::utils::dstd::Unexpected(tree.error());
     std::vector<Def> defs = duql::take_defs(tree->decls);
     std::vector<Let> rowsets;
     std::vector<duql::Macro> source_macros;
@@ -3084,34 +3084,34 @@ dftracer::utils::expected<duql::Program, duql::DuqlError> compile_program(
     std::optional<syntax::Program> source_tree;
     if (!source.empty()) {
         auto st = syntax::parse(source_text);
-        if (!st) return dftracer::utils::unexpected(st.error());
+        if (!st) return dftracer::utils::dstd::Unexpected(st.error());
         source_tree = std::move(*st);
         auto& decl = std::get<SourceDecl>(source_tree->decls.front());
         auto m = duql::macros_of(decl.defs, source_text, "the source");
-        if (!m) return dftracer::utils::unexpected(m.error());
+        if (!m) return dftracer::utils::dstd::Unexpected(m.error());
         source_macros = std::move(*m);
         fallback = duql::args_fallback(decl.defs);
         for (auto& r : decl.rowsets)
             rowsets.push_back({r.name, std::move(r.pipeline)});
     }
     auto scopes = scopes_of(defs, text, source_macros);
-    if (!scopes) return dftracer::utils::unexpected(scopes.error());
+    if (!scopes) return dftracer::utils::dstd::Unexpected(scopes.error());
     const MacroScopes source_scopes{source_macros, duql::path_macros()};
     for (auto& r : rowsets)
         if (auto ok = expand(*r.pipeline, source_scopes, source_text); !ok)
-            return dftracer::utils::unexpected(ok.error());
+            return dftracer::utils::dstd::Unexpected(ok.error());
     for (auto& d : tree->decls)
         if (auto* let = std::get_if<Let>(&d)) {
             if (auto ok = expand(*let->pipeline, *scopes, text); !ok)
-                return dftracer::utils::unexpected(ok.error());
+                return dftracer::utils::dstd::Unexpected(ok.error());
             if (auto ok = bind_params(*let->pipeline, params, text); !ok)
-                return dftracer::utils::unexpected(ok.error());
+                return dftracer::utils::dstd::Unexpected(ok.error());
         }
     if (tree->pipeline) {
         if (auto ok = expand(*tree->pipeline, *scopes, text); !ok)
-            return dftracer::utils::unexpected(ok.error());
+            return dftracer::utils::dstd::Unexpected(ok.error());
         if (auto ok = bind_params(*tree->pipeline, params, text); !ok)
-            return dftracer::utils::unexpected(ok.error());
+            return dftracer::utils::dstd::Unexpected(ok.error());
     }
     if (leaves) {
         for (auto& d : tree->decls)
@@ -3119,12 +3119,12 @@ dftracer::utils::expected<duql::Program, duql::DuqlError> compile_program(
                 if (auto ok = expand_wildcards(*let->pipeline, *leaves,
                                                fallback, text);
                     !ok)
-                    return dftracer::utils::unexpected(ok.error());
+                    return dftracer::utils::dstd::Unexpected(ok.error());
         if (tree->pipeline)
             if (auto ok =
                     expand_wildcards(*tree->pipeline, *leaves, fallback, text);
                 !ok)
-                return dftracer::utils::unexpected(ok.error());
+                return dftracer::utils::dstd::Unexpected(ok.error());
     }
     try {
         duql::Program out =
@@ -3132,7 +3132,7 @@ dftracer::utils::expected<duql::Program, duql::DuqlError> compile_program(
         out.args_fallback = fallback;
         return out;
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
@@ -3223,10 +3223,10 @@ void for_each_pipeline_term(const duql::Pipeline& p,
             stage);
 }
 
-dftracer::utils::expected<duql::ParamValue, duql::DuqlError> parse_param(
+dftracer::utils::dstd::Expected<duql::ParamValue, duql::DuqlError> parse_param(
     std::string_view text) {
     auto tree = syntax::parse(text);
-    if (!tree) return dftracer::utils::unexpected(tree.error());
+    if (!tree) return dftracer::utils::dstd::Unexpected(tree.error());
     if (tree->decls.empty() && tree->pipeline &&
         tree->pipeline->sources.empty() && tree->pipeline->stages.size() == 1)
         if (const auto* w =
@@ -3249,28 +3249,28 @@ dftracer::utils::expected<duql::ParamValue, duql::DuqlError> parse_param(
                 return duql::ParamValue{std::move(lit->value)};
             }
         }
-    return dftracer::utils::unexpected(make_error(
+    return dftracer::utils::dstd::Unexpected(make_error(
         text, 0, text.size(),
         "a parameter value must be a number, a string, true, false or a "
         "list of them"));
 }
 
-dftracer::utils::expected<duql::QueryNodePtr, duql::DuqlError> lower_filter(
-    syntax::Program program, const duql::Params& params,
-    std::string_view source) {
+dftracer::utils::dstd::Expected<duql::QueryNodePtr, duql::DuqlError>
+lower_filter(syntax::Program program, const duql::Params& params,
+             std::string_view source) {
     std::vector<Def> defs = duql::take_defs(program.decls);
     auto scopes = scopes_of(defs, source, {});
-    if (!scopes) return dftracer::utils::unexpected(scopes.error());
+    if (!scopes) return dftracer::utils::dstd::Unexpected(scopes.error());
     if (program.pipeline) {
         if (auto ok = expand(*program.pipeline, *scopes, source); !ok)
-            return dftracer::utils::unexpected(ok.error());
+            return dftracer::utils::dstd::Unexpected(ok.error());
         if (auto ok = bind_params(*program.pipeline, params, source); !ok)
-            return dftracer::utils::unexpected(ok.error());
+            return dftracer::utils::dstd::Unexpected(ok.error());
     }
     try {
         return Lowering(params, source).filter(program);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 

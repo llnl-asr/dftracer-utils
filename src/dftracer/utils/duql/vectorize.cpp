@@ -906,7 +906,7 @@ class Vectorizer {
 
 }  // namespace
 
-dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize(
+dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
     const Term& t, const std::vector<VectorColumn>& columns,
     bool args_fallback) {
     try {
@@ -914,7 +914,7 @@ dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize(
         if (v.k == K::Nul) return df::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
@@ -952,7 +952,7 @@ const LookupTable& bound(const TLookup& l) {
 
 }  // namespace
 
-dftracer::utils::expected<dataframe::Series, VectorizeError> lookup(
+dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
     const std::vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
@@ -964,11 +964,11 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> lookup(
         for (const auto& k : keys) ptrs.push_back(&k);
         return lookup_column(l, ptrs, rows);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
-dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
+dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
     const std::vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
@@ -1088,19 +1088,19 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
         }
         return df::Series::flat(TypeId::Bool, out.data(), rows, valid.data());
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
-dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize_condition(
-    const Term& t, const std::vector<VectorColumn>& columns,
-    bool args_fallback) {
+dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
+vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
+                    bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback)(t);
         if (v.k != K::Bool) return df::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 

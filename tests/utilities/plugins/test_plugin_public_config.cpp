@@ -64,7 +64,8 @@ TEST_CASE(
                    .add(CONFIG_KEYS_PLUGIN_PATH,
                         std::string(R"({"label": "rows", "stride": 3})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);
@@ -85,5 +86,5 @@ TEST_CASE("add(path, json) fails at build(), not at add()") {
 
     auto set = builder.build();
     REQUIRE(!set.has_value());
-    CHECK(set.error().message.find("does not parse") != std::string::npos);
+    CHECK(set.error().message().find("does not parse") != std::string::npos);
 }

@@ -660,8 +660,9 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
         auto opened =
             co_await fileio::GzipLineWriter::open(path, std::move(opts));
         if (!opened) {
-            DFTRACER_UTILS_LOG_ERROR("Cannot write %s: %s", path.c_str(),
-                                     opened.error().message.c_str());
+            DFTRACER_UTILS_LOG_ERROR(
+                "Cannot write %s: %s", path.c_str(),
+                std::string(opened.error().message()).c_str());
             co_return std::nullopt;
         }
         co_return std::move(*opened);
@@ -753,9 +754,9 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
         fs::remove(head_path, ec);
     }
     if (io_error || !closed || !appended) {
-        DFTRACER_UTILS_LOG_ERROR("Cannot write %s%s%s", output.c_str(),
-                                 closed ? "" : ": ",
-                                 closed ? "" : closed.error().message.c_str());
+        DFTRACER_UTILS_LOG_ERROR(
+            "Cannot write %s%s%s", output.c_str(), closed ? "" : ": ",
+            closed ? "" : std::string(closed.error().message()).c_str());
         co_return 1;
     }
     std::sort(skips.begin(), skips.end(), [](const auto& a, const auto& b) {

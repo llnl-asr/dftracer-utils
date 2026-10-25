@@ -424,7 +424,7 @@ struct PluginCatalog {
 /// `plugins`, every dotted function name is unknown. `leaves` lists the field
 /// paths a wildcard path (`a.*.b`) expands to (see wildcard.h), and without it
 /// a wildcard is an error.
-dftracer::utils::expected<Program, DuqlError> compile_program(
+dftracer::utils::dstd::Expected<Program, DuqlError> compile_program(
     std::string_view text, const Params& params, const Roles* roles,
     std::string_view source = {}, const PluginCatalog* plugins = nullptr,
     const LeafPaths* leaves = nullptr);
@@ -437,7 +437,7 @@ void for_each_pipeline_term(const Pipeline& p,
 /// The parameter value `text` spells as a duql literal: a number (with an
 /// optional `-`), a string, `true`, `false`, or a list of them such as
 /// `["a", "b"]`.
-dftracer::utils::expected<ParamValue, DuqlError> parse_param(
+dftracer::utils::dstd::Expected<ParamValue, DuqlError> parse_param(
     std::string_view text);
 
 }  // namespace dftracer::utils::duql

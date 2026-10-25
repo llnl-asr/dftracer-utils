@@ -577,10 +577,10 @@ coro::CoroTask<Result<SideAggregate>> aggregate_side(
 
         auto coarse_result = co_await run_agg_query(coarse);
         if (!coarse_result)
-            co_return unexpected<DFTUtilsError>(coarse_result.error());
+            co_return dstd::Unexpected(std::move(coarse_result).error());
         auto fine_result = co_await run_agg_query(fine);
         if (!fine_result)
-            co_return unexpected<DFTUtilsError>(fine_result.error());
+            co_return dstd::Unexpected(std::move(fine_result).error());
 
         side.group_chunks_reread += fine_result->stats.chunks_reread;
         side.metadata_chunks_reread += coarse_result->stats.chunks_reread;

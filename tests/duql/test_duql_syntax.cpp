@@ -52,9 +52,9 @@ std::string lowered(std::string_view text, const duql::Params& params = {}) {
     return duql::to_string(**node);
 }
 
-dftracer::utils::expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
-    std::string_view text, const duql::Params& params,
-    const duql::Roles* roles) {
+dftracer::utils::dstd::Expected<duql::Pipeline, duql::DuqlError>
+compile_pipeline(std::string_view text, const duql::Params& params,
+                 const duql::Roles* roles) {
     duql::PluginCatalog plugins;
     plugins.kind = [](std::string_view name) {
         const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
@@ -77,7 +77,7 @@ dftracer::utils::expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
         std::unique(plugins.namespaces.begin(), plugins.namespaces.end()),
         plugins.namespaces.end());
     auto p = duql::compile_program(text, params, roles, {}, &plugins);
-    if (!p) return dftracer::utils::unexpected(p.error());
+    if (!p) return dftracer::utils::dstd::Unexpected(p.error());
     return std::move(p->main);
 }
 
@@ -478,7 +478,7 @@ TEST_CASE("lower - regex_replace compile errors") {
     CHECK(duql::parse(R"re(regex_replace(s, $pat, $to) == "aa")re", params)
               .has_value());
     auto ok = duql::parse(R"re(regex_replace(s, "(a)", "${1}x$$") == "a")re");
-    CHECK_MESSAGE(ok.has_value(), (ok ? "" : ok.error().message));
+    CHECK_MESSAGE(ok.has_value(), (ok ? std::string() : ok.error().message));
     const std::vector<std::pair<const char*, const char*>> errors = {
         {R"re(regex_replace(s, "(a)", "$2") == "x")re", "group 2"},
         {R"re(regex_replace(s, "(a)", "${nope}") == "x")re", "nope"},

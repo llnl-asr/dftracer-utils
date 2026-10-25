@@ -211,7 +211,7 @@ void sweep_stale(const fs::path& root, std::string_view prefix) {
 
 Result<ScopedSpillSubdir> ScopedSpillSubdir::create(std::string_view prefix) {
     auto root = spill_dir();
-    if (!root) return unexpected<DFTUtilsError>(root.error());
+    if (!root) return dstd::Unexpected(std::move(root).error());
     static std::mutex mu;
     static std::set<std::string> swept;
     {

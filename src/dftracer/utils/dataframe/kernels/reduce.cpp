@@ -273,7 +273,7 @@ dftu_scalar refuse(const std::string& message) {
     static thread_local std::string text;
     static thread_local dftu_error err;
     text = message;
-    err.domain = dftracer::utils::CORE_DOMAIN.id;
+    err.domain = dftracer::utils::dstd::CORE_ERROR_DOMAIN.id;
     err.code = DFTU_COND_UNSUPPORTED;
     err.condition = DFTU_COND_UNSUPPORTED;
     err.message = text.c_str();

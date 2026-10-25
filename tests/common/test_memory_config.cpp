@@ -99,9 +99,9 @@ TEST_CASE("a bad value is refused and names its variable") {
             EnvVar var(name, bad);
             auto config = dut::memory_config_from_env();
             REQUIRE_FALSE(config);
-            CHECK(config.error().code == dut::ErrorCode::InvalidArgument);
-            CHECK(config.error().message.find(name) != std::string::npos);
-            CHECK(config.error().message.find(bad) != std::string::npos);
+            CHECK(config.error().is_code(dut::ErrorCode::InvalidArgument));
+            CHECK(config.error().message().find(name) != std::string::npos);
+            CHECK(config.error().message().find(bad) != std::string::npos);
         }
     }
 }
@@ -125,7 +125,7 @@ TEST_CASE("memory statuses map to error codes") {
     CHECK(std::string(dut::error_code_name(ErrorCode::MemoryBudgetExceeded)) ==
           "MEMORY_BUDGET_EXCEEDED");
     CHECK(dut::condition_of(ErrorCode::MemoryBudgetExceeded) ==
-          dut::Condition::Internal);
+          dut::dstd::Condition::Internal);
 }
 
 TEST_CASE("a failed reservation maps to the budget error") {

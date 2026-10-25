@@ -243,7 +243,7 @@ struct PatternError {
 };
 
 using PatternPtr = std::shared_ptr<const CompiledPattern>;
-using PatternResult = dftracer::utils::expected<PatternPtr, PatternError>;
+using PatternResult = dftracer::utils::dstd::Expected<PatternPtr, PatternError>;
 
 /// SQL LIKE over the whole string: `%` any run (newlines included), `_` one
 /// UTF-8 character; `escape` makes `c%`, `c_` and `cc` literal. `icase` folds
@@ -303,8 +303,8 @@ struct Substitution {
 /// Compile `to`: `$n` and `${n}` insert group n, `${name}` a named group,
 /// `$$` a dollar sign. A non-regex pattern, an unknown group or name, and a
 /// `$` followed by anything else are errors whose offset is in `to`.
-dftracer::utils::expected<Substitution, PatternError> compile_substitution(
-    const CompiledPattern& p, std::string_view to);
+dftracer::utils::dstd::Expected<Substitution, PatternError>
+compile_substitution(const CompiledPattern& p, std::string_view to);
 
 /// Replace every non-overlapping match of a regex in `s` into `out`, left to
 /// right; a group that took no part inserts nothing. NO leaves `out` equal to

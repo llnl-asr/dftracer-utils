@@ -92,7 +92,7 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                     metadata};
                 auto pruned = co_await plan::prune_file(std::move(request));
                 if (!pruned)
-                    co_return unexpected<DFTUtilsError>(pruned.error());
+                    co_return dstd::Unexpected(std::move(pruned).error());
                 if (pruned->total_chunks > 0) {
                     total_checkpoints = pruned->total_chunks;
                     output.total_checkpoints = total_checkpoints;

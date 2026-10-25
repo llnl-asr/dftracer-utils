@@ -15,7 +15,7 @@ namespace dftracer::utils {
 
 Result<std::unique_ptr<SpillFile>> SpillFile::create() {
     auto dir = spill_dir();
-    if (!dir) return unexpected(dir.error());
+    if (!dir) return dstd::Unexpected(dir.error());
     std::string path = (fs::path(*dir) / "dftu_spill_XXXXXX").string();
     std::unique_ptr<SpillFile> f(new SpillFile(spill_dir_in_memory(*dir)));
     f->fd_ = ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
@@ -66,7 +66,7 @@ Result<void> SpillFile::write_at(std::uint64_t offset, const void* data,
 Result<std::uint64_t> SpillFile::append(const void* data, std::size_t n) {
     const std::uint64_t at = reserve(n);
     auto written = write_at(at, data, n);
-    if (!written) return unexpected(written.error());
+    if (!written) return dstd::Unexpected(written.error());
     return at;
 }
 

@@ -2,10 +2,9 @@
 #define DFTRACER_UTILS_COMMON_ERROR_H
 
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
-#include <dftracer/utils/dstd/hash/fnv1a.h>
 
-#include <concepts>
 #include <cstdarg>
 #include <cstdint>
 #include <stdexcept>
@@ -33,239 +32,96 @@ enum class ErrorCode {
     MemoryBudgetExceeded,  ///< a reservation does not fit the memory budget
 };
 
+inline constexpr dstd::ErrorCodeInfo CORE_ERROR_CODE_INFOS[] = {
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Unknown),
+     dstd::Condition::Unknown, "UNKNOWN"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Internal),
+     dstd::Condition::Internal, "INTERNAL"},
+    {&dstd::CORE_ERROR_DOMAIN,
+     static_cast<std::int32_t>(ErrorCode::InvalidArgument),
+     dstd::Condition::InvalidArgument, "INVALID_ARGUMENT"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::NotFound),
+     dstd::Condition::NotFound, "NOT_FOUND"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Io),
+     dstd::Condition::Io, "IO"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Parse),
+     dstd::Condition::Parse, "PARSE"},
+    {&dstd::CORE_ERROR_DOMAIN,
+     static_cast<std::int32_t>(ErrorCode::Compression),
+     dstd::Condition::Compression, "COMPRESSION"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Duql),
+     dstd::Condition::InvalidArgument, "DUQL"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Reader),
+     dstd::Condition::Internal, "READER"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Indexer),
+     dstd::Condition::Internal, "INDEXER"},
+    {&dstd::CORE_ERROR_DOMAIN, static_cast<std::int32_t>(ErrorCode::Pipeline),
+     dstd::Condition::Internal, "PIPELINE"},
+    {&dstd::CORE_ERROR_DOMAIN,
+     static_cast<std::int32_t>(ErrorCode::Aggregation),
+     dstd::Condition::Internal, "AGGREGATION"},
+    {&dstd::CORE_ERROR_DOMAIN,
+     static_cast<std::int32_t>(ErrorCode::MemoryBudgetExceeded),
+     dstd::Condition::Internal, "MEMORY_BUDGET_EXCEEDED"},
+};
+
+constexpr const dstd::ErrorCodeInfo& error_info(ErrorCode code) noexcept {
+    const auto at = static_cast<std::size_t>(code);
+    return at < std::size(CORE_ERROR_CODE_INFOS) ? CORE_ERROR_CODE_INFOS[at]
+                                                 : CORE_ERROR_CODE_INFOS[0];
+}
+
 inline const char* error_code_name(ErrorCode code) noexcept {
-    switch (code) {
-        case ErrorCode::Unknown:
-            return "UNKNOWN";
-        case ErrorCode::Internal:
-            return "INTERNAL";
-        case ErrorCode::InvalidArgument:
-            return "INVALID_ARGUMENT";
-        case ErrorCode::NotFound:
-            return "NOT_FOUND";
-        case ErrorCode::Io:
-            return "IO";
-        case ErrorCode::Parse:
-            return "PARSE";
-        case ErrorCode::Compression:
-            return "COMPRESSION";
-        case ErrorCode::Duql:
-            return "DUQL";
-        case ErrorCode::Reader:
-            return "READER";
-        case ErrorCode::Indexer:
-            return "INDEXER";
-        case ErrorCode::Pipeline:
-            return "PIPELINE";
-        case ErrorCode::Aggregation:
-            return "AGGREGATION";
-        case ErrorCode::MemoryBudgetExceeded:
-            return "MEMORY_BUDGET_EXCEEDED";
-    }
-    return "UNKNOWN";
+    return error_info(code).name.data();
 }
 
-// Extensible error identity: (domain, code) is the precise identity, Condition
-// the portable cross-domain match key. A library adds codes in its own headers
-// (its own enum + a domain) without editing this file.
-
-/// A subsystem's error domain: the FNV-1a `id` is the identity (matching, the C
-/// ABI); `name` rides along because the hash cannot be reversed for printing.
-struct ErrorDomain {
-    std::uint64_t id = 0;
-    std::string_view name;
-
-    bool operator==(const ErrorDomain& o) const noexcept { return id == o.id; }
-};
-
-constexpr ErrorDomain make_error_domain(std::string_view name) noexcept {
-    return ErrorDomain{hash::fnv1a_hash(name), name};
-}
-
-inline constexpr ErrorDomain CORE_DOMAIN = make_error_domain("dftracer.core");
-
-/// Portable, cross-domain error category: callers match (and exhaustively
-/// switch) on this without learning any domain's private codes. Closed on
-/// purpose - keep it small.
-enum class Condition : std::uint16_t {
-    Unknown,
-    Internal,
-    InvalidArgument,
-    NotFound,
-    Io,
-    Parse,
-    Compression,
-    Timeout,
-    Unsupported,
-    Cancelled,
-};
-
-constexpr const char* condition_name(Condition c) noexcept {
-    switch (c) {
-        case Condition::Unknown:
-            return "UNKNOWN";
-        case Condition::Internal:
-            return "INTERNAL";
-        case Condition::InvalidArgument:
-            return "INVALID_ARGUMENT";
-        case Condition::NotFound:
-            return "NOT_FOUND";
-        case Condition::Io:
-            return "IO";
-        case Condition::Parse:
-            return "PARSE";
-        case Condition::Compression:
-            return "COMPRESSION";
-        case Condition::Timeout:
-            return "TIMEOUT";
-        case Condition::Unsupported:
-            return "UNSUPPORTED";
-        case Condition::Cancelled:
-            return "CANCELLED";
-    }
-    return "UNKNOWN";
-}
-
-/// Legacy ErrorCode -> portable condition (subsystem codes fold to Internal).
-constexpr Condition condition_of(ErrorCode c) noexcept {
-    switch (c) {
-        case ErrorCode::Unknown:
-            return Condition::Unknown;
-        case ErrorCode::Internal:
-            return Condition::Internal;
-        case ErrorCode::InvalidArgument:
-            return Condition::InvalidArgument;
-        case ErrorCode::NotFound:
-            return Condition::NotFound;
-        case ErrorCode::Io:
-            return Condition::Io;
-        case ErrorCode::Parse:
-            return Condition::Parse;
-        case ErrorCode::Compression:
-            return Condition::Compression;
-        case ErrorCode::Duql:
-            return Condition::InvalidArgument;
-        case ErrorCode::Reader:
-        case ErrorCode::Indexer:
-        case ErrorCode::Pipeline:
-        case ErrorCode::Aggregation:
-        case ErrorCode::MemoryBudgetExceeded:
-            return Condition::Internal;
-    }
-    return Condition::Unknown;
+constexpr dstd::Condition condition_of(ErrorCode code) noexcept {
+    return error_info(code).condition;
 }
 
 /// Condition -> best-effort legacy ErrorCode, for the back-compat code()
 /// accessor on a domain error; conditions with no equivalent fold to UNKNOWN.
-constexpr ErrorCode errorcode_of(Condition c) noexcept {
+constexpr ErrorCode errorcode_of(dstd::Condition c) noexcept {
     switch (c) {
-        case Condition::Unknown:
+        case dstd::Condition::Unknown:
             return ErrorCode::Unknown;
-        case Condition::Internal:
+        case dstd::Condition::Internal:
             return ErrorCode::Internal;
-        case Condition::InvalidArgument:
+        case dstd::Condition::InvalidArgument:
             return ErrorCode::InvalidArgument;
-        case Condition::NotFound:
+        case dstd::Condition::NotFound:
             return ErrorCode::NotFound;
-        case Condition::Io:
+        case dstd::Condition::Io:
             return ErrorCode::Io;
-        case Condition::Parse:
+        case dstd::Condition::Parse:
             return ErrorCode::Parse;
-        case Condition::Compression:
+        case dstd::Condition::Compression:
             return ErrorCode::Compression;
-        case Condition::Timeout:
-        case Condition::Unsupported:
-        case Condition::Cancelled:
+        case dstd::Condition::Timeout:
+        case dstd::Condition::Unsupported:
+        case dstd::Condition::Cancelled:
             return ErrorCode::Unknown;
     }
     return ErrorCode::Unknown;
 }
 
-/// Error as a value (travels inside Result<T>); see DFTUtilsException to throw.
-struct DFTUtilsError {
-    ErrorCode code = ErrorCode::Unknown;
-    std::string message;
-
-    DFTUtilsError() = default;
-    DFTUtilsError(ErrorCode c, std::string msg)
-        : code(c), message(std::move(msg)) {}
-
-    /// "<CODE>: <message>"
-    std::string format() const {
-        std::string out = error_code_name(code);
-        out += ": ";
-        out += message;
-        return out;
-    }
-};
-
 /// Recoverable-failure channel; reserve exceptions for the unrecoverable.
 template <typename T>
-using Result = expected<T, DFTUtilsError>;
+using Result = dstd::Expected<T, dstd::Error>;
 
-/// unexpected converts to any Result<T>, so no type argument is needed.
-inline unexpected<DFTUtilsError> make_error(ErrorCode code,
-                                            std::string message) {
-    return unexpected<DFTUtilsError>(DFTUtilsError{code, std::move(message)});
+/// dstd::Unexpected converts to any Result<T>, so no type argument is needed.
+inline dstd::Unexpected<dstd::Error> make_error(ErrorCode code,
+                                                std::string_view message) {
+    return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
 
-/// Extensible error value: (domain, code) identity, `condition` the portable
-/// match key, `message` the only allocation. Built with make_error(E); travels
-/// inside ErrorOr<T> and needs no exception machinery.
-struct Error {
-    std::uint64_t domain = CORE_DOMAIN.id;
-    std::string_view domain_name = CORE_DOMAIN.name;
-    std::int32_t code = static_cast<std::int32_t>(Condition::Unknown);
-    Condition condition = Condition::Unknown;
-    std::string message;
-
-    bool is(Condition c) const noexcept { return condition == c; }
-    bool in_domain(const ErrorDomain& d) const noexcept {
-        return domain == d.id;
-    }
-
-    /// "<domain>#<code> <CONDITION>: <message>"
-    std::string format() const {
-        std::string out(domain_name);
-        out += '#';
-        out += std::to_string(code);
-        out += ' ';
-        out += condition_name(condition);
-        out += ": ";
-        out += message;
-        return out;
-    }
-};
-
-/// A per-domain enum opts in by defining, in its own namespace (found by ADL),
-/// error_domain(E) -> ErrorDomain and error_condition(E) -> Condition.
-template <class E>
-concept ErrorEnum = std::is_enum_v<E> && requires(E e) {
-    { error_domain(e) } -> std::convertible_to<ErrorDomain>;
-    { error_condition(e) } -> std::convertible_to<Condition>;
-};
-
-/// Build an Error from a domain enum; domain and condition are deduced from the
-/// enum type, so a code cannot be paired with the wrong domain and a typo does
-/// not compile. Wrap in unexpected(...) to return from an ErrorOr<T>.
-template <ErrorEnum E>
-Error make_error(E code, std::string message) {
-    const ErrorDomain d = error_domain(code);
-    return Error{d.id, d.name, static_cast<std::int32_t>(code),
-                 static_cast<Condition>(error_condition(code)),
-                 std::move(message)};
+/// Build an error from a domain enum; the enum type selects its error_info via
+/// ADL, so a code cannot be paired with the wrong domain and a typo does not
+/// compile. Returning dstd::Unexpected makes it convertible to any Result<T>.
+template <dstd::ErrorEnum E>
+dstd::Unexpected<dstd::Error> make_error(E code, std::string_view message) {
+    return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
-
-/// Core-domain convenience: a bare Condition is a core error (code == the
-/// condition), for a generic failure needing no domain-specific code.
-inline Error make_error(Condition c, std::string message) {
-    return Error{CORE_DOMAIN.id, CORE_DOMAIN.name, static_cast<std::int32_t>(c),
-                 c, std::move(message)};
-}
-
-/// Exception-free result channel carrying the extensible Error.
-template <typename T>
-using ErrorOr = expected<T, Error>;
 
 /// Throwable carrying an ErrorCode (so any catch site, notably the Python
 /// boundary, can inspect code()) plus the extensible (domain, condition)
@@ -273,21 +129,13 @@ using ErrorOr = expected<T, Error>;
 class DFTUtilsException : public std::runtime_error {
    public:
     DFTUtilsException(ErrorCode code, const std::string& message)
-        : std::runtime_error(message),
-          code_(code),
-          domain_(CORE_DOMAIN.id),
-          domain_name_(CORE_DOMAIN.name),
-          code_int_(static_cast<std::int32_t>(code)),
-          condition_(condition_of(code)) {}
-    explicit DFTUtilsException(const DFTUtilsError& err)
-        : DFTUtilsException(err.code, err.message) {}
-    explicit DFTUtilsException(const Error& err)
-        : std::runtime_error(err.message),
-          code_(errorcode_of(err.condition)),
-          domain_(err.domain),
-          domain_name_(err.domain_name),
-          code_int_(err.code),
-          condition_(err.condition) {}
+        : std::runtime_error(message), error_(code, message), code_(code) {}
+    explicit DFTUtilsException(const dstd::Error& error)
+        : std::runtime_error(std::string(error.message())), error_(error) {
+        const auto legacy = static_cast<ErrorCode>(error.code());
+        code_ =
+            error.is_code(legacy) ? legacy : errorcode_of(error.condition());
+    }
 
     /// Concatenation factory (numbers via to_chars; no format string):
     ///   throw DFTUtilsException::cat(ErrorCode::IO,
@@ -313,20 +161,17 @@ class DFTUtilsException : public std::runtime_error {
 
     /// Legacy coarse code (core-domain proxy for a domain error).
     ErrorCode code() const noexcept { return code_; }
-    std::uint64_t domain() const noexcept { return domain_; }
-    std::string_view domain_name() const noexcept { return domain_name_; }
-    std::int32_t code_int() const noexcept { return code_int_; }
-    Condition condition() const noexcept { return condition_; }
-    Error error() const {
-        return Error{domain_, domain_name_, code_int_, condition_, what()};
+    std::uint64_t domain() const noexcept { return error_.domain().id; }
+    std::string_view domain_name() const noexcept {
+        return error_.domain().name;
     }
+    std::int32_t code_int() const noexcept { return error_.code(); }
+    dstd::Condition condition() const noexcept { return error_.condition(); }
+    const dstd::Error& error() const noexcept { return error_; }
 
    private:
+    dstd::Error error_;
     ErrorCode code_;
-    std::uint64_t domain_;
-    std::string_view domain_name_;
-    std::int32_t code_int_;
-    Condition condition_;
 };
 
 /// The value of `r`, or throws DFTUtilsException with its error.
@@ -348,7 +193,7 @@ T unwrap(Result<T>&& r) {
 #define DFTU_TRY(decl, expr)                                          \
     auto DFTU_TRY_CONCAT(dftu_try_, __LINE__) = (expr);               \
     if (!DFTU_TRY_CONCAT(dftu_try_, __LINE__))                        \
-        co_return ::dftracer::utils::unexpected(                      \
+        co_return ::dftracer::utils::dstd::Unexpected(                \
             std::move(DFTU_TRY_CONCAT(dftu_try_, __LINE__)).error()); \
     decl = *std::move(DFTU_TRY_CONCAT(dftu_try_, __LINE__))
 

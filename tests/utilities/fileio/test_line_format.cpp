@@ -156,10 +156,10 @@ TEST_CASE("line_format - run-time parse errors") {
     for (const char* bad : {"a\n", "\n", "a\r", "{}\n{}"}) {
         auto r = LineFormat::parse(bad);
         REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().code == ErrorCode::InvalidArgument);
+        CHECK(r.error().is_code(ErrorCode::InvalidArgument));
         auto j = JsonLineFormat::parse(bad);
         REQUIRE_FALSE(j.has_value());
-        CHECK(j.error().code == ErrorCode::InvalidArgument);
+        CHECK(j.error().is_code(ErrorCode::InvalidArgument));
     }
     CHECK(LineFormat::parse("a {\n}").has_value() == false);
     CHECK(LineFormat::parse("a { } {x}").has_value());
@@ -197,10 +197,10 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         }
         auto r = co_await w->append_json(*lf, 1, 2);
         bad_count =
-            !r.has_value() && r.error().code == ErrorCode::InvalidArgument;
+            !r.has_value() && r.error().is_code(ErrorCode::InvalidArgument);
         auto r2 = co_await w->append_json<"{}">((const char*)nullptr);
         null_arg =
-            !r2.has_value() && r2.error().code == ErrorCode::InvalidArgument;
+            !r2.has_value() && r2.error().is_code(ErrorCode::InvalidArgument);
         REQUIRE(co_await w->close());
 
         GzipWriterOptions u;

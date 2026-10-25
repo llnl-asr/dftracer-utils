@@ -58,6 +58,7 @@ set(DFTRACER_UTILS_MEMORY_SOURCES
 
 set(DFTRACER_UTILS_DSTD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/base64.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dstd/string_intern.cpp)
 
 # -----------------------------------------

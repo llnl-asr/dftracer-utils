@@ -139,9 +139,7 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
     }
     views::View view = views::View::from_files(std::move(view_files));
     auto run = co_await plugins->run(view);
-    if (!run)
-        throw dftracer::utils::DFTUtilsException(run.error().code,
-                                                 run.error().message);
+    if (!run) throw dftracer::utils::DFTUtilsException(run.error());
     *out = std::move(*run);
 }
 
@@ -319,7 +317,8 @@ int ph_init(PluginHostObject* self, PyObject* args, PyObject* kwds) {
 
     auto built = builder.build();
     if (!built) {
-        PyErr_SetString(PyExc_ImportError, built.error().message.c_str());
+        PyErr_SetString(PyExc_ImportError,
+                        std::string(built.error().message()).c_str());
         return -1;
     }
     st->set.emplace(std::move(*built));

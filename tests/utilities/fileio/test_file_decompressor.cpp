@@ -209,8 +209,8 @@ TEST_SUITE("FileDecompressor") {
             auto result = decompressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().code == dftracer::utils::ErrorCode::NotFound);
-            CHECK(result.error().message.find("does not exist") !=
+            CHECK(result.error().is_code(dftracer::utils::ErrorCode::NotFound));
+            CHECK(result.error().message().find("does not exist") !=
                   std::string::npos);
         }
 
@@ -226,13 +226,13 @@ TEST_SUITE("FileDecompressor") {
             auto result = decompressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().code ==
-                  dftracer::utils::ErrorCode::Compression);
+            CHECK(result.error().is_code(
+                dftracer::utils::ErrorCode::Compression));
             bool has_decompression_error =
-                result.error().message.find("Decompression failed") !=
+                result.error().message().find("Decompression failed") !=
                 std::string::npos;
             bool has_header_error =
-                result.error().message.find("incorrect header") !=
+                result.error().message().find("incorrect header") !=
                 std::string::npos;
             CHECK((has_decompression_error || has_header_error));
         }
@@ -348,7 +348,7 @@ TEST_SUITE("FileDecompressor") {
             auto r = decompressed_size_via_dft_try(decompressor, input).get();
 
             REQUIRE(!r);
-            CHECK(r.error().code == dftracer::utils::ErrorCode::NotFound);
+            CHECK(r.error().is_code(dftracer::utils::ErrorCode::NotFound));
         }
     }
 }

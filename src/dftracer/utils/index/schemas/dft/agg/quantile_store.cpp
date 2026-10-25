@@ -214,43 +214,43 @@ void QuantileStore::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     for (double v : exact_) append_f64_le(buf, v);
 }
 
-expected<QuantileStore, ErrorCode> QuantileStore::deserialize(
+dstd::Expected<QuantileStore, ErrorCode> QuantileStore::deserialize(
     const std::uint8_t* data, std::size_t len) {
     LeReader r(data, len);
     std::uint8_t tag = 0;
     double accuracy = 0.0;
     std::uint32_t n = 0;
     if (!r.u8(tag) || !r.f64(accuracy) || !r.u32(n)) {
-        return unexpected(ErrorCode::Parse);
+        return dstd::Unexpected(ErrorCode::Parse);
     }
     const std::size_t rest = r.remaining();
     if (!(accuracy > 0.0 && accuracy < 1.0)) {
-        return unexpected(ErrorCode::Parse);
+        return dstd::Unexpected(ErrorCode::Parse);
     }
 
     QuantileStore s(accuracy);
     if (tag == TAG_EXACT) {
         if (n > EXACT_CAPACITY || rest != std::size_t{n} * 8) {
-            return unexpected(ErrorCode::Parse);
+            return dstd::Unexpected(ErrorCode::Parse);
         }
         s.exact_.reserve(n);
         for (std::uint32_t i = 0; i < n; ++i) {
             double v = 0.0;
             r.f64(v);
             if (std::isnan(v) || (!s.exact_.empty() && v < s.exact_.back())) {
-                return unexpected(ErrorCode::Parse);
+                return dstd::Unexpected(ErrorCode::Parse);
             }
             s.exact_.push_back(v);
         }
         return s;
     }
     if (tag == TAG_SKETCH) {
-        if (rest != n) return unexpected(ErrorCode::Parse);
+        if (rest != n) return dstd::Unexpected(ErrorCode::Parse);
         s.to_sketch(nullptr, 0);
         *s.sketch_ = dataframe::MergeSketch::deserialize(r.position(), n);
         return s;
     }
-    return unexpected(ErrorCode::Parse);
+    return dstd::Unexpected(ErrorCode::Parse);
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

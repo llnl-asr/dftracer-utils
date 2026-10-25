@@ -44,7 +44,7 @@ duql::DuqlError make_error(std::string_view source, std::size_t offset,
         std::move(indicator), line};
 }
 
-dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
+dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
     std::string_view src) {
     std::vector<Token> out;
     std::size_t pos = 0;
@@ -77,7 +77,7 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
             std::size_t i = pos + 1;
             while (i < src.size() && src[i] != c) i += src[i] == '\\' ? 2 : 1;
             if (i >= src.size())
-                return dftracer::utils::unexpected(
+                return dftracer::utils::dstd::Unexpected(
                     make_error(src, start, src.size() - start,
                                "Unterminated string literal"));
             out.push_back({Tok::String, src.substr(start + 1, i - start - 1),
@@ -89,7 +89,7 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
         if (c == '`') {
             const std::size_t close = src.find('`', pos + 1);
             if (close == std::string_view::npos || close == pos + 1)
-                return dftracer::utils::unexpected(make_error(
+                return dftracer::utils::dstd::Unexpected(make_error(
                     src, start, 1,
                     close == std::string_view::npos ? "Unterminated quoted key"
                                                     : "Empty quoted key"));
@@ -125,7 +125,7 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
             bool unit = false;
             for (auto u : DURATION_UNITS) unit |= suffix == u;
             if (!unit)
-                return dftracer::utils::unexpected(
+                return dftracer::utils::dstd::Unexpected(
                     make_error(src, start, j - start, "Invalid number"));
             push(Tok::Duration, start, j - start);
             continue;
@@ -235,7 +235,7 @@ dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
             default:
                 break;
         }
-        return dftracer::utils::unexpected(make_error(
+        return dftracer::utils::dstd::Unexpected(make_error(
             src, start, 1, std::string("Unexpected character '") + c + "'"));
     }
     out.push_back({Tok::End, src.substr(src.size(), 0), src.size(), adjacent});

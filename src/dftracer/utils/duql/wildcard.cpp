@@ -291,14 +291,14 @@ class Expander {
 
 }  // namespace
 
-dftracer::utils::expected<void, DuqlError> expand_wildcards(
+dftracer::utils::dstd::Expected<void, DuqlError> expand_wildcards(
     syntax::Pipeline& p, const LeafPaths& leaves, bool args_fallback,
     std::string_view text) {
     try {
         Expander(leaves, args_fallback, text).run(p);
         return {};
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 

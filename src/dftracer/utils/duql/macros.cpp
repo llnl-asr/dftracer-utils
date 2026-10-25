@@ -291,7 +291,7 @@ void load_env(PathRegistry& r) {
 
 }  // namespace
 
-dftracer::utils::expected<std::vector<Macro>, DuqlError> macros_of(
+dftracer::utils::dstd::Expected<std::vector<Macro>, DuqlError> macros_of(
     std::vector<syntax::Def>& defs, std::string_view text,
     const std::string& origin) {
     std::vector<Macro> out;
@@ -302,7 +302,7 @@ dftracer::utils::expected<std::vector<Macro>, DuqlError> macros_of(
             continue;
         for (const auto& m : out)
             if (m.name == def.name)
-                return dftracer::utils::unexpected(syntax::make_error(
+                return dftracer::utils::dstd::Unexpected(syntax::make_error(
                     text, expr ? (*expr)->span.offset : 0, 0,
                     "macro '" + def.name + "' is defined twice"));
         if (expr)
@@ -340,7 +340,7 @@ std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls) {
     return out;
 }
 
-dftracer::utils::expected<void, DuqlError> expand_macros(
+dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     syntax::Pipeline& pipeline, const MacroScopes& scopes,
     std::string_view text,
     const std::function<bool(std::string_view)>& builtin) {
@@ -352,7 +352,7 @@ dftracer::utils::expected<void, DuqlError> expand_macros(
         if (!any) return {};
         each_slot(pipeline, [&](ExprPtr& e) { x.expand(e); });
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
     return {};
 }

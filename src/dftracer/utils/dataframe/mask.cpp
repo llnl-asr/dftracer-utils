@@ -34,7 +34,7 @@ constexpr bool FRAME_ARGS_FALLBACK = true;
 
 [[noreturn]] void unsupported(const std::string& why) {
     throw dftracer::utils::DFTUtilsException(
-        dftracer::utils::make_error(DuqlErrc::Unsupported, why));
+        dftracer::utils::dstd::Error{DuqlErrc::Unsupported, why});
 }
 
 bool is_string(const dataframe::Series& c) {

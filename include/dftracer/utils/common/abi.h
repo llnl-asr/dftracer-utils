@@ -14,8 +14,8 @@ extern "C" {
 #endif
 
 /** Portable, cross-domain error category mirroring
-   dftracer::utils::Condition; a caller switches on this without learning any
-   subsystem's private codes. */
+   dftracer::utils::dstd::Condition; a caller switches on this without learning
+   any subsystem's private codes. */
 typedef enum {
     DFTU_COND_UNKNOWN = 0,
     DFTU_COND_INTERNAL,
@@ -30,8 +30,8 @@ typedef enum {
 } dftu_condition;
 
 /** A fallible call's error: (domain, code) is the precise identity (mirrors
-   dftracer::utils::Error), `condition` the portable match key. `message` is
-   BORROWED - valid only until the next call on the same host handle; copy it
+   dftracer::utils::dstd::Error), `condition` the portable match key. `message`
+   is BORROWED - valid only until the next call on the same host handle; copy it
    if it must outlive that. */
 typedef struct dftu_error {
     uint64_t domain;

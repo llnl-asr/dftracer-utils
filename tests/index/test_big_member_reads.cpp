@@ -96,7 +96,7 @@ Trace short_lines(std::size_t bytes, std::uint32_t seed) {
     t.text.reserve(bytes + 16);
     while (t.text.size() < bytes) {
         ++t.lines;
-        for (std::uint32_t n = 1 + rng() % 6; n > 0; --n)
+        for (auto n = static_cast<std::uint32_t>(1 + rng() % 6); n > 0; --n)
             t.text += static_cast<char>('a' + rng() % 26);
         t.text += '\n';
     }

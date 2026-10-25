@@ -13,6 +13,8 @@ The test-suite metrics are from the `tests` preset (a debug build) of the same t
 | `scale_corona_traced.tsv` | every tool on `minife/tuolumne` at 1 thread under the DFTracer preload | `b33cabbc+wip` |
 | `scale_corona_fixed.tsv` | every tool on `minife/tuolumne` at 96 and 16 threads after the fixes | `69779a9c` |
 | `scale_corona_traced_fixed.tsv` | every tool on `minife/tuolumne` at 1 thread under the DFTracer preload after the fixes | `69779a9c` |
+| `scale_corona_fixed2.tsv` | every tool on `minife/tuolumne` at 96 and 16 threads after the cold-view and directory-scan work | `3dd2713` |
+| `scale_corona_traced_fixed2.tsv` | every tool on `minife/tuolumne` at 1 thread under the DFTracer preload after that work | `50c67be` |
 | `test_suite_metrics.tsv` | each ctest: wall time, parallelism, RSS, instructions, IPC, cache misses, Cachegrind D1 and LL misses, DHAT bytes and blocks | `b33cabbc+wip` |
 
 `b33cabbc+wip` is `b33cabbc` with the memory report, the I/O backend switch and this ladder, which are now commits `4a5302d0` to `dabf2cf1`.
@@ -78,3 +80,24 @@ Still open: `dftracer_replay` is serial; `dftracer_view` keeps only 3 cores busy
 In `dftracer_index`, 120 s of the 185 s are reads of the input (1.26 GB in 9,203 reads); index files cost about 9 s, against 472 s for unlink alone before.
 Each input is still opened about 4 times and stat'd 3.5 to 5.5 times: `dftracer_index` makes 25,209 open, 8,401 fopen64 and 29,829 stat calls on 8,404 traces (about 42 s), and `dftracer_event_count` makes 46,003 stat calls (22.5 s).
 `dftracer_stats` and `dftracer_comparator` also make 636,000 and 719,000 stat calls that DFTracer records with no file name (16 s and 19 s), about 80 per trace.
+
+## After the cold-view and directory-scan work (`3dd2713`, `50c67be`)
+
+The 96 and 16 thread rows are from `3dd2713`. The traced rows are from `50c67be`, the first commit after it on which the tools run under the DFTracer preload: at `3dd2713` every tool overflowed its stack in a loop through the preload's `munmap` wrapper.
+
+| Tool | 96 threads, `69779a9c` / now | 16 threads, `69779a9c` / now | 1 thread traced, `69779a9c` / now | RSS at 96 threads, `69779a9c` / now |
+|---|---|---|---|---|
+| `dftracer_index` | 210 / 32 s | 73 / 32 s | 478 / 168 s | 8.2 / 3.1 GB |
+| `dftracer_event_count` | 25 / 13 s | 38 / 21 s | 297 / 173 s | 8.5 / 3.2 GB |
+| `dftracer_info` | 24 / 8.2 s | 32 / 17 s | 285 / 167 s | 8.4 / 3.2 GB |
+| `dftracer_stats` | 49 / 16 s | 67 / 28 s | 512 / 274 s | 8.6 / 6.0 GB |
+| `dftracer_view` | 208 / 8.6 s | 210 / 20 s | 457 / 187 s | 4.7 / 3.2 GB |
+| `dftracer_split` | 24 / 18 s | 25 / 19 s | 177 / 154 s | 3.4 / 1.9 GB |
+| `dftracer_validate` | 7.7 / 1.7 s | 9.1 / 3.6 s | 47 / 53 s | 1.0 / 1.1 GB |
+| `dftracer_pgzip` | 0.5 / 0.6 s | 0.4 / 0.7 s | 3.6 / 3.6 s | 0.6 / 0.6 GB |
+| `dftracer_comparator` | 80 / 60 s | 111 / 74 s | 1,000 / 646 s | 28.1 / 10.4 GB |
+| `dftracer_replay` | 291 / 8.7 s | 276 / 26 s | 208 / 218 s | 0.2 / 1.3 GB |
+
+`dftracer_index` needs 1.0 G instructions per MB where it needed 1.95 G, and `dftracer_view` 1.08 G where it needed 2.77 G.
+Every run of both tables passed, so their `.known.tsv` files list no failure.
+

@@ -372,9 +372,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
-  # Inflates several large gzip members: 13 s alone on macOS, 41 s on Corona
-  # under the full suite, past 120 s on a 4-core CI runner.
-  if(bin_exec STREQUAL "index/test_big_member_reads")
+  # test_big_member_reads inflates several large gzip members: 13 s alone on
+  # macOS, 41 s on Corona under the full suite, past 120 s on a 4-core CI
+  # runner. test_catalog takes 82 to past 120 s on the same runners.
+  if(bin_exec STREQUAL "index/test_big_member_reads"
+     OR bin_exec STREQUAL "index/test_catalog")
     set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
   endif()
 

@@ -177,7 +177,7 @@ bool under_instrumentation() {
 // A build whose instrumentation adds a fixed memory cost of its own, which
 // the budgets measured on a release build do not hold.
 bool fixed_cost_build() {
-#if defined(DFTRACER_UTILS_COVERAGE_MODE) || \
+#if defined(DFTRACER_UTILS_COVERAGE_BUILD) || \
     defined(DFTRACER_UTILS_VALGRIND_MODE)
     return true;
 #else

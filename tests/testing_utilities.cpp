@@ -9,6 +9,7 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -58,6 +59,38 @@ std::string write_gz_trace(const std::string& path,
         gzwrite(f, content.data(), static_cast<unsigned>(content.size()));
     }
     gzclose(f);
+    return path;
+}
+
+std::string write_stored_gz_trace(const std::string& path,
+                                  const std::string& content) {
+    constexpr std::size_t STORED_MAX = 65535;
+    std::string out = {'\x1f', '\x8b', '\x08', '\x00', '\x00',
+                       '\x00', '\x00', '\x00', '\x00', '\xff'};
+    const auto put16 = [&out](std::size_t v) {
+        out += static_cast<char>(v & 0xFF);
+        out += static_cast<char>((v >> 8) & 0xFF);
+    };
+    const auto put32 = [&out](std::uint32_t v) {
+        for (int i = 0; i < 4; ++i)
+            out += static_cast<char>((v >> (8 * i)) & 0xFF);
+    };
+    std::size_t at = 0;
+    do {
+        const std::size_t n = std::min(STORED_MAX, content.size() - at);
+        const bool last = at + n == content.size();
+        out += static_cast<char>(last ? 1 : 0);
+        put16(n);
+        put16(~n & 0xFFFF);
+        out.append(content, at, n);
+        at += n;
+    } while (at < content.size());
+    put32(dftracer::utils::utilities::fileio::compress::gzip_crc32(
+        0, content.data(), content.size()));
+    put32(static_cast<std::uint32_t>(content.size()));
+    std::ofstream file(path, std::ios::binary);
+    if (!file.write(out.data(), static_cast<std::streamsize>(out.size())))
+        return "";
     return path;
 }
 

@@ -159,7 +159,9 @@ run_cpp() {
   # workers / spawn handoff threads in tight loops and livelock under it (they
   # exist for the tsan/asan presets, which cover their threading). Their memory
   # paths are still exercised by the other pipeline tests that do run here.
-  local default_exclude="test_reader_robustness|test_blocking_handoff|test_dynamic_workers|test_view_duql_joins"
+  # memory/test_global_new checks that the executable's operator new is our
+  # heap, and Valgrind replaces operator new with its own.
+  local default_exclude="test_reader_robustness|test_blocking_handoff|test_dynamic_workers|test_view_duql_joins|memory/test_global_new"
   local exclude_pat="${VALGRIND_CTEST_EXCLUDE:-$default_exclude}"
 
   local selector
@@ -453,7 +455,7 @@ run_cpp_one() {
     --errors-for-leak-kinds=definite,indirect \
     --suppressions="$SUPP_DIR/valgrind-cpp.supp" \
     --log-file="${logf}.%p" \
-    "$exe" "${doctest_args[@]}" >/dev/null 2>&1) || rc=$?
+    "$exe" "${doctest_args[@]}" >"${logf}.out" 2>&1) || rc=$?
   printf '%s\t%s\n' "$rc" "$name" >"$rdir/${name//\//_}.rc"
   printf '%s\t%s\n' "$name" \
     "$(awk -v a="$start_ts" -v b="$(now_s)" 'BEGIN { printf "%.1f", b - a }')" \

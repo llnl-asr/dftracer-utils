@@ -36,6 +36,12 @@ namespace {
 
 constexpr int FILES = 96;
 constexpr std::size_t WORKERS = 24;
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+// A Valgrind build caps every executor at 2 threads (thread_pool_executor.cpp).
+constexpr std::size_t RUNNING_WORKERS = 2;
+#else
+constexpr std::size_t RUNNING_WORKERS = WORKERS;
+#endif
 constexpr int EVENTS = 1000;
 constexpr std::size_t MAX_PREFIXES = 32;
 
@@ -124,7 +130,7 @@ TEST_SUITE("BootstrapParallelism") {
             store::IndexDatabase::read_write_opens() - opens_before;
 
         CHECK(trace::views::detail::bootstrap_counters().max_in_flight.load() ==
-              WORKERS);
+              RUNNING_WORKERS);
         CHECK(opens == 1);
 
         const auto warm = count_by_name(files, index_dir);
@@ -181,6 +187,11 @@ TEST_SUITE("BootstrapParallelism") {
     }
 
     TEST_CASE("a read-only open of more SSTs than the descriptor limit works") {
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+        // 2 workers write too few SSTs to pass the lowered descriptor limit.
+        MESSAGE("not run in a Valgrind build");
+        return;
+#endif
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;
         for (int i = 0; i < FILES; ++i)

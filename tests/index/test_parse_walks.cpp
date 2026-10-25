@@ -113,8 +113,8 @@ std::string write_trace(const std::string& dir) {
         }
     }
     out << "]\n";
-    const std::string path =
-        dftu_utils_test::write_gz_trace(dir + "/trace.pfw.gz", out.str());
+    const std::string path = dftu_utils_test::write_stored_gz_trace(
+        dir + "/trace.pfw.gz", out.str());
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;
@@ -140,15 +140,17 @@ build::IndexBuildBatchResult build_one(const std::string& file,
 }
 
 // The digest of each column family of the index write_trace builds, recorded
-// from the build before the single-walk parse. A family that holds no rows
-// digests to the FNV offset.
+// from the build before the single-walk parse. The members digest, which
+// holds compressed offsets, was recorded again when the trace moved to stored
+// gzip blocks, on a build whose other digests still matched. A family that
+// holds no rows digests to the FNV offset.
 struct FamilyDigest {
     std::string_view family;
     std::uint64_t digest;
 };
 constexpr FamilyDigest RECORDED[] = {
     {"default", 8611890762692540955ULL},
-    {"members", 12797188868763278476ULL},
+    {"members", 9480084793286417120ULL},
     {"granule", 309768426608778519ULL},
     {"blob", 8561683722829537242ULL},
     {"postings", 10242643526126183152ULL},

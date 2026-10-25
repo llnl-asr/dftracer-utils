@@ -1,7 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
+#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -16,6 +18,7 @@
 #include <vector>
 
 #include "bootstrap_test_common.h"
+#include "memory/fresh_process.h"
 
 using namespace dftracer::utils;
 namespace dataframe = dftracer::utils::dataframe;
@@ -27,7 +30,12 @@ namespace {
 
 constexpr std::size_t PEAK_WORKERS = 8;
 constexpr std::size_t FEW_WORKERS = 2;
-constexpr std::size_t SINK_LIMIT = std::size_t{2} << 20;
+// Small, so each worker fills its staged index buffer within a few files and
+// 64 files hold as many buffered bytes as 256.
+constexpr std::size_t SINK_LIMIT = std::size_t{256} << 10;
+// Small, so the blocks RocksDB caches as each file's index is read do not
+// grow the peak with the file count; the store, not the bootstrap, owns them.
+constexpr std::size_t BLOCK_CACHE_LIMIT = std::size_t{1} << 20;
 // What a worker may hold to parse a file, whatever the file.
 constexpr std::size_t PER_WORKER_BUDGET = std::size_t{24} << 20;
 // What the whole bootstrap holds at PEAK_WORKERS, whatever the files.
@@ -85,6 +93,31 @@ std::int64_t total_of(const dataframe::DataFrame& df) {
     return total;
 }
 
+constexpr const char* FILES_ENV = "DFTRACER_UTILS_TEST_BOOTSTRAP_FILES";
+
+struct BootstrapRun {
+    std::size_t peak = 0;
+    std::int64_t events = 0;
+};
+
+// One bootstrap of `files` big files in a new process of this binary.
+BootstrapRun run_bootstrap(int files) {
+    ::setenv(FILES_ENV, std::to_string(files).c_str(), 1);
+    const auto child = fresh_process::run("one bootstrap of big files");
+    ::unsetenv(FILES_ENV);
+    REQUIRE(child.ok());
+    BootstrapRun out;
+    const auto at = child.output.find("PEAK ");
+    REQUIRE(at != std::string::npos);
+    unsigned long long peak = 0;
+    long long events = 0;
+    REQUIRE(std::sscanf(child.output.c_str() + at, "PEAK %llu EVENTS %lld",
+                        &peak, &events) == 2);
+    out.peak = static_cast<std::size_t>(peak);
+    out.events = events;
+    return out;
+}
+
 }  // namespace
 
 TEST_SUITE("BootstrapPeak") {
@@ -118,37 +151,40 @@ TEST_SUITE("BootstrapPeak") {
         CHECK_FALSE(memory::Manager::get().leaked());
     }
 
-    TEST_CASE("big files peak the same for 64 files and for 256") {
+    // Run by the case below in a new process, so each measured run starts
+    // from the same empty process: in one process, what an earlier run left
+    // behind moves the next run's peak by about 10 MB either way.
+    TEST_CASE("one bootstrap of big files" * doctest::skip()) {
+        fresh_process::announce();
+        const auto n = Env::get<int>(FILES_ENV);
+        REQUIRE(n.has_value());
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;
-        for (int i = 0; i < MANY_FILES; ++i)
+        for (int i = 0; i < *n; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
-        const std::vector<std::string> few(files.begin(),
-                                           files.begin() + FEW_FILES);
-
-        // A fresh runtime for each run, so what a worker thread keeps does
-        // not count against the next run's start.
-        const auto limit = build::g_max_sink_bytes.exchange(SINK_LIMIT);
-        dataframe::DataFrame small_df, large_df;
+        build::g_max_sink_bytes.store(SINK_LIMIT);
+        index::store::g_block_cache_bytes.store(BLOCK_CACHE_LIMIT);
         set_default_runtime(std::make_shared<Runtime>(PEAK_WORKERS));
-        const auto small_peak = peak_live(
-            [&] { small_df = count_by_name(few, env.get_dir() + "/idx64"); });
+        dataframe::DataFrame df;
+        const auto peak = peak_live(
+            [&] { df = count_by_name(files, env.get_dir() + "/idx"); });
         set_default_runtime(nullptr);
-        set_default_runtime(std::make_shared<Runtime>(PEAK_WORKERS));
-        const auto large_peak = peak_live([&] {
-            large_df = count_by_name(files, env.get_dir() + "/idx256");
-        });
-        build::g_max_sink_bytes.store(limit);
-        MESSAGE("peak live bytes: 64 files " << small_peak << ", 256 files "
-                                             << large_peak);
+        std::fprintf(stderr, "PEAK %zu EVENTS %lld\n", peak,
+                     static_cast<long long>(total_of(df)));
+    }
 
-        const auto gap = large_peak > small_peak ? large_peak - small_peak
-                                                 : small_peak - large_peak;
-        CHECK(small_peak > 0);
+    TEST_CASE("big files peak the same for 64 files and for 256") {
+        const auto small = run_bootstrap(FEW_FILES);
+        const auto large = run_bootstrap(MANY_FILES);
+        MESSAGE("peak live bytes: 64 files " << small.peak << ", 256 files "
+                                             << large.peak);
+
+        const auto gap = large.peak > small.peak ? large.peak - small.peak
+                                                 : small.peak - large.peak;
+        CHECK(small.peak > 0);
         CHECK(gap < PER_WORKER_BUDGET);
-        CHECK(large_peak < PEAK_BUDGET);
-        CHECK(total_of(large_df) == MANY_FILES * BIG_EVENTS);
-        set_default_runtime(nullptr);
-        CHECK_FALSE(memory::Manager::get().leaked());
+        CHECK(large.peak < PEAK_BUDGET);
+        CHECK(small.events == FEW_FILES * BIG_EVENTS);
+        CHECK(large.events == MANY_FILES * BIG_EVENTS);
     }
 }

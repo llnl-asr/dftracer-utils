@@ -277,6 +277,10 @@ set(TEST_CPP_SOURCES
     server/test_viz_schema.cpp
     trace/genesis/test_genesis.cpp
     index/test_indexer.cpp
+    index/test_store_key.cpp
+    index/test_store_section.cpp
+    index/test_store_file.cpp
+    index/test_store_snapshot.cpp
     index/test_agg_extension.cpp
     index/test_prune_oracle.cpp
     index/test_layout.cpp

@@ -2,6 +2,7 @@
 #include <dftracer/utils/memory/debug.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
+#include <dftracer/utils/memory/os_map.h>
 #include <dftracer/utils/memory/settings.h>
 #include <sys/mman.h>
 
@@ -86,8 +87,8 @@ SiteTotal* totals() noexcept {
     if (t != nullptr) [[likely]]
         return t;
     constexpr std::size_t bytes = DEBUG_SITE_TOTALS * sizeof(SiteTotal);
-    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
     if (raw == MAP_FAILED) {
         abort_with("dftracer-utils memory: cannot map the site totals\n");
     }
@@ -95,7 +96,7 @@ SiteTotal* totals() noexcept {
     if (!g_totals.compare_exchange_strong(expected,
                                           static_cast<SiteTotal*>(raw),
                                           std::memory_order_acq_rel)) {
-        ::munmap(raw, bytes);
+        os_munmap(raw, bytes);
         return expected;
     }
     return static_cast<SiteTotal*>(raw);
@@ -130,8 +131,8 @@ SiteTotal* total_of(std::uintptr_t site) noexcept {
         if (g_at_peak == nullptr) {
             constexpr std::size_t bytes =
                 DEBUG_SITE_TOTALS * sizeof(std::atomic<std::ptrdiff_t>);
-            void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                               MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+            void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                                MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
             if (raw == MAP_FAILED) {
                 abort_with("dftracer-utils memory: cannot map the peak\n");
             }
@@ -198,15 +199,15 @@ Slot* table() noexcept {
     if (t != nullptr) [[likely]]
         return t;
     constexpr std::size_t bytes = DEBUG_TABLE_SLOTS * sizeof(Slot);
-    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
     if (raw == MAP_FAILED) {
         abort_with("dftracer-utils memory: cannot map the debug table\n");
     }
     Slot* expected = nullptr;
     if (!g_table.compare_exchange_strong(expected, static_cast<Slot*>(raw),
                                          std::memory_order_acq_rel)) {
-        ::munmap(raw, bytes);
+        os_munmap(raw, bytes);
         return expected;
     }
     return static_cast<Slot*>(raw);
@@ -265,8 +266,8 @@ std::atomic<std::uintptr_t>* held_list() noexcept {
         return h;
     constexpr std::size_t bytes =
         DEBUG_HELD_BLOCKS * sizeof(std::atomic<std::uintptr_t>);
-    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
     if (raw == MAP_FAILED) {
         abort_with("dftracer-utils memory: cannot map the held list\n");
     }
@@ -274,7 +275,7 @@ std::atomic<std::uintptr_t>* held_list() noexcept {
     auto* mine = static_cast<std::atomic<std::uintptr_t>*>(raw);
     if (!g_held.compare_exchange_strong(expected, mine,
                                         std::memory_order_acq_rel)) {
-        ::munmap(raw, bytes);
+        os_munmap(raw, bytes);
         return expected;
     }
     return mine;
@@ -472,8 +473,8 @@ void debug_for_each_site(std::uint16_t pool, DebugVisit visit,
     Slot* t = g_table.load(std::memory_order_acquire);
     if (t == nullptr) return;
     constexpr std::size_t bytes = GROUP_SLOTS * sizeof(Group);
-    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
+    void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, -1, 0);
     if (raw == MAP_FAILED) {
         abort_with("dftracer-utils memory: cannot map the leak report\n");
     }
@@ -509,7 +510,7 @@ void debug_for_each_site(std::uint16_t pool, DebugVisit visit,
                                  groups[g].blocks, groups[g].bytes});
     }
     if (other.blocks != 0) visit(context, other);
-    ::munmap(raw, bytes);
+    os_munmap(raw, bytes);
 }
 
 }  // namespace dftracer::utils::memory

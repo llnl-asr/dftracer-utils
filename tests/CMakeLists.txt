@@ -144,6 +144,12 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/include/dftracer/utils/dstd\" \"$0/src/dftracer/utils/dstd\" | grep -vE '<dftracer/utils/(dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from dstd/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME no_coro_temp_awaiters
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE 'co_await[[:space:]]+[A-Za-z_][A-Za-z0-9_:<>]*[[:space:]]*\\{' \"$0/include\" \"$0/src\" --include='*.h' --include='*.hpp' --include='*.cpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"co_await on a braced temporary; GCC 12.1 destroys it twice, await a named local:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
   NAME no_quoted_includes
   COMMAND
     sh -c

@@ -104,7 +104,8 @@ static coro::CoroTask<int> run_verify(
                               .with_checkpoint_size(ckpt_size)
                               .with_force_rebuild(false)
                               .with_index(index_path);
-        auto metadata = co_await MetadataCollectorUtility{}(meta_input);
+        MetadataCollectorUtility collector;
+        auto metadata = co_await collector(meta_input);
 
         if (!metadata.success) {
             std::fprintf(stderr, "  WARN: metadata failed for %s\n",

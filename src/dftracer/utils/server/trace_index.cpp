@@ -723,9 +723,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         MetadataCollectorUtilityInput::
                                             from_file(info->path)
                                                 .with_index(info->index_path);
+                                    MetadataCollectorUtility collector;
                                     auto metadata =
-                                        co_await MetadataCollectorUtility{}(
-                                            meta_input);
+                                        co_await collector(meta_input);
                                     if (metadata.success) {
                                         info->uncompressed_size =
                                             metadata.uncompressed_size;

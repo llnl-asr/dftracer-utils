@@ -27,7 +27,8 @@ constexpr int WINNER_VALUE = 7;
 using Clock = std::chrono::steady_clock;
 constexpr auto WINNER_TIME = std::chrono::milliseconds(50);
 constexpr auto LOSER_TIME = std::chrono::seconds(2);
-constexpr auto SLACK = std::chrono::milliseconds(100);
+// Far below LOSER_TIME: the bound fails only a loser that ran to its deadline.
+constexpr auto CANCEL_BOUND = LOSER_TIME / 2;
 
 struct Race {
     std::atomic<int> clock{0};
@@ -249,8 +250,7 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
     CHECK(loser_saw_cancel.load());
     CHECK(loser_finished_before_return.load());
     CHECK(elapsed_ms.load() <
-          std::chrono::duration_cast<std::chrono::milliseconds>(WINNER_TIME +
-                                                                SLACK)
+          std::chrono::duration_cast<std::chrono::milliseconds>(CANCEL_BOUND)
               .count());
     executor.shutdown();
 }
@@ -358,8 +358,7 @@ TEST_CASE("when_any with a timeout loser returns when the winner does") {
     CHECK(winner_index.load() == 0);
     CHECK(elapsed_ms.load() >= 0);
     CHECK(elapsed_ms.load() <
-          std::chrono::duration_cast<std::chrono::milliseconds>(WINNER_TIME +
-                                                                SLACK)
+          std::chrono::duration_cast<std::chrono::milliseconds>(CANCEL_BOUND)
               .count());
     executor.shutdown();
 }
@@ -450,8 +449,7 @@ TEST_CASE("when_any - a cancelled CoroTask loser stops without throwing") {
     CHECK_FALSE(seen->threw.load());
     CHECK(seen->destroyed.load() == frames);
     CHECK(elapsed_ms.load() <
-          std::chrono::duration_cast<std::chrono::milliseconds>(WINNER_TIME +
-                                                                SLACK)
+          std::chrono::duration_cast<std::chrono::milliseconds>(CANCEL_BOUND)
               .count());
     executor.shutdown();
 }

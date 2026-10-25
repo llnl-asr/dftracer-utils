@@ -372,6 +372,12 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
+  # Inflates several large gzip members: 13 s alone on macOS, 41 s on Corona
+  # under the full suite, past 120 s on a 4-core CI runner.
+  if(bin_exec STREQUAL "index/test_big_member_reads")
+    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+  endif()
+
   # The allocator counts its allocations only in debug mode, which is fixed
   # before the first allocation.
   if(bin_exec STREQUAL "index/test_parse_allocations")

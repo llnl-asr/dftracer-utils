@@ -174,6 +174,17 @@ bool under_instrumentation() {
 #endif
 }
 
+// A build whose instrumentation adds a fixed memory cost of its own, which
+// the budgets measured on a release build do not hold.
+bool fixed_cost_build() {
+#if defined(DFTRACER_UTILS_COVERAGE_MODE) || \
+    defined(DFTRACER_UTILS_VALGRIND_MODE)
+    return true;
+#else
+    return false;
+#endif
+}
+
 struct ScaleRss {
     /// The run that builds the indexes and then compares.
     std::uint64_t cold = 0;
@@ -590,8 +601,9 @@ TEST_SUITE("DFTracerComparator") {
         // Measured on Corona (Linux, release): warm 58 MB at 100 files and
         // 92 MB at 400; the comparator before the index queries took 78 MB
         // and 220 MB. The budget and the margin sit between the two.
-        CHECK(large.warm < WARM_BUDGET_BYTES);
         CHECK(large.warm < small.warm + WARM_GROWTH_BYTES);
+        if (fixed_cost_build()) return;
+        CHECK(large.warm < WARM_BUDGET_BYTES);
         // The cold run also builds the indexes, whose per-key aggregation
         // tier holds one entry per (pid, tid, file, window, arg) until the
         // build ends; measured 180 MB and 540 MB.

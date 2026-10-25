@@ -267,6 +267,20 @@ const PathCase PATHS[] = {
     {"truncated-member decoder", truncated_decoder, false, false},
 };
 
+// Whether this process sees zlib's calls to crc32. A zlib that calls its own
+// copy inside the library (macOS, Ubuntu 24.04) never reaches the counter, and
+// a zero count proves nothing there.
+bool zlib_crc_counted() {
+    static const bool counted = [] {
+        Sample s;
+        TempFile f(s.bytes);
+        const unsigned long before = ZLIB_CRC_CALLS.load();
+        const bool decoded = zlib_decode_all(f.path) == s.text;
+        return decoded && ZLIB_CRC_CALLS.load() > before;
+    }();
+    return counted;
+}
+
 bool same(const PathCase& p, const PathResult& got, const std::string& text) {
     if (!got) return false;
     if (p.size_only) return got->size() == text.size();
@@ -278,9 +292,10 @@ bool same(const PathCase& p, const PathResult& got, const std::string& text) {
 TEST_CASE("the control: zlib's own gzip inflate calls crc32") {
     Sample s;
     TempFile f(s.bytes);
-    ZLIB_CRC_CALLS = 0;
     CHECK(zlib_decode_all(f.path) == s.text);
-    CHECK(ZLIB_CRC_CALLS.load() > 0);
+    WARN_MESSAGE(zlib_crc_counted(),
+                 "this zlib calls crc32 inside the library, so the zlib crc32 "
+                 "counts below are not checked");
 }
 
 TEST_CASE("good multi-member input decodes identically without zlib crc32") {
@@ -296,7 +311,7 @@ TEST_CASE("good multi-member input decodes identically without zlib crc32") {
         TempFile file(bytes);
         PATH_CRC_CALLS = 0;
         const auto got = p.run(file.path);
-        CHECK(PATH_CRC_CALLS.load() == 0);
+        if (zlib_crc_counted()) CHECK(PATH_CRC_CALLS.load() == 0);
         CHECK(same(p, got, expect));
     }
 }

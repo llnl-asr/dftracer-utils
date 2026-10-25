@@ -5,23 +5,43 @@
 
 #include <expected>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
-using std::expected;
-using std::unexpected;
+template <class T, class E>
+using Expected = std::expected<T, E>;
 
-}  // namespace dftracer::utils
+template <class E>
+class Unexpected : public std::unexpected<E> {
+   public:
+    using std::unexpected<E>::unexpected;
+};
+
+template <class E>
+Unexpected(E) -> Unexpected<E>;
+
+}  // namespace dftracer::utils::dstd
 
 #else
 
 #include <tl/expected.hpp>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
-using tl::expected;
-using tl::unexpected;
+template <class T, class E>
+using Expected = tl::expected<T, E>;
 
-}  // namespace dftracer::utils
+// A wrapper, not an alias: AppleClang has no CTAD for alias templates, and
+// callers write Unexpected(x) with no template argument.
+template <class E>
+class Unexpected : public tl::unexpected<E> {
+   public:
+    using tl::unexpected<E>::unexpected;
+};
+
+template <class E>
+Unexpected(E) -> Unexpected<E>;
+
+}  // namespace dftracer::utils::dstd
 
 #endif
 

@@ -419,7 +419,7 @@ class CoroTask {
      *
      * An awaiter that wants no exception tests cancelled() before
      * await_resume(); await_resume() of a cancelled task throws a cancelled
-     * error (Condition::Cancelled).
+     * error (dstd::Condition::Cancelled).
      */
     void cancel() noexcept {
         if (coro_handle_) {

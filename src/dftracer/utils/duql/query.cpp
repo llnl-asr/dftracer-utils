@@ -20,10 +20,10 @@ Query conjoin(const Query& a, const Query& b) {
         make_node(AndNode{clone(a.root()), clone(b.root())}));
 }
 
-dftracer::utils::expected<Query, DuqlError> Query::from_string(
+dftracer::utils::dstd::Expected<Query, DuqlError> Query::from_string(
     std::string_view input) {
     auto result = parse(input);
-    if (!result) return dftracer::utils::unexpected(result.error());
+    if (!result) return dftracer::utils::dstd::Unexpected(result.error());
     return Query(std::move(*result), std::string(input));
 }
 

@@ -21,7 +21,7 @@ TEST_CASE("a plugin stamped with a mismatched ABI version is refused") {
     auto set = Plugins::builder().add(BAD_ABI_VERSION_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
-    CHECK(set.error().message.find("ABI version") != std::string::npos);
-    CHECK(set.error().message.find(BAD_ABI_VERSION_PLUGIN_PATH) !=
+    CHECK(set.error().message().find("ABI version") != std::string::npos);
+    CHECK(set.error().message().find(BAD_ABI_VERSION_PLUGIN_PATH) !=
           std::string::npos);
 }

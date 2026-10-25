@@ -55,13 +55,13 @@ class ExternalSorter {
             std::lock_guard<std::mutex> lock(mu_);
             if (!file_) {
                 auto created = SpillFile::create();
-                if (!created) return unexpected(created.error());
+                if (!created) return dstd::Unexpected(created.error());
                 file_ = std::move(*created);
             }
             file = file_.get();
         }
         auto at = file->append(run.data(), run.size() * sizeof(Rec));
-        if (!at) return unexpected(at.error());
+        if (!at) return dstd::Unexpected(at.error());
         {
             std::lock_guard<std::mutex> lock(mu_);
             runs_.push_back({*at, run.size()});
@@ -105,11 +105,11 @@ class ExternalSorter {
         std::sort(buf_.begin(), buf_.end(), less_);
         if (!file_) {
             auto created = SpillFile::create();
-            if (!created) return unexpected(created.error());
+            if (!created) return dstd::Unexpected(created.error());
             file_ = std::move(*created);
         }
         auto at = file_->append(buf_.data(), buf_.size() * sizeof(Rec));
-        if (!at) return unexpected(at.error());
+        if (!at) return dstd::Unexpected(at.error());
         runs_.push_back({*at, buf_.size()});
         buf_.clear();
         return {};
@@ -124,7 +124,7 @@ class ExternalSorter {
         rd.buf.resize(n);
         auto got = file_->read(r.offset + rd.next * sizeof(Rec), rd.buf.data(),
                                n * sizeof(Rec));
-        if (!got) return unexpected(got.error());
+        if (!got) return dstd::Unexpected(got.error());
         rd.next += n;
         rd.pos = 0;
         return true;
@@ -147,7 +147,7 @@ class ExternalSorter {
             heap(after);
         for (std::size_t i = 0; i < runs_.size(); ++i) {
             auto more = refill(i, readers[i], chunk);
-            if (!more) return unexpected(more.error());
+            if (!more) return dstd::Unexpected(more.error());
             if (*more) heap.push(i);
         }
         while (!heap.empty()) {
@@ -160,7 +160,7 @@ class ExternalSorter {
                 continue;
             }
             auto more = refill(i, rd, chunk);
-            if (!more) return unexpected(more.error());
+            if (!more) return dstd::Unexpected(more.error());
             if (*more) heap.push(i);
         }
         return {};

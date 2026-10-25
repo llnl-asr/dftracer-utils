@@ -159,7 +159,7 @@ struct GzipLineWriter::Impl {
     std::mutex mu;
     std::map<std::uint64_t, Done> ready;
     std::uint64_t next_write = 0;
-    std::optional<DFTUtilsError> error;
+    std::optional<dstd::Error> error;
     std::vector<std::unique_ptr<cmp::GzipMemberCompressor>> pool;
 
     std::atomic<std::size_t> in_flight{0};
@@ -186,7 +186,7 @@ struct GzipLineWriter::Impl {
     }
 
     coro::CoroTask<void> join_and_clean() {
-        co_await fail();
+        (void)co_await fail();
         co_return;
     }
 
@@ -195,10 +195,10 @@ struct GzipLineWriter::Impl {
 
     void set_error(ErrorCode code, std::string msg) {
         std::lock_guard<std::mutex> lk(mu);
-        if (!error) error = DFTUtilsError{code, std::move(msg)};
+        if (!error) error = dstd::Error{code, msg};
     }
 
-    DFTUtilsError get_error() {
+    dstd::Error get_error() {
         std::lock_guard<std::mutex> lk(mu);
         return *error;
     }
@@ -479,7 +479,7 @@ struct GzipLineWriter::Impl {
     std::unique_ptr<char[]> scratch;  ///< ordered append_with, reused
     std::size_t scratch_cap = 0;
 
-    coro::CoroTask<DFTUtilsError> fail() {
+    coro::CoroTask<dstd::Error> fail() {
         co_await scope.join();
         if (!cleaned) {
             cleaned = true;
@@ -525,8 +525,8 @@ coro::CoroTask<Result<GzipLineWriter>> GzipLineWriter::open(
         std::make_unique<Impl>(std::move(path), std::move(opts), workers);
     const auto open_part_ok = co_await impl->open_part();
     if (!open_part_ok) {
-        DFTUtilsError err = co_await impl->fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await impl->fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     co_return GzipLineWriter(std::move(impl));
 }
@@ -560,8 +560,8 @@ std::vector<std::string> take_members(std::string& buf, std::size_t size) {
 coro::CoroTask<Result<void>> GzipLineWriter::append(std::string_view lines) {
     Impl& s = *impl_;
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     if (lines.empty()) co_return Result<void>{};
     if (lines.back() != '\n')
@@ -575,8 +575,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::append(std::string_view lines) {
     }
     for (auto& m : members) co_await s.submit(std::move(m));
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     co_return Result<void>{};
 }
@@ -586,8 +586,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::append_with(
     std::function<std::size_t(char*, std::size_t)> fill) {
     Impl& s = *impl_;
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     const char* bad = "appended lines must end with a newline";
     if (s.unordered()) {
@@ -619,8 +619,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::append_with(
             co_await s.submit(std::move(m));
     }
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     co_return Result<void>{};
 }
@@ -678,8 +678,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::submit_full() {
     for (auto& m : members) co_await s.submit(std::move(m));
     release_extra();
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     co_return Result<void>{};
 }
@@ -688,8 +688,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::append(
     std::string_view lines) {
     Impl& s = *impl_;
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     if (lines.empty()) co_return Result<void>{};
     if (lines.back() != '\n')
@@ -705,8 +705,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::append_with(
     std::function<std::size_t(char*, std::size_t)> fill) {
     Impl& s = *impl_;
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     co_await reserve_for(max_bytes);
     const std::size_t old = buf_.size();
@@ -725,8 +725,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::append_with(
 coro::CoroTask<Result<void>> GzipLineWriter::Producer::flush() {
     Impl& s = *impl_;
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     if (buf_.empty()) co_return Result<void>{};
     std::string pending = std::move(buf_);
@@ -734,8 +734,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::flush() {
     co_await s.submit(std::move(pending));
     release_extra();
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     co_return Result<void>{};
 }
@@ -743,8 +743,8 @@ coro::CoroTask<Result<void>> GzipLineWriter::Producer::flush() {
 coro::CoroTask<Result<void>> GzipLineWriter::cut() {
     Impl& s = *impl_;
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     std::string pending;
     {
@@ -762,26 +762,26 @@ coro::CoroTask<Result<WriteSummary>> GzipLineWriter::close() {
 coro::CoroTask<Result<WriteSummary>> GzipLineWriter::close(
     std::string_view tail) {
     Impl& s = *impl_;
-    if (s.cleaned) co_return unexpected(s.get_error());
+    if (s.cleaned) co_return dstd::Unexpected(s.get_error());
     if (s.prod_held.load(std::memory_order_relaxed) != 0) {
         s.set_error(ErrorCode::InvalidArgument,
                     "close with unflushed producers");
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     s.buf.append(tail);
     if (!s.failed() && !s.buf.empty()) co_await s.submit(std::move(s.buf));
     s.buf.clear();
     co_await s.scope.join();
     if (s.failed()) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     s.summary.parts = s.writer ? s.part + 1 : s.part;
     const auto close_part_ok = co_await s.close_part();
     if (!close_part_ok) {
-        DFTUtilsError err = co_await s.fail();
-        co_return unexpected(std::move(err));
+        dstd::Error err = co_await s.fail();
+        co_return dstd::Unexpected(std::move(err));
     }
     s.summary.peak_in_flight = s.peak.load(std::memory_order_relaxed);
     s.summary.peak_bytes =
@@ -816,7 +816,7 @@ Result<GzipLineWriterBlocking> GzipLineWriterBlocking::open(
     auto r = run_on_default<GzipLineWriter>("gzip_line_writer_open", [&] {
         return GzipLineWriter::open(std::move(path), std::move(opts));
     });
-    if (!r) return unexpected(r.error());
+    if (!r) return dstd::Unexpected(r.error());
     return GzipLineWriterBlocking(std::move(*r));
 }
 

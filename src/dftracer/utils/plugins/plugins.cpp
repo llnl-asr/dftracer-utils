@@ -571,7 +571,7 @@ Result<Plugins> Plugins::Builder::build() {
         const dftu_value* root = nullptr;
         if (pending.config_json) {
             auto parsed = parse_config_json(pending.path, *pending.config_json);
-            if (!parsed) return unexpected(std::move(parsed).error());
+            if (!parsed) return dstd::Unexpected(std::move(parsed).error());
             impl->configs.push_back(std::move(*parsed));
             root = impl->configs.back().root();
         } else if (pending.has_config) {
@@ -579,11 +579,11 @@ Result<Plugins> Plugins::Builder::build() {
             root = impl->configs.back().root();
         }
         auto loaded = load_plugin(pending.path, root);
-        if (!loaded) return unexpected(std::move(loaded).error());
+        if (!loaded) return dstd::Unexpected(std::move(loaded).error());
         impl->plugins.push_back(std::move(*loaded));
     }
     auto ordered = settle_order(*impl);
-    if (!ordered) return unexpected(std::move(ordered).error());
+    if (!ordered) return dstd::Unexpected(std::move(ordered).error());
     settle_prune(*impl);
     return PluginsInternalAccess::make(std::move(impl));
 }
@@ -706,7 +706,7 @@ Result<Plugins> build_injected_plugins(std::vector<dftu_plugin*> plugins) {
         impl->plugins.push_back(
             {nullptr, pl, false, {}, {}, {}, {}, {}, {}, {}});
     auto ordered = settle_order(*impl);
-    if (!ordered) return unexpected(std::move(ordered).error());
+    if (!ordered) return dstd::Unexpected(std::move(ordered).error());
     settle_prune(*impl);
     return PluginsInternalAccess::make(std::move(impl));
 }

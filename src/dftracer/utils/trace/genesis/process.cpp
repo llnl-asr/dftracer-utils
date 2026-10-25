@@ -176,16 +176,22 @@ struct GroupError {
 };
 
 template <class T>
-using GResult = expected<T, GroupError>;
+using GResult = dstd::Expected<T, GroupError>;
 
-unexpected<GroupError> fail(std::string file, std::string reason,
-                            ErrorCode code = ErrorCode::Parse) {
-    return unexpected<GroupError>(
+dstd::Unexpected<GroupError> fail(std::string file, std::string reason,
+                                  ErrorCode code = ErrorCode::Parse) {
+    return dstd::Unexpected<GroupError>(
         GroupError{code, std::move(file), std::move(reason)});
 }
 
-unexpected<GroupError> fail_from(const DFTUtilsError& e) {
-    return fail("", e.message, e.code);
+dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
+    ErrorCode legacy = errorcode_of(e.condition());
+    if (e.in_domain(dstd::CORE_ERROR_DOMAIN) && e.code() >= 0) {
+        const auto at = static_cast<std::size_t>(e.code());
+        if (at < std::size(dftracer::utils::CORE_ERROR_CODE_INFOS))
+            legacy = static_cast<ErrorCode>(at);
+    }
+    return fail("", std::string(e.message()), legacy);
 }
 
 // A group's memory is its share of the budget in four equal parts: the calls
@@ -246,8 +252,8 @@ struct GroupMem {
                           true};
     }
 
-    unexpected<GroupError> over_budget(std::string_view what) const {
-        return unexpected<GroupError>(budget_error(what));
+    dstd::Unexpected<GroupError> over_budget(std::string_view what) const {
+        return dstd::Unexpected<GroupError>(budget_error(what));
     }
 
    private:
@@ -727,7 +733,7 @@ class GroupReader {
             cur_ = {};
         } else {
             auto file = mem_->spill_file();
-            if (!file) return unexpected(file.error());
+            if (!file) return dstd::Unexpected(file.error());
             auto at = (*file)->append(cur_.data(), bytes);
             if (!at) return fail_from(at.error());
             c.spilled = true;
@@ -1452,7 +1458,7 @@ GResult<void> replay_chunks(std::vector<FilePart>& parts,
         const Call* calls = chunk.mem.data();
         if (chunk.spilled) {
             auto file = mem.spill_file();
-            if (!file) return unexpected(file.error());
+            if (!file) return dstd::Unexpected(file.error());
             scratch.resize(chunk.count);
             auto got = (*file)->read(chunk.offset, scratch.data(),
                                      chunk.count * sizeof(Call));
@@ -1699,7 +1705,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     auto walked = co_await coro::when_all(std::move(walks));
     for (auto& st : walked) {
         if (!st) {
-            skip_all("", st.error().message);
+            skip_all("", std::string(st.error().message()));
             co_return result;
         }
     }

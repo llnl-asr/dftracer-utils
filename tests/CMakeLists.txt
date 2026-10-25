@@ -198,6 +198,7 @@ set(TEST_CPP_SOURCES
     runtime/test_watchdog.cpp
     runtime/test_executor_wakeups.cpp
     common/test_logging.cpp
+    common/test_error.cpp
     common/test_intern_table.cpp
     dstd/test_hash_partition.cpp
     dstd/test_hex64.cpp
@@ -209,6 +210,8 @@ set(TEST_CPP_SOURCES
     dstd/test_function.cpp
     dstd/test_any.cpp
     dstd/test_raw_buffer.cpp
+    dstd/test_expected.cpp
+    dstd/test_error.cpp
     common/test_filesystem_info.cpp
     common/test_memory_budget.cpp
     common/test_memory_config.cpp

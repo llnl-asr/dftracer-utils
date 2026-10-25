@@ -83,7 +83,7 @@ struct ReserveWaitState {
 class ReserveAsync {
    public:
     using Clock = std::chrono::steady_clock;
-    using Result = expected<memory::Reservation, memory::Status>;
+    using Result = dstd::Expected<memory::Reservation, memory::Status>;
 
     ReserveAsync(memory::Pool& pool, std::size_t bytes,
                  Clock::time_point deadline) noexcept
@@ -177,13 +177,14 @@ class ReserveAsync {
             park_ = nullptr;
         }
         if (reserved_) return std::move(reserved_);
-        if (!state_) return unexpected(reserved_.status());
+        if (!state_) return dstd::Unexpected(reserved_.status());
         state_->cancel_timer();
         memory::Reservation granted = state_->node->take();
         if (granted) return granted;
-        return unexpected(state_->cancelled.load(std::memory_order_acquire)
-                              ? memory::Status::Cancelled
-                              : memory::Status::OverBudget);
+        return dstd::Unexpected(
+            state_->cancelled.load(std::memory_order_acquire)
+                ? memory::Status::Cancelled
+                : memory::Status::OverBudget);
     }
 
    private:

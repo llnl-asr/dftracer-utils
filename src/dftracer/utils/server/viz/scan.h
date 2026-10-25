@@ -142,14 +142,15 @@ inline std::optional<HttpResponse> refuse_duql(std::string_view query,
     return HttpResponse::bad_request("Invalid duql: " + std::string(query));
 }
 
-inline dftracer::utils::expected<VizWindow, HttpResponse> parse_viz_window(
-    const QueryParams& params, TraceIndex& index, std::string_view endpoint) {
+inline dftracer::utils::dstd::Expected<VizWindow, HttpResponse>
+parse_viz_window(const QueryParams& params, TraceIndex& index,
+                 std::string_view endpoint) {
     double begin = params.get_double("begin", 0);
     double end = params.get_double("end", 0);
 
     auto query = params.get("duql");
     if (auto refused = refuse_duql(query, endpoint))
-        return dftracer::utils::unexpected(std::move(*refused));
+        return dftracer::utils::dstd::Unexpected(std::move(*refused));
 
     auto ts_norm_param = params.get("ts_normalize");
     bool normalize = ts_norm_param.empty() || ts_norm_param != "0";

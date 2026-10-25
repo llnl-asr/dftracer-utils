@@ -1306,14 +1306,14 @@ class Parser {
 
 bool is_stage_word(std::string_view word) { return stage_word(word); }
 
-dftracer::utils::expected<Program, duql::DuqlError> parse(
+dftracer::utils::dstd::Expected<Program, duql::DuqlError> parse(
     std::string_view source) {
     auto tokens = lex(source);
-    if (!tokens) return dftracer::utils::unexpected(tokens.error());
+    if (!tokens) return dftracer::utils::dstd::Unexpected(tokens.error());
     try {
         return Parser(source, std::move(*tokens)).program();
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 

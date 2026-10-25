@@ -64,7 +64,7 @@ struct Token {
 /// The tokens of `source`, ending with END. `#` comments and whitespace are
 /// skipped. Fails on an unterminated string or quoted key, or a character
 /// that starts no token.
-dftracer::utils::expected<std::vector<Token>, duql::DuqlError> lex(
+dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
     std::string_view source);
 
 /// A DuqlError for `length` bytes at `offset` of `source`, with line,

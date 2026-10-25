@@ -562,7 +562,7 @@ PatternResult compile_like(std::string_view pattern, bool icase,
             if (i + 1 >= pattern.size() ||
                 (pattern[i + 1] != '%' && pattern[i + 1] != '_' &&
                  pattern[i + 1] != esc))
-                return dftracer::utils::unexpected(PatternError{
+                return dftracer::utils::dstd::Unexpected(PatternError{
                     "the escape character must precede '%', '_' or itself", i});
             toks.push_back({GlobKind::Literal, pattern[++i]});
         } else if (c == '%') {
@@ -637,7 +637,7 @@ PatternResult compile_contains(std::string_view text, bool icase) {
 PatternResult compile_regex(std::string_view pattern, bool icase, bool whole) {
     DialectScan scan(pattern);
     if (auto err = scan.run())
-        return dftracer::utils::unexpected(PatternError{
+        return dftracer::utils::dstd::Unexpected(PatternError{
             "the duql regex dialect has no " + err->message, err->offset});
     std::uint32_t options =
         PCRE2_UTF | PCRE2_MATCH_INVALID_UTF | PCRE2_NEVER_BACKSLASH_C;
@@ -651,7 +651,7 @@ PatternResult compile_regex(std::string_view pattern, bool icase, bool whole) {
     if (!code->code) {
         PCRE2_UCHAR buf[256];
         pcre2_get_error_message(err, buf, sizeof(buf));
-        return dftracer::utils::unexpected(
+        return dftracer::utils::dstd::Unexpected(
             PatternError{reinterpret_cast<const char*>(buf), offset});
     }
     std::uint32_t groups = 0;
@@ -845,10 +845,11 @@ std::vector<std::pair<std::size_t, std::string>> capture_names(
     return names;
 }
 
-dftracer::utils::expected<Substitution, PatternError> compile_substitution(
-    const CompiledPattern& p, std::string_view to) {
+dftracer::utils::dstd::Expected<Substitution, PatternError>
+compile_substitution(const CompiledPattern& p, std::string_view to) {
     auto fail = [](std::string msg, std::size_t at) {
-        return dftracer::utils::unexpected(PatternError{std::move(msg), at});
+        return dftracer::utils::dstd::Unexpected(
+            PatternError{std::move(msg), at});
     };
     if (p.kind != Kind::Regex)
         return fail("a replacement needs a regex pattern", 0);
@@ -890,7 +891,8 @@ dftracer::utils::expected<Substitution, PatternError> compile_substitution(
             std::size_t g = 0, j = i + 1;
             for (; j < to.size() && digit(to[j]); ++j)
                 g = std::min<std::size_t>(g * 10 + (to[j] - '0'), 1u << 30);
-            if (auto e = group(g, at)) return dftracer::utils::unexpected(*e);
+            if (auto e = group(g, at))
+                return dftracer::utils::dstd::Unexpected(*e);
             i = j - 1;
         } else if (c == '{') {
             const std::size_t close = to.find('}', i + 2);
@@ -911,7 +913,8 @@ dftracer::utils::expected<Substitution, PatternError> compile_substitution(
                                 at);
                 g = it->first;
             }
-            if (auto e = group(g, at)) return dftracer::utils::unexpected(*e);
+            if (auto e = group(g, at))
+                return dftracer::utils::dstd::Unexpected(*e);
             i = close;
         } else {
             return fail(BAD_DOLLAR, at);

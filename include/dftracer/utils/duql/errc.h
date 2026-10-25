@@ -1,38 +1,36 @@
 #ifndef DFTRACER_UTILS_DUQL_ERRC_H
 #define DFTRACER_UTILS_DUQL_ERRC_H
 
-#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/error.h>
 
 #include <cstdint>
 
 namespace dftracer::utils::duql {
 
-/// The query library's error domain (domain #1 for the extensible error id).
-inline constexpr dftracer::utils::ErrorDomain ERROR_DOMAIN =
-    dftracer::utils::make_error_domain("dftracer.duql");
+/// The query library's error domain.
+inline constexpr dstd::ErrorDomain ERROR_DOMAIN =
+    dstd::make_error_domain("dftracer.utils.duql");
 
-/// duql error codes; portable conditions come from error_condition.
+/// duql error codes; portable conditions come from error_info.
 enum class DuqlErrc : std::int32_t {
     Parse,        ///< syntax / tokenize failure
     Pattern,      ///< invalid match pattern (like / regex)
     Unsupported,  ///< predicate has no columnar (vec-mask) lowering
 };
 
-/// ADL opt-in: binds each code to the query domain and a portable condition, so
-/// dftracer::utils::make_error(DuqlErrc::...) deduces both.
-constexpr dftracer::utils::ErrorDomain error_domain(DuqlErrc) noexcept {
-    return ERROR_DOMAIN;
-}
-constexpr dftracer::utils::Condition error_condition(DuqlErrc e) noexcept {
-    switch (e) {
-        case DuqlErrc::Parse:
-            return dftracer::utils::Condition::Parse;
-        case DuqlErrc::Pattern:
-            return dftracer::utils::Condition::InvalidArgument;
-        case DuqlErrc::Unsupported:
-            return dftracer::utils::Condition::Unsupported;
-    }
-    return dftracer::utils::Condition::Unknown;
+inline constexpr dstd::ErrorCodeInfo DUQL_ERROR_INFOS[] = {
+    {&ERROR_DOMAIN, static_cast<std::int32_t>(DuqlErrc::Parse),
+     dstd::Condition::Parse, "PARSE"},
+    {&ERROR_DOMAIN, static_cast<std::int32_t>(DuqlErrc::Pattern),
+     dstd::Condition::InvalidArgument, "PATTERN"},
+    {&ERROR_DOMAIN, static_cast<std::int32_t>(DuqlErrc::Unsupported),
+     dstd::Condition::Unsupported, "UNSUPPORTED"},
+};
+
+constexpr const dstd::ErrorCodeInfo& error_info(DuqlErrc code) noexcept {
+    const auto at = static_cast<std::size_t>(code);
+    return at < std::size(DUQL_ERROR_INFOS) ? DUQL_ERROR_INFOS[at]
+                                            : DUQL_ERROR_INFOS[0];
 }
 
 }  // namespace dftracer::utils::duql

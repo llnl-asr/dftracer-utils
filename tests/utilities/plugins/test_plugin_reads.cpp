@@ -73,7 +73,8 @@ TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": true})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);
@@ -94,7 +95,8 @@ TEST_CASE(
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": false})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);

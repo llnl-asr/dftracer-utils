@@ -11,7 +11,7 @@ namespace dftracer::utils::duql::syntax {
 
 /// Parses duql text into a syntax tree. Fails with the position of the first
 /// syntax error.
-dftracer::utils::expected<Program, duql::DuqlError> parse(
+dftracer::utils::dstd::Expected<Program, duql::DuqlError> parse(
     std::string_view source);
 
 /// Whether `word` names a stage (`where`, `sort`, ...), ignoring case.

@@ -203,10 +203,10 @@ struct AggPartial {
 
     /// Parses exactly `bytes`; a truncated, malformed or over-long input is
     /// ErrorCode::Parse.
-    static expected<AggPartial, ErrorCode> deserialize(
+    static dstd::Expected<AggPartial, ErrorCode> deserialize(
         dstd::Span<const std::uint8_t> bytes,
         double relative_accuracy = QuantileStore::DEFAULT_ACCURACY);
-    static expected<AggPartial, ErrorCode> deserialize(
+    static dstd::Expected<AggPartial, ErrorCode> deserialize(
         dstd::Span<const std::uint8_t> bytes, double relative_accuracy,
         Fields keep);
 };

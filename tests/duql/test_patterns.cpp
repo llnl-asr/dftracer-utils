@@ -21,7 +21,8 @@ namespace {
 
 Truth truth(const char* query, const char* record) {
     auto ast = parse(query);
-    REQUIRE_MESSAGE(ast.has_value(), (ast ? "" : ast.error().message));
+    REQUIRE_MESSAGE(ast.has_value(),
+                    (ast ? std::string() : ast.error().message));
     simdjson::dom::parser p;
     simdjson::dom::element el;
     REQUIRE(p.parse(record, std::strlen(record)).get(el) == simdjson::SUCCESS);
@@ -355,7 +356,8 @@ std::string replace_with(const char* re, const char* to, std::string_view s,
     auto p = compile_regex(re, false);
     REQUIRE(p.has_value());
     auto sub = compile_substitution(**p, to);
-    REQUIRE_MESSAGE(sub.has_value(), (sub ? "" : sub.error().message));
+    REQUIRE_MESSAGE(sub.has_value(),
+                    (sub ? std::string() : sub.error().message));
     std::string out;
     const MatchResult r = regex_replace(**p, *sub, s, out);
     if (res) *res = r;

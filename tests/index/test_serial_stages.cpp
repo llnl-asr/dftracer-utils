@@ -30,6 +30,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -238,7 +239,7 @@ TEST_SUITE("SerialStages") {
         CHECK(batches > 2);
     }
 
-    TEST_CASE("a CLI scan stats its files on more than one thread") {
+    TEST_CASE("a CLI scan stats its files on the pool, not the main thread") {
         dftu_utils_test::TestEnvironment env(10);
         const std::string dir = env.get_dir() + "/cli_scan";
         fs::create_directories(dir + "/a");
@@ -254,7 +255,9 @@ TEST_SUITE("SerialStages") {
         const auto entries = cli_scan(dir);
 
         CHECK(entries.size() == SCAN_FILES);
-        CHECK(scan::scan_stat_threads().count() > 1);
+        CHECK(scan::scan_stat_threads().count() >= 1);
+        CHECK_FALSE(
+            scan::scan_stat_threads().contains(std::this_thread::get_id()));
     }
 
     TEST_CASE("an ingest links its staged SSTs without a reopen and fsync") {

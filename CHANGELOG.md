@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Size how many stat batches a directory scan runs at once from the stat time it measures, where it ran at most 12 at once on any file system.
+  The scan admits one more batch while each stat stays within 2 times the fastest it has seen and fewer when stats slow down, up to `--executor-threads`, and a cold view of the 8,404 minife traces on Lustre takes 9.1 to 9.6 s where it took 9.0 to 10.2 s.
 - Stat the shared index folder once in a `dftracer_view` run, where each input file made up to 4 stat calls and 7 lstat calls on it.
   A view of the 8,404 minife traces makes 34,954 stat calls cold and 33,780 warm where it made 51,756 and 67,392, and 8,148 lstat calls warm where it made 66,913.
 - Ingest the index files of a cold `dftracer_view` from each worker as it finishes its files, where one thread ingested all of them after the parse.

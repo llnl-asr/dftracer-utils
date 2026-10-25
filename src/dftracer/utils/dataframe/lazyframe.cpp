@@ -1926,18 +1926,18 @@ class IsDupCursor : public Cursor {
             auto keyed = std::make_unique<RowKeyCursor>(spool_.reader());
             auto numbered =
                 std::make_unique<WithRowIndexCursor>(std::move(keyed));
-            auto by_key =
-                make_sort_merge(std::move(numbered),
-                                std::vector<std::string>{"row_index", "key"},
-                                std::vector<std::string>{"key", "row_index"},
-                                std::vector<bool>{false, false}, budget_);
+            auto by_key = make_sort_merge(
+                std::move(numbered),
+                std::vector<std::string>{"row_index", "key"},
+                std::vector<std::string>{"key", "row_index"},
+                std::vector<bool>{false, false}, budget_ / share::CHAINED_SORT);
             auto flagged =
                 std::make_unique<RunFlagCursor>(std::move(by_key), unique_);
-            auto by_row =
-                make_sort_merge(std::move(flagged),
-                                std::vector<std::string>{"row_index", "flag"},
-                                std::vector<std::string>{"row_index"},
-                                std::vector<bool>{false}, budget_);
+            auto by_row = make_sort_merge(
+                std::move(flagged),
+                std::vector<std::string>{"row_index", "flag"},
+                std::vector<std::string>{"row_index"}, std::vector<bool>{false},
+                budget_ / share::CHAINED_SORT);
             external_ = std::make_unique<SelectCursor>(std::move(by_row),
                                                        std::vector<int>{1});
             counted_ = true;

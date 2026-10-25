@@ -21,6 +21,9 @@ inline constexpr std::uint64_t CHUNK = 4;
 /// A sort run is cut at this fraction of the budget: sorting holds the rows,
 /// their sorted copy and the permutation at once.
 inline constexpr std::uint64_t SORT_RUN = 4;
+/// Each of two external sorts that run at once, the merge of one feeding the
+/// runs of the other.
+inline constexpr std::uint64_t CHAINED_SORT = 2;
 /// The output morsel of an op that makes more rows than it reads (a join, an
 /// explode, an unpivot, a set of dummy columns): the result and the copy that
 /// gathers it stay within this fraction of the budget.

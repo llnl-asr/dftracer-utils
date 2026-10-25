@@ -187,6 +187,7 @@ set(TEST_CPP_SOURCES
     # Runtime and common tests
     runtime/test_runtime.cpp
     runtime/test_runtime_abi.cpp
+    runtime/test_submit_exception.cpp
     runtime/test_task_abi.cpp
     runtime/test_task_pool.cpp
     runtime/test_reserve_async.cpp

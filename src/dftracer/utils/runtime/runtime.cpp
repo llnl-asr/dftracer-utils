@@ -193,6 +193,8 @@ void Runtime::shutdown() {
     if (!shutdown_called_.compare_exchange_strong(expected, true)) return;
     if (watchdog_) watchdog_->stop();
     if (executor_) executor_->shutdown();
+    std::lock_guard<std::mutex> lock(futures_mutex_);
+    outstanding_futures_.clear();
 }
 
 std::size_t Runtime::threads() const { return threads_; }

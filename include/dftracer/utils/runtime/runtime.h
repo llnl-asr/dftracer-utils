@@ -259,9 +259,8 @@ TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {
             t = coro::CoroTask<T>{std::coroutine_handle<
                 typename coro::CoroTask<T>::promise_type>{}};
             exec->mark_coro_completed(task_id->load(std::memory_order_acquire));
-            auto ex = std::current_exception();
-            tp->set_exception(ex);
-            vp->set_exception(ex);
+            tp->set_exception(std::current_exception());
+            vp->set_value();
             co_return;
         }
         vp->set_value();

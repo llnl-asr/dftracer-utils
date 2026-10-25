@@ -76,6 +76,7 @@ void touch(void* p, std::size_t size) {
 int run_in_child(void (*body)()) {
     pid_t pid = ::fork();
     if (pid == 0) {
+        no_core_dump::disable();
         int null = ::open("/dev/null", O_WRONLY);
         ::dup2(null, STDERR_FILENO);
         ::dup2(null, STDOUT_FILENO);

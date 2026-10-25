@@ -24,6 +24,7 @@ foreach(test_file ${MEMORY_TEST_SOURCES})
   set(target_name "memory_${bin_exec}")
 
   add_executable(${target_name} ${test_file})
+  target_include_directories(${target_name} PRIVATE ${CMAKE_SOURCE_DIR}/tests)
   target_link_libraries(${target_name} PRIVATE doctest::doctest
                                                ${MEMORY_TEST_LIBRARY}
                                                Threads::Threads)

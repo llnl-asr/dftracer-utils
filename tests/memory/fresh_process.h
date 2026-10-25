@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_TESTS_MEMORY_FRESH_PROCESS_H
 #define DFTRACER_UTILS_TESTS_MEMORY_FRESH_PROCESS_H
 
+#include <no_core_dump.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -69,6 +70,7 @@ inline Result run(const char* test_case) {
     }
     pid_t pid = ::fork();
     if (pid == 0) {
+        no_core_dump::disable();
         ::close(fds[0]);
         ::close(err[0]);
         ::dup2(err[1], STDERR_FILENO);

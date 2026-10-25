@@ -126,7 +126,12 @@ cmake.args = [
 
 [tool.cibuildwheel]
 build-verbosity = 1
+# The build tree is not needed once the wheel exists, and the tests need the
+# disk it holds on a 14 GB runner.
 before-test = [
+  "df -h {project}",
+  "rm -rf {project}/build/ci",
+  "df -h {project}",
   "pip install tomli",
   "python -c 'import tomli, subprocess, sys; subprocess.check_call([sys.executable, \"-m\", \"pip\", \"install\"] + tomli.load(open(\"pyproject.toml\", \"rb\"))[\"project\"][\"optional-dependencies\"][\"dev\"])'",
 ]

@@ -122,4 +122,7 @@ for tool in ldb sst_dump; do
 	fi
 done
 
+# The runner disk is small and the wheel build and tests still need it.
+rm -rf "${BUILD_DIR}" "${BUILD_DIR}-zstd"
+
 echo "RocksDB ${VERSION} installed to ${PREFIX}"

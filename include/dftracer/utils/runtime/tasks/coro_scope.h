@@ -23,6 +23,10 @@
 
 namespace dftracer::utils {
 
+namespace detail {
+struct CoroScopeAccess;
+}  // namespace detail
+
 /// Lightweight structured concurrency scope using Coro + JoinHandle.
 ///
 /// This is the single context type that task lambdas receive.
@@ -117,11 +121,10 @@ class CoroScope {
     CoroScope(Executor* executor, std::shared_ptr<CancelChain> chain)
         : executor_(executor), cancel_chain_(std::move(chain)) {}
 
-    template <typename Func, typename... Args>
-        requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&,
-                                       Args...>
-    friend coro::CoroTask<void> run_coro_scope(Executor* executor,
-                                               Func scope_func, Args... args);
+    // A friend struct, not the constrained run_coro_scope template:
+    // AppleClang 16 does not match a constrained friend template with its
+    // definition, so the friend would not get access.
+    friend struct detail::CoroScopeAccess;
 
    public:
     /// A scope for an owner that outlives the call that made it and joins it
@@ -575,13 +578,19 @@ class CoroScope {
 // Creates a child CoroScope, runs the lambda, and auto-joins.
 // ========================================================================
 
+namespace detail {
+struct CoroScopeAccess {
+    static CoroScope root(Executor* executor) { return CoroScope(executor); }
+};
+}  // namespace detail
+
 template <typename Func, typename... Args>
     requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&,
                                    Args...>
 inline coro::CoroTask<void> run_coro_scope(Executor* executor, Func scope_func,
                                            Args... args) {
     co_await coro::detail::OWNS_SCOPE;
-    CoroScope scope(executor);
+    CoroScope scope = detail::CoroScopeAccess::root(executor);
     std::exception_ptr error;
     try {
         co_await scope_func(scope, std::move(args)...);

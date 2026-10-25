@@ -225,6 +225,7 @@ set(TEST_CPP_SOURCES
     coro/test_async_once.cpp
     coro/test_async_semaphore.cpp
     coro/test_async_mutex.cpp
+    coro/test_adaptive_gate.cpp
     # Async I/O tests
     io/test_async_io.cpp
     # Task Graph tests

@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/runtime/coro/adaptive_gate.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -48,7 +49,8 @@ inline std::atomic<std::size_t>& scan_stat_batches() {
 }
 
 /// The threads that have run a stat batch in this process. A scan whose
-/// batches all run on one thread stats its files serially. For tests.
+/// batches run on the thread that awaited it stats its files on that thread's
+/// run loop, one at a time. For tests.
 class ScanStatThreads {
    public:
     void note() {
@@ -58,6 +60,10 @@ class ScanStatThreads {
     std::size_t count() const {
         std::lock_guard<std::mutex> lock(mu_);
         return ids_.size();
+    }
+    bool contains(std::thread::id id) const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return ids_.count(id) > 0;
     }
     void clear() {
         std::lock_guard<std::mutex> lock(mu_);
@@ -129,7 +135,10 @@ class DirectoryScannerUtility {
         }
 
         if (input.recursive) {
-            co_return co_await scan_parallel(ctx, input.path,
+            Executor* exec = ctx.get_executor();
+            auto gate = std::make_shared<coro::AdaptiveGate>(
+                exec ? exec->get_num_threads() : 1);
+            co_return co_await scan_parallel(ctx, std::move(gate), input.path,
                                              input.populate_size);
         }
 
@@ -194,11 +203,13 @@ class DirectoryScannerUtility {
     }
 
     /// Recursive parallel scan: list one directory level, stat its entries in
-    /// batches over @p ctx, spawn a child scan per subdirectory, then merge in
-    /// listing order. Uses error codes instead of exceptions so an unreadable
-    /// directory is skipped rather than aborting the whole scan.
+    /// batches over @p ctx, as many at once as @p gate admits, spawn a child
+    /// scan per subdirectory, then merge in listing order. Uses error codes
+    /// instead of exceptions so an unreadable directory is skipped rather than
+    /// aborting the whole scan.
     static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
-        CoroScope& ctx, fs::path dir, bool populate_size) {
+        CoroScope& ctx, std::shared_ptr<coro::AdaptiveGate> gate, fs::path dir,
+        bool populate_size) {
         std::vector<fs::directory_entry> listing;
         std::error_code ec;
         fs::directory_iterator it(dir, ec);
@@ -215,8 +226,9 @@ class DirectoryScannerUtility {
             const std::size_t stop =
                 std::min(begin + STAT_BATCH, shared_listing->size());
             batches.push_back(
-                ctx.spawn([shared_listing, begin, stop, populate_size](
+                ctx.spawn([gate, shared_listing, begin, stop, populate_size](
                               CoroScope&) -> coro::CoroTask<StatBatch> {
+                    auto admitted = co_await gate->enter(stop - begin);
                     co_return stat_batch(*shared_listing, begin, stop,
                                          populate_size);
                 }));
@@ -231,9 +243,9 @@ class DirectoryScannerUtility {
                          std::make_move_iterator(batch.entries.end()));
             for (auto& sub : batch.subdirs) {
                 subdirs.push_back(ctx.spawn(
-                    [p = std::move(sub), populate_size](CoroScope& child)
+                    [gate, p = std::move(sub), populate_size](CoroScope& child)
                         -> coro::CoroTask<std::vector<FileEntry>> {
-                        co_return co_await scan_parallel(child, p,
+                        co_return co_await scan_parallel(child, gate, p,
                                                          populate_size);
                     }));
             }
@@ -254,7 +266,8 @@ class DirectoryScannerUtility {
 /// on a pool of its own with `executor_threads` workers and `io_threads` I/O
 /// threads, and blocks until done. A CLI drives its run coroutine with get()
 /// on the main thread, whose run loop is one thread, so a scan awaited there
-/// stats every file one at a time. Here the stat batches fan out over the pool.
+/// stats every file one at a time. Here the stat batches fan out over the pool,
+/// which grows only as far as the scan's AdaptiveGate admits batches.
 template <class Scanner, class Input>
 coro::CoroTask<void> scan_on_pool_task(CoroScope& scope, Input input,
                                        std::vector<FileEntry>* entries) {
@@ -268,6 +281,7 @@ std::vector<FileEntry> scan_on_pool(std::size_t executor_threads,
     std::vector<FileEntry> entries;
     ExecutorConfig config;
     config.num_threads = executor_threads;
+    config.min_workers = 1;
     config.io_pool_size = io_threads;
     Runtime pool(config, /*enable_watchdog=*/false);
     pool.run_blocking("scan trace files", [&](CoroScope& scope) {

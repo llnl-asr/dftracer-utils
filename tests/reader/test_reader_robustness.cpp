@@ -5,6 +5,7 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <algorithm>
 #include <atomic>
@@ -19,8 +20,6 @@
 #include <thread>
 #include <tuple>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;

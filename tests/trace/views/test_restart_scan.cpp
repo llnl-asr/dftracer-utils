@@ -5,6 +5,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -12,8 +13,6 @@
 #include <random>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
 using dftracer::utils::index::gzip::GzipRecordKind;

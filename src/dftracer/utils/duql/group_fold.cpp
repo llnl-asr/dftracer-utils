@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/vectorize.h>
@@ -9,8 +10,6 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
-
-#include "../dataframe/batch_ops.h"
 
 namespace dftracer::utils::duql {
 

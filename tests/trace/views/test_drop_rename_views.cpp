@@ -4,13 +4,12 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 

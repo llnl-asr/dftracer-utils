@@ -6,14 +6,13 @@
 #include <dftracer/utils/dataframe/op.h>
 #include <dftracer/utils/trace/views/abi.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <fstream>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "test_view_common.h"
 
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::OpArgs;

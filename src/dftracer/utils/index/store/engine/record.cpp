@@ -1,6 +1,5 @@
-#include "record.h"
-
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/index/store/engine/record.h>
 #include <dftracer/utils/index/store/engine/varint.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 

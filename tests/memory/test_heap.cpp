@@ -6,6 +6,7 @@
 #include <dftracer/utils/memory/settings.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <memory/fresh_process.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -19,8 +20,6 @@
 #include <set>
 #include <thread>
 #include <vector>
-
-#include "fresh_process.h"
 
 using namespace dftracer::utils::memory;
 

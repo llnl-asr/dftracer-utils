@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -16,8 +17,6 @@
 #include <utility>
 #include <variant>
 #include <vector>
-
-#include "../dataframe/batch_ops.h"
 
 namespace dftracer::utils::duql {
 

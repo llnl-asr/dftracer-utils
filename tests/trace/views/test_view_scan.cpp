@@ -7,13 +7,12 @@
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <atomic>
 #include <limits>
 #include <map>
-
-#include "test_view_common.h"
 
 TEST_SUITE("View") {
     TEST_CASE(

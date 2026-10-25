@@ -7,7 +7,9 @@
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <testing_utilities.h>
+#include <trace/bootstrap_test_common.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -16,9 +18,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "bootstrap_test_common.h"
-#include "memory/fresh_process.h"
 
 using namespace dftracer::utils;
 namespace dataframe = dftracer::utils::dataframe;

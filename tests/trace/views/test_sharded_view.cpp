@@ -8,15 +8,14 @@
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
+#include <testing_runtime.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <fstream>
 #include <map>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
-#include "testing_runtime.h"
 
 using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::IndexShardManifest;

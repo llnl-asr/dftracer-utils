@@ -9,11 +9,10 @@
 // quantile) for the Arrow-only logical types, mirroring
 // test_arrow_types_matrix.cpp's default-less is_audited() switch.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/scalar.h>
 #include <nanoarrow/nanoarrow.h>
-
-#include "builders_arrow_types.h"
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;

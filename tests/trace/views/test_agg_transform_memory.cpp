@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <trace/views/agg_parity_common.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -21,8 +22,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include "agg_parity_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 namespace scan_detail = dftracer::utils::trace::views::detail;

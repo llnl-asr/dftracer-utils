@@ -54,6 +54,7 @@
 // construction; the record keeps it so a case that changes its workload shows
 // up. Instructions are counted over the whole run of a case, set-up included.
 
+#include <bench_counters.h>
 #include <dftracer/utils/memory/heap_page.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -76,8 +77,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#include "bench_counters.h"
 
 namespace mem = dftracer::utils::memory;
 

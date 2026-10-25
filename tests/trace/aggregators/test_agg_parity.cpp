@@ -6,6 +6,7 @@
 #include <doctest/doctest.h>
 #include <simdjson.h>
 #include <testing_utilities.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cmath>
@@ -18,8 +19,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "trace/views/test_view_common.h"
 
 // Parity references for the aggregate outputs of dftracer_comparator, the
 // View aggregate queries and dftracer_gen_dlio_config, taken from the code as

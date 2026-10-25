@@ -9,11 +9,10 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <testing_utilities.h>
 
 #include <span>
 #include <string>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::extensions;

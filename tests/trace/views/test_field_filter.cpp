@@ -1,8 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
-
-#include "test_view_common.h"
+#include <trace/views/test_view_common.h>
 
 using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::field::F;

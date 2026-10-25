@@ -1908,7 +1908,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     target_link_libraries(${bench_name} PRIVATE dftracer_utils)
     target_include_directories(
       ${bench_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
-                            ${CMAKE_CURRENT_SOURCE_DIR})
+                            ${CMAKE_CURRENT_SOURCE_DIR}
+                            ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks)
     add_stdfs_if_needed(${bench_name})
     target_set_warnings(${bench_name})
   endforeach()
@@ -1955,6 +1956,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
 
     add_executable(memory_probe_test
                    ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_probe_test.cpp)
+    target_include_directories(memory_probe_test
+                               PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks)
     target_set_warnings(memory_probe_test)
     add_test(NAME bench_smoke/memory_probe COMMAND memory_probe_test)
     set_tests_properties(bench_smoke/memory_probe PROPERTIES LABELS

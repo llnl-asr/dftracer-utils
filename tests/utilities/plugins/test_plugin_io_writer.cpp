@@ -18,6 +18,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 
 #include <cstdint>
@@ -26,8 +27,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;

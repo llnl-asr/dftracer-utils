@@ -11,6 +11,8 @@
 #include <doctest/doctest.h>
 #include <sys/resource.h>
 #include <testing_utilities.h>
+#include <trace/bootstrap_test_common.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -20,9 +22,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "bootstrap_test_common.h"
-#include "views/test_view_common.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;

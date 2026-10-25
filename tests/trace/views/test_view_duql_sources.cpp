@@ -4,13 +4,12 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <fstream>
 #include <functional>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;

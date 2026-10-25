@@ -1,6 +1,5 @@
-#include "data_file.h"
-
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/index/store/engine/data_file.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <fcntl.h>
 #include <sys/stat.h>

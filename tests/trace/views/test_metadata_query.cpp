@@ -8,11 +8,10 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <fstream>
 #include <string>
-
-#include "test_view_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;

@@ -5,12 +5,11 @@
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 #include <dftracer/utils/utilities/reader/internal/stream_type.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::gzip;

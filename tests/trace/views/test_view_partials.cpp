@@ -13,6 +13,7 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
 #include <rocksdb/db.h>
+#include <trace/views/test_view_common.h>
 
 #include <cmath>
 #include <fstream>
@@ -20,8 +21,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;

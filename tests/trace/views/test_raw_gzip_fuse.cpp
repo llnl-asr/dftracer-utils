@@ -21,6 +21,9 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <rocksdb/iterator.h>
+#include <testing_runtime.h>
+#include <trace/views/groupmap_oracle.h>
+#include <trace/views/test_view_common.h>
 #include <zlib.h>
 
 #include <array>
@@ -30,10 +33,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "groupmap_oracle.h"
-#include "test_view_common.h"
-#include "testing_runtime.h"
 
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;

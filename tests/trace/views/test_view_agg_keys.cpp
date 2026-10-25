@@ -1,9 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/trace/views/result_join.h>
+#include <trace/views/agg_parity_common.h>
 
 #include <optional>
-
-#include "agg_parity_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 

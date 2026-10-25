@@ -2,13 +2,12 @@
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
-
-#include "fresh_process.h"
 
 using namespace dftracer::utils::memory;
 

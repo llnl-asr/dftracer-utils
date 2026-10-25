@@ -19,14 +19,13 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include "test_plugin_common.h"
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;

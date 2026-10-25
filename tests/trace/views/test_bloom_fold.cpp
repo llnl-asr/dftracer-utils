@@ -16,6 +16,7 @@
 #include <index_test_helpers.h>
 #include <simdjson.h>
 #include <testing_runtime.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cmath>
@@ -25,8 +26,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#include "test_view_common.h"
 
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;

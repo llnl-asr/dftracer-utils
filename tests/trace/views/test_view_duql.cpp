@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <array>
@@ -15,8 +16,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace df = dftracer::utils::dataframe;
 

@@ -11,6 +11,7 @@
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <cstdio>
 #include <fstream>
@@ -19,8 +20,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;

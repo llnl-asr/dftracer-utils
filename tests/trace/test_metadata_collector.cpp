@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <chrono>
 #include <cstdint>
@@ -15,8 +16,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace;

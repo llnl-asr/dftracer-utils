@@ -2,11 +2,10 @@
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <stdexcept>
 #include <string>
-
-#include "test_view_common.h"
 
 namespace views_detail = dftracer::utils::trace::views::detail;
 namespace scan = dftracer::utils::trace::views::detail::scan;

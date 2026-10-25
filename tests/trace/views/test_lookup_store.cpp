@@ -4,6 +4,7 @@
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
+#include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <cstdlib>
@@ -11,8 +12,6 @@
 #include <memory>
 #include <string>
 #include <thread>
-
-#include "test_view_common.h"
 
 namespace {
 

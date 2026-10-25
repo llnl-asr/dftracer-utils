@@ -30,6 +30,8 @@
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
+#include <memory_probe.h>
+#include <memory_workloads.h>
 #include <simdjson.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -47,9 +49,6 @@
 #include <thread>
 #include <utility>
 #include <vector>
-
-#include "memory_probe.h"
-#include "memory_workloads.h"
 
 using namespace dftracer::utils;
 using dftracer::utils::coro::CoroTask;

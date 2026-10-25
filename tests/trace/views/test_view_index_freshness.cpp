@@ -2,13 +2,12 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <trace/views/test_view_common.h>
 
 #include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <string>
-
-#include "test_view_common.h"
 
 using namespace test_view_common;
 namespace st = dftracer::utils::index::store;

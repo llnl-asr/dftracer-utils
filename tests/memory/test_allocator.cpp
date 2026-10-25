@@ -6,6 +6,7 @@
 #include <dftracer/utils/memory/manager.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <no_core_dump.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -63,6 +64,7 @@ bool holds(const void* p, std::size_t size) {
 int run_in_child(void (*body)()) {
     pid_t pid = ::fork();
     if (pid == 0) {
+        no_core_dump::disable();
         int null = ::open("/dev/null", O_WRONLY);
         ::dup2(null, STDERR_FILENO);
         ::dup2(null, STDOUT_FILENO);

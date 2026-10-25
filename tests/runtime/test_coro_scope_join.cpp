@@ -2,6 +2,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
+#include <no_core_dump.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -17,6 +18,7 @@ template <typename Body>
 int run_in_child(Body body) {
     pid_t pid = ::fork();
     if (pid == 0) {
+        no_core_dump::disable();
         body();
         ::_exit(0);
     }

@@ -373,6 +373,7 @@ TEST_CASE("trim runs while other threads allocate and free across tiers") {
 TEST_CASE("bad decay value" * doctest::skip()) {
     pid_t pid = ::fork();
     if (pid == 0) {
+        no_core_dump::disable();
         int null = ::open("/dev/null", O_WRONLY);
         ::dup2(null, STDERR_FILENO);
         ::signal(SIGABRT, SIG_DFL);

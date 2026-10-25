@@ -11,7 +11,6 @@
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -49,7 +48,6 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
 
     GzipStreamInflater gz;
     if (!gz.init(15 + 16)) co_return member;
-    z_stream& zs = gz.z();
 
     constexpr std::size_t BUFFER_BYTES = std::size_t{1} << 20;
     const std::size_t in_bytes = static_cast<std::size_t>(
@@ -64,7 +62,7 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
     bool counted = false;
 
     while (true) {
-        if (zs.avail_in == 0) {
+        if (gz.avail_in() == 0) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(in_bytes, file_size - off));
@@ -72,14 +70,12 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
                 co_await io::pread(fd, in.get(), want, static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            zs.next_in = in.get();
-            zs.avail_in = static_cast<uInt>(n);
+            gz.set_input(in.get(), static_cast<std::size_t>(n));
         }
 
-        zs.next_out = out.get();
-        zs.avail_out = static_cast<uInt>(BUFFER_BYTES);
-        int rc = gz.inflate(Z_NO_FLUSH);
-        const std::uint64_t got = BUFFER_BYTES - zs.avail_out;
+        gz.set_output(out.get(), BUFFER_BYTES);
+        const InflateStatus rc = gz.inflate();
+        const std::uint64_t got = BUFFER_BYTES - gz.avail_out();
         produced += got;
         member_produced += got;
 
@@ -87,10 +83,10 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
             member.exceeds_cap = true;
             break;
         }
-        if (rc == Z_STREAM_END) {
+        if (rc == InflateStatus::StreamEnd) {
             finished += gz.total_in();
             in_first = false;
-            const bool more = zs.avail_in > 0 || off < file_size;
+            const bool more = gz.avail_in() > 0 || off < file_size;
             if (finished >= sample_bytes || !more || !gz.reset()) {
                 counted = true;
                 break;
@@ -101,7 +97,7 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
         // The first member ended within the cap (or is corrupt): the fast path
         // is safe. A corrupt or truncated stream is left for the normal path
         // to report, since rechunking would not help.
-        if (rc != Z_OK) break;
+        if (rc != InflateStatus::Ok) break;
     }
 
     member.compressed = counted ? finished : finished + gz.total_in();
@@ -137,10 +133,9 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                        magic[0] != 0x1f || magic[1] != 0x8b;
 
     GzipStreamInflater gz;
-    z_stream& zs = gz.z();
     if (!plain && !gz.init(15 + 16)) {
         throw DFTUtilsException(ErrorCode::Compression,
-                                "inflateInit2 failed for " + in_path);
+                                "cannot open a gzip stream for " + in_path);
     }
 
     GzipWriterOptions opts;
@@ -167,7 +162,6 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     bool ok = true;
     while (ok) {
-        int rc = Z_OK;
         if (plain) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
@@ -181,7 +175,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                  static_cast<std::size_t>(n)));
             continue;
         }
-        if (zs.avail_in == 0) {
+        if (gz.avail_in() == 0) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(in.size(), file_size - off));
@@ -189,24 +183,22 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                  static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            zs.next_in = in.data();
-            zs.avail_in = static_cast<uInt>(n);
+            gz.set_input(in.data(), static_cast<std::size_t>(n));
         }
 
-        zs.next_out = out.data();
-        zs.avail_out = static_cast<uInt>(out.size());
-        rc = gz.inflate(Z_NO_FLUSH);
+        gz.set_output(out.data(), out.size());
+        const InflateStatus rc = gz.inflate();
         co_await feed(
             std::string_view(reinterpret_cast<const char*>(out.data()),
-                             out.size() - zs.avail_out));
+                             out.size() - gz.avail_out()));
 
-        if (rc == Z_STREAM_END) {
-            if (gz.total_in() >= file_size && zs.avail_in == 0) break;
+        if (rc == InflateStatus::StreamEnd) {
+            if (gz.total_in() >= file_size && gz.avail_in() == 0) break;
             if (!gz.reset()) {
                 ok = false;
                 break;
             }
-        } else if (rc != Z_OK) {
+        } else if (rc != InflateStatus::Ok) {
             ok = false;
         }
     }

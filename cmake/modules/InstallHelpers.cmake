@@ -161,39 +161,10 @@ include(CMakeFindDependencyMacro)
 
 # Find dependencies - handle both CPM-built and system packages
 
-# ZLIB dependency
-find_library(ZLIB_LIBRARY_BUNDLED
-    NAMES dftracer_zlib libdftracer_zlib
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(ZLIB_LIBRARY_BUNDLED)
-    # Found zlib that was built with this package
-    find_path(ZLIB_INCLUDE_DIR_BUNDLED
-        NAMES zlib.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(ZLIB_INCLUDE_DIR_BUNDLED AND NOT TARGET dftracer::zlib)
-        add_library(dftracer::zlib UNKNOWN IMPORTED)
-        set_target_properties(dftracer::zlib PROPERTIES
-            IMPORTED_LOCATION \"\${ZLIB_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${ZLIB_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
-
-    # Also create ZLIB::ZLIB alias for compatibility
-    if(NOT TARGET ZLIB::ZLIB)
-        add_library(ZLIB::ZLIB ALIAS dftracer::zlib)
-    endif()
-else()
-    # Fall back to system zlib (require minimum version 1.2)
-    find_dependency(ZLIB 1.2 REQUIRED)
-    if(NOT TARGET dftracer::zlib)
-        add_library(dftracer::zlib ALIAS ZLIB::ZLIB)
-    endif()
+# zlib-ng: the static archive a static library of this package links. No
+# shared library of this package needs it, and no header includes zlib.
+if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/../zlib/ZlibTargets.cmake\")
+    include(\"\${CMAKE_CURRENT_LIST_DIR}/../zlib/ZlibTargets.cmake\")
 endif()
 
 # GHC_FILESYSTEM dependency (header-only)

@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -26,32 +27,19 @@ using dftracer::utils::utilities::reader::internal::ReaderInflater;
 using dftu_utils_test::run_coro;
 namespace gz = dftracer::utils::utilities::fileio::compress;
 
-// Counts every call zlib makes to its own crc32. The bodies use libdeflate, so
-// zlib's results stay correct and the process never reaches zlib's crc32_z.
 namespace {
-std::atomic<unsigned long> ZLIB_CRC_CALLS{0};
-// Calls made while a path under test decodes. The Runtime start-up and the
-// test's own reference decode are left out.
-std::atomic<unsigned long> PATH_CRC_CALLS{0};
+// Streams opened in a mode where zlib-ng verifies the checksum, counted while
+// a path under test decodes. The Runtime start-up and the test's own
+// reference decode are left out.
+std::atomic<std::uint64_t> PATH_CHECKSUM_OPENS{0};
 
 struct CrcWindow {
-    unsigned long start = ZLIB_CRC_CALLS.load();
-    ~CrcWindow() { PATH_CRC_CALLS += ZLIB_CRC_CALLS.load() - start; }
+    std::uint64_t start = gz::zlib_checksum_streams_opened();
+    ~CrcWindow() {
+        PATH_CHECKSUM_OPENS += gz::zlib_checksum_streams_opened() - start;
+    }
 };
 }  // namespace
-
-extern "C" {
-uLong crc32(uLong crc, const Bytef* buf, uInt len) {
-    ZLIB_CRC_CALLS.fetch_add(1, std::memory_order_relaxed);
-    if (buf == nullptr) return 0;
-    return gz::gzip_crc32(static_cast<std::uint32_t>(crc), buf, len);
-}
-uLong crc32_z(uLong crc, const Bytef* buf, z_size_t len) {
-    ZLIB_CRC_CALLS.fetch_add(1, std::memory_order_relaxed);
-    if (buf == nullptr) return 0;
-    return gz::gzip_crc32(static_cast<std::uint32_t>(crc), buf, len);
-}
-}
 
 namespace {
 
@@ -132,8 +120,7 @@ struct TempFile {
     ~TempFile() { std::filesystem::remove_all(dir); }
 };
 
-// Whole-file reference decode with zlib (counts crc calls; call it outside a
-// measured region).
+// Whole-file reference decode with the system zlib.
 std::string zlib_decode_all(const std::string& path) {
     std::FILE* f = std::fopen(path.c_str(), "rb");
     REQUIRE(f != nullptr);
@@ -267,20 +254,6 @@ const PathCase PATHS[] = {
     {"truncated-member decoder", truncated_decoder, false, false},
 };
 
-// Whether this process sees zlib's calls to crc32. A zlib that calls its own
-// copy inside the library (macOS, Ubuntu 24.04) never reaches the counter, and
-// a zero count proves nothing there.
-bool zlib_crc_counted() {
-    static const bool counted = [] {
-        Sample s;
-        TempFile f(s.bytes);
-        const unsigned long before = ZLIB_CRC_CALLS.load();
-        const bool decoded = zlib_decode_all(f.path) == s.text;
-        return decoded && ZLIB_CRC_CALLS.load() > before;
-    }();
-    return counted;
-}
-
 bool same(const PathCase& p, const PathResult& got, const std::string& text) {
     if (!got) return false;
     if (p.size_only) return got->size() == text.size();
@@ -289,16 +262,18 @@ bool same(const PathCase& p, const PathResult& got, const std::string& text) {
 
 }  // namespace
 
-TEST_CASE("the control: zlib's own gzip inflate calls crc32") {
+// Schema detection reads the head of a gzip file with a zlib-ng stream that
+// verifies the checksum, so it shows the counter moves.
+TEST_CASE("the control: a stream that verifies the gzip checksum is counted") {
     Sample s;
     TempFile f(s.bytes);
-    CHECK(zlib_decode_all(f.path) == s.text);
-    WARN_MESSAGE(zlib_crc_counted(),
-                 "this zlib calls crc32 inside the library, so the zlib crc32 "
-                 "counts below are not checked");
+    const auto before = gz::zlib_checksum_streams_opened();
+    index::detect_file_schema(f.path);
+    CHECK(gz::zlib_checksum_streams_opened() > before);
 }
 
-TEST_CASE("good multi-member input decodes identically without zlib crc32") {
+TEST_CASE(
+    "good multi-member input decodes identically without a zlib checksum") {
     Sample s;
     for (const auto& p : PATHS) {
         CAPTURE(std::string(p.name));
@@ -309,9 +284,9 @@ TEST_CASE("good multi-member input decodes identically without zlib crc32") {
             expect = s.text.substr(0, s.first_text_size);
         }
         TempFile file(bytes);
-        PATH_CRC_CALLS = 0;
+        PATH_CHECKSUM_OPENS = 0;
         const auto got = p.run(file.path);
-        if (zlib_crc_counted()) CHECK(PATH_CRC_CALLS.load() == 0);
+        CHECK(PATH_CHECKSUM_OPENS.load() == 0);
         CHECK(same(p, got, expect));
     }
 }
@@ -361,21 +336,19 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
     auto decode = [&](const std::vector<std::uint8_t>& in) {
         gz::GzipStreamInflater inf;
         REQUIRE(inf.init(31));
-        z_stream& zs = inf.z();
-        zs.next_in = const_cast<Bytef*>(in.data());
-        zs.avail_in = static_cast<uInt>(in.size());
+        inf.set_input(in.data(), in.size());
         std::string out(text.size() + 16, '\0');
-        zs.next_out = reinterpret_cast<Bytef*>(out.data());
-        zs.avail_out = static_cast<uInt>(out.size());
-        const int rc = inf.inflate(Z_NO_FLUSH);
-        out.resize(out.size() - zs.avail_out);
+        inf.set_output(reinterpret_cast<unsigned char*>(out.data()),
+                       out.size());
+        const auto rc = inf.inflate();
+        out.resize(out.size() - inf.avail_out());
         return std::make_pair(rc, out);
     };
     const auto good = decode(member);
-    CHECK(good.first == Z_STREAM_END);
+    CHECK(good.first == gz::InflateStatus::StreamEnd);
     CHECK(good.second == text);
 
     auto bad = member;
     bad[header.size() - 1] ^= 1;
-    CHECK(decode(bad).first == Z_DATA_ERROR);
+    CHECK(decode(bad).first == gz::InflateStatus::DataError);
 }

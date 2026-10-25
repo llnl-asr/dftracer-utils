@@ -7,7 +7,6 @@
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -163,14 +162,13 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
             auto in =
                 std::make_unique_for_overwrite<unsigned char[]>(READ_CHUNK);
             // The input read so far comes first.
-            zs.z().next_in = comp.get() + head;
-            zs.z().avail_in = static_cast<uInt>(tail - head);
+            zs.set_input(comp.get() + head, tail - head);
             std::uint64_t stream_read = next_read;
             std::size_t filled = 0;
             bool ended = false;
             bool cut = false;
             while (!ended) {
-                if (zs.z().avail_in == 0 && stream_read < file_size) {
+                if (zs.avail_in() == 0 && stream_read < file_size) {
                     const std::size_t want =
                         static_cast<std::size_t>(std::min<std::uint64_t>(
                             READ_CHUNK, file_size - stream_read));
@@ -181,25 +179,24 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                             ErrorCode::Io,
                             "read error while decoding gzip member");
                     }
-                    zs.z().next_in = in.get();
-                    zs.z().avail_in = static_cast<uInt>(n);
+                    zs.set_input(in.get(), static_cast<std::size_t>(n));
                     stream_read += static_cast<std::uint64_t>(n);
                 }
-                zs.z().next_out = out.get() + filled;
-                zs.z().avail_out = static_cast<uInt>(out_cap - filled);
-                const int rc = zs.inflate(Z_NO_FLUSH);
-                filled = out_cap - zs.z().avail_out;
-                if (rc == Z_STREAM_END) {
+                zs.set_output(out.get() + filled, out_cap - filled);
+                const InflateStatus rc = zs.inflate();
+                filled = out_cap - zs.avail_out();
+                if (rc == InflateStatus::StreamEnd) {
                     ended = true;
-                } else if (rc != Z_OK && rc != Z_BUF_ERROR) {
+                } else if (rc != InflateStatus::Ok &&
+                           rc != InflateStatus::BufError) {
                     throw DFTUtilsException(ErrorCode::Compression,
                                             "gzip member failed to decompress");
-                } else if (zs.z().avail_in == 0 && stream_read >= file_size &&
-                           zs.z().avail_out != 0) {
+                } else if (zs.avail_in() == 0 && stream_read >= file_size &&
+                           zs.avail_out() != 0) {
                     cut = true;
                     break;
                 }
-                if (ended || zs.z().avail_out == 0) {
+                if (ended || zs.avail_out() == 0) {
                     std::size_t keep = filled;
                     if (!ended) {
                         while (keep > 0 && out[keep - 1] != '\n') --keep;

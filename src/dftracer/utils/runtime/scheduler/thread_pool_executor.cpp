@@ -7,7 +7,6 @@
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
-#include <zlib.h>
 
 #include <chrono>
 #include <coroutine>
@@ -17,43 +16,6 @@
 #include <vector>
 
 namespace dftracer::utils {
-
-namespace {
-
-// Force zlib-ng's lazy CPU-feature functable init single-threaded before any
-// worker spawns, so concurrent first-use does not race on the global table.
-void warmup_vendored_libs() noexcept {
-    unsigned char src[64];
-    for (std::size_t i = 0; i < sizeof(src); ++i) {
-        src[i] = static_cast<unsigned char>(i);
-    }
-    unsigned char comp[128];
-    unsigned char back[64];
-
-    z_stream def{};
-    if (deflateInit2(&def, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 31, 8,
-                     Z_DEFAULT_STRATEGY) == Z_OK) {
-        def.next_in = src;
-        def.avail_in = sizeof(src);
-        def.next_out = comp;
-        def.avail_out = sizeof(comp);
-        deflate(&def, Z_FINISH);
-        uInt comp_len = static_cast<uInt>(sizeof(comp) - def.avail_out);
-        deflateEnd(&def);
-
-        z_stream inf{};
-        if (inflateInit2(&inf, 31) == Z_OK) {
-            inf.next_in = comp;
-            inf.avail_in = comp_len;
-            inf.next_out = back;
-            inf.avail_out = sizeof(back);
-            inflate(&inf, Z_FINISH);
-            inflateEnd(&inf);
-        }
-    }
-}
-
-}  // namespace
 
 ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
     : num_threads_(config.num_threads == 0 ? hardware_concurrency()
@@ -108,9 +70,6 @@ void ThreadPoolExecutor::start() {
     workers_.reserve(num_threads_);
     permits_.store(static_cast<std::ptrdiff_t>(num_threads_),
                    std::memory_order_release);
-
-    static std::once_flag warmup_once;
-    std::call_once(warmup_once, warmup_vendored_libs);
 
     timer_service_.start();
 

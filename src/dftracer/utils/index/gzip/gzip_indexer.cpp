@@ -24,7 +24,6 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <atomic>
@@ -256,7 +255,6 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
 
     compress::GzipStreamInflater gz;
     if (!gz.init(31)) co_return false;
-    z_stream& zs = gz.z();
 
     Bytes in(READ_CHUNK);
     InflateBuffer buf = buffers.take();
@@ -299,37 +297,41 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     };
 
     while (true) {
-        if (zs.avail_in == 0 && next_read < file_size) {
+        if (gz.avail_in() == 0 && next_read < file_size) {
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(READ_CHUNK, file_size - next_read));
             const ssize_t n = co_await dftracer::utils::io::pread(
                 fd, in.data(), want, static_cast<off_t>(next_read));
             if (n <= 0) co_return false;
-            zs.next_in = in.data();
-            zs.avail_in = static_cast<uInt>(n);
+            gz.set_input(in.data(), static_cast<std::size_t>(n));
             next_read += static_cast<std::uint64_t>(n);
         }
 
         Bytes& piece = *buf;
         const std::size_t old = piece.size();
         piece.resize(old + OUT_STEP);
-        zs.next_out = piece.data() + old;
-        zs.avail_out = static_cast<uInt>(OUT_STEP);
-        const int rc = gz.inflate(Z_BLOCK);
-        piece.resize(old + (OUT_STEP - zs.avail_out));
+        gz.set_output(piece.data() + old, OUT_STEP);
+        const compress::InflateStatus rc =
+            gz.inflate(compress::InflateFlush::Block);
+        piece.resize(old + (OUT_STEP - gz.avail_out()));
 
-        if (rc == Z_STREAM_END) break;
-        if (rc != Z_OK && rc != Z_BUF_ERROR) co_return false;
-        if (zs.avail_in == 0 && next_read >= file_size && zs.avail_out != 0) {
+        if (rc == compress::InflateStatus::StreamEnd) break;
+        if (rc != compress::InflateStatus::Ok &&
+            rc != compress::InflateStatus::BufError) {
+            co_return false;
+        }
+        if (gz.avail_in() == 0 && next_read >= file_size &&
+            gz.avail_out() != 0) {
             cut = true;
             break;
         }
 
-        if ((zs.data_type & 128) && !(zs.data_type & 64) &&
+        const int data_type = gz.data_type();
+        if ((data_type & 128) && !(data_type & 64) &&
             piece.size() >= split_at) {
             ParallelInflateMsg msg;
             msg.restart = true;
-            msg.bits = static_cast<std::uint8_t>(zs.data_type & 7);
+            msg.bits = static_cast<std::uint8_t>(data_type & 7);
             msg.member_c_end = c_off + gz.total_in();
             msg.window.assign(reinterpret_cast<const char*>(piece.data()) +
                                   piece.size() - RESTART_WINDOW,

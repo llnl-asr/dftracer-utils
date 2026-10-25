@@ -149,6 +149,7 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/chunk_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/gzip_line_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/indexed_file_reader_utility.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/compress/libdeflate_gzip.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/parallel/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/fileio/parallel/striped_writer.cpp
@@ -372,12 +373,8 @@ set(PKG_CONFIG_LIBS_PRIVATE "")
 # Add Threads (always required)
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lpthread")
 
-# Only add zlib to pkg-config requirements if it was found on system
-if(ZLIB_FOUND AND NOT ZLIB_CPM)
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lz")
-else()
-  set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_zlib")
-endif()
+# The static utilities library needs the zlib-ng archive it was built with.
+set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -ldftracer_zlib")
 
 # Add other dependencies built with CPM
 set(PKG_CONFIG_LIBS_PRIVATE "${PKG_CONFIG_LIBS_PRIVATE} -lsimdjson")
@@ -645,7 +642,6 @@ foreach(variant objects shared static)
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     # Link dependencies using helper functions
-    link_zlib(${VARIANT_TARGET} ${VARIANT_UPPER})
     link_unordered_dense(${VARIANT_TARGET})
     link_tl_expected(${VARIANT_TARGET})
 
@@ -1109,6 +1105,7 @@ foreach(variant objects shared static)
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     link_rocksdb(${VARIANT_TARGET} ${VARIANT_UPPER})
+    link_zlib(${VARIANT_TARGET})
 
     # RocksDB is a static archive linked into this .so. Without this its
     # symbols are re-exported into ELF's flat namespace, where they can bind

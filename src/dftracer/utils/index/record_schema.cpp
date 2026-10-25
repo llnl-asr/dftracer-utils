@@ -11,13 +11,13 @@
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/utilities/fileio/compress/zng_stream.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 #include <fcntl.h>
 #include <simdjson.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <yaml-cpp/yaml.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <array>
@@ -89,10 +89,11 @@ void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
         for (ssize_t got; !done && (got = read_chunk(CHUNK)) > 0;)
             feed(comp.data(), static_cast<std::size_t>(got));
     } else {
-        z_stream zs{};
+        zng_stream zs{};
         // Concatenated members decode as one stream (inflateReset at each
         // member end).
-        if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK)
+        if (utilities::fileio::compress::open_inflate_stream(
+                zs, 16 + MAX_WBITS) != Z_OK)
             throw DFTUtilsException::cat(ErrorCode::Io,
                                          "cannot inflate trace: ", path);
         std::vector<char> out(CHUNK);
@@ -101,23 +102,23 @@ void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
             if (zs.avail_in == 0 && !eof) {
                 const ssize_t got = read_chunk(CHUNK);
                 eof = got <= 0;
-                zs.next_in = reinterpret_cast<Bytef*>(comp.data());
-                zs.avail_in = eof ? 0 : static_cast<uInt>(got);
+                zs.next_in = reinterpret_cast<const std::uint8_t*>(comp.data());
+                zs.avail_in = eof ? 0 : static_cast<std::uint32_t>(got);
             }
-            zs.next_out = reinterpret_cast<Bytef*>(out.data());
-            zs.avail_out = static_cast<uInt>(out.size());
-            const int rc = inflate(&zs, Z_NO_FLUSH);
+            zs.next_out = reinterpret_cast<std::uint8_t*>(out.data());
+            zs.avail_out = static_cast<std::uint32_t>(out.size());
+            const int rc = zng_inflate(&zs, Z_NO_FLUSH);
             const std::size_t got = out.size() - zs.avail_out;
             feed(out.data(), got);
             if (rc == Z_STREAM_END) {
-                if ((eof && zs.avail_in == 0) || inflateReset(&zs) != Z_OK)
+                if ((eof && zs.avail_in == 0) || zng_inflateReset(&zs) != Z_OK)
                     break;
             } else if ((rc != Z_OK && rc != Z_BUF_ERROR) ||
                        (eof && zs.avail_in == 0 && got == 0)) {
                 break;
             }
         }
-        inflateEnd(&zs);
+        zng_inflateEnd(&zs);
     }
     if (!done && !text.empty()) emit(std::string_view(text));
 }

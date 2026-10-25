@@ -4,6 +4,7 @@
 
 need_test_deps()
 need_zlib()
+find_package(ZLIB 1.2 REQUIRED)
 
 # ##############################################################################
 # Testing Utilities
@@ -14,7 +15,9 @@ target_link_libraries(
   testing_utilities
   PUBLIC dftracer_utils
   PRIVATE doctest::doctest ghc_filesystem)
-link_zlib(testing_utilities STATIC)
+# The tests write their .gz input with the system zlib. A test that includes a
+# private gzip header of ours also gets zlib-ng, whose zng_ names do not clash.
+target_link_libraries(testing_utilities PUBLIC ZLIB::ZLIB dftracer::zlib)
 
 # Pure-C ABI guard: compile every public C ABI header (*abi.h under include/)
 # with the C compiler so any C++ leak into one of them fails the build. The
@@ -102,6 +105,20 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
            COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
                    -DLIB_DIR=${CMAKE_BINARY_DIR}/lib -P
                    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_library_versions.cmake)
+endif()
+if(DFTRACER_UTILS_BUILD_SHARED)
+  set(ZLIB_EXPORT_LIBS)
+  foreach(lib memory dstd common runtime json duql dataframe utilities)
+    dftu_variant_target(_target dftracer_utils_${lib} shared)
+    if(TARGET ${_target})
+      list(APPEND ZLIB_EXPORT_LIBS $<TARGET_FILE:${_target}>)
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES ZLIB_EXPORT_LIBS)
+  add_test(NAME zlib_exports
+           COMMAND ${CMAKE_COMMAND} "-DLIBS=${ZLIB_EXPORT_LIBS}" -DNM=${CMAKE_NM}
+                   -DSUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX} -P
+                   ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_zlib_exports.cmake)
 endif()
 add_test(NAME z_defs
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}

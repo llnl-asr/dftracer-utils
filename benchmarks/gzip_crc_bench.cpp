@@ -1,5 +1,6 @@
 // Benchmark: streaming gzip inflate with zlib's own CRC32 versus raw inflate
 // plus libdeflate's CRC32 (GzipStreamInflater). Both verify every member CRC.
+// The zlib side is the system zlib.
 //
 // Not a unit test: built only with DFTRACER_UTILS_BUILD_BENCHMARKS=ON, or by
 // hand against the utilities library, and run manually.
@@ -86,17 +87,14 @@ int main(int argc, char** argv) {
                              std::size_t& total) {
         gzc::GzipStreamInflater inf;
         inf.init(31);
-        z_stream& zs = inf.z();
-        zs.next_in = const_cast<Bytef*>(in.data());
-        zs.avail_in = static_cast<uInt>(in.size());
-        int rc;
+        inf.set_input(in.data(), in.size());
+        gzc::InflateStatus rc;
         do {
-            zs.next_out = out.data();
-            zs.avail_out = static_cast<uInt>(out.size());
-            rc = inf.inflate(Z_NO_FLUSH);
-            total += out.size() - zs.avail_out;
-        } while (rc == Z_OK);
-        if (rc != Z_STREAM_END) std::exit(2);
+            inf.set_output(out.data(), out.size());
+            rc = inf.inflate();
+            total += out.size() - inf.avail_out();
+        } while (rc == gzc::InflateStatus::Ok);
+        if (rc != gzc::InflateStatus::StreamEnd) std::exit(2);
     };
 
     double best_zlib = 1e9;

@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Bundle zlib-ng inside the utilities library with its symbols hidden, so a program that also loads the system zlib no longer has its zlib calls bound to ours.
+  No public header includes a zlib header, and the gzip classes in `include/` hold their zlib-ng stream in a private part.
 - Size how many stat batches a directory scan runs at once from the stat time it measures, where it ran at most 12 at once on any file system.
   The scan admits one more batch while each stat stays within 2 times the fastest it has seen and fewer when stats slow down, up to `--executor-threads`, and a cold view of the 8,404 minife traces on Lustre takes 9.1 to 9.6 s where it took 9.0 to 10.2 s.
 - Stat the shared index folder once in a `dftracer_view` run, where each input file made up to 4 stat calls and 7 lstat calls on it.
@@ -227,6 +229,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the `DFTRACER_UTILS_USE_ZLIB_NG` option and the fallback to madler/zlib.
 - Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
   Drop them from scripts that call it.
 - Remove `ReplayEngine::add_executor` and `ReplayEngine::process_trace_line`.

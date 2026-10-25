@@ -72,13 +72,17 @@ Prerequisites
 
          sudo apt-get install cmake ninja-build build-essential pkg-config zlib1g-dev
 
+      The system zlib (``zlib1g-dev``) is needed only to build the tests.
+      The library bundles zlib-ng as a static archive with hidden symbols.
+
    .. tab-item:: macOS
 
       .. code-block:: bash
 
          brew install cmake ninja pkg-config
 
-      The Apple SDK provides zlib. On Linux the I/O backend uses io_uring, on
+      The Apple SDK provides the zlib that the tests use, and the library
+      bundles zlib-ng as a static archive with hidden symbols. On Linux the I/O backend uses io_uring, on
       macOS it uses kqueue, selected automatically at configure time.
 
 Presets
@@ -175,9 +179,6 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_ENABLE_PCH``
      - ``OFF``
      - Precompiled headers (faster cold builds). ccache cannot cache GCC's, so leave it off when using ccache.
-   * - ``DFTRACER_UTILS_USE_ZLIB_NG``
-     - ``ON``
-     - Use zlib-ng instead of madler/zlib (falls back on failure).
 
 **Packaging and dev**
 

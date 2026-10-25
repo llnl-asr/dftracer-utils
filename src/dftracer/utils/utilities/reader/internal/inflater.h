@@ -12,7 +12,6 @@
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <sys/stat.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -127,14 +126,13 @@ class ReaderInflater {
         }
         if (!start_stream(-15)) co_return false;
         if (member.bits > 0 &&
-            inflatePrime(&zs_.z(), member.bits, prime >> (8 - member.bits)) !=
-                Z_OK) {
+            !zs_.prime(member.bits, prime >> (8 - member.bits))) {
             end_stream();
             co_return false;
         }
-        if (inflateSetDictionary(&zs_.z(),
-                                 reinterpret_cast<const Bytef*>(window.data()),
-                                 static_cast<uInt>(window.size())) != Z_OK) {
+        if (!zs_.set_dictionary(
+                reinterpret_cast<const unsigned char*>(window.data()),
+                window.size())) {
             end_stream();
             co_return false;
         }
@@ -261,7 +259,7 @@ class ReaderInflater {
         bool ended = false;
         bool cut = false;
         while (true) {
-            if (zs_.z().avail_in == 0 && next_read_ < file_size_) {
+            if (zs_.avail_in() == 0 && next_read_ < file_size_) {
                 if (comp_.size() < READ_CHUNK) comp_.resize(READ_CHUNK);
                 const std::size_t want =
                     static_cast<std::size_t>(std::min<std::uint64_t>(
@@ -269,25 +267,26 @@ class ReaderInflater {
                 const ssize_t n = co_await dftracer::utils::io::pread(
                     fd, comp_.data(), want, static_cast<off_t>(next_read_));
                 if (n <= 0) co_return false;
-                zs_.z().next_in = comp_.data();
-                zs_.z().avail_in = static_cast<uInt>(n);
+                zs_.set_input(comp_.data(), static_cast<std::size_t>(n));
                 next_read_ += static_cast<std::uint64_t>(n);
             }
             if (member_owned_.size() - filled < INIT_OUT) {
                 member_owned_.resize(filled + INIT_OUT);
             }
             const std::size_t space = member_owned_.size() - filled;
-            zs_.z().next_out = member_owned_.data() + filled;
-            zs_.z().avail_out = static_cast<uInt>(space);
-            const int rc = zs_.inflate(Z_NO_FLUSH);
-            filled += space - zs_.z().avail_out;
-            if (rc == Z_STREAM_END) {
+            zs_.set_output(member_owned_.data() + filled, space);
+            const compress::InflateStatus rc = zs_.inflate();
+            filled += space - zs_.avail_out();
+            if (rc == compress::InflateStatus::StreamEnd) {
                 ended = true;
                 break;
             }
-            if (rc != Z_OK && rc != Z_BUF_ERROR) co_return false;
-            if (zs_.z().avail_in == 0 && next_read_ >= file_size_ &&
-                zs_.z().avail_out != 0) {
+            if (rc != compress::InflateStatus::Ok &&
+                rc != compress::InflateStatus::BufError) {
+                co_return false;
+            }
+            if (zs_.avail_in() == 0 && next_read_ >= file_size_ &&
+                zs_.avail_out() != 0) {
                 cut = true;
                 break;
             }
@@ -346,8 +345,7 @@ class ReaderInflater {
         }
         if (!start_stream(31)) return false;
         if (!comp_.empty()) {
-            zs_.z().next_in = comp_.data();
-            zs_.z().avail_in = static_cast<uInt>(comp_.size());
+            zs_.set_input(comp_.data(), comp_.size());
         }
         return true;
     }

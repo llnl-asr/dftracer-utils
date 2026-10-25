@@ -1,7 +1,7 @@
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <climits>
@@ -169,39 +169,38 @@ std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
 std::optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
     GzipStreamInflater gz;
-    if (!gz.init(16 + MAX_WBITS)) return std::nullopt;
-    z_stream& zs = gz.z();
-    const auto* in = static_cast<const Bytef*>(comp);
+    if (!gz.init(constants::indexer::ZLIB_GZIP_WINDOW_BITS))
+        return std::nullopt;
+    const auto* in = static_cast<const unsigned char*>(comp);
     std::size_t in_left = comp_len;
     std::size_t produced = 0;
     if (out.size() < (1u << 20)) out.resize(1u << 20);
     bool complete = false;
     bool ok = true;
     while (true) {
-        if (zs.avail_in == 0 && in_left > 0) {
+        if (gz.avail_in() == 0 && in_left > 0) {
             const std::size_t take = std::min<std::size_t>(in_left, UINT_MAX);
-            zs.next_in = const_cast<Bytef*>(in);
-            zs.avail_in = static_cast<uInt>(take);
+            gz.set_input(in, take);
             in += take;
             in_left -= take;
         }
         if (produced == out.size()) out.resize(out.size() * 2);
         const std::size_t room =
             std::min<std::size_t>(out.size() - produced, UINT_MAX);
-        zs.next_out = out.data() + produced;
-        zs.avail_out = static_cast<uInt>(room);
-        const int rc = gz.inflate(Z_NO_FLUSH);
-        produced += room - zs.avail_out;
-        if (rc == Z_STREAM_END) {
+        gz.set_output(out.data() + produced, room);
+        const InflateStatus rc = gz.inflate();
+        produced += room - gz.avail_out();
+        if (rc == InflateStatus::StreamEnd) {
             complete = true;
             break;
         }
-        if (rc == Z_OK) continue;
-        if (rc == Z_BUF_ERROR) {
-            if (zs.avail_out == 0) continue;
-            if (zs.avail_in == 0 && in_left == 0) break;  // ran out: cut member
+        if (rc == InflateStatus::Ok) continue;
+        if (rc == InflateStatus::BufError) {
+            if (gz.avail_out() == 0) continue;
+            if (gz.avail_in() == 0 && in_left == 0)
+                break;  // ran out: cut member
         }
-        ok = false;  // Z_DATA_ERROR, Z_NEED_DICT, Z_MEM_ERROR
+        ok = false;     // DataError or any other failure
         break;
     }
     if (!ok) return std::nullopt;

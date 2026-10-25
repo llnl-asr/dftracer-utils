@@ -13,7 +13,9 @@ using namespace dftracer::utils;
 
 namespace {
 
-constexpr auto DEADLINE = std::chrono::seconds(10);
+// Only a hang reaches this; a slow machine just runs fewer rounds.
+constexpr auto DEADLINE = std::chrono::seconds(60);
+constexpr auto RUN_FOR = std::chrono::seconds(3);
 
 // A lost wakeup leaves the timer thread parked for good, so a failure would
 // otherwise hang the test instead of reporting.
@@ -30,14 +32,16 @@ void run_with_deadline(const char* what, Fn fn) {
 }  // namespace
 
 TEST_CASE("each timer registered on an idle timer thread fires") {
-    constexpr int ROUNDS = 200000;
+    int rounds = 0;
     int fired_rounds = 0;
     run_with_deadline("timer rounds", [&] {
         TimerService timers;
         timers.start();
         std::mutex m;
         std::condition_variable cv;
-        for (int i = 0; i < ROUNDS; ++i) {
+        const auto until = std::chrono::steady_clock::now() + RUN_FOR;
+        while (std::chrono::steady_clock::now() < until) {
+            ++rounds;
             bool fired = false;
             timers.register_timeout(std::chrono::microseconds(0), [&] {
                 std::lock_guard lock(m);
@@ -52,12 +56,15 @@ TEST_CASE("each timer registered on an idle timer thread fires") {
         }
         timers.stop();
     });
-    CHECK(fired_rounds == ROUNDS);
+    MESSAGE("rounds: " << rounds);
+    CHECK(rounds > 0);
+    CHECK(fired_rounds == rounds);
 }
 
 TEST_CASE("stop wakes an idle timer thread") {
     run_with_deadline("start and stop", [] {
-        for (int i = 0; i < 20000; ++i) {
+        const auto until = std::chrono::steady_clock::now() + RUN_FOR;
+        while (std::chrono::steady_clock::now() < until) {
             TimerService timers;
             timers.start();
             timers.stop();

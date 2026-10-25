@@ -820,8 +820,7 @@ TEST_SUITE("index store snapshot") {
             auto id = writer.add_namespace(spec);
             REQUIRE(id.has_value());
             Batch batch = writer.batch(*id, scope, 0);
-            for (const std::string& key :
-                 {"key-a", "key-b", "key-c", "key-d"}) {
+            for (const std::string key : {"key-a", "key-b", "key-c", "key-d"}) {
                 batch.put(view_of(key), view_of("v-" + key));
             }
             REQUIRE(writer.commit(std::move(batch)).has_value());
@@ -842,12 +841,12 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
-        for (const std::string& key : {"key-b", "key-c"}) {
+        for (const std::string key : {"key-b", "key-c"}) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             CHECK_FALSE(found->has_value());
         }
-        for (const std::string& key : {"key-a", "key-d"}) {
+        for (const std::string key : {"key-a", "key-d"}) {
             auto found = snapshot->get(spec, scope, view_of(key));
             REQUIRE(found.has_value());
             REQUIRE(found->has_value());

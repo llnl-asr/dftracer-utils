@@ -245,6 +245,30 @@ std::uint64_t kmv_hash(std::string_view v) {
 void AggStateDeleter::operator()(AggState* p) const noexcept { delete p; }
 
 AggStatePtr agg_new(std::vector<AggSpec> specs, std::vector<AggDynSpec> dyn) {
+    // The dyn finalize computes only these ops; any other would come out as a
+    // silent 0.0 in every group.
+    for (const AggDynSpec& d : dyn) {
+        switch (d.op) {
+            case AggOp::Count:
+            case AggOp::Sum:
+            case AggOp::Min:
+            case AggOp::Max:
+            case AggOp::SumSq:
+            case AggOp::Mean:
+            case AggOp::Var:
+            case AggOp::Std:
+            case AggOp::Skew:
+            case AggOp::Kurt:
+            case AggOp::Pct:
+                break;
+            default:
+                throw std::invalid_argument(
+                    "group_by: dyn columns support count, sum, min, max, "
+                    "sum_sq, mean, var, std, skew, kurt and pct; op " +
+                    std::to_string(static_cast<int>(d.op)) + " for prefix '" +
+                    d.out_prefix + "' is not one of them");
+        }
+    }
     AggStatePtr s(new AggState());
     s->specs = std::move(specs);
     s->dyn_specs = std::move(dyn);
@@ -1159,9 +1183,29 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                     const std::vector<AggDynInput>& dyn_in, std::int64_t begin,
                     std::int64_t end) {
     std::string sketch_bytes;
-    if (st.has_dyn)
-        for (const AggDynInput& di : dyn_in)
-            st.dyn_domain.emplace(di.name, col_domain(di.col->type()));
+    if (st.has_dyn) {
+        // Resolve every dyn input once, before the row loop: the loop keys a
+        // group's cells by id and never touches a name.
+        bool light = st.dyn_light_ok;
+        st.dyn_slots.resize(dyn_in.size());
+        for (std::size_t s = 0; s < dyn_in.size(); ++s) {
+            const AggDynInput& di = dyn_in[s];
+            const FieldStatDomain dom = col_domain(di.col->type());
+            const std::uint32_t id = st.dyn_intern(di.name, dom);
+            // The light words are read in the name's first domain; a call
+            // that brings another one keeps the full cells.
+            if (st.dyn_domain[static_cast<std::size_t>(id)] != dom)
+                light = false;
+            st.dyn_slots[s] = DynSlot{id, dom};
+        }
+        if (light && !st.dyn_light_on && st.ngroups() == 0) {
+            // No group holds a cell yet, so the light record can hold them all.
+            st.dyn_light_on = true;
+            st.dyn_light.clear();
+        } else if (!light && st.dyn_light_on) {
+            st.dyn_settle();
+        }
+    }
     if (!st.inited) {
         st.nkeys = keys.size();
         st.key_is_bytes.resize(st.nkeys);
@@ -1563,15 +1607,35 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
             }
         }
         if (st.has_dyn) {
-            for (const AggDynInput& di : dyn_in) {
-                if (di.col->is_null(i)) continue;
-                const FieldStatDomain d = col_domain(di.col->type());
-                std::map<std::string, FieldStat>& gmap =
+            if (st.dyn_light_on) {
+                for (std::size_t s = 0; s < dyn_in.size(); ++s) {
+                    const AggDynInput& di = dyn_in[s];
+                    if (di.col->is_null(i)) continue;
+                    const DynSlot& slot = st.dyn_slots[s];
+                    std::uint64_t* cell = st.dyn_light_cell(g, slot.id);
+                    const int wrap = light_add(
+                        cell, 1, st.dyn_light_mask, DYN_LIGHT_PRESENT_BIT,
+                        slot.domain, read_bits(*di.col, i, slot.domain));
+                    if (wrap != 0) st.dyn_light_carry_add(g, slot.id, wrap);
+                    if (st.dyn_has_sketch)
+                        dyn_sketch_cell_of(
+                            st.dyn_sketch[static_cast<std::size_t>(g)], slot.id)
+                            .add(read_as_double(*di.col, i, slot.domain));
+                }
+            } else {
+                dstd::Vector<DynCell>& cells =
                     st.dyn_fs[static_cast<std::size_t>(g)];
-                fs_add(gmap[di.name], *di.col, i, d);
-                if (st.dyn_has_sketch)
-                    st.dyn_sketch[static_cast<std::size_t>(g)][di.name].add(
-                        read_as_double(*di.col, i, d));
+                for (std::size_t s = 0; s < dyn_in.size(); ++s) {
+                    const AggDynInput& di = dyn_in[s];
+                    if (di.col->is_null(i)) continue;
+                    const DynSlot& slot = st.dyn_slots[s];
+                    fs_add(dyn_cell_of(cells, slot.id), *di.col, i,
+                           slot.domain);
+                    if (st.dyn_has_sketch)
+                        dyn_sketch_cell_of(
+                            st.dyn_sketch[static_cast<std::size_t>(g)], slot.id)
+                            .add(read_as_double(*di.col, i, slot.domain));
+                }
             }
         }
     }
@@ -1613,10 +1677,14 @@ void agg_merge(AggState& into, const AggState& other,
         into.nkey_cols.assign(into.nkeys, {});
         into.inited = true;
     }
-    for (const auto& [name, d] : other.dyn_domain)
-        into.dyn_domain.emplace(name, d);
+    dstd::Vector<std::uint32_t> dyn_map;
+    if (other.has_dyn) dyn_map = into.dyn_remap(other);
+    if (into.has_dyn)
+        into.dyn_light_open_for_merge(other,
+                                      other.has_dyn ? &dyn_map : nullptr);
     for (const std::int64_t j : order)
-        into.merge_group(into.group_of_other(other, j), other, j);
+        into.merge_group(into.group_of_other(other, j), other, j,
+                         other.has_dyn ? &dyn_map : nullptr);
 }
 
 bool agg_pack_shape(AggState& st, const std::vector<const Series*>& keys,
@@ -1781,9 +1849,17 @@ AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
     std::vector<const AggState*> others;
     for (const AggStatePtr& p : partials)
         if (p && p->inited) others.push_back(&settled(*p));
-    for (const AggState* o : others)
-        for (const auto& [name, d] : o->dyn_domain)
-            base->dyn_domain.emplace(name, d);
+    // One remap per partial, built here because it grows base's name table
+    // and the merges below run in parallel.
+    std::vector<dstd::Vector<std::uint32_t>> dyn_map(others.size());
+    for (std::size_t p = 0; p < others.size(); ++p)
+        if (others[p]->has_dyn) dyn_map[p] = base->dyn_remap(*others[p]);
+    // Before the parallel merge: taking or dropping the light dyn form
+    // rewrites the whole state.
+    if (base->has_dyn)
+        for (std::size_t p = 0; p < others.size(); ++p)
+            base->dyn_light_open_for_merge(
+                *others[p], others[p]->has_dyn ? &dyn_map[p] : nullptr);
 
     // Each other's group -> base group, or -1: one fork-join over every
     // (partial, group) pair.
@@ -1810,8 +1886,9 @@ AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
             const std::vector<std::int64_t>& m = map[p];
             for (std::size_t j = 0; j < m.size(); ++j)
                 if (m[j] >= gb && m[j] < ge)
-                    base->merge_group(m[j], *others[p],
-                                      static_cast<std::int64_t>(j));
+                    base->merge_group(
+                        m[j], *others[p], static_cast<std::int64_t>(j),
+                        others[p]->has_dyn ? &dyn_map[p] : nullptr);
         }
     });
     for (std::size_t p = 0; p < others.size(); ++p) {
@@ -1820,7 +1897,8 @@ AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
             if (m[j] < 0)
                 base->merge_group(base->group_of_other(
                                       *others[p], static_cast<std::int64_t>(j)),
-                                  *others[p], static_cast<std::int64_t>(j));
+                                  *others[p], static_cast<std::int64_t>(j),
+                                  others[p]->has_dyn ? &dyn_map[p] : nullptr);
     }
     return base;
 }

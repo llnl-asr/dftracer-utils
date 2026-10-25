@@ -3,7 +3,10 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <doctest/doctest.h>
 
+#include <bit>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -457,4 +460,254 @@ TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
         CHECK(std::string(got.column("tags").string_at(r)) ==
               std::string(want.column("tags").string_at(r)));
     }
+}
+
+namespace {
+
+// The dyn side-table has two cell layouts: the light record (an id word and the
+// cells a mask names), which a state takes when its first batch carries the
+// dynamics, and the full FieldStat per cell, which a state takes when it holds
+// the group already. Every reduction must answer the same columns, values,
+// nulls and types from either.
+df::AggStatePtr dyn_light_state(const std::vector<AggDynSpec>& specs,
+                                const std::vector<const Series*>& keys,
+                                const std::vector<AggDynInput>& inputs) {
+    auto st = df::agg_new({}, specs);
+    agg_accumulate(*st, keys, {}, inputs);
+    return st;
+}
+
+df::AggStatePtr dyn_full_state(const std::vector<AggDynSpec>& specs,
+                               const std::vector<const Series*>& keys,
+                               const std::vector<AggDynInput>& inputs) {
+    // The same batches regrouped: agg_regroup re-keys into a fresh state that
+    // holds no light record, so its cells are FieldStats unpacked from the
+    // light ones, and its answer must not differ.
+    auto st = dyn_light_state(specs, keys, inputs);
+    return df::agg_regroup(*st, {0});
+}
+
+// Every column, bit for bit: the two layouts must not differ in one bit.
+void check_same_columns(const DataFrame& a, const DataFrame& b) {
+    REQUIRE(a.names == b.names);
+    REQUIRE(a.num_rows() == b.num_rows());
+    for (const std::string& name : a.names) {
+        const Series ca = a.column(name);
+        const Series cb = b.column(name);
+        REQUIRE(ca.type() == cb.type());
+        for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+            const bool null_a = ca.is_null(r);
+            CHECK(null_a == cb.is_null(r));
+            if (null_a) continue;
+            if (ca.type() == TypeId::Int64) {
+                CHECK(ca.data<std::int64_t>()[r] == cb.data<std::int64_t>()[r]);
+            } else if (ca.type() == TypeId::Float64) {
+                CHECK(std::bit_cast<std::uint64_t>(ca.data<double>()[r]) ==
+                      std::bit_cast<std::uint64_t>(cb.data<double>()[r]));
+            } else {
+                CHECK(std::string(ca.string_at(r)) ==
+                      std::string(cb.string_at(r)));
+            }
+        }
+    }
+}
+
+void check_same_dyn(const std::vector<AggDynSpec>& specs,
+                    const std::vector<const Series*>& keys,
+                    const std::vector<AggDynInput>& inputs) {
+    auto light = dyn_light_state(specs, keys, inputs);
+    auto full = dyn_full_state(specs, keys, inputs);
+    df::agg_sort_groups(*light);
+    df::agg_sort_groups(*full);
+    check_same_columns(df::agg_finalize(*light, "k"),
+                       df::agg_finalize(*full, "k"));
+}
+
+// k = {0,0,0,0,1,1,2,2}; a: Int64 with rows 1 and 4 null; b: Float64 with row
+// 7 null, so one group holds four values of each and the higher moments are not
+// all zero. Every dyn reduction reads both.
+struct DynData {
+    std::vector<std::int64_t> k{0, 0, 0, 0, 1, 1, 2, 2};
+    std::vector<std::int64_t> a{5, -3, 7, 11, 13, 17, 19, 23};
+    std::vector<double> b{1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5};
+    std::uint8_t a_ok[1] = {0xED};  // rows 1 and 4 null
+    std::uint8_t b_ok[1] = {0x7F};  // row 7 null
+    Series sk = Series::flat_i64(k.data(), 8);
+    Series sa = Series::flat_i64(a.data(), 8, a_ok);
+    Series sb = Series::flat_f64(b.data(), 8, b_ok);
+    std::vector<const Series*> keys{&sk};
+};
+
+}  // namespace
+
+TEST_CASE("AggState dyn: the light cells finalize like the full ones") {
+    DynData d;
+    check_same_dyn({{AggOp::Sum, 0.0, "sum_"}, {AggOp::Count, 0.0, "n_"}},
+                   d.keys, {{"a", &d.sa}, {"b", &d.sb}});
+    check_same_dyn({{AggOp::Mean, 0.0, "mean_"},
+                    {AggOp::Min, 0.0, "min_"},
+                    {AggOp::Max, 0.0, "max_"},
+                    {AggOp::Std, 0.0, "std_"},
+                    {AggOp::Var, 0.0, "var_"}},
+                   d.keys, {{"a", &d.sa}, {"b", &d.sb}});
+    // Pct answers from its sketch, which the light record does not touch.
+    check_same_dyn({{AggOp::Pct, 0.9, "p90_"}}, d.keys,
+                   {{"a", &d.sa}, {"b", &d.sb}});
+
+    // The values themselves: group 0 is a = {5, null, 7, 11} (three present,
+    // sum 23) and b = {1.5, 2.5, 3.5, 4.5}.
+    auto st =
+        dyn_light_state({{AggOp::Sum, 0.0, "sum_"}, {AggOp::Count, 0.0, "n_"}},
+                        d.keys, {{"a", &d.sa}, {"b", &d.sb}});
+    df::agg_sort_groups(*st);
+    DataFrame r = df::agg_finalize(*st, "k");
+    CHECK(r.column("sum_a").type() == TypeId::Int64);
+    CHECK(r.column("sum_a").data<std::int64_t>()[0] == 23);
+    CHECK(r.column("sum_a").data<std::int64_t>()[1] == 17);
+    CHECK(r.column("sum_a").data<std::int64_t>()[2] == 42);
+    CHECK(r.column("n_a").data<std::int64_t>()[0] == 3);
+    CHECK(r.column("n_a").data<std::int64_t>()[1] == 1);
+    CHECK(r.column("n_a").data<std::int64_t>()[2] == 2);
+    CHECK(r.column("sum_b").data<double>()[0] == doctest::Approx(12.0));
+    CHECK(r.column("n_b").data<std::int64_t>()[0] == 4);
+    CHECK(r.column("sum_b").data<double>()[1] == doctest::Approx(12.0));
+    CHECK(r.column("n_b").data<std::int64_t>()[1] == 2);
+    CHECK(r.column("sum_b").data<double>()[2] == doctest::Approx(7.5));
+    CHECK(r.column("n_b").data<std::int64_t>()[2] == 1);
+}
+
+TEST_CASE("AggState dyn: an Int64 sum stays exact through the light cells") {
+    // Above 2^53 the double route and the exact one part company, and the exact
+    // sum overflows, which the light record must report like a FieldStat does.
+    const std::int64_t big = std::numeric_limits<std::int64_t>::max();
+    std::vector<std::int64_t> k{0, 0, 0, 1, 1, 1};
+    std::vector<std::int64_t> a{big - 4, 4, 0, big, big, 1};
+    Series sk = Series::flat_i64(k.data(), 6);
+    Series sa = Series::flat_i64(a.data(), 6);
+    std::vector<const Series*> keys{&sk};
+    const std::vector<AggDynInput> in{{"a", &sa}};
+    const std::vector<AggDynSpec> specs{{AggOp::Sum, 0.0, "sum_"},
+                                        {AggOp::Mean, 0.0, "mean_"}};
+    check_same_dyn(specs, keys, in);
+
+    auto st = dyn_light_state(specs, keys, in);
+    df::agg_sort_groups(*st);
+    DataFrame r = df::agg_finalize(*st, "k");
+    // Group 0 sums to big exactly; group 1 wraps, so its sum column is null.
+    CHECK(!r.column("sum_a").is_null(0));
+    CHECK(r.column("sum_a").data<std::int64_t>()[0] == big);
+    CHECK(r.column("sum_a").is_null(1));
+}
+
+TEST_CASE("AggState dyn: a name fed two domains keeps the full cells") {
+    // The light words are read in a name's first domain, so a later batch in
+    // another one settles the side-table into full cells; the sum stays the
+    // exact Int64 one either way (the layout's domain is the first seen).
+    std::vector<std::int64_t> k{0, 0, 1, 1};
+    std::vector<std::int64_t> ai{1, 2, 3, 4};
+    std::vector<double> af{10.5, 20.5, 30.5, 40.5};
+    Series sk = Series::flat_i64(k.data(), 4);
+    Series sa = Series::flat_i64(ai.data(), 4);
+    Series sf = Series::flat_f64(af.data(), 4);
+    std::vector<const Series*> keys{&sk};
+    const std::vector<AggDynSpec> specs{{AggOp::Sum, 0.0, "sum_"},
+                                        {AggOp::Count, 0.0, "n_"}};
+
+    auto light = df::agg_new({}, specs);
+    agg_accumulate(*light, keys, {}, {{"a", &sa}});
+    agg_accumulate(*light, keys, {}, {{"a", &sf}});
+    auto full = df::agg_new({}, specs);
+    agg_accumulate(*full, keys, {});
+    agg_accumulate(*full, keys, {}, {{"a", &sa}});
+    agg_accumulate(*full, keys, {}, {{"a", &sf}});
+    df::agg_sort_groups(*light);
+    df::agg_sort_groups(*full);
+    check_same_columns(df::agg_finalize(*light, "k"),
+                       df::agg_finalize(*full, "k"));
+
+    DataFrame r = df::agg_finalize(*light, "k");
+    // Every row of both batches counts, and the exact sum is the Int64 batch's.
+    CHECK(r.column("n_a").data<std::int64_t>()[0] == 4);
+    CHECK(r.column("sum_a").data<std::int64_t>()[0] == 3);
+    CHECK(r.column("sum_a").data<std::int64_t>()[1] == 7);
+}
+
+TEST_CASE("AggState dyn: merge unions names through both layouts") {
+    std::vector<std::int64_t> k{0, 0, 1, 1};
+    std::vector<std::int64_t> a{1, 2, 3, 4};
+    std::vector<double> b{10.0, 20.0, 30.0, 40.0};
+    Series sk = Series::flat_i64(k.data(), 4);
+    Series sa = Series::flat_i64(a.data(), 4);
+    Series sb = Series::flat_f64(b.data(), 4);
+    std::vector<const Series*> keys{&sk};
+    const std::vector<AggDynSpec> specs{{AggOp::Sum, 0.0, "sum_"},
+                                        {AggOp::Count, 0.0, "n_"}};
+
+    // Two batches, one naming a only and one naming a and b: folding them into
+    // one state is the merge's answer. a is in both, so it counts twice.
+    auto ref = df::agg_new({}, specs);
+    agg_accumulate(*ref, keys, {}, {{"a", &sa}});
+    agg_accumulate(*ref, keys, {}, {{"a", &sa}, {"b", &sb}});
+    df::agg_sort_groups(*ref);
+    const DataFrame w = df::agg_finalize(*ref, "k");
+    CHECK(w.column("n_a").data<std::int64_t>()[0] == 4);
+    CHECK(w.column("sum_a").data<std::int64_t>()[0] == 6);
+
+    auto merged_light = dyn_light_state(specs, keys, {{"a", &sa}});
+    auto other = dyn_light_state(specs, keys, {{"a", &sa}, {"b", &sb}});
+    df::agg_merge(*merged_light, *other);
+    df::agg_sort_groups(*merged_light);
+    check_same_columns(df::agg_finalize(*merged_light, "k"), w);
+
+    auto into_full = dyn_full_state(specs, keys, {{"a", &sa}});
+    df::agg_merge(*into_full, *other);
+    df::agg_sort_groups(*into_full);
+    check_same_columns(df::agg_finalize(*into_full, "k"), w);
+
+    // A full other, one pass of both names, into a fresh destination: the same
+    // batches folded once into one state.
+    auto one_pass = df::agg_new({}, specs);
+    agg_accumulate(*one_pass, keys, {}, {{"a", &sa}, {"b", &sb}});
+    df::agg_sort_groups(*one_pass);
+    const DataFrame w1 = df::agg_finalize(*one_pass, "k");
+
+    auto into_light = df::agg_new({}, specs);
+    auto full_other = dyn_full_state(specs, keys, {{"a", &sa}, {"b", &sb}});
+    df::agg_merge(*into_light, *full_other);
+    df::agg_sort_groups(*into_light);
+    check_same_columns(df::agg_finalize(*into_light, "k"), w1);
+}
+
+TEST_CASE("AggState dyn: the light cells round-trip a blob") {
+    DynData d;
+    const std::vector<AggDynSpec> specs{{AggOp::Sum, 0.0, "sum_"},
+                                        {AggOp::Mean, 0.0, "mean_"},
+                                        {AggOp::Min, 0.0, "min_"},
+                                        {AggOp::Max, 0.0, "max_"},
+                                        {AggOp::Std, 0.0, "std_"}};
+    auto st = dyn_light_state(specs, d.keys, {{"a", &d.sa}, {"b", &d.sb}});
+    df::agg_sort_groups(*st);
+    const DataFrame want = df::agg_finalize(*st, "k");
+    const std::string blob = df::agg_serialize(*st);
+    check_same_columns(df::agg_finalize(*df::agg_deserialize(blob), "k"), want);
+    check_same_columns(
+        df::agg_finalize(
+            *df::agg_deserialize(df::agg_serialize(*st, true), true), "k"),
+        want);
+
+    // A blob written while the cells were full reads back as full cells and
+    // still agrees, and its tag is not the light one.
+    auto full = dyn_full_state(specs, d.keys, {{"a", &d.sa}, {"b", &d.sb}});
+    df::agg_sort_groups(*full);
+    const std::string fblob = df::agg_serialize(*full);
+    check_same_columns(df::agg_finalize(*df::agg_deserialize(fblob), "k"),
+                       want);
+}
+
+TEST_CASE("AggState dyn: an op the dyn path cannot compute is refused") {
+    CHECK_THROWS_AS(
+        df::agg_new({}, {df::AggDynSpec{df::AggOp::CountValid, 0.0, "cv_"}}),
+        std::invalid_argument);
+    CHECK_NOTHROW(
+        df::agg_new({}, {df::AggDynSpec{df::AggOp::Mean, 0.0, "mean_"}}));
 }

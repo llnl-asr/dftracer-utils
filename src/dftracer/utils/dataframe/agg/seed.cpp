@@ -13,11 +13,11 @@ namespace dftracer::utils::dataframe {
 
 namespace {
 // Reorders `v` (blocks of `stride` elements per group) into `perm` order.
-template <class T>
-void permute_blocks(std::vector<T>& v, const std::vector<std::int64_t>& perm,
+template <class Vec>
+void permute_blocks(Vec& v, const std::vector<std::int64_t>& perm,
                     std::size_t stride) {
     if (stride == 0 || v.empty()) return;
-    std::vector<T> tmp(v.size());
+    Vec tmp(v.size());
     for (std::size_t g = 0; g < perm.size(); ++g) {
         const std::size_t src = static_cast<std::size_t>(perm[g]) * stride;
         for (std::size_t j = 0; j < stride; ++j)
@@ -80,7 +80,10 @@ void agg_permute_groups(AggState& st, const std::vector<std::int64_t>& perm) {
         permute_blocks(st.occ_te, perm, st.n_occ);
     }
     if (st.has_dyn) {
-        permute_blocks(st.dyn_fs, perm, 1);
+        if (st.dyn_light_on)
+            permute_blocks(st.dyn_light, perm, 1);
+        else
+            permute_blocks(st.dyn_fs, perm, 1);
         if (st.dyn_has_sketch) permute_blocks(st.dyn_sketch, perm, 1);
     }
     // The caches in front of key_buckets go; the hash chains keep their
@@ -111,8 +114,12 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
     AggStatePtr out(new AggState());
     out->specs = st.specs;
     out->dyn_specs = st.dyn_specs;
+    // The name table comes along, so a copied cell keeps its group's id.
+    out->dyn_names = st.dyn_names;
+    out->dyn_ids = st.dyn_ids;
     out->dyn_domain = st.dyn_domain;
     out->init_layout();
+    out->dyn_light_on = st.dyn_light_on;
     out->nkeys = st.nkeys;
     out->key_is_bytes = st.key_is_bytes;
     out->key_domain = st.key_domain;
@@ -224,7 +231,10 @@ AggStatePtr agg_extract_groups(const AggState& st_in,
             }
         }
         if (st.has_dyn) {
-            out->dyn_fs[o] = st.dyn_fs[static_cast<std::size_t>(g)];
+            if (st.dyn_light_on)
+                out->dyn_light[o] = st.dyn_light[static_cast<std::size_t>(g)];
+            else
+                out->dyn_fs[o] = st.dyn_fs[static_cast<std::size_t>(g)];
             if (st.dyn_has_sketch)
                 out->dyn_sketch[o] = st.dyn_sketch[static_cast<std::size_t>(g)];
         }

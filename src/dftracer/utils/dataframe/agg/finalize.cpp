@@ -822,30 +822,37 @@ static DataFrame finalize_impl(const AggState& st_in,
     if (st.has_dyn) {
         // Union of discovered argument names, sorted (std::set) so the dyn
         // column order is deterministic and matches the GroupMap path. Columns
-        // are laid out name-outer, reduction-inner.
+        // are laid out name-outer, reduction-inner. A name of the layout this
+        // state never saw still gets its (all-empty) columns.
         AggDynLayout own;
         if (!layout) {
             agg_dyn_layout_add(own, st);
             layout = &own;
         }
         for (const auto& [name, dom] : *layout) {
+            const std::uint32_t id = st.dyn_id_of(name);
+            const bool have = id != AggState::NO_DYN_ID;
             for (const AggDynSpec& d : st.dyn_specs) {
                 out.names.push_back(d.out_prefix + name);
+                FieldStat cell;
                 auto fs_of = [&](std::int64_t g) -> const FieldStat* {
-                    const std::map<std::string, FieldStat>& gmap =
-                        st.dyn_fs[static_cast<std::size_t>(g)];
-                    const auto it = gmap.find(name);
-                    return it != gmap.end() ? &it->second : nullptr;
+                    if (!have) return nullptr;
+                    if (st.dyn_light_on) {
+                        const std::uint64_t* w = st.dyn_light_find(g, id);
+                        if (w == nullptr) return nullptr;
+                        cell = st.dyn_light_stat_of(g, id, w);
+                        return &cell;
+                    }
+                    return dyn_find_cell(st.dyn_fs[static_cast<std::size_t>(g)],
+                                         id);
                 };
                 if (d.op == AggOp::Pct) {
                     std::vector<double> v(static_cast<std::size_t>(ng), 0.0);
-                    for (std::int64_t g = 0; g < ng; ++g) {
-                        const std::map<std::string, DDSketch>& gsk =
-                            st.dyn_sketch[static_cast<std::size_t>(g)];
-                        const auto it = gsk.find(name);
-                        if (it != gsk.end())
+                    for (std::int64_t g = 0; have && g < ng; ++g) {
+                        if (const DDSketch* sk = dyn_find_sketch(
+                                st.dyn_sketch[static_cast<std::size_t>(g)], id))
                             v[static_cast<std::size_t>(g)] =
-                                it->second.quantile(d.param);
+                                sk->quantile(d.param);
                     }
                     out.columns.push_back(Series::flat_f64(v.data(), ng));
                 } else if (d.op == AggOp::Count) {
@@ -948,13 +955,12 @@ DataFrame agg_finalize(const AggState& st,
 void agg_dyn_layout_add(AggDynLayout& layout, const AggState& in) {
     if (!in.has_dyn) return;
     const AggState& state = settled(in);
-    for (const std::map<std::string, FieldStat>& gmap : state.dyn_fs)
-        for (const auto& [name, fs] : gmap) {
-            const auto dit = state.dyn_domain.find(name);
-            layout.emplace(name, dit != state.dyn_domain.end()
-                                     ? dit->second
-                                     : FieldStatDomain::I64);
-        }
+    for (std::int64_t g = 0; g < state.ngroups(); ++g)
+        state.dyn_each_cell(g, [&](std::uint32_t id, const FieldStat&) {
+            layout.emplace(std::string(state.dyn_name(id)),
+                           id < state.dyn_domain.size() ? state.dyn_domain[id]
+                                                        : FieldStatDomain::I64);
+        });
 }
 
 DataFrame agg_finalize(const AggState& st,

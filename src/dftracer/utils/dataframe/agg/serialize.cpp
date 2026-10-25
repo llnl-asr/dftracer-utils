@@ -16,6 +16,11 @@ namespace {
 // Set in a FieldStat's domain byte when a nonzero ecarry follows it.
 constexpr std::uint8_t HAS_ECARRY = 0x80;
 
+// The smallest a serialized dyn cell can be: its 4-byte id, the domain byte
+// and the compact mask. A cell count is honest only when the bytes left could
+// hold that many, so a corrupt count cannot size a vector past the blob.
+constexpr std::uint64_t MIN_DYN_CELL_BYTES = 7;
+
 template <class T>
 void put(std::string& s, T v) {
     s.append(reinterpret_cast<const char*>(&v), sizeof(T));
@@ -164,6 +169,16 @@ struct Reader {
         count(n);
         p += n;
     }
+    void count_cells(std::uint64_t n) const {
+        if (n > left() / MIN_DYN_CELL_BYTES) truncated();
+    }
+    // A fixed tag of the dyn section's layout; a blob written before the dyn
+    // cells became (id, stat) pairs fails here instead of being misread.
+    void expect(const char (&tag)[4]) {
+        if (left() < sizeof(tag) || std::memcmp(p, tag, sizeof(tag)) != 0)
+            truncated();
+        p += sizeof(tag);
+    }
 };
 
 }  // namespace
@@ -171,6 +186,12 @@ struct Reader {
 // A compact blob starts with this, so a reader of the other format fails on it
 // instead of misreading the bytes. A full blob starts with a small spec count.
 constexpr char COMPACT_MAGIC[4] = {'D', 'F', 'T', 'C'};
+
+// The dyn section's tag: what follows the specs. Both were 'DFTD' while every
+// cell held a FieldStat; a light cell (id and words, no stat) needs its own,
+// and a blob of either older layout fails here instead of being misread.
+constexpr char DYN_FULL_MAGIC[4] = {'D', 'F', 'T', 'F'};
+constexpr char DYN_LIGHT_MAGIC[4] = {'D', 'F', 'T', 'E'};
 
 std::string agg_serialize(const AggState& st_in, bool compact) {
     const AggState& st = settled(st_in);
@@ -293,29 +314,56 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
             put_bytes(s, d.out_prefix);
         }
         put(s, static_cast<std::uint8_t>(st.dyn_has_sketch ? 1 : 0));
-        put(s, static_cast<std::uint32_t>(st.dyn_domain.size()));
-        for (const auto& [name, dom] : st.dyn_domain) {
-            put_bytes(s, name);
-            put(s, static_cast<std::uint8_t>(dom));
-        }
-        for (std::int64_t g = 0; g < ng; ++g) {
-            const std::map<std::string, FieldStat>& gmap =
-                st.dyn_fs[static_cast<std::size_t>(g)];
-            put(s, static_cast<std::uint64_t>(gmap.size()));
-            for (const auto& [name, fs] : gmap) {
-                put_bytes(s, name);
-                put_stat(s, fs, compact);
+        // The tag, then the name table once (id -> name and the name's domain),
+        // then each group's cells by id (or, in the light form, their words).
+        if (st.dyn_light_on) {
+            s.append(DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC));
+            put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
+            for (std::size_t i = 0; i < st.dyn_names.size(); ++i) {
+                put_bytes(s, st.dyn_name(static_cast<std::uint32_t>(i)));
+                put(s, static_cast<std::uint8_t>(st.dyn_domain[i]));
+            }
+            // The record the words are read with, so a reader whose mask rules
+            // differ from the writer's fails here.
+            put(s, st.dyn_light_mask);
+            put(s, static_cast<std::uint8_t>(st.dyn_light_stride));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const DynLightCells& cells =
+                    st.dyn_light[static_cast<std::size_t>(g)];
+                put(s, static_cast<std::uint64_t>(cells.words.size()));
+                for (std::uint64_t w : cells.words) put(s, w);
+                put(s, static_cast<std::uint64_t>(cells.carry.size()));
+                for (const auto& [id, wrap] : cells.carry) {
+                    put(s, id);
+                    put(s, wrap);
+                }
+            }
+        } else {
+            s.append(DYN_FULL_MAGIC, sizeof(DYN_FULL_MAGIC));
+            put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
+            for (std::size_t i = 0; i < st.dyn_names.size(); ++i) {
+                put_bytes(s, st.dyn_name(static_cast<std::uint32_t>(i)));
+                put(s, static_cast<std::uint8_t>(st.dyn_domain[i]));
+            }
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const dstd::Vector<DynCell>& cells =
+                    st.dyn_fs[static_cast<std::size_t>(g)];
+                put(s, static_cast<std::uint64_t>(cells.size()));
+                for (const DynCell& c : cells) {
+                    put(s, c.id);
+                    put_stat(s, c.stat, compact);
+                }
             }
         }
         if (st.dyn_has_sketch) {
             std::vector<std::uint8_t> blob;
             for (std::int64_t g = 0; g < ng; ++g) {
-                const std::map<std::string, DDSketch>& gsk =
+                const dstd::Vector<DynSketchCell>& cells =
                     st.dyn_sketch[static_cast<std::size_t>(g)];
-                put(s, static_cast<std::uint64_t>(gsk.size()));
-                for (const auto& [name, sk] : gsk) {
-                    put_bytes(s, name);
-                    sk.serialize_into(blob);
+                put(s, static_cast<std::uint64_t>(cells.size()));
+                for (const DynSketchCell& c : cells) {
+                    put(s, c.id);
+                    c.sketch.serialize_into(blob);
                     put(s, static_cast<std::uint32_t>(blob.size()));
                     s.append(reinterpret_cast<const char*>(blob.data()),
                              blob.size());
@@ -621,21 +669,84 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             if (d.op == AggOp::Pct) sketch = true;
         if ((r.get<std::uint8_t>() != 0) != sketch) Reader::truncated();
         st->dyn_has_sketch = sketch;
-        const std::uint32_t ndom = r.get<std::uint32_t>();
-        for (std::uint32_t i = 0; i < ndom; ++i) {
-            std::string name = r.get_bytes();
-            st->dyn_domain.emplace(
-                std::move(name),
-                static_cast<FieldStatDomain>(r.get<std::uint8_t>()));
+        // The specs ride the blob, so the light record they need is derived
+        // here, after them (init_layout saw none).
+        st->dyn_light_layout();
+        if (r.left() < sizeof(DYN_FULL_MAGIC)) Reader::truncated();
+        const bool light_cells =
+            std::memcmp(r.p, DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC)) == 0;
+        r.expect(light_cells ? DYN_LIGHT_MAGIC : DYN_FULL_MAGIC);
+        if (light_cells && !st->dyn_light_ok) Reader::truncated();
+        const std::uint32_t nnames = r.get<std::uint32_t>();
+        r.count(nnames);
+        st->dyn_names.reserve(nnames);
+        st->dyn_domain.reserve(nnames);
+        for (std::uint32_t i = 0; i < nnames; ++i) {
+            const std::string name = r.get_bytes();
+            const auto dom =
+                static_cast<FieldStatDomain>(r.get<std::uint8_t>());
+            if (dom > FieldStatDomain::F64) Reader::truncated();
+            // A repeated name would break the id -> name mapping.
+            if (st->dyn_intern(name, dom) != i) Reader::truncated();
         }
         r.count(static_cast<std::size_t>(ng));
-        st->dyn_fs.resize(static_cast<std::size_t>(ng));
-        for (std::int64_t g = 0; g < ng; ++g) {
-            const std::uint64_t cnt = r.get<std::uint64_t>();
-            for (std::uint64_t j = 0; j < cnt; ++j) {
-                std::string name = r.get_bytes();
-                st->dyn_fs[static_cast<std::size_t>(g)].emplace(
-                    std::move(name), r.get_stat(compact));
+        if (light_cells) {
+            const std::uint8_t mask = r.get<std::uint8_t>();
+            const std::uint8_t stride = r.get<std::uint8_t>();
+            if (mask != st->dyn_light_mask || stride != st->dyn_light_stride)
+                Reader::truncated();
+            st->dyn_light_on = true;
+            st->dyn_light.resize(static_cast<std::size_t>(ng));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                DynLightCells& cells =
+                    st->dyn_light[static_cast<std::size_t>(g)];
+                const std::uint64_t nw = r.get<std::uint64_t>();
+                r.count_cells(nw);
+                if (nw % st->dyn_light_stride != 0) Reader::truncated();
+                cells.words.resize(static_cast<std::size_t>(nw));
+                std::uint32_t prev = 0;
+                for (std::uint64_t j = 0; j < nw; ++j) {
+                    cells.words[static_cast<std::size_t>(j)] =
+                        r.get<std::uint64_t>();
+                    if (j % st->dyn_light_stride != 0) continue;
+                    // The cells are written in id order and must stay in it.
+                    const auto id = static_cast<std::uint32_t>(
+                        cells.words[static_cast<std::size_t>(j)] &
+                        DYN_LIGHT_ID);
+                    if (id >= nnames || (j != 0 && id <= prev))
+                        Reader::truncated();
+                    prev = id;
+                }
+                const std::uint64_t nc = r.get<std::uint64_t>();
+                r.count_cells(nc);
+                cells.carry.reserve(static_cast<std::size_t>(nc));
+                for (std::uint64_t j = 0; j < nc; ++j) {
+                    const std::uint32_t id = r.get<std::uint32_t>();
+                    const std::int64_t wrap = r.get<std::int64_t>();
+                    if (id >= nnames || wrap == 0 ||
+                        (!cells.carry.empty() &&
+                         cells.carry.back().first >= id))
+                        Reader::truncated();
+                    cells.carry.emplace_back(id, wrap);
+                }
+            }
+        } else {
+            st->dyn_fs.resize(static_cast<std::size_t>(ng));
+            for (std::int64_t g = 0; g < ng; ++g) {
+                const std::uint64_t cnt = r.get<std::uint64_t>();
+                r.count_cells(cnt);
+                dstd::Vector<DynCell>& cells =
+                    st->dyn_fs[static_cast<std::size_t>(g)];
+                cells.reserve(static_cast<std::size_t>(cnt));
+                for (std::uint64_t j = 0; j < cnt; ++j) {
+                    const std::uint32_t id = r.get<std::uint32_t>();
+                    FieldStat fs = r.get_stat(compact);
+                    // The cells are written in id order and must stay in it.
+                    if (id >= nnames ||
+                        (!cells.empty() && cells.back().id >= id))
+                        Reader::truncated();
+                    cells.push_back(DynCell{std::move(fs), id});
+                }
             }
         }
         if (st->dyn_has_sketch) {
@@ -643,15 +754,21 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             st->dyn_sketch.resize(static_cast<std::size_t>(ng));
             for (std::int64_t g = 0; g < ng; ++g) {
                 const std::uint64_t cnt = r.get<std::uint64_t>();
+                r.count_cells(cnt);
+                dstd::Vector<DynSketchCell>& cells =
+                    st->dyn_sketch[static_cast<std::size_t>(g)];
+                cells.reserve(static_cast<std::size_t>(cnt));
                 for (std::uint64_t j = 0; j < cnt; ++j) {
-                    std::string name = r.get_bytes();
+                    const std::uint32_t id = r.get<std::uint32_t>();
                     const std::uint32_t blen = r.get<std::uint32_t>();
                     r.count(blen);
-                    st->dyn_sketch[static_cast<std::size_t>(g)].emplace(
-                        std::move(name),
-                        DDSketch::deserialize(
-                            reinterpret_cast<const std::uint8_t*>(r.p), blen));
+                    DDSketch sk = DDSketch::deserialize(
+                        reinterpret_cast<const std::uint8_t*>(r.p), blen);
                     r.p += blen;
+                    if (id >= nnames ||
+                        (!cells.empty() && cells.back().id >= id))
+                        Reader::truncated();
+                    cells.push_back(DynSketchCell{std::move(sk), id});
                 }
             }
         }

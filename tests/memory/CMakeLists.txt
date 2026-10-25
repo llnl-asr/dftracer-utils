@@ -8,7 +8,8 @@ set(MEMORY_TEST_SOURCES test_system_backend.cpp test_heap.cpp
                         test_pool_threads.cpp test_reclaim.cpp
                         test_pressure.cpp test_debug.cpp test_allocator.cpp
                         test_arena.cpp test_block.cpp test_block_threads.cpp
-                        test_reserve_wait.cpp test_global_new.cpp)
+                        test_reserve_wait.cpp test_global_new.cpp
+                        test_heap_interposed.cpp)
 
 find_package(Threads REQUIRED)
 
@@ -56,8 +57,16 @@ if(TARGET dftracer_utils_global_new)
     memory/test_global_new_page_heap
     PROPERTIES ENVIRONMENT
                "DFTRACER_UTILS_MEMORY_BACKEND=page_heap;DFTRACER_UTILS_MEMORY_DEBUG=1")
+  # A wrapped munmap that allocates, as a tracer's does, in front of the page
+  # heap that serves the executable's operator new.
+  target_link_libraries(memory_test_heap_interposed
+                        PRIVATE dftracer_utils_global_new ${CMAKE_DL_LIBS})
+  set_tests_properties(
+    memory/test_heap_interposed
+    PROPERTIES ENVIRONMENT "DFTRACER_UTILS_MEMORY_BACKEND=page_heap")
 else()
-  set_tests_properties(memory/test_global_new PROPERTIES DISABLED TRUE)
+  set_tests_properties(memory/test_global_new memory/test_heap_interposed
+                       PROPERTIES DISABLED TRUE)
 endif()
 
 # The pool tests run once per backend: the loop above runs them on the

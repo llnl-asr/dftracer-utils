@@ -243,6 +243,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix every CLI tool crashing with a stack overflow when it runs under the DFTracer preload on Linux.
+  The tracer's `munmap` wrapper allocated, which called the heap again before the heap's own `munmap` returned, and the heap now maps its memory with system calls that a wrapper does not see.
 - Fix a second `dftracer_index` run on unchanged files indexing every file again.
   It now skips them, indexes a file again only when its size, its mtime or the index settings changed, and `--force` still indexes all.
 - Fix `dftracer_index` exiting with status 0 when a file failed to index, and `dftracer_split` reporting 0 chunk files for a plain input.

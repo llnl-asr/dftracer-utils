@@ -3,6 +3,7 @@
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
 #include <dftracer/utils/memory/link.h>
+#include <dftracer/utils/memory/os_map.h>
 #include <dftracer/utils/memory/settings.h>
 #include <dftracer/utils/memory/vg.h>
 #include <pthread.h>
@@ -355,17 +356,17 @@ void check_size(bool matches) noexcept {
 
 void* map_aligned(std::size_t bytes) noexcept {
     std::size_t total = bytes + HEAP_SPAN_SIZE;
-    void* raw = ::mmap(nullptr, total, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
+    void* raw = os_mmap(nullptr, total, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, -1, 0);
     if (raw == MAP_FAILED) return nullptr;
     std::uintptr_t start = addr(raw);
     std::uintptr_t base = (start + SPAN_MASK) & ~SPAN_MASK;
     if (base > start) {
-        ::munmap(raw, base - start);
+        os_munmap(raw, base - start);
     }
     std::uintptr_t tail = start + total - (base + bytes);
     if (tail > 0) {
-        ::munmap(reinterpret_cast<void*>(base + bytes), tail);
+        os_munmap(reinterpret_cast<void*>(base + bytes), tail);
     }
     return reinterpret_cast<void*>(base);
 }
@@ -632,16 +633,16 @@ std::uint64_t now_ms() noexcept {
 
 bool purge_range(void* p, std::size_t n) noexcept {
 #if defined(__APPLE__)
-    return ::madvise(p, n, MADV_FREE_REUSABLE) == 0;
+    return os_madvise(p, n, MADV_FREE_REUSABLE) == 0;
 #else
-    return ::madvise(p, n, MADV_DONTNEED) == 0;
+    return os_madvise(p, n, MADV_DONTNEED) == 0;
 #endif
 }
 
 void reuse_range([[maybe_unused]] void* p,
                  [[maybe_unused]] std::size_t n) noexcept {
 #if defined(__APPLE__)
-    ::madvise(p, n, MADV_FREE_REUSE);
+    os_madvise(p, n, MADV_FREE_REUSE);
 #endif
 }
 
@@ -1277,7 +1278,7 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
     std::size_t from =
         s->kind == SpanKind::Large ? 0 : (s->size & ~std::size_t{7});
     asan_unpoison(user + from, s->usable - from);
-    ::munmap(s, s->map_bytes);
+    os_munmap(s, s->map_bytes);
 }
 
 void check_align(std::size_t align) noexcept {
@@ -1477,7 +1478,7 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
         moved = ::mremap(s, old_bytes, old_bytes, MREMAP_MAYMOVE | MREMAP_FIXED,
                          target);
         if (moved == MAP_FAILED) {
-            ::munmap(target, bytes);
+            os_munmap(target, bytes);
             restore();
             throw std::bad_alloc();
         }

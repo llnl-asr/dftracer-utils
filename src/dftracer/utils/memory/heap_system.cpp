@@ -1,5 +1,6 @@
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/heap_system.h>
+#include <dftracer/utils/memory/os_map.h>
 #include <dftracer/utils/memory/settings.h>
 #include <pthread.h>
 #include <sys/mman.h>
@@ -56,8 +57,8 @@ void system_init() {
 
 SystemCache* new_cache() {
     auto bytes = static_cast<std::size_t>(::sysconf(_SC_PAGESIZE));
-    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
+    void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, -1, 0);
     if (raw == MAP_FAILED) throw std::bad_alloc();
     auto* c = new (raw) SystemCache{};
     attrib_register(c->attrib);

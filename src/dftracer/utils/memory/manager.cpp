@@ -5,6 +5,7 @@
 #include <dftracer/utils/memory/heap_page.h>
 #include <dftracer/utils/memory/heap_system.h>
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/memory/os_map.h>
 #include <dftracer/utils/memory/pressure.h>
 #include <dftracer/utils/memory/settings.h>
 #include <dlfcn.h>
@@ -595,8 +596,8 @@ Manager* ManagerAccess::create() noexcept {
     std::size_t bytes = header + pools +
                         RECLAIMER_SLOTS * sizeof(ReclaimEntry) +
                         EXTERNAL_SLOTS * sizeof(ExternalEntry);
-    void* raw = ::mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
+    void* raw = os_mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANON, -1, 0);
     if (raw == MAP_FAILED) {
         abort_with("dftracer-utils memory: cannot map the pool table\n");
     }
@@ -625,7 +626,7 @@ Manager* ManagerAccess::create() noexcept {
     Manager* expected = nullptr;
     if (!g_manager.compare_exchange_strong(expected, m,
                                            std::memory_order_acq_rel)) {
-        ::munmap(raw, bytes);
+        os_munmap(raw, bytes);
         return expected;
     }
     if (::pthread_atfork(nullptr, nullptr, after_fork_child) != 0) {

@@ -110,19 +110,11 @@ std::shared_ptr<RocksDatabase> open(const std::string& index_path,
                                     RocksDatabase::OpenMode mode) {
     auto sys_merge = std::make_shared<SystemMetricsMergeOperator>();
     const bool writing = mode == RocksDatabase::OpenMode::ReadWrite;
-    // Rows are rewritten by every rebuild, so a cheap codec keeps flush and
-    // compaction CPU low; the rest of the index is tuned for size.
+    // Rows are rewritten by every rebuild, so they take zstd at its default
+    // level; the rest of the index is tuned for size.
     auto fast_compression = [](::rocksdb::ColumnFamilyOptions& opts) {
-#ifdef DFTRACER_UTILS_ENABLE_LZ4
-        opts.compression = ::rocksdb::kLZ4Compression;
-        opts.bottommost_compression = ::rocksdb::kLZ4Compression;
-#elif defined(DFTRACER_UTILS_ENABLE_ZSTD)
         opts.compression = ::rocksdb::kZSTD;
         opts.bottommost_compression = ::rocksdb::kZSTD;
-#else
-        opts.compression = ::rocksdb::kNoCompression;
-        opts.bottommost_compression = ::rocksdb::kNoCompression;
-#endif
     };
     auto override = [sys_merge, writing, fast_compression](
                         const std::string& name,

@@ -229,6 +229,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the `DFTRACER_UTILS_ENABLE_ZSTD` and `DFTRACER_UTILS_ENABLE_LZ4` CMake options, and with them LZ4 compression of the RocksDB index.
+  Every build links zstd, and builds it from source when the system has none, so spill files and Arrow IPC files can always compress with zstd.
 - Remove the `DFTRACER_UTILS_USE_ZLIB_NG` option and the fallback to madler/zlib.
 - Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
   Drop them from scripts that call it.

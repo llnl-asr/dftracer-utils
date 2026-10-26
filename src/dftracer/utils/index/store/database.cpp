@@ -182,7 +182,6 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     bbt.separate_key_value_in_data_block = true;
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     options.compression = ::rocksdb::kZSTD;
     options.compression_opts.level = constants::rocksdb::ZSTD_UPPER_LEVEL;
     options.compression_opts.enabled = true;
@@ -194,13 +193,6 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     options.bottommost_compression_opts.zstd_max_train_bytes =
         constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
     options.bottommost_compression_opts.enabled = true;
-#elif defined(DFTRACER_UTILS_ENABLE_LZ4)
-    options.compression = ::rocksdb::kLZ4Compression;
-    options.bottommost_compression = ::rocksdb::kZlibCompression;
-#else
-    options.compression = ::rocksdb::kZlibCompression;
-    options.bottommost_compression = ::rocksdb::kZlibCompression;
-#endif
     return options;
 }
 

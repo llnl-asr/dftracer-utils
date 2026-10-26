@@ -12,10 +12,7 @@
 #include <nanoarrow/nanoarrow_ipc.h>
 #include <sys/uio.h>
 #include <unistd.h>
-
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 #include <zstd.h>
-#endif
 
 #include <cstring>
 #include <vector>
@@ -59,8 +56,6 @@ BufferPool::Lease BufferPool::acquire(std::size_t min_capacity) {
 // ---------------------------------------------------------------------------
 // Compression helpers
 // ---------------------------------------------------------------------------
-
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 
 struct BufferInfo {
     std::int64_t offset;
@@ -215,8 +210,6 @@ static int build_message_header(ArrowArrayView* view,
 
     return 0;
 }
-
-#endif  // DFTRACER_UTILS_ENABLE_ZSTD
 
 // ---------------------------------------------------------------------------
 // IpcWriter lifecycle
@@ -442,7 +435,6 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
         co_return result;
     }
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     if (compression_ != IpcCompression::Zstd) {
         co_return result;
     }
@@ -488,7 +480,6 @@ coro::CoroTask<IpcWriter::CompressedBatch> IpcWriter::compress_batch(
     result.metadata_length = static_cast<std::int32_t>(result.header.size());
 
     ArrowArrayViewReset(&view);
-#endif
 
     co_return result;
 }

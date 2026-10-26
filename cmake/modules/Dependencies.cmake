@@ -531,9 +531,9 @@ function(need_rocksdb)
         "WITH_BENCHMARK_TOOLS OFF"
         "WITH_GFLAGS OFF"
         "WITH_SNAPPY OFF"
-        "WITH_LZ4 ${DFTRACER_UTILS_ENABLE_LZ4}"
+        "WITH_LZ4 OFF"
         "WITH_ZLIB ON"
-        "WITH_ZSTD ${DFTRACER_UTILS_ENABLE_ZSTD}"
+        "WITH_ZSTD ON"
         "WITH_BZ2 OFF"
         "USE_RTTI ON"
         "FAIL_ON_WARNINGS OFF"
@@ -726,187 +726,6 @@ endfunction()
 # ==============================================================================
 # Compression Dependencies
 # ==============================================================================
-
-function(need_lz4)
-  if(DEFINED CACHE{lz4_LIBRARIES} AND NOT EXISTS "${lz4_LIBRARIES}")
-    unset(lz4_LIBRARIES CACHE)
-  endif()
-  if(DEFINED CACHE{lz4_INCLUDE_DIRS} AND NOT EXISTS "${lz4_INCLUDE_DIRS}")
-    unset(lz4_INCLUDE_DIRS CACHE)
-  endif()
-
-  find_path(lz4_INCLUDE_DIRS NAMES lz4.h)
-  find_library(lz4_LIBRARIES NAMES lz4)
-
-  if(lz4_INCLUDE_DIRS
-     AND lz4_LIBRARIES
-     AND EXISTS "${lz4_LIBRARIES}")
-    dftracer_utils_ok("Found system lz4: ${lz4_LIBRARIES}")
-
-    if(NOT TARGET lz4::lz4)
-      add_library(lz4::lz4 UNKNOWN IMPORTED)
-      set_target_properties(
-        lz4::lz4 PROPERTIES IMPORTED_LOCATION "${lz4_LIBRARIES}"
-                            INTERFACE_INCLUDE_DIRECTORIES "${lz4_INCLUDE_DIRS}")
-    endif()
-
-    set(lz4_FOUND
-        TRUE
-        PARENT_SCOPE)
-    set(lz4_INCLUDE_DIRS
-        ${lz4_INCLUDE_DIRS}
-        PARENT_SCOPE)
-    set(lz4_LIBRARIES
-        ${lz4_LIBRARIES}
-        PARENT_SCOPE)
-    set(lz4_CPM
-        FALSE
-        PARENT_SCOPE)
-    set(lz4_FOUND
-        TRUE
-        CACHE BOOL "lz4 availability" FORCE)
-    set(lz4_INCLUDE_DIRS
-        "${lz4_INCLUDE_DIRS}"
-        CACHE PATH "lz4 include directories" FORCE)
-    set(lz4_LIBRARIES
-        "${lz4_LIBRARIES}"
-        CACHE STRING "lz4 libraries" FORCE)
-  else()
-    if(NOT lz4_ADDED)
-      cpmaddpackage(
-        NAME
-        lz4
-        GITHUB_REPOSITORY
-        lz4/lz4
-        VERSION
-        1.10.0
-        GIT_TAG
-        v1.10.0
-        DOWNLOAD_ONLY
-        YES)
-    endif()
-
-    if(lz4_ADDED)
-      dftracer_utils_ok("Built lz4 with CPM")
-
-      set(LZ4_TARGETS)
-      set(LZ4_SOURCES
-          ${lz4_SOURCE_DIR}/lib/lz4.c ${lz4_SOURCE_DIR}/lib/lz4frame.c
-          ${lz4_SOURCE_DIR}/lib/lz4hc.c ${lz4_SOURCE_DIR}/lib/xxhash.c)
-      set(LZ4_SHARED_OUTPUT
-          "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}lz4${CMAKE_SHARED_LIBRARY_SUFFIX}"
-      )
-      set(LZ4_STATIC_OUTPUT
-          "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}lz4${CMAKE_STATIC_LIBRARY_SUFFIX}"
-      )
-      set(LZ4_PREFERRED_OUTPUT "${LZ4_STATIC_OUTPUT}")
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        set(LZ4_PREFERRED_OUTPUT "${LZ4_SHARED_OUTPUT}")
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_STATIC)
-        add_library(lz4_static STATIC ${LZ4_SOURCES})
-        target_include_directories(
-          lz4_static PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
-                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        set_target_properties(
-          lz4_static
-          PROPERTIES OUTPUT_NAME lz4
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        list(APPEND LZ4_TARGETS lz4_static)
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        add_library(lz4_shared SHARED ${LZ4_SOURCES})
-        target_include_directories(
-          lz4_shared PUBLIC $<BUILD_INTERFACE:${lz4_SOURCE_DIR}/lib>
-                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-        set_target_properties(
-          lz4_shared
-          PROPERTIES OUTPUT_NAME lz4
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        list(APPEND LZ4_TARGETS lz4_shared)
-      endif()
-
-      if(TARGET lz4_static AND NOT TARGET lz4::lz4_static)
-        add_library(lz4::lz4_static UNKNOWN IMPORTED GLOBAL)
-        set_target_properties(
-          lz4::lz4_static
-          PROPERTIES IMPORTED_LOCATION "${LZ4_STATIC_OUTPUT}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-        add_dependencies(lz4::lz4_static lz4_static)
-      endif()
-      if(TARGET lz4_shared AND NOT TARGET lz4::lz4_shared)
-        add_library(lz4::lz4_shared UNKNOWN IMPORTED GLOBAL)
-        set_target_properties(
-          lz4::lz4_shared
-          PROPERTIES IMPORTED_LOCATION "${LZ4_SHARED_OUTPUT}"
-                     INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-        add_dependencies(lz4::lz4_shared lz4_shared)
-      endif()
-      if(NOT TARGET lz4::lz4)
-        add_library(lz4::lz4 UNKNOWN IMPORTED GLOBAL)
-        if(TARGET lz4::lz4_shared)
-          set_target_properties(
-            lz4::lz4
-            PROPERTIES IMPORTED_LOCATION "${LZ4_SHARED_OUTPUT}"
-                       INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-          add_dependencies(lz4::lz4 lz4_shared)
-        elseif(TARGET lz4::lz4_static)
-          set_target_properties(
-            lz4::lz4
-            PROPERTIES IMPORTED_LOCATION "${LZ4_STATIC_OUTPUT}"
-                       INTERFACE_INCLUDE_DIRECTORIES "${lz4_SOURCE_DIR}/lib")
-          add_dependencies(lz4::lz4 lz4_static)
-        endif()
-      endif()
-
-      install(FILES ${lz4_SOURCE_DIR}/lib/lz4.h ${lz4_SOURCE_DIR}/lib/lz4frame.h
-                    ${lz4_SOURCE_DIR}/lib/lz4hc.h ${lz4_SOURCE_DIR}/lib/xxhash.h
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-
-      if(LZ4_TARGETS)
-        install(
-          TARGETS ${LZ4_TARGETS}
-          EXPORT lz4Targets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-        install(
-          EXPORT lz4Targets
-          FILE lz4Targets.cmake
-          NAMESPACE lz4::
-          DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/lz4)
-      endif()
-
-      set(lz4_FOUND
-          TRUE
-          PARENT_SCOPE)
-      set(lz4_INCLUDE_DIRS
-          ${lz4_SOURCE_DIR}/lib
-          PARENT_SCOPE)
-      set(lz4_LIBRARIES
-          ${LZ4_PREFERRED_OUTPUT}
-          PARENT_SCOPE)
-      set(lz4_CPM
-          TRUE
-          PARENT_SCOPE)
-
-      # Seed the variables RocksDB's bundled Findlz4.cmake checks.
-      set(lz4_FOUND
-          TRUE
-          CACHE BOOL "lz4 availability" FORCE)
-      set(lz4_INCLUDE_DIRS
-          "${lz4_SOURCE_DIR}/lib"
-          CACHE PATH "lz4 include directories" FORCE)
-      set(lz4_LIBRARIES
-          "${LZ4_PREFERRED_OUTPUT}"
-          CACHE STRING "lz4 libraries" FORCE)
-    endif()
-  endif()
-endfunction()
 
 # zlib-ng in its native API (zng_ names) as one static PIC archive with hidden
 # visibility. The utilities library links it privately, so no library of ours
@@ -1164,6 +983,20 @@ endfunction()
 
 # Link the resolved libdeflate target (name varies: CPM static build vs a system
 # find_package) into `target`.
+function(link_zstd target)
+  if(TARGET zstd::libzstd_shared)
+    target_link_libraries(${target} PRIVATE zstd::libzstd_shared)
+  elseif(TARGET zstd::libzstd_static)
+    target_link_libraries(${target} PRIVATE zstd::libzstd_static)
+  elseif(TARGET libzstd_shared)
+    target_link_libraries(${target} PRIVATE libzstd_shared)
+  elseif(TARGET libzstd_static)
+    target_link_libraries(${target} PRIVATE libzstd_static)
+  else()
+    message(FATAL_ERROR "link_zstd: no zstd target available")
+  endif()
+endfunction()
+
 function(link_libdeflate target)
   if(TARGET libdeflate::libdeflate_static)
     target_link_libraries(${target} PRIVATE libdeflate::libdeflate_static)
@@ -1322,14 +1155,12 @@ function(need_nanoarrow)
           PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
         # Enable zstd compression for Arrow IPC
-        if(DFTRACER_UTILS_ENABLE_ZSTD)
-          target_compile_definitions(nanoarrow_static
-                                     PRIVATE NANOARROW_IPC_WITH_ZSTD)
-          if(TARGET zstd::libzstd_static)
-            target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
-          elseif(TARGET zstd::libzstd_shared)
-            target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_shared)
-          endif()
+        target_compile_definitions(nanoarrow_static
+                                   PRIVATE NANOARROW_IPC_WITH_ZSTD)
+        if(TARGET zstd::libzstd_static)
+          target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
+        elseif(TARGET zstd::libzstd_shared)
+          target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_shared)
         endif()
       endif()
       set_target_properties(
@@ -1356,14 +1187,12 @@ function(need_nanoarrow)
           PUBLIC $<BUILD_INTERFACE:${NANOARROW_FLATCC_INCLUDE}>
                  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
         # Enable zstd compression for Arrow IPC
-        if(DFTRACER_UTILS_ENABLE_ZSTD)
-          target_compile_definitions(nanoarrow_shared
-                                     PRIVATE NANOARROW_IPC_WITH_ZSTD)
-          if(TARGET zstd::libzstd_shared)
-            target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_shared)
-          elseif(TARGET zstd::libzstd_static)
-            target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
-          endif()
+        target_compile_definitions(nanoarrow_shared
+                                   PRIVATE NANOARROW_IPC_WITH_ZSTD)
+        if(TARGET zstd::libzstd_shared)
+          target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_shared)
+        elseif(TARGET zstd::libzstd_static)
+          target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
         endif()
       endif()
       set_target_properties(

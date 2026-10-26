@@ -226,7 +226,6 @@ TEST_CASE("IpcReader - read batch out of range") {
     fs::remove(path);
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 TEST_CASE("IpcReader - read ZSTD compressed file") {
     std::string path = tmp_path("test_ipc_reader_zstd.arrow");
     std::remove(path.c_str());
@@ -250,7 +249,6 @@ TEST_CASE("IpcReader - read ZSTD compressed file") {
     reader.close();
     fs::remove(path);
 }
-#endif
 
 TEST_CASE("IpcReader - roundtrip with all column types") {
     std::string path = tmp_path("test_ipc_reader_types.arrow");
@@ -492,7 +490,6 @@ TEST_CASE("read_arrow_files_streaming - early cancel") {
     fs::remove_all(dir);
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 TEST_CASE("read_arrow_files_parallel - mixed compression") {
     std::string dir = tmp_path("test_parallel_mixed");
     fs::remove_all(dir);
@@ -517,7 +514,6 @@ TEST_CASE("read_arrow_files_parallel - mixed compression") {
     runtime.shutdown();
     fs::remove_all(dir);
 }
-#endif
 
 #else
 

@@ -126,8 +126,6 @@ option(DFTRACER_UTILS_ENABLE_MPI "Enable MPI support for call tree" OFF)
 option(DFTRACER_UTILS_ENABLE_ARROW "Enable Arrow C Data Interface via nanoarrow" ON)
 option(DFTRACER_UTILS_ENABLE_VECTORSCAN "Use Vectorscan for duql regexes and the raw prefilter" ON)
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
-option(DFTRACER_UTILS_ENABLE_ZSTD "Enable ZSTD compression for RocksDB" ON)
-option(DFTRACER_UTILS_ENABLE_LZ4 "Enable LZ4 compression for RocksDB" OFF)
 option(
   DFTRACER_UTILS_LOCAL_PACKAGES
   "Prefer system-installed bundled dependencies (RocksDB, zstd, simdjson, ...) when available; set OFF to build them from source for portable wheels"
@@ -290,9 +288,6 @@ dftracer_utils_item(
   "${DFTRACER_UTILS_BUILD_BINARIES} / ${DFTRACER_UTILS_BUILD_PYTHON}")
 dftracer_utils_item("Tests          " "${DFTRACER_UTILS_TESTS}")
 dftracer_utils_item("MPI            " "${DFTRACER_UTILS_ENABLE_MPI}")
-dftracer_utils_item(
-  "Compression    "
-  "zstd=${DFTRACER_UTILS_ENABLE_ZSTD} lz4=${DFTRACER_UTILS_ENABLE_LZ4}")
 dftracer_utils_item("Arrow          " "${DFTRACER_UTILS_ENABLE_ARROW}")
 dftracer_utils_item("Vectorscan     " "${DFTRACER_UTILS_ENABLE_VECTORSCAN}")
 dftracer_utils_item("Async I/O      "

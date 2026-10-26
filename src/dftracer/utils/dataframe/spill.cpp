@@ -15,9 +15,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 #include <zstd.h>
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -644,7 +642,6 @@ std::string Dir::run_path(int id) const {
 namespace {
 
 bool spill_compression_on(const std::string& path) {
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
     const auto is = [&](std::string_view a, std::string_view b = {},
                         std::string_view c = {}) {
@@ -656,21 +653,6 @@ bool spill_compression_on(const std::string& path) {
     if (is("off", "0")) return false;
     if (is("on", "1", "zstd")) return true;
     return is_network_filesystem(filesystem_kind(path));
-#else
-    (void)path;
-    static const bool warned = [] {
-        const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
-        if (v && (::dftracer::utils::detail::iequals(*v, "on") || *v == "1" ||
-                  ::dftracer::utils::detail::iequals(*v, "zstd")))
-            DFTRACER_UTILS_LOG_WARN(
-                "%s is set but this build has no zstd; spilled runs are not "
-                "compressed",
-                constants::SPILL_COMPRESS_ENV);
-        return true;
-    }();
-    (void)warned;
-    return false;
-#endif
 }
 
 // A morsel smaller than this is not worth a compression call.
@@ -678,7 +660,6 @@ constexpr std::size_t COMPRESS_MIN_BYTES = 4096;
 
 }  // namespace
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 struct Writer::Codec {
     ZSTD_CCtx* ctx = ZSTD_createCCtx();
     std::string out;
@@ -688,10 +669,6 @@ struct Reader::Codec {
     ZSTD_DCtx* ctx = ZSTD_createDCtx();
     ~Codec() { ZSTD_freeDCtx(ctx); }
 };
-#else
-struct Writer::Codec {};
-struct Reader::Codec {};
-#endif
 
 Writer::Writer(const std::string& path)
     : os_(path, std::ios::binary | std::ios::trunc),
@@ -714,7 +691,6 @@ void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
     const char* payload = blob_.data();
     std::int64_t stored = static_cast<std::int64_t>(blob_.size());
     const std::int64_t raw = stored;
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     if (codec_ && blob_.size() >= COMPRESS_MIN_BYTES) {
         codec_->out.resize(ZSTD_compressBound(blob_.size()));
         const std::size_t n = ZSTD_compressCCtx(codec_->ctx, codec_->out.data(),
@@ -725,7 +701,6 @@ void Writer::write(const std::vector<Series>& cols, std::int64_t rows) {
             stored = static_cast<std::int64_t>(n);
         }
     }
-#endif
     os_.write(reinterpret_cast<const char*>(&stored), sizeof(stored));
     os_.write(reinterpret_cast<const char*>(&raw), sizeof(raw));
     os_.write(payload, static_cast<std::streamsize>(stored));
@@ -817,7 +792,6 @@ coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
         grow(raw_, raw_cap_, raw);
         is_.read(raw_.get(), static_cast<std::streamsize>(raw));
     } else {
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
         if (!codec_) codec_ = std::make_unique<Codec>();
         grow(stored_, stored_cap_, stored);
         is_.read(stored_.get(), static_cast<std::streamsize>(stored));
@@ -830,9 +804,6 @@ coro::CoroTask<std::optional<Morsel>> Reader::next(std::int64_t /*max_rows*/) {
         if (ZSTD_decompressDCtx(codec_->ctx, raw_.get(), raw, stored_.get(),
                                 stored) != raw)
             throw std::runtime_error("spill: corrupt compressed morsel");
-#else
-        throw std::runtime_error("spill: compressed morsel without zstd");
-#endif
     }
     if (static_cast<std::size_t>(is_.gcount()) != stored)
         throw std::runtime_error("spill: short run read");

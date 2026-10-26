@@ -18,10 +18,7 @@ SRC_CACHE="${ROCKSDB_SRC_CACHE:-${TMPDIR:-/tmp}/rocksdb-src}"
 BUILD_DIR="${ROCKSDB_BUILD_DIR:-${TMPDIR:-/tmp}/rocksdb-build}"
 JOBS="${JOBS:-$( (nproc 2>/dev/null || sysctl -n hw.ncpu) )}"
 
-# Match Dependencies.cmake. WITH_ZLIB is unconditional there; LZ4/ZSTD track
-# DFTRACER_UTILS_ENABLE_LZ4 / _ZSTD, whose defaults are OFF / ON.
-WITH_LZ4="${WITH_LZ4:-OFF}"
-WITH_ZSTD="${WITH_ZSTD:-ON}"
+# Match Dependencies.cmake: zlib and zstd on, lz4 off.
 # Wheels set this so the install carries its own static zstd. A system shared
 # libzstd would otherwise be bundled into the wheel, or fail delocate on macOS.
 ZSTD_STATIC="${ZSTD_STATIC:-0}"
@@ -59,7 +56,7 @@ if [ ! -d "${SRC_CACHE}/rocksdb-${VERSION}" ]; then
 	rmdir "$stage"
 fi
 
-if [ "${ZSTD_STATIC}" = 1 ] && [ "${WITH_ZSTD}" = ON ]; then
+if [ "${ZSTD_STATIC}" = 1 ]; then
 	zsrc="${SRC_CACHE}/zstd-${ZSTD_VERSION}"
 	if [ ! -d "${zsrc}" ]; then
 		mkdir -p "${SRC_CACHE}/.stage-zstd"
@@ -95,9 +92,9 @@ cmake -S "${SRC_CACHE}/rocksdb-${VERSION}" -B "${BUILD_DIR}" -G Ninja \
 	-DWITH_BENCHMARK_TOOLS=OFF \
 	-DWITH_GFLAGS=OFF \
 	-DWITH_SNAPPY=OFF \
-	-DWITH_LZ4="${WITH_LZ4}" \
+	-DWITH_LZ4=OFF \
 	-DWITH_ZLIB=ON \
-	-DWITH_ZSTD="${WITH_ZSTD}" \
+	-DWITH_ZSTD=ON \
 	-DWITH_BZ2=OFF \
 	-DUSE_RTTI=ON \
 	-DFAIL_ON_WARNINGS=OFF \

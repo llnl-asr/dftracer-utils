@@ -113,7 +113,6 @@ TEST_CASE("IpcWriter - close without writing batches") {
     fs::remove(path);
 }
 
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
 // With no pooled slot every batch takes the overflow slot, which the writer
 // must own and free; the file is the same as with the pool.
 TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
@@ -145,9 +144,7 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
         return runtime.submit(task(), "test").get();
     };
     std::vector<IpcCompression> modes{IpcCompression::None};
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     modes.push_back(IpcCompression::Zstd);
-#endif
     for (const IpcCompression mode : modes) {
         const std::string pooled = tmp_path("test_ipc_pooled.arrows");
         const std::string bare = tmp_path("test_ipc_bare.arrows");
@@ -189,7 +186,6 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
     CHECK(fs::file_size(path) > 0);
     fs::remove(path);
 }
-#endif
 
 TEST_CASE("PartitionWriter - basic single file") {
     std::string dir = tmp_path("test_partition_basic");

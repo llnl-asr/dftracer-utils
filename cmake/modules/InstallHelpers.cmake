@@ -248,31 +248,6 @@ else()
     endif()
 endif()
 
-# LZ4 dependency (used by RocksDB)
-find_library(LZ4_LIBRARY_BUNDLED
-    NAMES lz4 liblz4
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(LZ4_LIBRARY_BUNDLED)
-    find_path(LZ4_INCLUDE_DIR_BUNDLED
-        NAMES lz4.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(LZ4_INCLUDE_DIR_BUNDLED AND NOT TARGET lz4::lz4)
-        add_library(lz4::lz4 UNKNOWN IMPORTED)
-        set_target_properties(lz4::lz4 PROPERTIES
-            IMPORTED_LOCATION \"\${LZ4_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${LZ4_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
-else()
-    find_dependency(lz4 QUIET)
-endif()
-
 # ZSTD dependency (compression)
 find_library(ZSTD_LIBRARY_BUNDLED
     NAMES zstd libzstd

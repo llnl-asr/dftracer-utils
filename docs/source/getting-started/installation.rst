@@ -167,12 +167,6 @@ Pass with ``-D`` at configure time, for example
      - ``ON``
      - Vectorscan for yes/no regex matches. ``OFF`` downloads
        nothing and runs every regex on PCRE2. See `Vectorscan build needs`_.
-   * - ``DFTRACER_UTILS_ENABLE_ZSTD``
-     - ``ON``
-     - ZSTD compression for RocksDB.
-   * - ``DFTRACER_UTILS_ENABLE_LZ4``
-     - ``OFF``
-     - LZ4 compression for RocksDB.
    * - ``DFTRACER_UTILS_ENABLE_MPI``
      - ``OFF``
      - MPI support (distributes ``dftracer_view --flamegraph`` across ranks).
@@ -222,7 +216,7 @@ The sanitizer, coverage, and test toggles all have matching presets (``asan``,
 ``ubsan``, ``tsan``, ``asan-ubsan``, ``tests``), prefer those over setting the
 options by hand.
 
-Dependencies (RocksDB, simdjson, nanoarrow, Highway, zstd, lz4, and others) are
+Dependencies (RocksDB, simdjson, nanoarrow, Highway, zstd, and others) are
 vendored via CPM and cached under ``.cpmsource/``; see the
 `THIRD-PARTY-NOTICES <https://github.com/llnl-asr/dftracer-utils/blob/develop/THIRD-PARTY-NOTICES.md>`_
 for the full list and licenses.

@@ -6,12 +6,7 @@ add_rpath()
 
 need_zlib()
 need_libdeflate()
-if(DFTRACER_UTILS_ENABLE_LZ4)
-  need_lz4()
-endif()
-if(DFTRACER_UTILS_ENABLE_ZSTD)
-  need_zstd()
-endif()
+need_zstd()
 need_rocksdb()
 need_argparse()
 need_ghc_filesystem()
@@ -1033,21 +1028,7 @@ foreach(variant objects shared static)
                           PRIVATE $<BUILD_INTERFACE:utf8proc_static>)
     add_stdfs_if_needed(${VARIANT_TARGET})
     # Spill files compress each morsel with zstd (spill.cpp).
-    if(DFTRACER_UTILS_ENABLE_ZSTD)
-      if(TARGET zstd::libzstd_shared)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE zstd::libzstd_shared)
-      elseif(TARGET zstd::libzstd_static)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE zstd::libzstd_static)
-      elseif(TARGET libzstd_shared)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE libzstd_shared)
-      elseif(TARGET libzstd_static)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE libzstd_static)
-      endif()
-    endif()
+    link_zstd(${VARIANT_TARGET})
     if(DFTRACER_UTILS_ENABLE_ARROW)
       link_nanoarrow(${VARIANT_TARGET} ${VARIANT_UPPER})
     endif()
@@ -1181,23 +1162,8 @@ foreach(variant objects shared static)
     # libdeflate: one-shot gzip/deflate codec for member-at-a-time decode.
     link_libdeflate(${VARIANT_TARGET})
 
-    # Link zstd when ENABLE_ZSTD is on so headers propagate to consumers (e.g.
-    # arrow ipc_writer.cpp guarded by DFTRACER_UTILS_ENABLE_ZSTD).
-    if(DFTRACER_UTILS_ENABLE_ZSTD)
-      if(TARGET zstd::libzstd_shared)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE zstd::libzstd_shared)
-      elseif(TARGET zstd::libzstd_static)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE zstd::libzstd_static)
-      elseif(TARGET libzstd_shared)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE libzstd_shared)
-      elseif(TARGET libzstd_static)
-        target_link_libraries(${VARIANT_TARGET}
-                              PRIVATE libzstd_static)
-      endif()
-    endif()
+    # The Arrow IPC writer and the RocksDB index compress with zstd.
+    link_zstd(${VARIANT_TARGET})
 
     # Lustre stripe query (optional). The config header carries the
     # DFTRACER_UTILS_HAVE_LUSTREAPI define; we just need to link the lib.

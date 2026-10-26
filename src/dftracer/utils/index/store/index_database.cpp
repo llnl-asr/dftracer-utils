@@ -267,13 +267,7 @@ void scan_files(const rocks::RocksDatabase& db, Ext ext, std::uint8_t kind,
 namespace {
 
 ::rocksdb::CompressionType select_compression_type() {
-#ifdef DFTRACER_UTILS_ENABLE_ZSTD
     return ::rocksdb::kZSTD;
-#elif defined(DFTRACER_UTILS_ENABLE_LZ4)
-    return ::rocksdb::kLZ4Compression;
-#else
-    return ::rocksdb::kZlibCompression;
-#endif
 }
 
 // Every open registers the system metrics merge operator: RocksDBManager shares

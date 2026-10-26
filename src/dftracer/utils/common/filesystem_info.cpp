@@ -17,7 +17,7 @@
 #ifdef DFTRACER_UTILS_HAVE_LUSTREAPI
 #include <lustre/lustreapi.h>
 
-#include <cstdlib>
+#include <cstdint>
 #endif
 
 #include <string>
@@ -171,19 +171,30 @@ std::vector<MountInfo> list_mounts() noexcept {
 StripeInfo lustre_stripe([[maybe_unused]] const std::string& path) noexcept {
     StripeInfo info;
 #ifdef DFTRACER_UTILS_HAVE_LUSTREAPI
+    // Every value above this is a layout sentinel (LLAPI_LAYOUT_DEFAULT, the
+    // raid0 or wide pattern markers), never a byte count.
+    constexpr std::uint64_t MAX_STRIPE_BYTES = std::uint64_t{1} << 40;
+
     const std::string probe = probe_path(path);
-    const std::size_t lum_size =
-        sizeof(struct lov_user_md) +
-        LOV_MAX_STRIPE_COUNT * sizeof(struct lov_user_ost_data_v1);
-    auto* raw = std::calloc(1, lum_size);
-    if (!raw) return info;
-    auto* lum = reinterpret_cast<struct lov_user_md*>(raw);
-    lum->lmm_magic = LOV_USER_MAGIC;
-    if (llapi_file_get_stripe(probe.c_str(), lum) == 0) {
-        info.size = static_cast<std::size_t>(lum->lmm_stripe_size);
-        info.count = static_cast<std::size_t>(lum->lmm_stripe_count);
+    // The layout, not a single getstripe ioctl: a progressive file layout
+    // (PFL) has several components with a stripe size each.
+    struct llapi_layout* layout =
+        llapi_layout_get_by_path(probe.c_str(), LLAPI_LAYOUT_GET_EXPECTED);
+    if (!layout) return info;
+    for (int rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_FIRST);
+         rc == 0;
+         rc = llapi_layout_comp_use(layout, LLAPI_LAYOUT_COMP_USE_NEXT)) {
+        std::uint64_t stripe_size = 0;
+        if (llapi_layout_stripe_size_get(layout, &stripe_size) != 0) continue;
+        if (stripe_size == 0 || stripe_size >= MAX_STRIPE_BYTES) continue;
+        if (stripe_size <= info.size) continue;
+        std::uint64_t stripe_count = 0;
+        if (llapi_layout_stripe_count_get(layout, &stripe_count) != 0)
+            stripe_count = 0;
+        info.size = static_cast<std::size_t>(stripe_size);
+        info.count = static_cast<std::size_t>(stripe_count);
     }
-    std::free(raw);
+    llapi_layout_free(layout);
 #endif
     return info;
 }

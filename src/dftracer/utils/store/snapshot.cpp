@@ -1734,15 +1734,11 @@ dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_pages(
     return publish_view(slot, std::move(owned));
 }
 
-dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
+dstd::Expected<const detail::ExtentSlot*, dstd::Error> Snapshot::loaded_extent(
     const detail::FileData& file, detail::LazyBlock& block,
     std::size_t index) const {
     if (index >= block.segments.size()) return bad_extent_error();
-    detail::SegmentSlot& slot = block.segments[index];
-    if (detail::SegmentBody* known =
-            slot.view.load(std::memory_order_acquire)) {
-        return &known->view;
-    }
+    const detail::SegmentSlot& slot = block.segments[index];
     if (block.owner == nullptr) {
         const detail::LoadStatus status =
             load_frame(file, slot.extent_index, slot.extent);
@@ -1750,7 +1746,7 @@ dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
             return dstd::Unexpected<dstd::Error>(status.error);
         }
         if (status.state != detail::LoadState::Good) return bad_extent_error();
-        return segment_pages(slot, file.extent_slots.slot(slot.extent_index));
+        return &file.extent_slots.slot(slot.extent_index);
     }
     detail::Commit& commit = *block.owner;
     if (commit.synced) {
@@ -1763,7 +1759,98 @@ dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
                    std::memory_order_acquire)) != detail::LoadState::Good) {
         return bad_extent_error();
     }
-    return segment_pages(slot, commit.extent_slots[slot.block]);
+    return &commit.extent_slots[slot.block];
+}
+
+dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
+    const detail::FileData& file, detail::LazyBlock& block,
+    std::size_t index) const {
+    if (index >= block.segments.size()) return bad_extent_error();
+    detail::SegmentSlot& slot = block.segments[index];
+    if (detail::SegmentBody* known =
+            slot.view.load(std::memory_order_acquire)) {
+        return &known->view;
+    }
+    auto extent = loaded_extent(file, block, index);
+    if (!extent) return dstd::Unexpected<dstd::Error>(extent.error());
+    return segment_pages(slot, **extent);
+}
+
+dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
+Snapshot::find_in_segment(const detail::FileData& file,
+                          detail::LazyBlock& block, std::size_t index,
+                          ByteView key) const {
+    if (index >= block.segments.size()) return bad_extent_error();
+    detail::SegmentSlot& slot = block.segments[index];
+    if (detail::SegmentBody* known =
+            slot.view.load(std::memory_order_acquire)) {
+        return known->view.find(key);
+    }
+    auto loaded = loaded_extent(file, block, index);
+    if (!loaded) return dstd::Unexpected<dstd::Error>(loaded.error());
+    const detail::ExtentSlot& extent = **loaded;
+    if (!extent.pages.has_value()) return bad_extent_error();
+    const ExtentPages& pages = *extent.pages;
+    if (slot.offset_in_extent > pages.raw_length() ||
+        slot.length > pages.raw_length() - slot.offset_in_extent) {
+        return bad_extent_error();
+    }
+    // Reads the whole segment, the path of a segment that one page holds.
+    const auto whole = [&]()
+        -> dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error> {
+        auto view = segment_pages(slot, extent);
+        if (!view) return dstd::Unexpected<dstd::Error>(view.error());
+        return (*view)->find(key);
+    };
+    const auto covered = pages.covering(slot.offset_in_extent, slot.length);
+    if (covered.first >= covered.second) return bad_extent_error();
+    if (covered.second - covered.first == 1) return whole();
+
+    // The header and the index lie in the first page the segment spans.
+    detail::LoadStatus status = load_page(extent, covered.first);
+    if (status.state == detail::LoadState::Failed) {
+        return dstd::Unexpected<dstd::Error>(status.error);
+    }
+    if (status.state != detail::LoadState::Good) return bad_extent_error();
+    const PageEntry& head_page = pages.entry(covered.first);
+    const dstd::Vector<std::uint8_t>& head_frame =
+        extent.frames[covered.first].bytes;
+    if (slot.offset_in_extent < head_page.raw_offset ||
+        slot.offset_in_extent - head_page.raw_offset > head_frame.size()) {
+        return bad_extent_error();
+    }
+    const std::size_t head_at = slot.offset_in_extent - head_page.raw_offset;
+    const std::uint32_t head_bytes = SegmentView::head_length(
+        ByteView{head_frame.data() + head_at, head_frame.size() - head_at});
+    if (head_bytes == 0) return whole();
+    auto granule = SegmentView::find_granule(
+        ByteView{head_frame.data() + head_at, head_bytes}, slot.length, key);
+    if (!granule) return bad_extent_error();
+    if (!granule->has_value()) return dstd::Optional<SegmentView::Entry>{};
+    const SegmentView::GranuleSpan span = **granule;
+    const std::uint32_t granule_at = slot.offset_in_extent + span.offset;
+    const auto granule_pages = pages.covering(granule_at, span.length);
+    if (granule_pages.first >= granule_pages.second) return bad_extent_error();
+    // A granule over PAGE_BYTES spans pages, which the whole segment reads.
+    if (granule_pages.second - granule_pages.first > 1) return whole();
+    status = load_page(extent, granule_pages.first);
+    if (status.state == detail::LoadState::Failed) {
+        return dstd::Unexpected<dstd::Error>(status.error);
+    }
+    if (status.state != detail::LoadState::Good) return bad_extent_error();
+    const PageEntry& granule_page = pages.entry(granule_pages.first);
+    const dstd::Vector<std::uint8_t>& granule_frame =
+        extent.frames[granule_pages.first].bytes;
+    if (granule_at < granule_page.raw_offset ||
+        granule_at - granule_page.raw_offset > granule_frame.size()) {
+        return bad_extent_error();
+    }
+    const std::size_t begin = granule_at - granule_page.raw_offset;
+    if (span.length > granule_frame.size() - begin) return bad_extent_error();
+    auto found = SegmentView::find_in_granule(
+        ByteView{granule_frame.data() + begin, span.length}, key);
+    if (!found) return bad_extent_error();
+    return *found;
 }
 
 dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_segments(
@@ -1951,10 +2038,14 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
         for (std::size_t i = 0; i < block.segments.size(); ++i) {
             const detail::SegmentSlot& slot = block.segments[i];
             if (!holds_key(slot.first_key, slot.last_key)) continue;
-            auto view = segment_view(files_[copy.file_index], block, i);
-            if (!view) return dstd::Unexpected<dstd::Error>(view.error());
-            const auto entry = (*view)->find(key);
-            if (entry) sources.push_back({copy.file_index, *entry});
+            auto found_entry =
+                find_in_segment(files_[copy.file_index], block, i, key);
+            if (!found_entry) {
+                return dstd::Unexpected<dstd::Error>(found_entry.error());
+            }
+            if (found_entry->has_value()) {
+                sources.push_back({copy.file_index, **found_entry});
+            }
         }
     }
     if (sources.empty()) return dstd::Optional<Value>{};

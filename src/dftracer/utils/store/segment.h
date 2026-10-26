@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/store/extent_codec.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -65,6 +66,12 @@ class SegmentBuilder {
 
 class SegmentView {
    public:
+    /// The bytes of one granule within its segment.
+    struct GranuleSpan {
+        std::uint32_t offset = 0;
+        std::uint32_t length = 0;
+    };
+
     class Entry {
        public:
         ByteView key() const { return key_; }
@@ -124,6 +131,35 @@ class SegmentView {
 
     std::uint64_t entry_count() const { return entry_count_; }
 
+    std::size_t granule_count() const { return granules_.size(); }
+
+    /// The bytes of granule `i` within the segment, for `i` below
+    /// granule_count().
+    GranuleSpan granule(std::size_t i) const;
+
+    /// The byte length of the header and the index that follow it in `prefix`,
+    /// walked in place and allocated nothing. Zero when `prefix` is shorter
+    /// than they are, when the header is not a segment header, or when an index
+    /// entry does not parse. A segment of no granules answers the header
+    /// length alone.
+    static std::uint32_t head_length(ByteView prefix);
+
+    /// The granule of the segment whose bytes `head` holds, the header and the
+    /// index of a segment of `segment_length` bytes, that can hold `key`: the
+    /// last one whose first key is at most it. Nullopt for a key below the
+    /// first granule's first key and for a segment of no granules. A Parse
+    /// error when the header is not one of a segment of `segment_length`, or
+    /// when the granules are not contiguous from the end of the index, empty,
+    /// ascending by first key and inside the segment.
+    static dstd::Expected<dstd::Optional<GranuleSpan>, dstd::Error>
+    find_granule(ByteView head, std::uint32_t segment_length, ByteView key);
+
+    /// The entry of `key` among the bytes of one granule, which the returned
+    /// entry points into, or nullopt when the granule does not hold it. A Parse
+    /// error when an entry does not parse or runs past the granule.
+    static dstd::Expected<dstd::Optional<Entry>, dstd::Error> find_in_granule(
+        ByteView granule, ByteView key);
+
    private:
     struct Granule {
         std::size_t offset = 0;
@@ -141,6 +177,14 @@ class SegmentView {
     dstd::Vector<Granule> granules_;
     std::uint64_t entry_count_ = 0;
 };
+
+/// Appends the spans of one sealed segment that starts at `offset` in an
+/// extent, for `page_starts`: the header and the index as one span, then one
+/// span per granule with the last one ending at the segment end, so the padding
+/// goes with it. A segment of at most PAGE_BYTES gives one span. False when the
+/// segment does not open.
+bool append_segment_spans(ByteView segment, std::uint32_t offset,
+                          dstd::Vector<SegmentSpan>& out);
 
 }  // namespace dftracer::utils::store
 

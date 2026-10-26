@@ -216,10 +216,10 @@ std::vector<std::uint8_t> make_segment(std::uint32_t id,
     std::uint8_t key[8];
     write_id(key, id);
     std::vector<std::uint8_t> value(value_bytes);
-    write_id(value.data(), id);
-    for (std::size_t i = 8; i < value.size(); ++i) {
+    for (std::size_t i = 0; i < value.size(); ++i) {
         value[i] = static_cast<std::uint8_t>((id + i) & 0xFFU);
     }
+    if (value.size() >= sizeof key) write_id(value.data(), id);
     SegmentBuilder builder;
     builder.add(ByteView(key, sizeof(key)),
                 ByteView(value.data(), value.size()));
@@ -238,14 +238,22 @@ std::vector<std::uint8_t> make_payload(std::uint32_t id, std::size_t length) {
     return bytes;
 }
 
-void check_payload(const std::vector<std::uint8_t>& extent_bytes,
-                   const ExtentSegment& segment, std::uint32_t id) {
-    REQUIRE(segment.offset_in_extent + segment.length <= extent_bytes.size());
-    const std::uint8_t* at = extent_bytes.data() + segment.offset_in_extent;
-    CHECK(read_id(at) == id);
-    for (std::size_t i = 8; i < segment.length; ++i) {
-        CHECK(at[i] == static_cast<std::uint8_t>((id * 31U + i) & 0xFFU));
+/// A sealed segment of exactly `length` bytes that names `id`, empty when no
+/// value length seals to it.
+std::vector<std::uint8_t> make_segment_of(std::uint32_t id,
+                                          std::size_t length) {
+    std::size_t value_bytes = length > 128 ? length - 128 : 0;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        std::vector<std::uint8_t> bytes = make_segment(id, value_bytes);
+        if (bytes.size() == length) return bytes;
+        if (bytes.size() > length) {
+            if (value_bytes == 0) return {};
+            --value_bytes;
+        } else {
+            value_bytes += length - bytes.size();
+        }
     }
+    return {};
 }
 
 std::vector<std::uint8_t> read_range(int fd, std::uint64_t offset,
@@ -455,7 +463,8 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
                         &collect_written, &collector);
 
     const std::size_t length = 3U * EIGHT_KIB;
-    const std::vector<std::uint8_t> payload = make_payload(11, length);
+    const std::vector<std::uint8_t> payload = make_segment_of(11, length);
+    REQUIRE(payload.size() == length);
     REQUIRE(writer
                 .append(1, ByteView(payload.data(), payload.size()),
                         segment_info(1, 5), nullptr)
@@ -499,9 +508,11 @@ TEST_CASE(
 
     // The extent keeps room for the header of its stored form.
     const std::size_t first = EIGHT_KIB - store::EXTENT_HEADER_BYTES - 64;
-    std::vector<std::uint8_t> a = make_payload(1, first);
-    std::vector<std::uint8_t> b = make_payload(2, 64);
-    std::vector<std::uint8_t> c(1, 0x5AU);
+    std::vector<std::uint8_t> a = make_segment_of(1, first);
+    std::vector<std::uint8_t> b = make_segment_of(2, 64);
+    std::vector<std::uint8_t> c = make_segment(3, 8);
+    REQUIRE(a.size() == first);
+    REQUIRE(b.size() == 64);
 
     int context_a = 0;
     int context_b = 0;
@@ -539,18 +550,19 @@ TEST_CASE(
     const WrittenExtent& rest = extents[1];
     REQUIRE(rest.segments.size() == 1);
     CHECK(rest.segments[0].offset_in_extent == 0);
-    CHECK(rest.segments[0].length == 1);
+    CHECK(rest.segments[0].length == c.size());
     CHECK(rest.length == FOUR_KIB);
     REQUIRE(rest.contexts.size() == 1);
     CHECK(rest.contexts[0] == &context_c);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
+    std::vector<std::uint8_t> expected = a;
+    expected.insert(expected.end(), b.begin(), b.end());
     const std::vector<std::uint8_t> full_bytes = read_extent_raw(fd, full);
-    check_payload(full_bytes, full.segments[0], 1);
-    check_payload(full_bytes, full.segments[1], 2);
+    CHECK(full_bytes == expected);
     const std::vector<std::uint8_t> rest_bytes = read_extent_raw(fd, rest);
-    CHECK(rest_bytes[rest.segments[0].offset_in_extent] == 0x5AU);
+    CHECK(rest_bytes == c);
     ::close(fd);
 }
 
@@ -572,7 +584,7 @@ TEST_CASE("store open extent: a failed write latches and reports no extent") {
     ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
                         &collect_written, &collector, &count_discarded);
 
-    const std::vector<std::uint8_t> payload = make_payload(1, 1024);
+    const std::vector<std::uint8_t> payload = make_segment(1, 1024);
     REQUIRE(writer
                 .append(1, ByteView(payload.data(), payload.size()),
                         segment_info(1, 1), &discarded)
@@ -856,7 +868,8 @@ TEST_CASE(
     ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
                         &collect_written, &collector);
 
-    const std::vector<std::uint8_t> payload = make_payload(11, EIGHT_KIB);
+    const std::vector<std::uint8_t> payload = make_segment_of(11, EIGHT_KIB);
+    REQUIRE(payload.size() == EIGHT_KIB);
     REQUIRE(writer
                 .append(1, ByteView(payload.data(), payload.size()),
                         segment_info(1, 5), nullptr)
@@ -964,8 +977,8 @@ TEST_CASE(
     ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
                         &collect_written, &collector);
 
-    const std::vector<std::uint8_t> first = make_payload(1, 300);
-    const std::vector<std::uint8_t> second = make_payload(2, 300);
+    const std::vector<std::uint8_t> first = make_segment(1, 300);
+    const std::vector<std::uint8_t> second = make_segment(2, 300);
     REQUIRE(writer
                 .append(1, ByteView(first.data(), first.size()),
                         segment_info(1, 1), nullptr)
@@ -988,10 +1001,10 @@ TEST_CASE(
     REQUIRE(fd >= 0);
     const std::vector<std::uint8_t> first_bytes =
         read_extent_raw(fd, extents[0]);
-    check_payload(first_bytes, extents[0].segments[0], 1);
+    CHECK(first_bytes == first);
     const std::vector<std::uint8_t> second_bytes =
         read_extent_raw(fd, extents[1]);
-    check_payload(second_bytes, extents[1].segments[0], 2);
+    CHECK(second_bytes == second);
     ::close(fd);
 }
 

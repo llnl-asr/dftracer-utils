@@ -17,12 +17,15 @@ namespace dstd = dftracer::utils::dstd;
 
 using dftracer::utils::ByteView;
 using dftracer::utils::dstd::Condition;
+namespace store = dftracer::utils::store;
 using dftracer::utils::store::BIG_VALUE_BYTES;
 using dftracer::utils::store::BigRef;
 using dftracer::utils::store::GRANULE_BYTES;
+using dftracer::utils::store::PAGE_BYTES;
 using dftracer::utils::store::PlacerFn;
 using dftracer::utils::store::SEGMENT_ALIGN;
 using dftracer::utils::store::SegmentBuilder;
+using dftracer::utils::store::SegmentSpan;
 using dftracer::utils::store::SegmentView;
 
 constexpr std::uint64_t RANDOM_SEED = 0x5EC7105EED1234C0ULL;
@@ -400,6 +403,201 @@ TEST_SUITE("index store segment") {
         CHECK(builder.entry_count() == 1);
         CHECK(as_string(builder.first_key()) == "key");
         CHECK(as_string(builder.last_key()) == "key");
+    }
+
+    TEST_CASE("the spans of a sealed segment cut its pages at its granules") {
+        SegmentBuilder builder;
+        const std::string value(GRANULE_BYTES / 2 - 32, 'v');
+        for (std::size_t i = 0; i < 12; ++i) {
+            const std::string key = "key-" + std::to_string(i);
+            builder.add(view_of(key), view_of(value));
+        }
+        const auto sealed = builder.seal(nullptr, nullptr, nullptr);
+        REQUIRE(sealed.has_value());
+        REQUIRE(sealed->size() > 4 * PAGE_BYTES);
+        const auto opened = SegmentView::open_index(view_of(*sealed));
+        REQUIRE(opened.has_value());
+        const SegmentView& view = *opened;
+        REQUIRE(view.granule_count() > 4);
+
+        dstd::Vector<SegmentSpan> spans;
+        REQUIRE(store::append_segment_spans(view_of(*sealed), 100, spans));
+        REQUIRE(spans.size() == view.granule_count() + 1);
+        CHECK(spans.front().offset == 100);
+        CHECK(spans.front().length == view.granule(0).offset);
+        for (std::size_t i = 0; i < view.granule_count(); ++i) {
+            const SegmentView::GranuleSpan granule = view.granule(i);
+            CHECK(spans[i + 1].offset == 100 + granule.offset);
+            if (i + 1 < view.granule_count()) {
+                CHECK(spans[i + 1].length == granule.length);
+            }
+        }
+        CHECK(spans[1].offset == spans[0].offset + spans[0].length);
+        for (std::size_t i = 2; i < spans.size(); ++i) {
+            CHECK(spans[i].offset == spans[i - 1].offset + spans[i - 1].length);
+        }
+        CHECK(spans.back().offset + spans.back().length ==
+              100 + sealed->size());
+    }
+
+    TEST_CASE("a segment of at most one page is one span") {
+        SegmentBuilder builder;
+        builder.add(view_of(std::string("a")), view_of(std::string("1")));
+        builder.add(view_of(std::string("b")), view_of(std::string("2")));
+        const auto sealed = builder.seal(nullptr, nullptr, nullptr);
+        REQUIRE(sealed.has_value());
+        REQUIRE(sealed->size() <= PAGE_BYTES);
+
+        dstd::Vector<SegmentSpan> spans;
+        REQUIRE(store::append_segment_spans(view_of(*sealed), 4096, spans));
+        REQUIRE(spans.size() == 1);
+        CHECK(spans[0].offset == 4096);
+        CHECK(spans[0].length == sealed->size());
+
+        dstd::Vector<SegmentSpan> garbage_spans;
+        const std::string garbage(4096, 'x');
+        CHECK_FALSE(
+            store::append_segment_spans(view_of(garbage), 0, garbage_spans));
+        CHECK(garbage_spans.empty());
+    }
+
+    TEST_CASE("the head and the granule walk agree with find") {
+        SegmentBuilder builder;
+        std::vector<std::string> keys;
+        const std::string value(1000, 'v');
+        for (std::size_t i = 0; i < 300; ++i) {
+            const std::string digits = std::to_string(i);
+            const std::string key =
+                "key-" + std::string(4 - digits.size(), '0') + digits;
+            keys.push_back(key);
+            builder.add(view_of(key), view_of(value));
+        }
+        const auto sealed = builder.seal(nullptr, nullptr, nullptr);
+        REQUIRE(sealed.has_value());
+        const auto opened = SegmentView::open(view_of(*sealed));
+        REQUIRE(opened.has_value());
+        const SegmentView& view = *opened;
+        REQUIRE(view.granule_count() > 4);
+        const std::uint32_t length = static_cast<std::uint32_t>(sealed->size());
+        const std::uint32_t head_bytes =
+            SegmentView::head_length(view_of(*sealed));
+        REQUIRE(head_bytes > 0);
+        REQUIRE(head_bytes < sealed->size());
+        const ByteView head{sealed->data(), head_bytes};
+
+        const auto check = [&](const std::string& key) {
+            const auto expected = view.find(view_of(key));
+            const auto granule =
+                SegmentView::find_granule(head, length, view_of(key));
+            REQUIRE(granule.has_value());
+            if (!granule->has_value()) {
+                CHECK_FALSE(expected.has_value());
+                return;
+            }
+            const SegmentView::GranuleSpan span = **granule;
+            REQUIRE(span.offset >= head_bytes);
+            REQUIRE(span.offset + span.length <= length);
+            const auto actual = SegmentView::find_in_granule(
+                ByteView{sealed->data() + span.offset, span.length},
+                view_of(key));
+            REQUIRE(actual.has_value());
+            CHECK(actual->has_value() == expected.has_value());
+            if (expected.has_value() && actual->has_value()) {
+                CHECK(same_bytes((*actual)->key(), expected->key()));
+                CHECK(same_bytes((*actual)->value(), expected->value()));
+            }
+        };
+
+        for (const std::string& key : keys) check(key);
+        check(keys.front() + "x");
+        for (std::size_t i = 0; i + 1 < keys.size(); ++i) {
+            check(keys[i] + "x");
+        }
+        check("aaa");
+        check("zzz");
+
+        CHECK_FALSE(
+            SegmentView::find_granule(head, length, view_of(std::string("aaa")))
+                ->has_value());
+        CHECK_FALSE(
+            SegmentView::find_in_granule(
+                ByteView{sealed->data() + head_bytes, length - head_bytes},
+                view_of(std::string("zzz")))
+                ->has_value());
+    }
+
+    TEST_CASE("a damaged header or index leaves the head unusable") {
+        SegmentBuilder builder;
+        const std::string value(GRANULE_BYTES / 2 - 32, 'v');
+        for (std::size_t i = 0; i < 6; ++i) {
+            const std::string key = "key-" + std::to_string(i);
+            builder.add(view_of(key), view_of(value));
+        }
+        const auto sealed = builder.seal(nullptr, nullptr, nullptr);
+        REQUIRE(sealed.has_value());
+        const std::uint32_t length = static_cast<std::uint32_t>(sealed->size());
+        const std::uint32_t head_bytes =
+            SegmentView::head_length(view_of(*sealed));
+        REQUIRE(head_bytes > 0);
+        const std::string key = "key-3";
+
+        const auto refuses = [&](const std::vector<std::uint8_t>& bytes,
+                                 std::uint32_t head) {
+            const ByteView head_view{bytes.data(), head};
+            const auto granule =
+                SegmentView::find_granule(head_view, length, view_of(key));
+            REQUIRE_FALSE(granule.has_value());
+            CHECK(granule.error().is(Condition::Parse));
+        };
+
+        SUBCASE("a magic that is not a segment magic") {
+            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            bad[0] = 'X';
+            CHECK(SegmentView::head_length(ByteView{bad.data(), head_bytes}) ==
+                  0);
+            refuses(bad, head_bytes);
+        }
+        SUBCASE("a reserved byte of the header set") {
+            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            bad[17] = 1;
+            CHECK(SegmentView::head_length(ByteView{bad.data(), head_bytes}) ==
+                  0);
+            refuses(bad, head_bytes);
+        }
+        SUBCASE("a header of another segment length") {
+            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            const auto other = static_cast<std::uint32_t>(bad.size() * 2);
+            bad[4] = static_cast<std::uint8_t>(other & 0xFFU);
+            bad[5] = static_cast<std::uint8_t>((other >> 8U) & 0xFFU);
+            bad[6] = static_cast<std::uint8_t>((other >> 16U) & 0xFFU);
+            bad[7] = static_cast<std::uint8_t>((other >> 24U) & 0xFFU);
+            refuses(bad, head_bytes);
+        }
+        SUBCASE("an index entry that runs past the head") {
+            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            bad.resize(head_bytes - 1);
+            CHECK(SegmentView::head_length(ByteView{bad.data(), bad.size()}) ==
+                  0);
+            refuses(bad, static_cast<std::uint32_t>(bad.size()));
+        }
+        SUBCASE("an index offset that does not follow the one before it") {
+            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            const std::size_t second =
+                20U + 8U + 1U + std::string("key-0").size();
+            bad[second] = 0;
+            bad[second + 1U] = 0;
+            bad[second + 2U] = 0;
+            bad[second + 3U] = 0;
+            refuses(bad, head_bytes);
+        }
+        SUBCASE("a granule length of zero") {
+            std::vector<std::uint8_t> bad(sealed->begin(), sealed->end());
+            bad[24] = 0;
+            bad[25] = 0;
+            bad[26] = 0;
+            bad[27] = 0;
+            refuses(bad, head_bytes);
+        }
     }
 
     TEST_CASE("corrupt segments return Parse or stay in bounds") {

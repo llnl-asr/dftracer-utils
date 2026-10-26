@@ -3216,4 +3216,125 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().extents_read == 1);
         CHECK(snapshot->read_stats().pages_decoded == pages->size());
     }
+
+    TEST_CASE("a point read of a segment over pages decodes two of them") {
+        const ScopeKey scope = file_scope("/traces/granules.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.granules");
+        constexpr std::size_t KEY_COUNT = 700;
+        const std::string value(400, 'v');
+        const auto key_at = [](std::size_t index) {
+            const std::string digits = std::to_string(index);
+            return "key-" + std::string(6 - digits.size(), '0') + digits;
+        };
+
+        dftu_utils_test::ScopedTestDir dir("snapshot_segment_granules");
+        WriterOptions options = small_extents();
+        options.extent_size = 8U * 1024U * 1024U;
+        std::string path;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch batch = writer->batch(*id, scope, 0);
+            for (std::size_t index = 0; index < KEY_COUNT; ++index) {
+                batch.put(view_of(key_at(index)), view_of(value));
+            }
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(flush_writer(*writer).has_value());
+            path = to_std(writer->path());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        // One segment of several granules fills one extent, so how many pages
+        // it holds comes from the stored bytes themselves.
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const auto refs = extent_refs_of(*reader);
+        REQUIRE(refs.size() == 1);
+        REQUIRE(refs[0].ref.segments.size() == 1);
+        auto stored = reader->read_extent(
+            {refs[0].ref.offset, refs[0].ref.length, refs[0].ref.crc});
+        REQUIRE(stored.has_value());
+        auto pages = store::ExtentPages::open(view_of(*stored));
+        REQUIRE(pages.has_value());
+        REQUIRE(pages->size() > 4);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto found = snapshot->get(spec, scope, view_of(key_at(KEY_COUNT / 2)));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == value);
+        CHECK(snapshot->read_stats().extents_read == 1);
+        CHECK(snapshot->read_stats().pages_decoded == 2);
+
+        const std::string absent = key_at(KEY_COUNT / 2) + "x";
+        auto missing = snapshot->get(spec, scope, view_of(absent));
+        REQUIRE(missing.has_value());
+        CHECK_FALSE(missing->has_value());
+        CHECK(snapshot->read_stats().pages_decoded <= 2);
+
+        auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+        const std::vector<std::pair<std::string, std::string>> rows =
+            collect(cursor);
+        REQUIRE(rows.size() == KEY_COUNT);
+        for (std::size_t index = 0; index < rows.size(); ++index) {
+            CHECK(rows[index].first == key_at(index));
+            CHECK(rows[index].second == value);
+        }
+        CHECK(snapshot->read_stats().extents_read == 1);
+        CHECK(snapshot->read_stats().pages_decoded == pages->size());
+    }
+
+    TEST_CASE("a point read of a granule over a page reads the whole segment") {
+        const ScopeKey scope = file_scope("/traces/wide_granule.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.wide_granule");
+        // Two pages of value, below BIG_VALUE_BYTES, so the entry stays in a
+        // granule that no page holds alone.
+        const std::string value(2 * store::PAGE_BYTES, 'w');
+
+        dftu_utils_test::ScopedTestDir dir("snapshot_wide_granule");
+        WriterOptions options = small_extents();
+        options.extent_size = 8U * 1024U * 1024U;
+        std::string path;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch batch = writer->batch(*id, scope, 0);
+            batch.put(view_of(std::string("a")), view_of(std::string("small")));
+            batch.put(view_of(std::string("m")), view_of(value));
+            batch.put(view_of(std::string("z")), view_of(std::string("small")));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(flush_writer(*writer).has_value());
+            path = to_std(writer->path());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const auto refs = extent_refs_of(*reader);
+        REQUIRE(refs.size() == 1);
+        REQUIRE(refs[0].ref.segments.size() == 1);
+        auto stored = reader->read_extent(
+            {refs[0].ref.offset, refs[0].ref.length, refs[0].ref.crc});
+        REQUIRE(stored.has_value());
+        auto pages = store::ExtentPages::open(view_of(*stored));
+        REQUIRE(pages.has_value());
+        REQUIRE(pages->size() > 2);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto head = snapshot->get(spec, scope, view_of(std::string("a")));
+        REQUIRE(head.has_value());
+        REQUIRE(head->has_value());
+        CHECK(to_std((*head)->bytes()) == "small");
+        CHECK(snapshot->read_stats().pages_decoded == 1);
+
+        auto wide = snapshot->get(spec, scope, view_of(std::string("m")));
+        REQUIRE(wide.has_value());
+        REQUIRE(wide->has_value());
+        CHECK(to_std((*wide)->bytes()) == value);
+        CHECK(snapshot->read_stats().pages_decoded == pages->size());
+    }
 }

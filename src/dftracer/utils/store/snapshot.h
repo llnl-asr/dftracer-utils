@@ -804,6 +804,19 @@ class Snapshot {
     dstd::Expected<const SegmentView*, dstd::Error> segment_view(
         const detail::FileData& file, detail::LazyBlock& block,
         std::size_t index) const;
+    /// The extent holding one segment, loaded once: the extent of a closed file
+    /// or the block of the commit that holds it. An extent that failed its crc
+    /// is a Parse error.
+    dstd::Expected<const detail::ExtentSlot*, dstd::Error> loaded_extent(
+        const detail::FileData& file, detail::LazyBlock& block,
+        std::size_t index) const;
+    /// The entry of `key` in one segment, read through the page of the header
+    /// and the index and the page of the granule that holds it when those are
+    /// two pages of the extent, so a point read decodes those two and no more.
+    /// The entry points into bytes the snapshot keeps.
+    dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
+    find_in_segment(const detail::FileData& file, detail::LazyBlock& block,
+                    std::size_t index, ByteView key) const;
     /// The segment block of one copy in one commit, with what it needs read
     /// first: the commit index of a file that is not closed, or the segment
     /// block of a closed one. Null when the commit holds no

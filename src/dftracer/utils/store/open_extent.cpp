@@ -290,8 +290,21 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
               });
     dstd::Vector<SegmentSpan> spans;
     spans.reserve(extent->segments.size());
+    const auto reject = [this, extent] {
+        latch_error(EINVAL);
+        discard(extent);
+        retire(extent);
+        release_in_flight();
+    };
     for (const OpenSegment& open : extent->segments) {
-        spans.push_back({open.segment.offset_in_extent, open.segment.length});
+        const auto* raw = extent->buffer.data() + open.segment.offset_in_extent;
+        if (!append_segment_spans(
+                ByteView{reinterpret_cast<const std::byte*>(raw),
+                         open.segment.length},
+                open.segment.offset_in_extent, spans)) {
+            reject();
+            return;
+        }
     }
     const dstd::Vector<std::uint32_t> starts = page_starts(spans, used);
     auto stored = encode_extent(
@@ -299,10 +312,7 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
                  used),
         starts, OPEN_EXTENT_WRITE_ALIGN);
     if (!stored) {
-        latch_error(EINVAL);
-        discard(extent);
-        retire(extent);
-        release_in_flight();
+        reject();
         return;
     }
     // The raw bytes go with the extent: only the stored form stays in flight.
@@ -327,9 +337,10 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
     ByteView segment_bytes, ExtentSegment info, void* context) {
-    const SegmentSpan span{0, static_cast<std::uint32_t>(segment_bytes.size())};
+    dstd::Vector<SegmentSpan> spans;
+    if (!append_segment_spans(segment_bytes, 0, spans)) return invalid_error();
     const dstd::Vector<std::uint32_t> starts =
-        page_starts(dstd::Span<const SegmentSpan>(&span, 1), span.length);
+        page_starts(spans, static_cast<std::uint32_t>(segment_bytes.size()));
     auto stored = encode_extent(segment_bytes, starts, OPEN_EXTENT_WRITE_ALIGN);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());

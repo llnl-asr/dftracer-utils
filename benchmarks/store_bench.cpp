@@ -407,6 +407,7 @@ std::string format_read_stats(const store::ReadStats& reads) {
         << " page_hits=" << reads.page_hits
         << " page_reads=" << reads.page_reads
         << " windows_warmed=" << reads.windows_warmed
+        << " files_filtered=" << reads.files_filtered
         << " metadata_blocks_read=" << reads.metadata_blocks_read
         << " read_calls=" << reads.read_calls << " mib_read=" << std::fixed
         << std::setprecision(1)
@@ -2413,40 +2414,49 @@ bool Bench::run_kept() {
     const std::string& base = keep ? opt.keep : opt.reuse;
     const bool ours_on = has_engine(opt.engines, "ours");
     const bool rocksdb_on = has_engine(opt.engines, "rocksdb");
-    for (int threads : opt.threads) {
-        Runtime runtime(static_cast<std::size_t>(threads));
-        note_backend(runtime);
-        const Workload workload =
-            workload_of(opt, static_cast<std::uint64_t>(threads));
-        const std::string name = "shared-" + std::to_string(threads) + "-" +
-                                 std::to_string(opt.payload_mib);
-        const std::string ours_dir = ours_on ? base + "/ours-" + name : "";
-        const std::string rocksdb_dir =
-            rocksdb_on ? base + "/rocksdb-" + name : "";
-        for (const std::string& dir : {ours_dir, rocksdb_dir}) {
-            if (dir.empty()) continue;
-            std::error_code error;
-            const bool exists = std::filesystem::exists(dir, error);
-            if (keep && exists) {
-                fail(dir + " exists; --keep writes only a new directory");
-                return false;
-            }
-            if (!keep && !exists) {
-                fail(dir + " does not exist; write it first with --keep");
-                return false;
-            }
+    for (const std::string& mode : opt.modes) {
+        // One snapshot reads every file of a directory; RocksDB opens one
+        // database, so it keeps only the shared mode.
+        const bool per_thread = mode == "per-thread";
+        if (per_thread && rocksdb_on) {
+            fail("--keep and --reuse keep the per-thread mode for ours only");
+            return false;
         }
-        if (keep) {
-            if (ours_on) {
-                print_write_row(run_ours_write_case(runtime, workload, ours_dir,
-                                                    false, true));
+        for (int threads : opt.threads) {
+            Runtime runtime(static_cast<std::size_t>(threads));
+            note_backend(runtime);
+            const Workload workload =
+                workload_of(opt, static_cast<std::uint64_t>(threads));
+            const std::string name = mode + "-" + std::to_string(threads) +
+                                     "-" + std::to_string(opt.payload_mib);
+            const std::string ours_dir = ours_on ? base + "/ours-" + name : "";
+            const std::string rocksdb_dir =
+                rocksdb_on ? base + "/rocksdb-" + name : "";
+            for (const std::string& dir : {ours_dir, rocksdb_dir}) {
+                if (dir.empty()) continue;
+                std::error_code error;
+                const bool exists = std::filesystem::exists(dir, error);
+                if (keep && exists) {
+                    fail(dir + " exists; --keep writes only a new directory");
+                    return false;
+                }
+                if (!keep && !exists) {
+                    fail(dir + " does not exist; write it first with --keep");
+                    return false;
+                }
             }
-            if (rocksdb_on) {
-                print_write_row(
-                    run_rocksdb_write_case(workload, rocksdb_dir, false, true));
+            if (keep) {
+                if (ours_on) {
+                    print_write_row(run_ours_write_case(
+                        runtime, workload, ours_dir, per_thread, true));
+                }
+                if (rocksdb_on) {
+                    print_write_row(run_rocksdb_write_case(
+                        workload, rocksdb_dir, false, true));
+                }
+            } else {
+                run_query_case(workload, ours_dir, rocksdb_dir);
             }
-        } else {
-            run_query_case(workload, ours_dir, rocksdb_dir);
         }
     }
     for (const QueryRow& row : query_rows) print_query_row(row);

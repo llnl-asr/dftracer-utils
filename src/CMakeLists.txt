@@ -696,6 +696,7 @@ set(DFTRACER_UTILS_STORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/page_cache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/record.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/scope_directory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/scope_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/segment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/snapshot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer.cpp

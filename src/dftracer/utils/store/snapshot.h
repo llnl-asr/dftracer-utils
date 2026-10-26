@@ -96,6 +96,9 @@ struct ReadStats {
     /// system caches them: a window is read once a query loads the second
     /// extent in it.
     std::uint64_t windows_warmed = 0;
+    /// The files a scope lookup passed over because the scope filter in their
+    /// tail rules the scope out, with no block of them read.
+    std::uint64_t files_filtered = 0;
     /// The blocks of metadata read on first use: the directory blocks and the
     /// segment blocks of a closed file.
     std::uint64_t metadata_blocks_read = 0;
@@ -470,6 +473,11 @@ class ReadCounters {
         bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
     }
 
+    /// One file a scope lookup passed over by its scope filter.
+    void add_filtered() {
+        files_filtered_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     /// One window of a file read so the operating system caches it.
     void add_window(const BlockReads& reads) {
         windows_warmed_.fetch_add(1, std::memory_order_relaxed);
@@ -493,6 +501,7 @@ class ReadCounters {
                          page_hits_.load(std::memory_order_relaxed),
                          page_reads_.load(std::memory_order_relaxed),
                          windows_warmed_.load(std::memory_order_relaxed),
+                         files_filtered_.load(std::memory_order_relaxed),
                          metadata_blocks_read_.load(std::memory_order_relaxed),
                          read_calls_.load(std::memory_order_relaxed),
                          bytes_read_.load(std::memory_order_relaxed)};
@@ -506,6 +515,7 @@ class ReadCounters {
     std::atomic<std::uint64_t> page_hits_{0};
     std::atomic<std::uint64_t> page_reads_{0};
     std::atomic<std::uint64_t> windows_warmed_{0};
+    std::atomic<std::uint64_t> files_filtered_{0};
     std::atomic<std::uint64_t> metadata_blocks_read_{0};
     std::atomic<std::uint64_t> read_calls_{0};
     std::atomic<std::uint64_t> bytes_read_{0};

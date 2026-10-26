@@ -302,6 +302,7 @@ set(TEST_CPP_SOURCES
     store/test_snapshot.cpp
     store/test_extent_codec.cpp
     store/test_page_cache.cpp
+    store/test_scope_filter.cpp
     store/test_extent_size.cpp
     store/test_open_extent.cpp
     store/test_concurrent.cpp

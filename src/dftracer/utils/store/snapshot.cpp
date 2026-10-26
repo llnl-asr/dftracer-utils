@@ -3,6 +3,7 @@
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/varint.h>
 #include <pthread.h>
@@ -1126,11 +1127,19 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                    ? status.error
                    : dstd::Error(dstd::Condition::Parse);
     };
+    const std::uint64_t hash =
+        scope_hash(spec.name, spec.format_version, scope.kind, paths);
     // The leaf block and the entry of one scope of one file, reading the
     // blocks on the way there. A null leaf is a scope no entry holds.
     const auto find_leaf = [&](const detail::FileData& file, std::size_t& entry)
         -> dstd::Expected<const detail::LazyBlock*, dstd::Error> {
         if (file.directory_levels == 0) {
+            return static_cast<const detail::LazyBlock*>(nullptr);
+        }
+        const dstd::Optional<FileTail>& tail = file.reader.index().tail;
+        if (tail.has_value() &&
+            !scope_filter_may_hold(bytes_of(tail->scope_filter), hash)) {
+            reads_->add_filtered();
             return static_cast<const detail::LazyBlock*>(nullptr);
         }
         // The last separator at or before the scope names the child that

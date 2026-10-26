@@ -2835,6 +2835,46 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
     }
 
+    TEST_CASE("a scope lookup skips the files whose filter rules it out") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_scope_filter");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        constexpr int FILES = 12;
+        std::vector<ScopeKey> scopes;
+        for (int f = 0; f < FILES; ++f) {
+            scopes.push_back(
+                file_scope("/traces/f" + std::to_string(f) + ".pfw"));
+            write_scoped_file(dir, spec, scopes.back(), 1, 50, true);
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        REQUIRE(snapshot->open_stats().files == FILES);
+        auto found =
+            snapshot->get(spec, scopes[FILES / 2], view_of("b0-" + key_of(7)));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == value_of(7));
+        // Only the file that holds the scope reads its directory leaf and its
+        // segment block; every other file is ruled out by its tail.
+        CHECK(snapshot->read_stats().files_filtered == FILES - 1);
+        CHECK(snapshot->read_stats().metadata_blocks_read == 2);
+
+        const ScopeKey absent = file_scope("/traces/absent.pfw");
+        auto missing = snapshot->get(spec, absent, view_of("b0-" + key_of(7)));
+        REQUIRE(missing.has_value());
+        CHECK_FALSE(missing->has_value());
+        CHECK(snapshot->read_stats().files_filtered == 2 * FILES - 1);
+        CHECK(snapshot->read_stats().metadata_blocks_read == 2);
+
+        // Every scope still reads whole through a scan.
+        for (int f = 0; f < FILES; ++f) {
+            auto cursor =
+                snapshot->scan(spec, scopes[static_cast<std::size_t>(f)],
+                               ByteView{}, ByteView{});
+            CHECK(collect(cursor).size() == 50);
+        }
+    }
+
     TEST_CASE("the page cache size comes from its variable") {
         dftu_utils_test::ScopedTestDir dir("snapshot_page_cache_env");
         const ScopeKey scope = file_scope("/traces/a.pfw");
@@ -2890,17 +2930,19 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == value_of(0));
-        // The files closed, so their commits are synced: the get reads the
-        // directory block of each file to find the scope, the segment block of
-        // the one commit whose range holds the key, then the page table of the
-        // one extent that holds it and the page that holds the key.
+        // The files closed, so their commits are synced: the scope filter of
+        // the other file rules the scope out, and the get reads the directory
+        // block of the file that holds it, the segment block of the one commit
+        // whose range holds the key, then the page table of the one extent
+        // that holds it and the page that holds the key.
         const store::ReadStats touched = snapshot->read_stats();
         CHECK(touched.commits_verified == 0);
         CHECK(touched.indexes_read == 0);
-        CHECK(touched.metadata_blocks_read == 3);
+        CHECK(touched.files_filtered == 1);
+        CHECK(touched.metadata_blocks_read == 2);
         CHECK(touched.extents_read == 1);
         CHECK(touched.page_reads == 1);
-        CHECK(touched.read_calls == 5);
+        CHECK(touched.read_calls == 4);
         CHECK(touched.bytes_read > 0);
 
         auto other =
@@ -2911,6 +2953,7 @@ TEST_SUITE("index store snapshot") {
         const store::ReadStats both = snapshot->read_stats();
         CHECK(both.commits_verified == 0);
         CHECK(both.indexes_read == 0);
+        CHECK(both.files_filtered == 2);
         CHECK(both.metadata_blocks_read == 4);
         CHECK(both.extents_read == 2);
         CHECK(both.page_reads == 2);

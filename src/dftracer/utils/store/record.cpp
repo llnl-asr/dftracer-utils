@@ -322,6 +322,7 @@ void encode_file_tail(dstd::Vector<std::uint8_t>& payload,
     append_u32_le(payload, item.extent_count);
     append_u32_le(payload, item.directory_levels);
     append_byte_vector(payload, item.top_table);
+    append_byte_vector(payload, item.scope_filter);
 }
 
 dstd::Expected<FileTail, dstd::Error> decode_file_tail(ByteView bytes) {
@@ -336,7 +337,8 @@ dstd::Expected<FileTail, dstd::Error> decode_file_tail(ByteView bytes) {
         !read_block_handle(bytes, at, item.items) ||
         !read_u32(bytes, at, item.extent_count) ||
         !read_u32(bytes, at, item.directory_levels) ||
-        !read_bytes(bytes, at, item.top_table) || at != bytes.size()) {
+        !read_bytes(bytes, at, item.top_table) ||
+        !read_bytes(bytes, at, item.scope_filter) || at != bytes.size()) {
         return parse_error();
     }
     // One level at least, so the top table names leaves or middle blocks.

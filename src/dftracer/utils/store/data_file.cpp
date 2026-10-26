@@ -4,6 +4,7 @@
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <dftracer/utils/store/scope_directory.h>
+#include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/varint.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -794,6 +795,18 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     if (!directory) {
         return dstd::Unexpected<dstd::Error>(directory.error());
     }
+    auto entries = ScopeDirectory::open(bytes_of(*directory));
+    if (!entries) return dstd::Unexpected<dstd::Error>(entries.error());
+    dstd::Vector<std::uint64_t> scope_hashes;
+    scope_hashes.reserve(entries->size());
+    for (std::size_t i = 0; i < entries->size(); ++i) {
+        auto key = entries->key(i);
+        if (!key) return dstd::Unexpected<dstd::Error>(key.error());
+        scope_hashes.push_back(
+            scope_hash(key->name, key->format_version, key->kind,
+                       dstd::Span<const dstd::StringView>(key->paths.data(),
+                                                          key->paths.size())));
+    }
 
     // The directory: blocks of entries in key order, then one separator per
     // child while the table is too large for the footer, then the top table.
@@ -840,6 +853,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     tail.extent_count = static_cast<std::uint32_t>(extents.size());
     tail.directory_levels = levels;
     tail.top_table = std::move(top_table);
+    tail.scope_filter = build_scope_filter(scope_hashes);
     return tail;
 }
 

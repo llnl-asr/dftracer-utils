@@ -136,6 +136,10 @@ struct FileTail {
     /// The levels below the top table; 1 when it points at leaves.
     std::uint32_t directory_levels = 0;
     dstd::Vector<std::uint8_t> top_table;
+    /// A Bloom filter over the directory keys of the file (scope_filter.h), so
+    /// a reader skips a file that cannot hold a scope without reading its
+    /// directory.
+    dstd::Vector<std::uint8_t> scope_filter;
 };
 
 using RecordItem = std::variant<NamespaceItem, ScopeItem, CopyItem, DropItem,

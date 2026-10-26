@@ -58,6 +58,16 @@ class IoBackend {
     /// Submit an async positional write. Only seekable fds.
     virtual IoAwaitable submit_pwrite(int fd, const void *buf, std::size_t len,
                                       off_t offset) = 0;
+
+    /// Submit an async positional write with a completion callback.
+    /// The callback receives either a byte count or a negative errno. Unlike a
+    /// coroutine, the callback runs on the backend's own thread, so a caller
+    /// that needs the write dispatched calls flush() afterwards.
+    virtual void submit_pwrite_callback(int fd, const void *buf,
+                                        std::size_t len, off_t offset,
+                                        IoCompletionFn completion,
+                                        void *context) = 0;
+
     /// Submit an async open operation.
     virtual IoAwaitable submit_open(const char *path, int flags,
                                     mode_t mode) = 0;

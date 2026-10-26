@@ -69,6 +69,9 @@ class ThreadPoolFileOps : public IoBackend {
                                void* context) override;
     IoAwaitable submit_pwrite(int fd, const void* buf, std::size_t len,
                               off_t offset) override;
+    void submit_pwrite_callback(int fd, const void* buf, std::size_t len,
+                                off_t offset, IoCompletionFn completion,
+                                void* context) override;
     IoAwaitable submit_open(const char* path, int flags, mode_t mode) override;
     IoAwaitable submit_close(int fd) override;
     IoAwaitable submit_fsync(int fd) override;

@@ -347,7 +347,8 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
     return out;
 }
 
-dstd::Expected<SectionView, dstd::Error> SectionView::open(ByteView bytes) {
+dstd::Expected<SectionView, dstd::Error> SectionView::open_index(
+    ByteView bytes) {
     if (bytes.size() < HEADER_BYTES) return parse_error();
     const auto* data = byte_data(bytes);
     if (std::memcmp(data, SECTION_MAGIC.data(), SECTION_MAGIC.size()) != 0) {
@@ -419,38 +420,47 @@ dstd::Expected<SectionView, dstd::Error> SectionView::open(ByteView bytes) {
         if (data[i] != 0) return parse_error();
     }
 
+    return SectionView(bytes, std::move(subpages), entry_count);
+}
+
+bool SectionView::check_entries() const {
     std::uint64_t seen = 0;
     ByteView previous_key;
     bool have_previous = false;
-    for (const Subpage& subpage : subpages) {
+    for (const Subpage& subpage : subpages_) {
         std::size_t entry_at = subpage.offset;
         const std::size_t subpage_end = subpage.offset + subpage.length;
         bool first = true;
         while (entry_at < subpage_end) {
             Entry entry;
             const std::size_t before = entry_at;
-            if (!parse_entry(bytes, entry_at, subpage_end, entry) ||
+            if (!parse_entry(bytes_, entry_at, subpage_end, entry) ||
                 entry_at > subpage_end) {
-                return parse_error();
+                return false;
             }
             if (first && compare_bytes(entry.key(), subpage.first_key) != 0) {
-                return parse_error();
+                return false;
             }
             if (have_previous &&
                 compare_bytes(previous_key, entry.key()) >= 0) {
-                return parse_error();
+                return false;
             }
             previous_key = entry.key();
             have_previous = true;
             first = false;
             ++seen;
-            if (entry_at == before) return parse_error();
+            if (entry_at == before) return false;
         }
-        if (first) return parse_error();
+        if (first) return false;
     }
-    if (seen != entry_count) return parse_error();
+    return seen == entry_count_;
+}
 
-    return SectionView(bytes, std::move(subpages), entry_count);
+dstd::Expected<SectionView, dstd::Error> SectionView::open(ByteView bytes) {
+    auto view = open_index(bytes);
+    if (!view) return dstd::Unexpected<dstd::Error>(view.error());
+    if (!view->check_entries()) return parse_error();
+    return view;
 }
 
 dstd::Optional<SectionView::Entry> SectionView::find(ByteView key) const {

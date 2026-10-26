@@ -396,6 +396,7 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
                     big.length = run.length;
                     big.crc = run.crc;
                     big.sequence = sequence;
+                    big.synced = durable ? 1 : 0;
                     file_.add(std::move(big));
                 }
             }
@@ -404,6 +405,7 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
             reference.length = entry.page.length;
             reference.crc = entry.page.crc;
             reference.sequence = sequence;
+            reference.synced = durable ? 1 : 0;
             reference.sections = std::move(entry.page.sections);
             file_.add(std::move(reference));
             continue;

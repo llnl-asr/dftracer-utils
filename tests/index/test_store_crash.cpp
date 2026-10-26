@@ -436,8 +436,22 @@ Dumped dump_snapshot(const engine::Snapshot& snapshot,
             out.dump.row_group[key] = group;
             cursor.next();
         }
+        if (cursor.error()) {
+            out.error =
+                "scan_all " +
+                std::to_string(static_cast<int>(cursor.error()->condition())) +
+                " of " + space;
+            return out;
+        }
     }
-    for (const engine::ScopeGeneration& generation : snapshot.generations()) {
+    auto generations = snapshot.generations();
+    if (!generations) {
+        out.error =
+            "generations " +
+            std::to_string(static_cast<int>(generations.error().condition()));
+        return out;
+    }
+    for (const engine::ScopeGeneration& generation : *generations) {
         engine::NamespaceSpec spec;
         spec.name = generation.namespace_name;
         spec.format_version = generation.format_version;
@@ -698,11 +712,14 @@ struct LostOracle {
     std::size_t durable_lost = 0;
     /// Synced writes of the durable namespace the image kept.
     std::size_t durable_kept = 0;
+    /// States in range where a lost record behind a checkpoint made a copy Bad.
+    std::size_t summary_records_lost = 0;
 };
 
 LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
-                       const std::vector<char>& dropped, std::size_t lo,
-                       std::size_t hi) {
+                       const std::vector<char>& dropped,
+                       const std::vector<std::size_t>& record_at,
+                       std::size_t lo, std::size_t hi) {
     LostOracle oracle;
     std::set<std::uint32_t> lost_copies;
     std::map<std::string, std::pair<std::uint32_t, std::uint64_t>> current;
@@ -762,15 +779,32 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
             }
         }
         if (m < lo || m > hi) continue;
+        // The newest checkpoint at or before m lists every earlier commit by a
+        // summary that names its record: a lost record of one of them makes
+        // its copies Bad, as a lost page does.
+        std::set<std::uint32_t> lost_here = lost_copies;
+        const std::size_t base =
+            m / engine::CHECKPOINT_INTERVAL * engine::CHECKPOINT_INTERVAL;
+        bool record_lost = false;
+        for (std::size_t sequence = 1; sequence < base; ++sequence) {
+            if (dropped[record_at[sequence - 1]] == 0) continue;
+            const auto pages = model.pages.find(sequence);
+            if (pages == model.pages.end()) continue;
+            for (const auto& write : pages->second) {
+                lost_here.insert(write.second);
+                record_lost = true;
+            }
+        }
+        if (record_lost) ++oracle.summary_records_lost;
         std::set<std::string> blank;
-        for (const std::uint32_t copy : lost_copies) {
+        for (const std::uint32_t copy : lost_here) {
             const std::string& group = model.group_of_copy.at(copy);
             const auto at = current.find(group);
             if (at != current.end() && at->second.first == copy) {
                 blank.insert(group);
             }
         }
-        oracle.lost.push_back(lost_copies.size());
+        oracle.lost.push_back(lost_here.size());
         oracle.expected.push_back(refs[m].text_without(blank));
     }
     return oracle;
@@ -1013,6 +1047,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     std::size_t big_dropped = 0;
     std::size_t durable_lost = 0;
     std::size_t durable_kept_images = 0;
+    std::size_t summary_records_lost = 0;
 
     // `exact` is the one m an image must reach when the tear left no usable
     // header, and SIZE_MAX when any m in the range will do. `expected` holds
@@ -1144,8 +1179,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                 kept.emplace_back(i, whole_length(event));
             }
             const LostOracle oracle =
-                lost_oracle(model, refs, dropped, m_lo, m_hi);
+                lost_oracle(model, refs, dropped, record_at, m_lo, m_hi);
             durable_lost += oracle.durable_lost;
+            summary_records_lost += oracle.summary_records_lost;
             if (dropped_page && oracle.durable_kept > 0) ++durable_kept_images;
             const std::size_t seen =
                 verify(2, k, m_lo, oracle.expected,
@@ -1201,8 +1237,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     }
     std::printf(
         "crash lost coverage: images_with_lost_copies=%zu bigs_dropped=%zu "
-        "durable_kept_images=%zu durable_lost=%zu\n",
-        lost_with_copies, big_dropped, durable_kept_images, durable_lost);
+        "durable_kept_images=%zu durable_lost=%zu summary_records_lost=%zu\n",
+        lost_with_copies, big_dropped, durable_kept_images, durable_lost,
+        summary_records_lost);
 
     CHECK(failures == 0);
     CHECK(header_inversions > 0);
@@ -1223,6 +1260,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     CHECK(lost_with_copies > 0);
     CHECK(big_dropped > 0);
     CHECK(durable_lost == 0);
+    // A commit record a checkpoint summary names is lost in at least one
+    // image, and its copies read Bad there.
+    CHECK(summary_records_lost > 0);
     CHECK(durable_kept_images > 0);
     CHECK(whole_file_skips == 0);
 }

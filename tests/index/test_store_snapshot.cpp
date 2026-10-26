@@ -10,11 +10,14 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +26,7 @@
 #include <iterator>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -199,6 +203,58 @@ void write_file(const std::string& path,
                  static_cast<std::streamsize>(bytes.size()));
 }
 
+/// Every page ref of a data file, with those a summary lists read from their
+/// commit records.
+std::vector<engine::IndexedPageRef> page_refs_of(const DataFileReader& reader) {
+    auto refs = reader.all_page_refs();
+    REQUIRE(refs.has_value());
+    return std::vector<engine::IndexedPageRef>(refs->begin(), refs->end());
+}
+
+/// The bytes of a data file without its footer and trailer, as a crash before
+/// the close leaves them: the reader recovers the commit chain by a scan, and a
+/// commit that was not durable counts as not synced.
+std::vector<std::uint8_t> without_footer(std::vector<std::uint8_t> bytes) {
+    REQUIRE(bytes.size() >= engine::FILE_TRAILER_BYTES);
+    const std::uint64_t footer = dftracer::utils::read_u64_le(
+        bytes.data() + bytes.size() - engine::FILE_TRAILER_BYTES + 8U);
+    REQUIRE(footer >= engine::FILE_HEADER_BYTES);
+    REQUIRE(footer < bytes.size());
+    bytes.resize(static_cast<std::size_t>(footer));
+    return bytes;
+}
+
+/// The bytes of a closed data file with the format version of its footer
+/// tail set to `version`, the footer record encoded again in place.
+std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
+                                            std::uint32_t version) {
+    REQUIRE(bytes.size() >= engine::FILE_TRAILER_BYTES);
+    const std::uint8_t* trailer =
+        bytes.data() + bytes.size() - engine::FILE_TRAILER_BYTES;
+    const std::uint64_t at = dftracer::utils::read_u64_le(trailer + 8U);
+    const std::uint32_t length = dftracer::utils::read_u32_le(trailer + 16U);
+    REQUIRE(at + length <= bytes.size());
+    auto footer = engine::decode_record(ByteView{
+        reinterpret_cast<const std::byte*>(bytes.data() + at), length});
+    REQUIRE(footer.has_value());
+    bool found = false;
+    for (engine::RecordItem& item : footer->items) {
+        if (auto* tail = std::get_if<engine::FileTail>(&item)) {
+            tail->format_version = version;
+            found = true;
+        }
+    }
+    REQUIRE(found);
+    auto encoded = engine::encode_record(footer->kind, footer->sequence,
+                                         footer->prev_offset, footer->offset,
+                                         footer->items);
+    REQUIRE(encoded.has_value());
+    REQUIRE(encoded->size() <= length);
+    std::copy(encoded->begin(), encoded->end(),
+              bytes.begin() + static_cast<std::ptrdiff_t>(at));
+    return bytes;
+}
+
 void rewrite_header_crc(std::vector<std::uint8_t>& bytes) {
     REQUIRE(bytes.size() >= engine::FILE_HEADER_BYTES);
     dftracer::utils::write_u32_le(bytes.data() + HEADER_CRC_AT, 0);
@@ -209,7 +265,8 @@ void rewrite_header_crc(std::vector<std::uint8_t>& bytes) {
 }
 
 /// Copies `source` into `target` under `name`, with the header writer id and
-/// the header crc rewritten so the copy verifies.
+/// the header crc rewritten so the copy verifies, and without its footer, so
+/// the reader takes the writer id from the header.
 std::string forge_copy(const std::string& source,
                        const dftu_utils_test::ScopedTestDir& target,
                        const std::string& name, std::uint64_t writer_random) {
@@ -219,7 +276,7 @@ std::string forge_copy(const std::string& source,
                                   writer_random);
     rewrite_header_crc(bytes);
     const std::string path = target.file(name);
-    write_file(path, bytes);
+    write_file(path, without_footer(bytes));
     return path;
 }
 
@@ -261,7 +318,9 @@ std::uint64_t only_copy_generation(const std::string& path) {
 void check_generation(const Snapshot& snapshot,
                       const std::string& namespace_name, const ScopeKey& scope,
                       std::uint64_t expected) {
-    const dstd::Vector<engine::ScopeGeneration> all = snapshot.generations();
+    auto listed = snapshot.generations();
+    REQUIRE(listed.has_value());
+    const dstd::Vector<engine::ScopeGeneration>& all = *listed;
     REQUIRE(all.size() == 1);
     CHECK(to_std(all[0].namespace_name) == namespace_name);
     CHECK(all[0].format_version == 0);
@@ -304,12 +363,19 @@ class ScopedDefaultRuntime {
 };
 
 /// What one open of a root read, and a text of every scope state and every row,
-/// so two opens under different runtimes compare with one string.
+/// so two opens under different runtimes compare with one string. The read
+/// counters are the ones the dump left behind: an open reads no block, and the
+/// queries the dump makes read the commits they need.
 struct OpenDump {
     std::string text;
     std::size_t files = 0;
     std::size_t pages = 0;
     std::uint64_t read_calls = 0;
+    std::uint64_t commits_verified = 0;
+    std::uint64_t blocks_read = 0;
+    std::size_t commits = 0;
+    std::uint64_t indexes_read = 0;
+    std::uint64_t metadata_blocks_read = 0;
 };
 
 OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
@@ -320,8 +386,8 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     CHECK(snapshot->skipped().empty());
     OpenDump dump;
     dump.files = snapshot->open_stats().files;
-    dump.pages = snapshot->open_stats().pages;
-    dump.read_calls = snapshot->open_stats().read_calls;
+    // Open itself reads no block at all.
+    CHECK(snapshot->read_stats().read_calls == 0);
     for (const ScopeKey& scope : scopes) {
         dump.text +=
             "state " + to_std(scope.paths[0]) + " " +
@@ -332,7 +398,30 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
             dump.text += row.key + "=" + row.value + "\n";
         }
     }
+    dump.read_calls = snapshot->read_stats().read_calls;
+    dump.commits_verified = snapshot->read_stats().commits_verified;
+    dump.blocks_read = snapshot->read_stats().blocks_read;
+    dump.indexes_read = snapshot->read_stats().indexes_read;
+    dump.metadata_blocks_read = snapshot->read_stats().metadata_blocks_read;
+    auto report = snapshot->check();
+    REQUIRE(report.has_value());
+    dump.commits = report->commits;
+    dump.pages = report->blocks;
     return dump;
+}
+
+/// The descriptor this process holds open on `path`, found by its inode, or -1.
+int descriptor_of(const std::string& path) {
+    struct stat file_stat{};
+    if (::stat(path.c_str(), &file_stat) != 0) return -1;
+    for (int fd = 0; fd < 4096; ++fd) {
+        struct stat fd_stat{};
+        if (::fstat(fd, &fd_stat) == 0 && fd_stat.st_dev == file_stat.st_dev &&
+            fd_stat.st_ino == file_stat.st_ino) {
+            return fd;
+        }
+    }
+    return -1;
 }
 
 /// One data file of one writer of the open tests: one commit of `keys` entries
@@ -691,7 +780,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(reader.has_value());
         engine::BigRef ref{};
         bool found_ref = false;
-        for (const engine::IndexedPageRef& page : reader->index().page_refs) {
+        for (const engine::IndexedPageRef& page : page_refs_of(*reader)) {
             const engine::PageRef page_ref{page.ref.offset, page.ref.length,
                                            page.ref.crc};
             auto bytes = reader->read_page(page_ref);
@@ -721,8 +810,42 @@ TEST_SUITE("index store snapshot") {
         const std::string corrupt_path = corrupt_dir.file("w-corrupt.dfs");
         write_file(corrupt_path, bytes);
 
-        // The big value run is a block of its commit: when it does not
-        // verify, the whole commit reads as bad, so neither key is returned.
+        {
+            // A closed file is synced: the bad run fails the read of its own
+            // value, and the rest of the commit reads.
+            auto corrupt = Snapshot::open(corrupt_dir.str());
+            REQUIRE(corrupt.has_value());
+            CHECK(corrupt->state(spec, scope) == ScopeState::Ready);
+            auto bad = corrupt->get(spec, scope, view_of(std::string("big")));
+            REQUIRE_FALSE(bad.has_value());
+            CHECK(bad.error().is(dstd::Condition::Parse));
+            auto other =
+                corrupt->get(spec, scope, view_of(std::string("small")));
+            REQUIRE(other.has_value());
+            CHECK(other->has_value());
+            // No directory or section block names the run, but check() reads
+            // it through the entry that holds it.
+            auto report = corrupt->check();
+            REQUIRE(report.has_value());
+            CHECK(report->blocks == 2);
+            CHECK(report->sections == 1);
+            CHECK(report->bad_sections.empty());
+            REQUIRE(report->bad_commits.size() == 1);
+            CHECK(report->bad_commits[0].sequence == 1);
+        }
+        {
+            auto sound = Snapshot::open(dir.str());
+            REQUIRE(sound.has_value());
+            auto report = sound->check();
+            REQUIRE(report.has_value());
+            CHECK(report->blocks == 2);
+            CHECK(report->bad_commits.empty());
+        }
+
+        // Without the footer the commit is not synced, and the big value run
+        // is a block of it: when it does not verify, the whole commit reads as
+        // bad, so neither key is returned.
+        write_file(corrupt_path, without_footer(bytes));
         auto corrupt = Snapshot::open(corrupt_dir.str());
         REQUIRE(corrupt.has_value());
         CHECK(corrupt->state(spec, scope) == ScopeState::Bad);
@@ -756,8 +879,8 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(reader.has_value());
         // The batch is one section now instead of a run of page-sized ones:
         // it is longer than a page and is written as a run of its own.
-        REQUIRE(reader->index().page_refs.size() == 1);
-        const engine::PageRefItem& run = reader->index().page_refs[0].ref;
+        REQUIRE(page_refs_of(*reader).size() == 1);
+        const engine::PageRefItem run = page_refs_of(*reader)[0].ref;
         REQUIRE(run.sections.size() == 1);
         CHECK(run.sections[0].entry_count == static_cast<std::uint64_t>(COUNT));
         CHECK(run.length > SMALL_PAGE);
@@ -1041,17 +1164,17 @@ TEST_SUITE("index store snapshot") {
 
         auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
-        REQUIRE(reader->index().page_refs.size() == 2);
+        REQUIRE(page_refs_of(*reader).size() == 2);
         engine::PageRef broken_page{};
-        broken_page.offset = reader->index().page_refs[0].ref.offset;
-        broken_page.length = reader->index().page_refs[0].ref.length;
-        broken_page.crc = reader->index().page_refs[0].ref.crc;
+        broken_page.offset = page_refs_of(*reader)[0].ref.offset;
+        broken_page.length = page_refs_of(*reader)[0].ref.length;
+        broken_page.crc = page_refs_of(*reader)[0].ref.crc;
 
         std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         REQUIRE(broken_page.offset + broken_page.length <= bytes.size());
         bytes[static_cast<std::size_t>(broken_page.offset) + 4U] ^= 0xFFU;
         const std::string copy_path = copy_dir.file("w-bad.dfs");
-        write_file(copy_path, bytes);
+        write_file(copy_path, without_footer(bytes));
 
         auto snapshot = Snapshot::open(copy_dir.str());
         REQUIRE(snapshot.has_value());
@@ -1137,16 +1260,22 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
+        // A file without a footer takes its version from the header, and a
+        // closed file from the tail of its footer.
         std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
-        dftracer::utils::write_u32_le(bytes.data() + 8, 1);
-        rewrite_header_crc(bytes);
-        write_file(dir.file("w-version-one.dfs"), bytes);
+        std::vector<std::uint8_t> header_one = bytes;
+        dftracer::utils::write_u32_le(header_one.data() + 8, 1);
+        rewrite_header_crc(header_one);
+        write_file(dir.file("w-header-one.dfs"), without_footer(header_one));
+        write_file(dir.file("w-tail-one.dfs"), with_tail_version(bytes, 1));
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        REQUIRE(snapshot->skipped().size() == 1);
-        CHECK(to_std(snapshot->skipped()[0].name) == "w-version-one.dfs");
+        REQUIRE(snapshot->skipped().size() == 2);
+        CHECK(to_std(snapshot->skipped()[0].name) == "w-header-one.dfs");
         CHECK(snapshot->skipped()[0].error.is(Condition::Unsupported));
+        CHECK(to_std(snapshot->skipped()[1].name) == "w-tail-one.dfs");
+        CHECK(snapshot->skipped()[1].error.is(Condition::Unsupported));
         auto found = snapshot->get(spec, scope, view_of(std::string("key-a")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
@@ -1658,7 +1787,7 @@ TEST_SUITE("index store snapshot") {
         std::vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(shared.offset + shared.length <= bytes.size());
         bytes[static_cast<std::size_t>(shared.offset) + 4U] ^= 0xFFU;
-        write_file(corrupt.file("w-bad.dfs"), bytes);
+        write_file(corrupt.file("w-bad.dfs"), without_footer(bytes));
 
         auto snapshot = Snapshot::open(corrupt.str());
         REQUIRE(snapshot.has_value());
@@ -1719,9 +1848,8 @@ TEST_SUITE("index store snapshot") {
             // run of its own: it is no longer a failed commit.
             auto reader = DataFileReader::open(to_std(writer->path()));
             REQUIRE(reader.has_value());
-            REQUIRE(reader->index().page_refs.size() == std::size(lengths));
-            for (const engine::IndexedPageRef& page :
-                 reader->index().page_refs) {
+            REQUIRE(page_refs_of(*reader).size() == std::size(lengths));
+            for (const engine::IndexedPageRef& page : page_refs_of(*reader)) {
                 REQUIRE(page.ref.sections.size() == 1);
                 CHECK(page.ref.length > SMALL_PAGE);
                 CHECK(page.ref.length % SMALL_PAGE == 0);
@@ -1824,11 +1952,11 @@ TEST_SUITE("index store snapshot") {
 
         auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
-        REQUIRE(reader->index().page_refs.size() == 1);
-        REQUIRE(reader->index().page_refs[0].ref.sections.size() == 1);
-        CHECK(reader->index().page_refs[0].ref.sections[0].entry_count ==
+        REQUIRE(page_refs_of(*reader).size() == 1);
+        REQUIRE(page_refs_of(*reader)[0].ref.sections.size() == 1);
+        CHECK(page_refs_of(*reader)[0].ref.sections[0].entry_count ==
               BIG_COUNT + 1);
-        CHECK(reader->index().page_refs[0].ref.length == PAGE);
+        CHECK(page_refs_of(*reader)[0].ref.length == PAGE);
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1885,14 +2013,25 @@ TEST_SUITE("index store snapshot") {
                                 ".pfw 1") != std::string::npos);
         }
         CHECK(one.text.find("b0-key-0000=value-0") != std::string::npos);
-        // A file written without a group commit per batch holds adjacent page
-        // refs, one run per batch, so the read calls of the whole root stay
-        // well under its page count.
         CHECK(one.pages >= WRITERS * BATCHES);
         CHECK(one.pages == eight.pages);
+        // A lazy open reads no block, and the dump reads every page once. The
+        // files closed, so every commit is synced and none is checked whole.
         CHECK(eight.read_calls == one.read_calls);
-        CHECK(eight.read_calls < eight.pages);
-        CHECK(eight.read_calls * 4 <= eight.pages);
+        CHECK(eight.commits == one.commits);
+        CHECK(eight.commits >= WRITERS);
+        CHECK(eight.commits_verified == 0);
+        CHECK(one.commits_verified == 0);
+        CHECK(one.blocks_read == one.pages);
+        CHECK(eight.blocks_read == eight.pages);
+        // The files closed, so the dump reads the directory and section blocks
+        // of each scope, one call each, and no commit record.
+        CHECK(one.indexes_read == 0);
+        CHECK(eight.indexes_read == 0);
+        CHECK(eight.metadata_blocks_read == one.metadata_blocks_read);
+        CHECK(eight.metadata_blocks_read >= 2U * WRITERS);
+        CHECK(eight.read_calls ==
+              eight.blocks_read + eight.metadata_blocks_read);
     }
 
     TEST_CASE("a corrupt page in a middle run marks only its commit bad") {
@@ -1908,10 +2047,10 @@ TEST_SUITE("index store snapshot") {
 
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
-        REQUIRE(reader->index().page_refs.size() == 3);
+        REQUIRE(page_refs_of(*reader).size() == 3);
         // One group commit per scope, so the middle reference is one commit's
         // pages, read in one preadv and crc-checked as one block.
-        const engine::PageRefItem middle = reader->index().page_refs[1].ref;
+        const engine::PageRefItem middle = page_refs_of(*reader)[1].ref;
         CHECK(middle.length > SMALL_PAGE);
         CHECK(middle.length % SMALL_PAGE == 0);
 
@@ -1921,7 +2060,7 @@ TEST_SUITE("index store snapshot") {
         // the block crc sees it.
         bytes[static_cast<std::size_t>(middle.offset) + middle.length - 1U] ^=
             0xFFU;
-        write_file(copy_dir.file("w-corrupt.dfs"), bytes);
+        write_file(copy_dir.file("w-corrupt.dfs"), without_footer(bytes));
 
         const auto check = [&](std::size_t threads) {
             ScopedDefaultRuntime runtime(threads);
@@ -1945,10 +2084,487 @@ TEST_SUITE("index store snapshot") {
             CHECK(collect(cursor).size() == 1000);
             CHECK(snapshot->open_stats().files == 1);
             CHECK(snapshot->open_stats().pages == 3);
-            CHECK(snapshot->open_stats().read_calls == 3);
+            // The three commits of the file, each read once at its first touch:
+            // the queries of one dump touch each of them exactly once.
+            CHECK(snapshot->read_stats().commits_verified == 3);
+            CHECK(snapshot->read_stats().read_calls == 3);
         };
         check(1);
         check(8);
+    }
+
+    TEST_CASE("a block that cannot be read fails its queries with the error") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_read_error");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::vector<ScopeKey> scopes = {
+            file_scope("/traces/a.pfw"), file_scope("/traces/b.pfw"),
+            file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
+        write_scopes_file(dir, spec, scopes, 1000, true);
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+        // Cut as a crash before the close leaves it, so each commit is checked
+        // whole on its first touch.
+        write_file(path, without_footer(read_file(path)));
+        const std::string key_text = "b0-key-0000";
+        const ByteView key = view_of(key_text);
+
+        ScopedDefaultRuntime runtime(1);
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+
+        // A directory put in place of the snapshot's descriptor makes every
+        // read of the file fail with EISDIR, an error that is not a bad crc.
+        const int data_fd = descriptor_of(path);
+        REQUIRE(data_fd >= 0);
+        const int saved_fd = ::dup(data_fd);
+        REQUIRE(saved_fd >= 0);
+        const int dir_fd = ::open(dir.str().c_str(), O_RDONLY);
+        REQUIRE(dir_fd >= 0);
+        REQUIRE(::dup2(dir_fd, data_fd) == data_fd);
+
+        auto failed = snapshot->get(spec, scopes[0], key);
+        CHECK_FALSE(failed.has_value());
+        auto cursor = snapshot->scan(spec, scopes[1], ByteView{}, ByteView{});
+        CHECK(cursor.at_end());
+        REQUIRE(cursor.error().has_value());
+        CHECK(snapshot->state(spec, scopes[2]) == ScopeState::Bad);
+        CHECK(snapshot->read_stats().commits_verified == 0);
+
+        // With the file readable again, a failed commit keeps its error and is
+        // not read again, while a commit no query touched reads as usual.
+        REQUIRE(::dup2(saved_fd, data_fd) == data_fd);
+        ::close(saved_fd);
+        ::close(dir_fd);
+        auto still = snapshot->get(spec, scopes[0], key);
+        CHECK_FALSE(still.has_value());
+        auto fresh = snapshot->get(spec, scopes[3], key);
+        REQUIRE(fresh.has_value());
+        REQUIRE(fresh->has_value());
+        CHECK(to_std((*fresh)->bytes()) == "value-0");
+        CHECK(snapshot->read_stats().commits_verified == 1);
+        CHECK_FALSE(snapshot->check().has_value());
+    }
+
+    TEST_CASE(
+        "a bad page of a closed file fails only the queries that read it") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_synced_bad_page");
+        dftu_utils_test::ScopedTestDir copy_dir(
+            "snapshot_synced_bad_page_copy");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey both = file_scope("/traces/both.pfw");
+        const ScopeKey late = file_scope("/traces/late.pfw");
+        {
+            // The second commit holds two pages: one of `both` and one of
+            // `late`.
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            const auto put = [&](const ScopeKey& scope,
+                                 const std::string& tag) {
+                Batch entries = writer->batch(*id, scope, 0);
+                for (int k = 0; k < 100; ++k) {
+                    const std::string key = tag + "-" + key_of(k);
+                    const std::string value = value_of(k);
+                    entries.put(view_of(key), view_of(value));
+                }
+                REQUIRE(writer->commit(std::move(entries)).has_value());
+            };
+            put(both, "b0");
+            REQUIRE(flush_writer(*writer).has_value());
+            put(both, "b1");
+            put(late, "late");
+            REQUIRE(flush_writer(*writer).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        CHECK(reader->index().closed);
+        const std::vector<engine::IndexedPageRef> refs = page_refs_of(*reader);
+        const engine::PageRefItem* late_page = nullptr;
+        for (const engine::IndexedPageRef& ref : refs) {
+            for (const engine::PageSection& section : ref.ref.sections) {
+                if (to_std(view_of(section.first_key)).rfind("late-", 0) == 0) {
+                    late_page = &ref.ref;
+                }
+            }
+        }
+        REQUIRE(late_page != nullptr);
+        std::vector<std::uint8_t> bytes = read_file(path);
+        REQUIRE(late_page->offset + late_page->length <= bytes.size());
+        bytes[static_cast<std::size_t>(late_page->offset) + late_page->length -
+              1U] ^= 0xFFU;
+        const std::string copy_path = copy_dir.file("w-synced-bad.dfs");
+        write_file(copy_path, bytes);
+
+        ScopedDefaultRuntime runtime(1);
+        auto snapshot = Snapshot::open(copy_dir.str());
+        REQUIRE(snapshot.has_value());
+        // The commit is synced, so nothing checks it whole: the state is the
+        // one its records give.
+        CHECK(snapshot->state(spec, late) == ScopeState::Ready);
+        CHECK(snapshot->read_stats().blocks_read == 0);
+
+        const std::string late_key = "late-" + key_of(0);
+        auto failed = snapshot->get(spec, late, view_of(late_key));
+        REQUIRE_FALSE(failed.has_value());
+        CHECK(failed.error().is(dstd::Condition::Parse));
+        auto late_cursor = snapshot->scan(spec, late, ByteView{}, ByteView{});
+        CHECK(late_cursor.at_end());
+        REQUIRE(late_cursor.error().has_value());
+        CHECK(late_cursor.error()->is(dstd::Condition::Parse));
+
+        // The other page of the same commit reads.
+        const std::string both_key = "b1-" + key_of(0);
+        auto found = snapshot->get(spec, both, view_of(both_key));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == value_of(0));
+        CHECK(snapshot->read_stats().blocks_read == 2);
+
+        // A page that cannot be read keeps its error after the file reads
+        // again, while the pages already read stay readable.
+        const int data_fd = descriptor_of(copy_path);
+        REQUIRE(data_fd >= 0);
+        const int saved_fd = ::dup(data_fd);
+        REQUIRE(saved_fd >= 0);
+        const int dir_fd = ::open(copy_dir.str().c_str(), O_RDONLY);
+        REQUIRE(dir_fd >= 0);
+        REQUIRE(::dup2(dir_fd, data_fd) == data_fd);
+        const std::string first_key = "b0-" + key_of(0);
+        auto unreadable = snapshot->get(spec, both, view_of(first_key));
+        REQUIRE_FALSE(unreadable.has_value());
+        CHECK(unreadable.error().is(dstd::Condition::Io));
+        REQUIRE(::dup2(saved_fd, data_fd) == data_fd);
+        ::close(saved_fd);
+        ::close(dir_fd);
+        auto still = snapshot->get(spec, both, view_of(first_key));
+        REQUIRE_FALSE(still.has_value());
+        CHECK(still.error().is(dstd::Condition::Io));
+        auto again = snapshot->get(spec, both, view_of(both_key));
+        REQUIRE(again.has_value());
+        CHECK(again->has_value());
+    }
+
+    TEST_CASE("a durable commit marks its pages synced and a close its file") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_synced_mark");
+        dftu_utils_test::ScopedTestDir cut_dir("snapshot_synced_mark_cut");
+        NamespaceSpec durable_spec = put_spec("dftu.test.durable");
+        durable_spec.durable = true;
+        const NamespaceSpec loose_spec = put_spec("dftu.test.loose");
+        const ScopeKey scope = file_scope("/traces/mark.pfw");
+        const std::string key_text = "b0-" + key_of(0);
+
+        auto writer = make_writer(dir);
+        auto durable_id = writer->add_namespace(durable_spec);
+        auto loose_id = writer->add_namespace(loose_spec);
+        REQUIRE(durable_id.has_value());
+        REQUIRE(loose_id.has_value());
+        const auto put = [&](engine::NamespaceId id) {
+            Batch entries = writer->batch(id, scope, 0);
+            for (int k = 0; k < 100; ++k) {
+                const std::string key = "b0-" + key_of(k);
+                const std::string value = value_of(k);
+                entries.put(view_of(key), view_of(value));
+            }
+            REQUIRE(writer->commit(std::move(entries)).has_value());
+            REQUIRE(flush_writer(*writer).has_value());
+        };
+        put(*durable_id);
+        put(*loose_id);
+        const std::string path = to_std(writer->path());
+        {
+            auto open_file = DataFileReader::open(path);
+            REQUIRE(open_file.has_value());
+            CHECK_FALSE(open_file->index().closed);
+            const auto& refs = page_refs_of(*open_file);
+            REQUIRE(refs.size() == 2);
+            const auto& first =
+                refs[0].sequence < refs[1].sequence ? refs[0] : refs[1];
+            const auto& second =
+                refs[0].sequence < refs[1].sequence ? refs[1] : refs[0];
+            CHECK(first.ref.synced == 1);
+            CHECK(second.ref.synced == 0);
+        }
+        REQUIRE(close_writer(*writer).has_value());
+        auto closed_file = DataFileReader::open(path);
+        REQUIRE(closed_file.has_value());
+        CHECK(closed_file->index().closed);
+
+        // Without the footer, only the durable commit is read page by page;
+        // the other is checked whole on its first touch.
+        write_file(cut_dir.file("w-mark.dfs"), without_footer(read_file(path)));
+        ScopedDefaultRuntime runtime(1);
+        auto snapshot = Snapshot::open(cut_dir.str());
+        REQUIRE(snapshot.has_value());
+        auto durable_found =
+            snapshot->get(durable_spec, scope, view_of(key_text));
+        REQUIRE(durable_found.has_value());
+        CHECK(durable_found->has_value());
+        CHECK(snapshot->read_stats().commits_verified == 0);
+        auto loose_found = snapshot->get(loose_spec, scope, view_of(key_text));
+        REQUIRE(loose_found.has_value());
+        CHECK(loose_found->has_value());
+        CHECK(snapshot->read_stats().commits_verified == 1);
+    }
+
+    TEST_CASE(
+        "a scan reads each scope's pages only when it reaches the scope") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_lazy_scan");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
+                                              file_scope("/traces/b.pfw"),
+                                              file_scope("/traces/c.pfw")};
+        write_scopes_file(dir, spec, scopes, 1000, true);
+        ScopedDefaultRuntime runtime(1);
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+
+        // The begin bound is a temporary: the scan keeps its own copy, and
+        // reads it each time a section's page loads.
+        auto cursor = snapshot->scan(
+            spec, dstd::Span<const ScopeKey>(scopes.data(), scopes.size()),
+            view_of(std::string("b0-") + key_of(500)), ByteView{});
+        REQUIRE_FALSE(cursor.at_end());
+        CHECK(to_std(cursor.key()) == "b0-" + key_of(500));
+        // Only the first scope's page is read before the first row.
+        CHECK(snapshot->read_stats().blocks_read == 1);
+        std::size_t rows = 0;
+        while (!cursor.at_end()) {
+            ++rows;
+            cursor.next();
+        }
+        CHECK_FALSE(cursor.error().has_value());
+        CHECK(rows == 3U * 500U);
+        CHECK(snapshot->read_stats().blocks_read == 3);
+    }
+
+    TEST_CASE(
+        "closed files read through their directories as their chains do") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_directory_same");
+        dftu_utils_test::ScopedTestDir cut_dir("snapshot_directory_same_cut");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::vector<ScopeKey> scopes = {
+            file_scope("/traces/a.pfw"), file_scope("/traces/b.pfw"),
+            file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
+        const auto put = [&](Writer& writer, engine::NamespaceId id,
+                             const ScopeKey& scope, const std::string& tag) {
+            Batch entries = writer.batch(id, scope, 0);
+            for (int k = 0; k < 50; ++k) {
+                const std::string key = "key-" + key_of(k);
+                const std::string value = tag + "-" + value_of(k);
+                entries.put(view_of(key), view_of(value));
+            }
+            REQUIRE(writer.commit(std::move(entries)).has_value());
+        };
+        {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            for (std::size_t s = 0; s < 3; ++s) {
+                put(*writer, *id, scopes[s], "first");
+                REQUIRE(flush_writer(*writer).has_value());
+            }
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        {
+            // A newer copy of a, a whole drop of b, a range drop of c and a
+            // new scope d, in a second file.
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            put(*writer, *id, scopes[0], "second");
+            REQUIRE(writer->drop(*id, scopes[1]).has_value());
+            const std::string begin = "key-" + key_of(10);
+            const std::string end = "key-" + key_of(20);
+            REQUIRE(writer->drop(*id, scopes[2], view_of(begin), view_of(end))
+                        .has_value());
+            put(*writer, *id, scopes[3], "second");
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        {
+            // More commits than a checkpoint interval, so the chain of the cut
+            // file lists most commits by summary, and a big value, over scopes
+            // of their own.
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            for (int commit = 0; commit < 150; ++commit) {
+                const ScopeKey scope = file_scope(
+                    "/traces/m" + std::to_string(commit % 4) + ".pfw");
+                Batch entries = writer->batch(*id, scope, 0);
+                const std::string key = "many-" + key_of(commit);
+                entries.put(view_of(key), view_of(value_of(commit)));
+                if (commit == 77) {
+                    entries.put(view_of(std::string("many-big")),
+                                view_of(std::string(3 * SMALL_PAGE, 'b')));
+                }
+                REQUIRE(writer->commit(std::move(entries)).has_value());
+                REQUIRE(flush_writer(*writer).has_value());
+            }
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        for (const auto& entry :
+             std::filesystem::directory_iterator(dir.str())) {
+            const std::string path = entry.path().string();
+            // A light open keeps the directory and leaves the scope items of
+            // the footer unread; a full open reads them.
+            auto light =
+                DataFileReader::open(path, engine::FooterItems::Directory);
+            REQUIRE(light.has_value());
+            CHECK(light->index().tail.has_value());
+            CHECK(light->index().scopes.empty());
+            CHECK(light->index().copies.empty());
+            auto full = DataFileReader::open(path);
+            REQUIRE(full.has_value());
+            CHECK_FALSE(full->index().scopes.empty());
+            write_file(cut_dir.file(entry.path().filename().string()),
+                       without_footer(read_file(path)));
+        }
+
+        const auto dump = [&](const std::string& root) {
+            auto snapshot = Snapshot::open(root);
+            REQUIRE(snapshot.has_value());
+            CHECK(snapshot->skipped().empty());
+            std::string text;
+            auto generations = snapshot->generations();
+            REQUIRE(generations.has_value());
+            for (const engine::ScopeGeneration& generation : *generations) {
+                text += "generation " + to_std(generation.namespace_name) +
+                        " " + to_std(generation.scope.paths[0]) + " " +
+                        std::to_string(generation.generation) + "\n";
+            }
+            for (const ScopeKey& scope : scopes) {
+                text += "state " + to_std(scope.paths[0]) + " " +
+                        std::to_string(
+                            static_cast<int>(snapshot->state(spec, scope))) +
+                        "\n";
+            }
+            auto cursor = snapshot->scan_all(spec, ByteView{}, ByteView{});
+            for (const ScopedRow& row : collect_scoped(cursor)) {
+                text += row.scope + " " + row.key + "=" + row.value + "\n";
+            }
+            return text;
+        };
+        const std::string closed = dump(dir.str());
+        CHECK(closed == dump(cut_dir.str()));
+        CHECK(closed.find("/traces/m1.pfw many-" + key_of(149)) !=
+              std::string::npos);
+        CHECK(closed.find("/traces/m1.pfw many-big=" +
+                          std::string(3 * SMALL_PAGE, 'b')) !=
+              std::string::npos);
+        // check() sees the same commits, pages and sections either way.
+        const auto checked = [](const std::string& root) {
+            auto snapshot = Snapshot::open(root);
+            REQUIRE(snapshot.has_value());
+            auto report = snapshot->check();
+            REQUIRE(report.has_value());
+            CHECK(report->bad_commits.empty());
+            CHECK(report->bad_sections.empty());
+            return std::to_string(report->commits) + " " +
+                   std::to_string(report->blocks) + " " +
+                   std::to_string(report->sections);
+        };
+        CHECK(checked(dir.str()) == checked(cut_dir.str()));
+        // The newer copy of a, no b, c without its dropped range, and d.
+        CHECK(closed.find("/traces/a.pfw key-" + key_of(0) + "=second-") !=
+              std::string::npos);
+        CHECK(closed.find("/traces/b.pfw key-") == std::string::npos);
+        CHECK(closed.find("/traces/c.pfw key-" + key_of(15)) ==
+              std::string::npos);
+        CHECK(closed.find("/traces/c.pfw key-" + key_of(25)) !=
+              std::string::npos);
+        CHECK(closed.find("/traces/d.pfw key-" + key_of(0)) !=
+              std::string::npos);
+    }
+
+    TEST_CASE("a bad commit decides over one that cannot be read") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_bad_over_failed");
+        dftu_utils_test::ScopedTestDir copy_dir(
+            "snapshot_bad_over_failed_copy");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey both = file_scope("/traces/both.pfw");
+        const ScopeKey late = file_scope("/traces/late.pfw");
+        {
+            // `both` has a section in each of two commits, and `late` one in
+            // the second only.
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            const auto put = [&](const ScopeKey& scope,
+                                 const std::string& tag) {
+                Batch entries = writer->batch(*id, scope, 0);
+                for (int k = 0; k < 100; ++k) {
+                    const std::string key = tag + "-" + key_of(k);
+                    const std::string value = value_of(k);
+                    entries.put(view_of(key), view_of(value));
+                }
+                REQUIRE(writer->commit(std::move(entries)).has_value());
+            };
+            put(both, "b0");
+            REQUIRE(flush_writer(*writer).has_value());
+            put(both, "b1");
+            put(late, "b0");
+            REQUIRE(flush_writer(*writer).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const auto& refs = page_refs_of(*reader);
+        // Two commits, each with its own pages.
+        const auto newest = std::max_element(refs.begin(), refs.end(),
+                                             [](const auto& a, const auto& b) {
+                                                 return a.sequence < b.sequence;
+                                             });
+        const auto oldest = std::min_element(refs.begin(), refs.end(),
+                                             [](const auto& a, const auto& b) {
+                                                 return a.sequence < b.sequence;
+                                             });
+        REQUIRE(oldest->sequence < newest->sequence);
+        const engine::PageRefItem newer = newest->ref;
+
+        // The last byte of the newer commit's page is padding no section
+        // covers, so only its crc sees the change.
+        std::vector<std::uint8_t> bytes = read_file(path);
+        REQUIRE(newer.offset + newer.length <= bytes.size());
+        bytes[static_cast<std::size_t>(newer.offset) + newer.length - 1U] ^=
+            0xFFU;
+        const std::string copy_path = copy_dir.file("w-bad-over-failed.dfs");
+        write_file(copy_path, without_footer(bytes));
+
+        ScopedDefaultRuntime runtime(1);
+        auto snapshot = Snapshot::open(copy_dir.str());
+        REQUIRE(snapshot.has_value());
+        // The newer commit reads Bad through `late`, before any read fails.
+        CHECK(snapshot->state(spec, late) == ScopeState::Bad);
+        CHECK(snapshot->read_stats().commits_verified == 1);
+
+        const int data_fd = descriptor_of(copy_path);
+        REQUIRE(data_fd >= 0);
+        const int saved_fd = ::dup(data_fd);
+        REQUIRE(saved_fd >= 0);
+        const int dir_fd = ::open(copy_dir.str().c_str(), O_RDONLY);
+        REQUIRE(dir_fd >= 0);
+        REQUIRE(::dup2(dir_fd, data_fd) == data_fd);
+
+        // The older commit of `both` now fails to read, and its newer one is
+        // Bad: the copy is unreadable whatever else failed, so the query finds
+        // nothing and reports no error.
+        const std::string key_text = "b0-key-0000";
+        auto found = snapshot->get(spec, both, view_of(key_text));
+        REQUIRE(found.has_value());
+        CHECK_FALSE(found->has_value());
+        auto cursor = snapshot->scan(spec, both, ByteView{}, ByteView{});
+        CHECK(cursor.at_end());
+        CHECK_FALSE(cursor.error().has_value());
+        CHECK(snapshot->state(spec, both) == ScopeState::Bad);
+
+        REQUIRE(::dup2(saved_fd, data_fd) == data_fd);
+        ::close(saved_fd);
+        ::close(dir_fd);
     }
 
     TEST_CASE("a cut past a run drops the pages it leaves behind") {
@@ -1963,8 +2579,8 @@ TEST_SUITE("index store snapshot") {
             std::filesystem::directory_iterator(dir.str())->path().string();
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
-        REQUIRE(reader->index().page_refs.size() == 3);
-        const engine::PageRefItem middle = reader->index().page_refs[1].ref;
+        REQUIRE(page_refs_of(*reader).size() == 3);
+        const engine::PageRefItem middle = page_refs_of(*reader)[1].ref;
 
         std::vector<std::uint8_t> bytes = read_file(path);
         const std::size_t cut =
@@ -1993,7 +2609,9 @@ TEST_SUITE("index store snapshot") {
             CHECK(to_std((*found)->bytes()) == "value-999");
             CHECK(snapshot->open_stats().files == 1);
             CHECK(snapshot->open_stats().pages == 1);
-            CHECK(snapshot->open_stats().read_calls == 1);
+            // One commit, read once, by the state and the query that need it.
+            CHECK(snapshot->read_stats().commits_verified == 1);
+            CHECK(snapshot->read_stats().read_calls == 1);
         };
         check(1);
         check(8);
@@ -2023,5 +2641,499 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->open_stats().files == 0);
         CHECK(snapshot->open_stats().pages == 0);
         CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
+    }
+
+    TEST_CASE(
+        "an open reads no block and a query reads only the page it needs") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_lazy_open");
+        const ScopeKey first = file_scope("/traces/a.pfw");
+        const ScopeKey second = file_scope("/traces/b.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        write_scoped_file(dir, spec, first, 3, 500, true);
+        write_scoped_file(dir, spec, second, 2, 500, true);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        // Two files open, and not one block of them read.
+        REQUIRE(snapshot->open_stats().files == 2);
+        const engine::ReadStats cold = snapshot->read_stats();
+        CHECK(cold.commits_verified == 0);
+        CHECK(cold.blocks_read == 0);
+        CHECK(cold.read_calls == 0);
+        CHECK(cold.bytes_read == 0);
+
+        auto found =
+            snapshot->get(spec, second, view_of(std::string("b0-key-0000")));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == value_of(0));
+        // The files closed, so their commits are synced: the get reads the
+        // directory block of each file to find the scope, the section block of
+        // the one commit whose range holds the key, then the one page that
+        // holds it.
+        const engine::ReadStats touched = snapshot->read_stats();
+        CHECK(touched.commits_verified == 0);
+        CHECK(touched.indexes_read == 0);
+        CHECK(touched.metadata_blocks_read == 3);
+        CHECK(touched.blocks_read == 1);
+        CHECK(touched.read_calls == 4);
+        CHECK(touched.bytes_read > 0);
+
+        auto other =
+            snapshot->get(spec, first, view_of(std::string("b0-key-0499")));
+        REQUIRE(other.has_value());
+        REQUIRE(other->has_value());
+        CHECK(to_std((*other)->bytes()) == value_of(499));
+        const engine::ReadStats both = snapshot->read_stats();
+        CHECK(both.commits_verified == 0);
+        CHECK(both.indexes_read == 0);
+        CHECK(both.metadata_blocks_read == 4);
+        CHECK(both.blocks_read == 2);
+        CHECK(both.read_calls == 6);
+        // A closed file holds no commit object and lists no page ref.
+        CHECK(snapshot->open_stats().commits == 0);
+        CHECK(snapshot->open_stats().pages == 0);
+    }
+
+    TEST_CASE(
+        "a corrupt commit stops only the scopes that hold a section of it") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_lazy_bad");
+        dftu_utils_test::ScopedTestDir copy_dir("snapshot_lazy_bad_copy");
+        const ScopeKey broken = file_scope("/traces/broken.pfw");
+        const ScopeKey shared = file_scope("/traces/shared.pfw");
+        const ScopeKey sound = file_scope("/traces/sound.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+
+        // One page holds the section of `broken` and the section of `shared`,
+        // and the commit that names it is the one the corrupt byte hits. The
+        // next page holds the section of `sound` alone.
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        for (const ScopeKey& scope : {broken, shared}) {
+            Batch entries = writer->batch(*id, scope, 0);
+            const std::string key =
+                to_std(scope.paths[0]) == "/traces/broken.pfw" ? "broken-1"
+                                                               : "shared-1";
+            entries.put(view_of(key), view_of(std::string("value-1")));
+            REQUIRE(writer->commit(std::move(entries)).has_value());
+        }
+        REQUIRE(flush_writer(*writer).has_value());
+        {
+            Batch entries = writer->batch(*id, sound, 0);
+            entries.put(view_of(std::string("sound-1")),
+                        view_of(std::string("sound-value-1")));
+            REQUIRE(writer->commit(std::move(entries)).has_value());
+        }
+        REQUIRE(close_writer(*writer).has_value());
+
+        auto reader = DataFileReader::open(to_std(writer->path()));
+        REQUIRE(reader.has_value());
+        REQUIRE(page_refs_of(*reader).size() == 2);
+        const engine::PageRef dead{page_refs_of(*reader)[0].ref.offset,
+                                   page_refs_of(*reader)[0].ref.length,
+                                   page_refs_of(*reader)[0].ref.crc};
+
+        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        REQUIRE(dead.offset + dead.length <= bytes.size());
+        bytes[static_cast<std::size_t>(dead.offset) + 4U] ^= 0xFFU;
+        write_file(copy_dir.file("w-bad.dfs"), without_footer(bytes));
+
+        auto snapshot = Snapshot::open(copy_dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->state(spec, broken) == ScopeState::Bad);
+        CHECK(snapshot->state(spec, shared) == ScopeState::Bad);
+        CHECK(snapshot->read_stats().commits_verified == 1);
+
+        // The good scope is read on its own, and the bad commit is not touched
+        // by the query that does not need it.
+        auto visible =
+            snapshot->get(spec, sound, view_of(std::string("sound-1")));
+        REQUIRE(visible.has_value());
+        REQUIRE(visible->has_value());
+        CHECK(to_std((*visible)->bytes()) == "sound-value-1");
+        const engine::ReadStats after = snapshot->read_stats();
+        CHECK(after.commits_verified == 2);
+        CHECK(after.blocks_read == 2);
+
+        for (const ScopeKey& scope : {broken, shared}) {
+            auto hidden =
+                snapshot->get(spec, scope, view_of(std::string("broken-1")));
+            REQUIRE(hidden.has_value());
+            CHECK_FALSE(hidden->has_value());
+        }
+        CHECK(snapshot->read_stats().commits_verified == 2);
+    }
+
+    TEST_CASE("a lost big value run reads Bad at its first touch") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_lazy_big");
+        dftu_utils_test::ScopedTestDir copy_dir("snapshot_lazy_big_copy");
+        const ScopeKey big_scope = file_scope("/traces/big.pfw");
+        const ScopeKey sound_scope = file_scope("/traces/sound.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::string big(2 * 1024 * 1024, 'x');
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        {
+            Batch entries = writer->batch(*id, big_scope, 0);
+            entries.put(view_of(std::string("big")), view_of(big));
+            REQUIRE(writer->commit(std::move(entries)).has_value());
+        }
+        REQUIRE(close_writer(*writer).has_value());
+        // The sound scope is a file of its own, so its commit is not the one
+        // the big value run belongs to.
+        write_scoped_file(copy_dir, spec, sound_scope, 1, 20, true);
+
+        auto reader = DataFileReader::open(to_std(writer->path()));
+        REQUIRE(reader.has_value());
+        // The big value is a run of its own, the one page ref with no sections.
+        bool found_run = false;
+        engine::PageRef run{};
+        for (const engine::IndexedPageRef& page : page_refs_of(*reader)) {
+            if (!page.ref.sections.empty()) continue;
+            REQUIRE_FALSE(found_run);
+            run = {page.ref.offset, page.ref.length, page.ref.crc};
+            found_run = true;
+        }
+        REQUIRE(found_run);
+        CHECK(run.length >= big.size());
+
+        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        REQUIRE(run.offset + run.length <= bytes.size());
+        std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(run.offset),
+                  bytes.begin() +
+                      static_cast<std::ptrdiff_t>(run.offset + run.length),
+                  std::uint8_t{0});
+        write_file(copy_dir.file("w-big.dfs"), without_footer(bytes));
+
+        auto snapshot = Snapshot::open(copy_dir.str());
+        REQUIRE(snapshot.has_value());
+        // Nothing of the run was read at open.
+        CHECK(snapshot->read_stats().blocks_read == 0);
+        CHECK(snapshot->state(spec, big_scope) == ScopeState::Bad);
+        auto hidden =
+            snapshot->get(spec, big_scope, view_of(std::string("big")));
+        REQUIRE(hidden.has_value());
+        CHECK_FALSE(hidden->has_value());
+
+        // The other commit of the file is untouched by it.
+        CHECK(snapshot->state(spec, sound_scope) == ScopeState::Ready);
+        auto visible = snapshot->get(spec, sound_scope,
+                                     view_of(std::string("b0-key-0000")));
+        REQUIRE(visible.has_value());
+        REQUIRE(visible->has_value());
+        CHECK(to_std((*visible)->bytes()) == value_of(0));
+    }
+
+    TEST_CASE("sixteen threads share the first touch of one cold snapshot") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_lazy_threads");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        constexpr int FILES = 4;
+        constexpr int BATCHES = 3;
+        constexpr int KEYS = 200;
+        std::vector<ScopeKey> scopes;
+        for (int file = 0; file < FILES; ++file) {
+            scopes.push_back(
+                file_scope("/traces/t" + std::to_string(file) + ".pfw"));
+        }
+        for (const ScopeKey& scope : scopes) {
+            write_scoped_file(dir, spec, scope, BATCHES, KEYS, true);
+        }
+
+        // The same root as written, and again cut before every footer, as a
+        // crash before the closes leaves it.
+        dftu_utils_test::ScopedTestDir cut_dir("snapshot_lazy_threads_cut");
+        for (const auto& entry :
+             std::filesystem::directory_iterator(dir.str())) {
+            write_file(cut_dir.file(entry.path().filename().string()),
+                       without_footer(read_file(entry.path().string())));
+        }
+        const auto touch_all = [&](const std::string& root, bool synced) {
+            auto opened = Snapshot::open(root);
+            REQUIRE(opened.has_value());
+            const Snapshot& snapshot = *opened;
+            CHECK(snapshot.open_stats().files == FILES);
+            CHECK(snapshot.read_stats().blocks_read == 0);
+
+            std::atomic<int> failures{0};
+            std::vector<std::thread> threads;
+            for (int thread = 0; thread < 16; ++thread) {
+                threads.emplace_back([&snapshot, &scopes, &spec, &failures,
+                                      thread] {
+                    const ScopeKey& scope =
+                        scopes[static_cast<std::size_t>(thread) %
+                               scopes.size()];
+                    for (int batch = 0; batch < BATCHES; ++batch) {
+                        for (int k = 0; k < KEYS; ++k) {
+                            const std::string key =
+                                "b" + std::to_string(batch) + "-" + key_of(k);
+                            auto found =
+                                snapshot.get(spec, scope, view_of(key));
+                            if (!found.has_value() || !found->has_value() ||
+                                to_std((*found)->bytes()) != value_of(k)) {
+                                failures.fetch_add(1);
+                            }
+                        }
+                    }
+                    auto cursor =
+                        snapshot.scan(spec, scope, ByteView{}, ByteView{});
+                    std::size_t rows = 0;
+                    while (!cursor.at_end()) {
+                        auto value = cursor.value();
+                        if (!value.has_value()) {
+                            failures.fetch_add(1);
+                        } else {
+                            ++rows;
+                        }
+                        cursor.next();
+                    }
+                    if (rows != static_cast<std::size_t>(BATCHES * KEYS)) {
+                        failures.fetch_add(1);
+                    }
+                });
+            }
+            for (std::thread& thread : threads) thread.join();
+            CHECK(failures.load() == 0);
+
+            // Each page of a synced root, and each commit of a cut one, was
+            // read exactly once, whatever the order the threads reached it in.
+            const engine::ReadStats reads = snapshot.read_stats();
+            CHECK(reads.commits_verified ==
+                  (synced ? 0U : static_cast<std::uint64_t>(FILES * BATCHES)));
+            auto report = snapshot.check();
+            REQUIRE(report.has_value());
+            CHECK(reads.blocks_read == report->blocks);
+        };
+        touch_all(dir.str(), true);
+        touch_all(cut_dir.str(), false);
+    }
+
+    TEST_CASE("check reports every commit and section that does not verify") {
+        dftu_utils_test::ScopedTestDir built("snapshot_check_built");
+        const ScopeKey scope = file_scope("/traces/check.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::string path = built.file("w-check.dfs");
+
+        // A section of two entries of equal size, with the two of them swapped:
+        // every offset, length and count in it stays valid, its first key in
+        // the index no longer matches its first entry, and its keys descend.
+        // The page crc is the one the writer computes over those bytes.
+        engine::PageRefItem listed{};
+        std::uint32_t offset_in_page = 0;
+        {
+            engine::SectionBuilder builder;
+            builder.add(view_of(std::string("k1")), view_of(std::string("v1")));
+            builder.add(view_of(std::string("k2")), view_of(std::string("v2")));
+            auto one = builder.seal(nullptr, nullptr, nullptr);
+            REQUIRE(one.has_value());
+            dstd::Vector<std::uint8_t> section = std::move(*one);
+
+            constexpr std::size_t HEADER = 20;
+            constexpr std::size_t SUBPAGE_INDEX = 8 + 1 + 2;
+            constexpr std::size_t ENTRY = 6;
+            REQUIRE(section.size() >= HEADER + SUBPAGE_INDEX + 2 * ENTRY);
+            std::rotate(section.begin() + HEADER + SUBPAGE_INDEX,
+                        section.begin() + HEADER + SUBPAGE_INDEX + ENTRY,
+                        section.begin() + HEADER + SUBPAGE_INDEX + 2 * ENTRY);
+
+            auto file = engine::DataFileWriter::create(path, SMALL_PAGE, "host",
+                                                       "label");
+            REQUIRE(file.has_value());
+            engine::NamespaceItem namespaces;
+            namespaces.local_id = 1;
+            namespaces.name = dstring("dftu.test.put");
+            namespaces.format_version = 0;
+            file->add(std::move(namespaces));
+            engine::ScopeItem scope_item;
+            scope_item.local_id = 1;
+            scope_item.kind = engine::ScopeKind::File;
+            engine::ScopePath entry;
+            entry.logical_path = dstring("/traces/check.pfw");
+            scope_item.paths.push_back(std::move(entry));
+            file->add(std::move(scope_item));
+            engine::CopyItem copy;
+            copy.local_id = 1;
+            copy.namespace_id = 1;
+            copy.scope_id = 1;
+            copy.generation = 1;
+            copy.state = engine::CopyState::Ready;
+            file->add(std::move(copy));
+
+            auto reference = file->append_page(view_of(section));
+            REQUIRE(reference.has_value());
+            listed.offset = reference->offset;
+            listed.length = reference->length;
+            listed.crc = reference->crc;
+            listed.sequence = 1;
+            engine::PageSection page_section;
+            page_section.copy_id = 1;
+            page_section.offset_in_page = 0;
+            page_section.length = static_cast<std::uint32_t>(section.size());
+            page_section.entry_count = 2;
+            page_section.first_key = bytes_vector("k1");
+            page_section.last_key = bytes_vector("k2");
+            listed.sections.push_back(std::move(page_section));
+            file->add(listed);
+            REQUIRE(file->commit().has_value());
+            REQUIRE(file->close().has_value());
+            offset_in_page = 0;
+        }
+
+        auto snapshot = Snapshot::open(built.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->read_stats().blocks_read == 0);
+
+        // The commit verifies: its page crc is right and its section index is
+        // well formed. A lookup through the index does not reject it either.
+        auto found = snapshot->get(spec, scope, view_of(std::string("k2")));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == "v2");
+        CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
+
+        const engine::ReadStats before = snapshot->read_stats();
+        auto report = snapshot->check();
+        REQUIRE(report.has_value());
+        CHECK(report->files == 1);
+        CHECK(report->commits == 1);
+        CHECK(report->blocks == 1);
+        CHECK(report->bad_commits.empty());
+        CHECK(report->sections == 1);
+        REQUIRE(report->bad_sections.size() == 1);
+        CHECK(to_std(report->bad_sections[0].file) == "w-check.dfs");
+        CHECK(report->bad_sections[0].page_offset == listed.offset);
+        CHECK(report->bad_sections[0].offset_in_page == offset_in_page);
+        // The page the get read is not read again.
+        CHECK(snapshot->read_stats().blocks_read == before.blocks_read);
+        // The walk does not change what the commit already read.
+        CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
+    }
+
+    TEST_CASE("check reads every block and reports the commit that fails") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_check_bad");
+        dftu_utils_test::ScopedTestDir copy_dir("snapshot_check_bad_copy");
+        const ScopeKey scope = file_scope("/traces/a.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        write_scoped_file(dir, spec, scope, 3, 20, true);
+
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        REQUIRE(page_refs_of(*reader).size() == 3);
+        // The middle page of the file is the one that does not verify.
+        const engine::PageRef dead{page_refs_of(*reader)[1].ref.offset,
+                                   page_refs_of(*reader)[1].ref.length,
+                                   page_refs_of(*reader)[1].ref.crc};
+
+        std::vector<std::uint8_t> bytes = read_file(path);
+        REQUIRE(dead.offset + dead.length <= bytes.size());
+        bytes[static_cast<std::size_t>(dead.offset) + 8U] ^= 0x01U;
+        write_file(copy_dir.file("w-check-bad.dfs"), without_footer(bytes));
+
+        auto snapshot = Snapshot::open(copy_dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->read_stats().blocks_read == 0);
+
+        auto report = snapshot->check();
+        REQUIRE(report.has_value());
+        CHECK(report->files == 1);
+        CHECK(report->commits == 3);
+        CHECK(report->blocks == 3);
+        // The two page refs that do verify hold a walkable section each; the
+        // one that does not is reported as the commit that fails, not as a
+        // section, since its bytes are not there to walk.
+        CHECK(report->sections == 2);
+        CHECK(report->bad_sections.empty());
+        REQUIRE(report->bad_commits.size() == 1);
+        CHECK(to_std(report->bad_commits[0].file) == "w-check-bad.dfs");
+        CHECK(report->bad_commits[0].sequence ==
+              page_refs_of(*reader)[1].sequence);
+        CHECK(report->bytes_read > 0);
+        // The check leaves the state of every commit it read as it found it.
+        CHECK(snapshot->state(spec, scope) == ScopeState::Bad);
+    }
+
+    TEST_CASE("a directory too large for the footer reads through its levels") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_directory_levels");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::string path = dir.file("w-levels.dfs");
+        // Long paths make each separator of the top table long, so a few
+        // thousand scopes fill more than one top table.
+        constexpr std::uint32_t SCOPES = 12000;
+        const auto scope_path = [](std::uint32_t index) {
+            std::string digits = std::to_string(index);
+            return "/traces/" + std::string(1000, 'p') + "/s" +
+                   std::string(7 - digits.size(), '0') + digits + ".pfw";
+        };
+
+        // Copies without a commit: the directory lists every scope, and no
+        // page is written.
+        {
+            auto file = engine::DataFileWriter::create(path, SMALL_PAGE, "host",
+                                                       "label");
+            REQUIRE(file.has_value());
+            engine::NamespaceItem namespaces;
+            namespaces.local_id = 1;
+            namespaces.name = dstring("dftu.test.put");
+            file->add(std::move(namespaces));
+            for (std::uint32_t i = 0; i < SCOPES; ++i) {
+                engine::ScopeItem scope_item;
+                scope_item.local_id = i + 1;
+                scope_item.kind = engine::ScopeKind::File;
+                engine::ScopePath entry;
+                entry.logical_path = dstring(scope_path(i));
+                scope_item.paths.push_back(std::move(entry));
+                file->add(std::move(scope_item));
+                engine::CopyItem copy;
+                copy.local_id = i + 1;
+                copy.namespace_id = 1;
+                copy.scope_id = i + 1;
+                copy.generation = i + 1;
+                copy.state = engine::CopyState::Ready;
+                file->add(std::move(copy));
+            }
+            REQUIRE(file->commit().has_value());
+            REQUIRE(file->close().has_value());
+        }
+        auto light = DataFileReader::open(path, engine::FooterItems::Directory);
+        REQUIRE(light.has_value());
+        REQUIRE(light->index().tail.has_value());
+        const std::uint32_t levels = light->index().tail->directory_levels;
+        REQUIRE(levels >= 2);
+        CHECK(light->index().tail->top_table.size() <=
+              engine::DIRECTORY_TOP_BYTES);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->read_stats().read_calls == 0);
+        // One scope reads one block per level, and nothing else.
+        CHECK(snapshot->state(spec, file_scope(scope_path(SCOPES / 2))) ==
+              ScopeState::Ready);
+        CHECK(snapshot->read_stats().metadata_blocks_read == levels);
+        CHECK(snapshot->read_stats().blocks_read == 0);
+        for (std::uint32_t i = 0; i < SCOPES; i += 97) {
+            CHECK(snapshot->state(spec, file_scope(scope_path(i))) ==
+                  ScopeState::Ready);
+        }
+        CHECK(snapshot->state(spec, file_scope(scope_path(SCOPES - 1))) ==
+              ScopeState::Ready);
+        CHECK(snapshot->state(spec, file_scope("/a.pfw")) ==
+              ScopeState::Absent);
+        CHECK(snapshot->state(spec, file_scope(scope_path(0) + "x")) ==
+              ScopeState::Absent);
+        CHECK(snapshot->state(spec, file_scope("/zzz.pfw")) ==
+              ScopeState::Absent);
+
+        auto listed = snapshot->generations();
+        REQUIRE(listed.has_value());
+        const dstd::Vector<engine::ScopeGeneration>& all = *listed;
+        REQUIRE(all.size() == SCOPES);
+        CHECK(to_std(all.front().scope.paths[0]) == scope_path(0));
+        CHECK(all.front().generation == 1);
+        CHECK(to_std(all.back().scope.paths[0]) == scope_path(SCOPES - 1));
+        CHECK(all.back().generation == SCOPES);
     }
 }

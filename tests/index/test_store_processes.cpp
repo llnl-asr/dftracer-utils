@@ -675,15 +675,31 @@ void run_round(const std::string& root, int round) {
     reap_children(pids);
 }
 
+/// Copies every regular file of `from` into `to`.
+void copy_files(const std::string& from, const std::string& to) {
+    for (const auto& entry : std::filesystem::directory_iterator(from)) {
+        if (!entry.is_regular_file()) continue;
+        std::filesystem::copy_file(
+            entry.path(), std::filesystem::path(to) / entry.path().filename(),
+            std::filesystem::copy_options::overwrite_existing);
+    }
+}
+
 }  // namespace
 
 TEST_CASE("processes: eight writers on one root read back once") {
     dftu_utils_test::ScopedTestDir dir("store_processes_root");
+    dftu_utils_test::ScopedTestDir first("store_processes_round_one");
 
+    // Both rounds fork before the parent starts any thread: a snapshot open
+    // starts the default runtime's workers, and ThreadSanitizer refuses a
+    // fork after that. Data files never change once closed, so a copy taken
+    // after round one is the root as round one left it.
     run_round(dir.str(), 1);
-    check_root(dir.str(), 1);
-
+    copy_files(dir.str(), first.str());
     run_round(dir.str(), 2);
+
+    check_root(first.str(), 1);
     check_root(dir.str(), 2);
 }
 

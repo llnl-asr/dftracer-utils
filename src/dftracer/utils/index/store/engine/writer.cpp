@@ -308,7 +308,9 @@ dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
     auto snapshot = Snapshot::open(dir);
     if (!snapshot) return dstd::Unexpected<dstd::Error>(snapshot.error());
 
-    dstd::Vector<ScopeGeneration> generations = snapshot->generations();
+    auto listed = snapshot->generations();
+    if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
+    dstd::Vector<ScopeGeneration> generations = std::move(*listed);
     std::sort(generations.begin(), generations.end(),
               [](const ScopeGeneration& a, const ScopeGeneration& b) {
                   const int by_name =

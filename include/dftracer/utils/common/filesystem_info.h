@@ -61,8 +61,11 @@ struct StripeInfo {
     std::size_t count = 0;  ///< number of stripes, 0 if unknown/not striped
 };
 
-/// Lustre stripe geometry for `path` (or its parent when absent). Returns an
-/// all-zero StripeInfo off Lustre or when the query is unavailable.
+/// Lustre stripe geometry for `path` (or its parent when absent): the largest
+/// stripe size over the layout components and that component's stripe count. A
+/// progressive file layout gives its components different stripe sizes, so the
+/// largest is reported. Returns an all-zero StripeInfo off Lustre or when the
+/// query is unavailable.
 StripeInfo lustre_stripe(const std::string& path) noexcept;
 
 }  // namespace dftracer::utils

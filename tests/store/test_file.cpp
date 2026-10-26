@@ -4,7 +4,7 @@
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/scope_directory.h>
-#include <dftracer/utils/store/section.h>
+#include <dftracer/utils/store/segment.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
 
@@ -45,18 +45,18 @@ using store::CopyState;
 using store::DataFileReader;
 using store::DataFileWriter;
 using store::DropItem;
+using store::ExtentRef;
+using store::ExtentRefItem;
+using store::ExtentSegment;
 using store::FileIndex;
-using store::IndexedPageRef;
+using store::IndexedExtentRef;
 using store::NamespaceItem;
-using store::PageRef;
-using store::PageRefItem;
-using store::PageSection;
 using store::ScopeItem;
 using store::ScopeKind;
 using store::ScopePath;
-using store::SectionBuilder;
+using store::SegmentBuilder;
 
-constexpr std::size_t PAGE_SIZE = 4096;
+constexpr std::size_t EXTENT_SIZE = 4096;
 
 ByteView view_of(const std::string& bytes) {
     return {bytes.data(), bytes.size()};
@@ -203,15 +203,15 @@ struct TempDir {
     }
 };
 
-struct SectionData {
+struct SegmentData {
     dstd::Vector<std::uint8_t> bytes;
     std::uint64_t entry_count = 0;
     dstd::Vector<std::uint8_t> first_key;
     dstd::Vector<std::uint8_t> last_key;
 };
 
-SectionData make_section(std::uint32_t seed, std::size_t entry_count) {
-    SectionBuilder builder;
+SegmentData make_segment(std::uint32_t seed, std::size_t entry_count) {
+    SegmentBuilder builder;
     for (std::size_t i = 0; i < entry_count; ++i) {
         const std::string key =
             "key-" + std::to_string(seed) + "-" + std::to_string(i);
@@ -275,21 +275,22 @@ DropItem make_drop(std::uint32_t namespace_id, std::uint32_t scope_id,
     return item;
 }
 
-PageRefItem make_page_ref(const PageRef& page, const SectionData& section,
-                          std::uint32_t copy_id) {
-    PageRefItem item;
-    item.offset = page.offset;
-    item.length = page.length;
-    item.crc = page.crc;
+ExtentRefItem make_extent_ref(const ExtentRef& extent,
+                              const SegmentData& segment,
+                              std::uint32_t copy_id) {
+    ExtentRefItem item;
+    item.offset = extent.offset;
+    item.length = extent.length;
+    item.crc = extent.crc;
     item.sequence = copy_id;
-    PageSection page_section;
-    page_section.copy_id = copy_id;
-    page_section.offset_in_page = 0;
-    page_section.length = static_cast<std::uint32_t>(section.bytes.size());
-    page_section.entry_count = section.entry_count;
-    page_section.first_key = section.first_key;
-    page_section.last_key = section.last_key;
-    item.sections.push_back(std::move(page_section));
+    ExtentSegment extent_segment;
+    extent_segment.copy_id = copy_id;
+    extent_segment.offset_in_extent = 0;
+    extent_segment.length = static_cast<std::uint32_t>(segment.bytes.size());
+    extent_segment.entry_count = segment.entry_count;
+    extent_segment.first_key = segment.first_key;
+    extent_segment.last_key = segment.last_key;
+    item.segments.push_back(std::move(extent_segment));
     return item;
 }
 
@@ -333,25 +334,25 @@ void check_drop(const DropItem& actual, const DropItem& expected) {
     CHECK(same_bytes(view_of(actual.end_key), view_of(expected.end_key)));
 }
 
-void check_page_ref(const IndexedPageRef& actual,
-                    const IndexedPageRef& expected) {
+void check_extent_ref(const IndexedExtentRef& actual,
+                      const IndexedExtentRef& expected) {
     CHECK(actual.sequence == expected.sequence);
     CHECK(actual.ref.offset == expected.ref.offset);
     CHECK(actual.ref.length == expected.ref.length);
     CHECK(actual.ref.crc == expected.ref.crc);
-    REQUIRE(actual.ref.sections.size() == expected.ref.sections.size());
-    for (std::size_t i = 0; i < actual.ref.sections.size(); ++i) {
-        CHECK(actual.ref.sections[i].copy_id ==
-              expected.ref.sections[i].copy_id);
-        CHECK(actual.ref.sections[i].offset_in_page ==
-              expected.ref.sections[i].offset_in_page);
-        CHECK(actual.ref.sections[i].length == expected.ref.sections[i].length);
-        CHECK(actual.ref.sections[i].entry_count ==
-              expected.ref.sections[i].entry_count);
-        CHECK(same_bytes(view_of(actual.ref.sections[i].first_key),
-                         view_of(expected.ref.sections[i].first_key)));
-        CHECK(same_bytes(view_of(actual.ref.sections[i].last_key),
-                         view_of(expected.ref.sections[i].last_key)));
+    REQUIRE(actual.ref.segments.size() == expected.ref.segments.size());
+    for (std::size_t i = 0; i < actual.ref.segments.size(); ++i) {
+        CHECK(actual.ref.segments[i].copy_id ==
+              expected.ref.segments[i].copy_id);
+        CHECK(actual.ref.segments[i].offset_in_extent ==
+              expected.ref.segments[i].offset_in_extent);
+        CHECK(actual.ref.segments[i].length == expected.ref.segments[i].length);
+        CHECK(actual.ref.segments[i].entry_count ==
+              expected.ref.segments[i].entry_count);
+        CHECK(same_bytes(view_of(actual.ref.segments[i].first_key),
+                         view_of(expected.ref.segments[i].first_key)));
+        CHECK(same_bytes(view_of(actual.ref.segments[i].last_key),
+                         view_of(expected.ref.segments[i].last_key)));
     }
 }
 
@@ -360,7 +361,7 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     REQUIRE(actual.scopes.size() == expected.scopes.size());
     REQUIRE(actual.copies.size() == expected.copies.size());
     REQUIRE(actual.drops.size() == expected.drops.size());
-    REQUIRE(actual.page_refs.size() == expected.page_refs.size());
+    REQUIRE(actual.extent_refs.size() == expected.extent_refs.size());
     CHECK(actual.last_sequence == expected.last_sequence);
     for (std::size_t i = 0; i < actual.namespaces.size(); ++i) {
         check_namespace(actual.namespaces[i], expected.namespaces[i]);
@@ -374,19 +375,19 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     for (std::size_t i = 0; i < actual.drops.size(); ++i) {
         check_drop(actual.drops[i], expected.drops[i]);
     }
-    for (std::size_t i = 0; i < actual.page_refs.size(); ++i) {
-        check_page_ref(actual.page_refs[i], expected.page_refs[i]);
+    for (std::size_t i = 0; i < actual.extent_refs.size(); ++i) {
+        check_extent_ref(actual.extent_refs[i], expected.extent_refs[i]);
     }
 }
 
-/// Compares the index of an open file, with the page refs its summaries name
+/// Compares the index of an open file, with the extent refs its summaries name
 /// read from their records, to the expected state.
 void check_index_equal(const DataFileReader& reader,
                        const FileIndex& expected) {
     FileIndex actual = reader.index();
-    auto refs = reader.all_page_refs();
+    auto refs = reader.all_extent_refs();
     REQUIRE(refs.has_value());
-    actual.page_refs = std::move(*refs);
+    actual.extent_refs = std::move(*refs);
     check_index_equal(actual, expected);
 }
 
@@ -398,7 +399,7 @@ FileIndex prefix_state(const FileIndex& full, std::size_t commit_count) {
         prefix.scopes.push_back(full.scopes[i]);
         prefix.copies.push_back(full.copies[i]);
         prefix.drops.push_back(full.drops[i]);
-        prefix.page_refs.push_back(full.page_refs[i]);
+        prefix.extent_refs.push_back(full.extent_refs[i]);
     }
     return prefix;
 }
@@ -414,7 +415,7 @@ FileIndex state_after_sequence(const FileIndex& full, std::uint64_t sequence) {
         state.scopes.push_back(full.scopes[i]);
         state.copies.push_back(full.copies[i]);
         state.drops.push_back(full.drops[i]);
-        state.page_refs.push_back(full.page_refs[i]);
+        state.extent_refs.push_back(full.extent_refs[i]);
     }
     return state;
 }
@@ -501,36 +502,37 @@ std::vector<std::size_t> record_flip_offsets(const RecordMeta& record) {
 
 void add_five_commit(DataFileWriter& writer, FileIndex& expected,
                      std::uint32_t commit_id,
-                     dstd::Vector<PageRef>* pages = nullptr) {
+                     dstd::Vector<ExtentRef>* extents = nullptr) {
     const NamespaceItem ns = make_namespace(commit_id);
     const ScopeItem scope = make_scope(commit_id, commit_id);
     const CopyItem copy = make_copy(commit_id, commit_id, commit_id);
     const DropItem drop = make_drop(commit_id, commit_id, commit_id);
-    const SectionData section = make_section(commit_id, 4);
-    REQUIRE_FALSE(section.bytes.empty());
+    const SegmentData segment = make_segment(commit_id, 4);
+    REQUIRE_FALSE(segment.bytes.empty());
 
-    auto page = writer.append_page(view_of(section.bytes));
-    REQUIRE(page.has_value());
-    const PageRefItem page_ref = make_page_ref(*page, section, commit_id);
+    auto extent = writer.append_extent(view_of(segment.bytes));
+    REQUIRE(extent.has_value());
+    const ExtentRefItem extent_ref =
+        make_extent_ref(*extent, segment, commit_id);
 
     writer.add(ns);
     writer.add(scope);
     writer.add(copy);
     writer.add(drop);
-    writer.add(page_ref);
+    writer.add(extent_ref);
 
     expected.namespaces.push_back(ns);
     expected.scopes.push_back(scope);
     expected.copies.push_back(copy);
     expected.drops.push_back(drop);
-    expected.page_refs.push_back({commit_id, page_ref});
-    if (pages != nullptr) pages->push_back(*page);
+    expected.extent_refs.push_back({commit_id, extent_ref});
+    if (extents != nullptr) extents->push_back(*extent);
 
     REQUIRE(writer.commit().has_value());
 }
 
 std::uint64_t commit_record_offset(std::uint32_t commit_id) {
-    return 2U * static_cast<std::uint64_t>(commit_id) * PAGE_SIZE;
+    return 2U * static_cast<std::uint64_t>(commit_id) * EXTENT_SIZE;
 }
 
 }  // namespace
@@ -542,17 +544,17 @@ TEST_SUITE("index store file") {
         const std::string host = "host.example";
         const std::string label = "rank-0";
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, host, label);
+        auto created = DataFileWriter::create(path, EXTENT_SIZE, host, label);
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         FileIndex expected;
-        expected.page_size = PAGE_SIZE;
+        expected.extent_size = EXTENT_SIZE;
         expected.host = dstring(host);
         expected.label = dstring(label);
-        dstd::Vector<PageRef> pages;
+        dstd::Vector<ExtentRef> extents;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
-            add_five_commit(writer, expected, commit_id, &pages);
+            add_five_commit(writer, expected, commit_id, &extents);
         }
         expected.last_sequence = 6;
         REQUIRE(writer.close().has_value());
@@ -561,7 +563,7 @@ TEST_SUITE("index store file") {
         REQUIRE(opened.has_value());
         CHECK(opened->records_read() == 1);
         const FileIndex& actual = opened->index();
-        CHECK(actual.page_size == PAGE_SIZE);
+        CHECK(actual.extent_size == EXTENT_SIZE);
         CHECK(to_std(actual.host) == host);
         CHECK(to_std(actual.label) == label);
         CHECK(actual.pid == static_cast<std::uint32_t>(::getpid()));
@@ -569,13 +571,13 @@ TEST_SUITE("index store file") {
         CHECK(actual.creation_time != 0);
         check_index_equal(*opened, expected);
 
-        for (std::size_t i = 0; i < pages.size(); ++i) {
-            auto read = opened->read_data_page(pages[i]);
+        for (std::size_t i = 0; i < extents.size(); ++i) {
+            auto read = opened->read_data_extent(extents[i]);
             REQUIRE(read.has_value());
             CHECK(same_bytes(
                 view_of(*read),
                 view_of(
-                    make_section(static_cast<std::uint32_t>(i) + 1, 4).bytes)));
+                    make_segment(static_cast<std::uint32_t>(i) + 1, 4).bytes)));
         }
     }
 
@@ -585,12 +587,12 @@ TEST_SUITE("index store file") {
         const std::string host = "host.example";
         const std::string label = "rank-0";
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, host, label);
+        auto created = DataFileWriter::create(path, EXTENT_SIZE, host, label);
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         FileIndex expected;
-        expected.page_size = PAGE_SIZE;
+        expected.extent_size = EXTENT_SIZE;
         expected.host = dstring(host);
         expected.label = dstring(label);
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
@@ -608,26 +610,28 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("checkpoints.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         dstd::Vector<NamespaceItem> expected_namespaces;
-        dstd::Vector<PageRef> expected_pages;
+        dstd::Vector<ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 200; ++commit_id) {
             const NamespaceItem ns = make_namespace(commit_id);
-            const std::string page_bytes = "page-" + std::to_string(commit_id);
-            auto page = writer.append_page(view_of(page_bytes));
-            REQUIRE(page.has_value());
-            PageRefItem ref;
-            ref.offset = page->offset;
-            ref.length = page->length;
-            ref.crc = page->crc;
+            const std::string extent_bytes =
+                "extent-" + std::to_string(commit_id);
+            auto extent = writer.append_extent(view_of(extent_bytes));
+            REQUIRE(extent.has_value());
+            ExtentRefItem ref;
+            ref.offset = extent->offset;
+            ref.length = extent->length;
+            ref.crc = extent->crc;
             ref.sequence = commit_id;
             writer.add(ns);
             writer.add(ref);
             expected_namespaces.push_back(ns);
-            expected_pages.push_back(*page);
+            expected_extents.push_back(*extent);
             REQUIRE(writer.commit().has_value());
         }
 
@@ -637,23 +641,23 @@ TEST_SUITE("index store file") {
         CHECK(opened->index().last_sequence == 200);
         REQUIRE(opened->index().namespaces.size() ==
                 expected_namespaces.size());
-        auto page_refs = opened->all_page_refs();
-        REQUIRE(page_refs.has_value());
-        REQUIRE(page_refs->size() == expected_pages.size());
+        auto extent_refs = opened->all_extent_refs();
+        REQUIRE(extent_refs.has_value());
+        REQUIRE(extent_refs->size() == expected_extents.size());
         for (std::size_t i = 0; i < expected_namespaces.size(); ++i) {
             check_namespace(opened->index().namespaces[i],
                             expected_namespaces[i]);
         }
-        // The chain lists the newest checkpoint's own pages and the commits
+        // The chain lists the newest checkpoint's own extents and the commits
         // after it itself, and the checkpoint lists the 191 earlier ones by
         // summary.
         CHECK(opened->index().commit_refs.size() == 191);
-        for (std::size_t i = 0; i < expected_pages.size(); ++i) {
+        for (std::size_t i = 0; i < expected_extents.size(); ++i) {
             const auto& found = std::find_if(
-                page_refs->begin(), page_refs->end(),
+                extent_refs->begin(), extent_refs->end(),
                 [i](const auto& ref) { return ref.sequence == i + 1; });
-            REQUIRE(found != page_refs->end());
-            CHECK(found->ref.offset == expected_pages[i].offset);
+            REQUIRE(found != extent_refs->end());
+            CHECK(found->ref.offset == expected_extents[i].offset);
         }
     }
 
@@ -662,17 +666,18 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("crash.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         FileIndex expected;
-        expected.page_size = PAGE_SIZE;
+        expected.extent_size = EXTENT_SIZE;
         expected.host = dstring("host");
         expected.label = dstring("label");
-        dstd::Vector<PageRef> expected_pages;
+        dstd::Vector<ExtentRef> expected_extents;
         for (std::uint32_t commit_id = 1; commit_id <= 20; ++commit_id) {
-            add_five_commit(writer, expected, commit_id, &expected_pages);
+            add_five_commit(writer, expected, commit_id, &expected_extents);
         }
         expected.last_sequence = 20;
 
@@ -681,7 +686,7 @@ TEST_SUITE("index store file") {
 
         std::vector<std::size_t> lengths;
         for (std::size_t length = 0; length <= original.size();
-             length += PAGE_SIZE) {
+             length += EXTENT_SIZE) {
             lengths.push_back(length);
         }
         std::mt19937_64 rng(1234567);
@@ -699,12 +704,12 @@ TEST_SUITE("index store file") {
 
             std::size_t commits_before = 0;
             for (std::uint32_t commit_id = 1; commit_id <= 20; ++commit_id) {
-                const std::uint64_t page_end =
-                    commit_record_offset(commit_id) - PAGE_SIZE +
-                    expected_pages[commit_id - 1].length;
+                const std::uint64_t extent_end =
+                    commit_record_offset(commit_id) - EXTENT_SIZE +
+                    expected_extents[commit_id - 1].length;
                 const std::uint64_t record_end =
-                    commit_record_offset(commit_id) + PAGE_SIZE;
-                if (page_end <= length && record_end <= length) {
+                    commit_record_offset(commit_id) + EXTENT_SIZE;
+                if (extent_end <= length && record_end <= length) {
                     commits_before = commit_id;
                 } else {
                     break;
@@ -728,7 +733,8 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("missing_middle.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
@@ -740,14 +746,14 @@ TEST_SUITE("index store file") {
 
         const std::vector<std::uint8_t> original = read_file(path);
         const std::uint64_t record_offset = commit_record_offset(3);
-        REQUIRE(record_offset + PAGE_SIZE <= original.size());
+        REQUIRE(record_offset + EXTENT_SIZE <= original.size());
 
         for (const bool bad_header : {false, true}) {
             std::vector<std::uint8_t> corrupted = original;
             std::fill(
                 corrupted.begin() + static_cast<std::ptrdiff_t>(record_offset),
                 corrupted.begin() +
-                    static_cast<std::ptrdiff_t>(record_offset + PAGE_SIZE),
+                    static_cast<std::ptrdiff_t>(record_offset + EXTENT_SIZE),
                 0);
             if (bad_header) corrupt_header(corrupted);
 
@@ -760,11 +766,12 @@ TEST_SUITE("index store file") {
         }
     }
 
-    TEST_CASE("a record copied inside a page is not applied") {
+    TEST_CASE("a record copied inside an extent is not applied") {
         TempDir temp;
         const std::string path = temp.file("copied_record.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
@@ -776,14 +783,14 @@ TEST_SUITE("index store file") {
 
         std::vector<std::uint8_t> corrupted = read_file(path);
         const std::uint64_t record_offset = commit_record_offset(1);
-        REQUIRE(record_offset + PAGE_SIZE <= corrupted.size());
+        REQUIRE(record_offset + EXTENT_SIZE <= corrupted.size());
         const std::size_t append_offset = corrupted.size();
         corrupted.insert(
             corrupted.end(),
             corrupted.begin() + static_cast<std::ptrdiff_t>(record_offset),
             corrupted.begin() +
-                static_cast<std::ptrdiff_t>(record_offset + PAGE_SIZE));
-        REQUIRE(corrupted.size() == append_offset + PAGE_SIZE);
+                static_cast<std::ptrdiff_t>(record_offset + EXTENT_SIZE));
+        REQUIRE(corrupted.size() == append_offset + EXTENT_SIZE);
         corrupt_header(corrupted);
 
         const std::string copy_path = temp.file("copied_record_copy.dfs");
@@ -798,41 +805,42 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string no_close_path = temp.file("empty_no_close.dfs");
         auto created =
-            DataFileWriter::create(no_close_path, PAGE_SIZE, "host", "label");
+            DataFileWriter::create(no_close_path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
 
         auto opened_no_close = DataFileReader::open(no_close_path);
         REQUIRE(opened_no_close.has_value());
-        CHECK(opened_no_close->index().page_size == PAGE_SIZE);
+        CHECK(opened_no_close->index().extent_size == EXTENT_SIZE);
         CHECK(opened_no_close->index().last_sequence == 0);
         CHECK(opened_no_close->index().namespaces.size() == 0);
         CHECK(opened_no_close->index().scopes.size() == 0);
         CHECK(opened_no_close->index().copies.size() == 0);
         CHECK(opened_no_close->index().drops.size() == 0);
-        CHECK(opened_no_close->index().page_refs.size() == 0);
+        CHECK(opened_no_close->index().extent_refs.size() == 0);
 
         const std::string close_path = temp.file("empty_close.dfs");
         auto close_created =
-            DataFileWriter::create(close_path, PAGE_SIZE, "host", "label");
+            DataFileWriter::create(close_path, EXTENT_SIZE, "host", "label");
         REQUIRE(close_created.has_value());
         REQUIRE(close_created->close().has_value());
 
         auto opened_close = DataFileReader::open(close_path);
         REQUIRE(opened_close.has_value());
-        CHECK(opened_close->index().page_size == PAGE_SIZE);
+        CHECK(opened_close->index().extent_size == EXTENT_SIZE);
         CHECK(opened_close->index().last_sequence == 1);
         CHECK(opened_close->index().namespaces.size() == 0);
         CHECK(opened_close->index().scopes.size() == 0);
         CHECK(opened_close->index().copies.size() == 0);
         CHECK(opened_close->index().drops.size() == 0);
-        CHECK(opened_close->index().page_refs.size() == 0);
+        CHECK(opened_close->index().extent_refs.size() == 0);
     }
 
     TEST_CASE("a header with version 1 opens as unsupported") {
         TempDir temp;
         const std::string path = temp.file("version.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         REQUIRE(created->close().has_value());
 
@@ -854,7 +862,8 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("latched.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
@@ -870,7 +879,7 @@ TEST_SUITE("index store file") {
         REQUIRE_FALSE(second.has_value());
         CHECK(second.error().is(dstd::Condition::Io));
 
-        auto append = writer.append_page(view_of(std::string("never")));
+        auto append = writer.append_extent(view_of(std::string("never")));
         REQUIRE_FALSE(append.has_value());
         CHECK(append.error().is(dstd::Condition::Io));
 
@@ -886,7 +895,8 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("checkpoint_bad_header.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
@@ -920,7 +930,7 @@ TEST_SUITE("index store file") {
 
         const std::string valid_path = temp.file("valid.dfs");
         auto created =
-            DataFileWriter::create(valid_path, PAGE_SIZE, "host", "label");
+            DataFileWriter::create(valid_path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         REQUIRE(created->commit().has_value());
         const std::vector<std::uint8_t> valid = read_file(valid_path);
@@ -935,43 +945,45 @@ TEST_SUITE("index store file") {
                opened_short.error().is(dstd::Condition::Io)));
     }
 
-    TEST_CASE("a zeroed page passes open and fails the page crc") {
+    TEST_CASE("a zeroed extent passes open and fails the extent crc") {
         TempDir temp;
-        const std::string path = temp.file("zero_page.dfs");
+        const std::string path = temp.file("zero_extent.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        const std::string page_bytes(64, 'p');
-        auto page = writer.append_page(view_of(page_bytes));
-        REQUIRE(page.has_value());
-        PageRefItem ref;
-        ref.offset = page->offset;
-        ref.length = page->length;
-        ref.crc = page->crc;
+        const std::string extent_bytes(64, 'p');
+        auto extent = writer.append_extent(view_of(extent_bytes));
+        REQUIRE(extent.has_value());
+        ExtentRefItem ref;
+        ref.offset = extent->offset;
+        ref.length = extent->length;
+        ref.crc = extent->crc;
         ref.sequence = 1;
         writer.add(make_namespace(1));
         writer.add(ref);
         REQUIRE(writer.commit().has_value());
 
         std::vector<std::uint8_t> corrupted = read_file(path);
-        REQUIRE(corrupted.size() >= page->offset + page->length);
-        std::fill(corrupted.begin() + static_cast<std::ptrdiff_t>(page->offset),
-                  corrupted.begin() +
-                      static_cast<std::ptrdiff_t>(page->offset + page->length),
-                  0);
+        REQUIRE(corrupted.size() >= extent->offset + extent->length);
+        std::fill(
+            corrupted.begin() + static_cast<std::ptrdiff_t>(extent->offset),
+            corrupted.begin() +
+                static_cast<std::ptrdiff_t>(extent->offset + extent->length),
+            0);
 
-        const std::string copy_path = temp.file("zero_page_copy.dfs");
+        const std::string copy_path = temp.file("zero_extent_copy.dfs");
         write_file(copy_path, corrupted);
 
         auto opened = DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
-        REQUIRE(opened->index().page_refs.size() == 1);
+        REQUIRE(opened->index().extent_refs.size() == 1);
         auto read =
-            opened->read_data_page({opened->index().page_refs[0].ref.offset,
-                                    opened->index().page_refs[0].ref.length,
-                                    opened->index().page_refs[0].ref.crc});
+            opened->read_data_extent({opened->index().extent_refs[0].ref.offset,
+                                      opened->index().extent_refs[0].ref.length,
+                                      opened->index().extent_refs[0].ref.crc});
         REQUIRE_FALSE(read.has_value());
         CHECK(read.error().is(dstd::Condition::Parse));
     }
@@ -980,18 +992,20 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("bad_header.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             const NamespaceItem ns = make_namespace(commit_id);
-            const std::string page_bytes = "page-" + std::to_string(commit_id);
-            auto page = writer.append_page(view_of(page_bytes));
-            REQUIRE(page.has_value());
-            PageRefItem ref;
-            ref.offset = page->offset;
-            ref.length = page->length;
-            ref.crc = page->crc;
+            const std::string extent_bytes =
+                "extent-" + std::to_string(commit_id);
+            auto extent = writer.append_extent(view_of(extent_bytes));
+            REQUIRE(extent.has_value());
+            ExtentRefItem ref;
+            ref.offset = extent->offset;
+            ref.length = extent->length;
+            ref.crc = extent->crc;
             ref.sequence = commit_id;
             writer.add(ns);
             writer.add(ref);
@@ -1008,9 +1022,9 @@ TEST_SUITE("index store file") {
         REQUIRE(opened.has_value());
         CHECK(opened->index().last_sequence == 5);
         CHECK(opened->index().namespaces.size() == 5);
-        CHECK(opened->index().page_refs.size() == 5);
+        CHECK(opened->index().extent_refs.size() == 5);
         for (std::size_t i = 0; i < 5; ++i) {
-            CHECK(opened->index().page_refs[i].sequence == i + 1);
+            CHECK(opened->index().extent_refs[i].sequence == i + 1);
         }
     }
 
@@ -1018,18 +1032,20 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("bad_tail.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
             const NamespaceItem ns = make_namespace(commit_id);
-            const std::string page_bytes = "page-" + std::to_string(commit_id);
-            auto page = writer.append_page(view_of(page_bytes));
-            REQUIRE(page.has_value());
-            PageRefItem ref;
-            ref.offset = page->offset;
-            ref.length = page->length;
-            ref.crc = page->crc;
+            const std::string extent_bytes =
+                "extent-" + std::to_string(commit_id);
+            auto extent = writer.append_extent(view_of(extent_bytes));
+            REQUIRE(extent.has_value());
+            ExtentRefItem ref;
+            ref.offset = extent->offset;
+            ref.length = extent->length;
+            ref.crc = extent->crc;
             ref.sequence = commit_id;
             writer.add(ns);
             writer.add(ref);
@@ -1049,33 +1065,33 @@ TEST_SUITE("index store file") {
         REQUIRE(opened.has_value());
         CHECK(opened->index().last_sequence == 4);
         CHECK(opened->index().namespaces.size() == 4);
-        CHECK(opened->index().page_refs.size() == 4);
+        CHECK(opened->index().extent_refs.size() == 4);
     }
 
-    TEST_CASE("pages without a commit open as an empty index") {
+    TEST_CASE("extents without a commit open as an empty index") {
         TempDir temp;
-        const std::string path = temp.file("pages_no_commit.dfs");
+        const std::string path = temp.file("extents_no_commit.dfs");
 
         {
             auto created =
-                DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+                DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
             REQUIRE(created.has_value());
             auto& writer = *created;
-            REQUIRE(
-                writer.append_page(view_of(std::string(64, 'a'))).has_value());
-            REQUIRE(
-                writer.append_page(view_of(std::string(64, 'b'))).has_value());
+            REQUIRE(writer.append_extent(view_of(std::string(64, 'a')))
+                        .has_value());
+            REQUIRE(writer.append_extent(view_of(std::string(64, 'b')))
+                        .has_value());
         }
 
         auto opened = DataFileReader::open(path);
         REQUIRE(opened.has_value());
-        CHECK(opened->index().page_size == PAGE_SIZE);
+        CHECK(opened->index().extent_size == EXTENT_SIZE);
         CHECK(opened->index().last_sequence == 0);
         CHECK(opened->index().namespaces.size() == 0);
         CHECK(opened->index().scopes.size() == 0);
         CHECK(opened->index().copies.size() == 0);
         CHECK(opened->index().drops.size() == 0);
-        CHECK(opened->index().page_refs.size() == 0);
+        CHECK(opened->index().extent_refs.size() == 0);
     }
 
     TEST_CASE("record item counts are bounded by the body size") {
@@ -1127,7 +1143,7 @@ TEST_SUITE("index store file") {
         }
 
         {
-            PageRefItem ref;
+            ExtentRefItem ref;
             ref.offset = record_offset;
             ref.length = 16;
             ref.crc = 0;
@@ -1147,12 +1163,13 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("forward_prev.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         FileIndex expected;
-        expected.page_size = PAGE_SIZE;
+        expected.extent_size = EXTENT_SIZE;
         expected.host = dstring("host");
         expected.label = dstring("label");
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {
@@ -1166,13 +1183,13 @@ TEST_SUITE("index store file") {
             static_cast<std::uint64_t>(corrupted.size());
         const std::uint64_t source_offset = commit_record_offset(4);
         REQUIRE(copied_offset % store::FILE_HEADER_BYTES == 0);
-        REQUIRE(source_offset + PAGE_SIZE <= corrupted.size());
+        REQUIRE(source_offset + EXTENT_SIZE <= corrupted.size());
         corrupted.insert(
             corrupted.end(),
             corrupted.begin() + static_cast<std::ptrdiff_t>(source_offset),
             corrupted.begin() +
-                static_cast<std::ptrdiff_t>(source_offset + PAGE_SIZE));
-        REQUIRE(corrupted.size() == copied_offset + PAGE_SIZE);
+                static_cast<std::ptrdiff_t>(source_offset + EXTENT_SIZE));
+        REQUIRE(corrupted.size() == copied_offset + EXTENT_SIZE);
 
         write_u64_le_at(corrupted,
                         static_cast<std::size_t>(copied_offset) + 32U,
@@ -1200,12 +1217,13 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("bit_flips.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         FileIndex expected;
-        expected.page_size = PAGE_SIZE;
+        expected.extent_size = EXTENT_SIZE;
         expected.host = dstring("host");
         expected.label = dstring("label");
         for (std::uint32_t commit_id = 1; commit_id <= 70; ++commit_id) {
@@ -1236,17 +1254,17 @@ TEST_SUITE("index store file") {
             }
         }
 
-        for (const IndexedPageRef& page_ref : expected.page_refs) {
-            REQUIRE(page_ref.ref.length != 0);
+        for (const IndexedExtentRef& extent_ref : expected.extent_refs) {
+            REQUIRE(extent_ref.ref.length != 0);
             const std::size_t begin =
-                static_cast<std::size_t>(page_ref.ref.offset);
-            const std::size_t middle = begin + page_ref.ref.length / 2U;
-            const std::size_t end = begin + page_ref.ref.length - 1U;
+                static_cast<std::size_t>(extent_ref.ref.offset);
+            const std::size_t middle = begin + extent_ref.ref.length / 2U;
+            const std::size_t end = begin + extent_ref.ref.length - 1U;
             for (const std::size_t flip_at : {begin, middle, end}) {
                 REQUIRE(flip_at < original.size());
                 std::vector<std::uint8_t> corrupted = original;
                 corrupted[flip_at] ^= 1;
-                const std::string copy_path = temp.file("flip_page.dfs");
+                const std::string copy_path = temp.file("flip_extent.dfs");
                 write_file(copy_path, corrupted);
 
                 auto opened = DataFileReader::open(copy_path);
@@ -1260,12 +1278,13 @@ TEST_SUITE("index store file") {
         TempDir temp;
         const std::string path = temp.file("torn_header.dfs");
 
-        auto created = DataFileWriter::create(path, PAGE_SIZE, "host", "label");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
         REQUIRE(created.has_value());
         auto& writer = *created;
 
         FileIndex expected;
-        expected.page_size = PAGE_SIZE;
+        expected.extent_size = EXTENT_SIZE;
         expected.host = dstring("host");
         expected.label = dstring("label");
         for (std::uint32_t commit_id = 1; commit_id <= 5; ++commit_id) {

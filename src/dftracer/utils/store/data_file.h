@@ -24,9 +24,10 @@ inline constexpr std::size_t FILE_TRAILER_BYTES = 32;
 /// Every this many sequences a commit record is a checkpoint: it lists every
 /// item so far, with the earlier commits by summary, and a reader starts there.
 inline constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
-/// The most bytes one read run covers: page refs that are adjacent in the file
-/// are read together up to this many bytes, so a run of them costs one preadv
-/// instead of one pread per page. A ref longer than this is a run of its own.
+/// The most bytes one read run covers: extent refs that are adjacent in the
+/// file are read together up to this many bytes, so a run of them costs one
+/// preadv instead of one pread per extent. A ref longer than this is a run of
+/// its own.
 inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
 /// The most bytes the top table of a scope directory may use; above it the
 /// directory gains a level of middle blocks.
@@ -40,15 +41,15 @@ inline constexpr std::size_t TAIL_READ_BYTES = 65536;
 /// value run.
 inline constexpr std::size_t VERIFY_CHUNK_BYTES = std::size_t{1} << 20;
 
-struct PageRef {
+struct ExtentRef {
     std::uint64_t offset = 0;
     std::uint32_t length = 0;
     std::uint32_t crc = 0;
 };
 
-/// Where one page of a run reads: the buffer it fills, and the flag it sets
-/// when the page does not verify. Both are owned by the caller.
-struct PageTarget {
+/// Where one extent of a run reads: the buffer it fills, and the flag it sets
+/// when the extent does not verify. Both are owned by the caller.
+struct ExtentTarget {
     dstd::Vector<std::uint8_t>* bytes = nullptr;
     std::uint8_t* bad = nullptr;
 };
@@ -60,13 +61,13 @@ struct BlockReads {
     std::uint64_t bytes = 0;
 };
 
-struct IndexedPageRef {
+struct IndexedExtentRef {
     std::uint64_t sequence = 0;
-    PageRefItem ref;
+    ExtentRefItem ref;
 };
 
 struct FileIndex {
-    std::uint32_t page_size = 0;
+    std::uint32_t extent_size = 0;
     std::uint64_t writer_random = 0;
     std::uint32_t pid = 0;
     dstd::String host;
@@ -74,20 +75,20 @@ struct FileIndex {
     std::uint64_t creation_time = 0;
     // The sequence of the newest applied record; a footer has its own sequence.
     std::uint64_t last_sequence = 0;
-    // The newest applied record is a footer. A close syncs every page before
-    // it writes the footer, so every page ref of a closed file is on disk.
+    // The newest applied record is a footer. A close syncs every extent before
+    // it writes the footer, so every extent ref of a closed file is on disk.
     bool closed = false;
     dstd::Vector<NamespaceItem> namespaces;
     dstd::Vector<ScopeItem> scopes;
     dstd::Vector<CopyItem> copies;
     dstd::Vector<DropItem> drops;
-    /// The page refs the chain lists itself: those of the commits after the
+    /// The extent refs the chain lists itself: those of the commits after the
     /// newest checkpoint, and the checkpoint's own.
-    dstd::Vector<IndexedPageRef> page_refs;
-    /// The commits a checkpoint or the footer lists by summary. Their page
+    dstd::Vector<IndexedExtentRef> extent_refs;
+    /// The commits a checkpoint or the footer lists by summary. Their extent
     /// refs stay in their records; read_commit reads them.
     dstd::Vector<CommitRefItem> commit_refs;
-    /// The footer of a closed file, which names its items block, its page
+    /// The footer of a closed file, which names its items block, its extent
     /// table and its scope directory. Absent for a file that is not closed.
     dstd::Optional<FileTail> tail;
 };
@@ -98,7 +99,7 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
 class DataFileWriter {
    public:
     static dstd::Expected<DataFileWriter, dstd::Error> create(
-        dstd::StringView path, std::uint32_t page_size, dstd::StringView host,
+        dstd::StringView path, std::uint32_t extent_size, dstd::StringView host,
         dstd::StringView label);
 
     DataFileWriter(const DataFileWriter&) = delete;
@@ -107,22 +108,22 @@ class DataFileWriter {
     DataFileWriter& operator=(DataFileWriter&& other) noexcept;
     ~DataFileWriter();
 
-    /// Writes the stored form of one page of raw bytes (page_codec.h) at a
-    /// page-aligned offset and returns its ref. Section offsets inside the
-    /// page count from the raw bytes.
-    dstd::Expected<PageRef, dstd::Error> append_page(ByteView bytes);
-    dstd::Expected<PageRef, dstd::Error> append_big(ByteView bytes);
+    /// Writes the stored form of one extent of raw bytes (extent_codec.h) at
+    /// an extent-aligned offset and returns its ref. Segment offsets inside the
+    /// extent count from the raw bytes.
+    dstd::Expected<ExtentRef, dstd::Error> append_extent(ByteView bytes);
+    dstd::Expected<ExtentRef, dstd::Error> append_big(ByteView bytes);
 
     /// Takes `length` bytes at the first offset that is a multiple of `align`
     /// at or after the file end, and moves the end past them. Safe from any
     /// thread: one compare-and-swap hands out a range, no range is ever
     /// reused and the range belongs to the caller before it returns. `align`
-    /// must not be zero. `kind` names the range only so a reserved page region
-    /// reaches the fault recorder there; a range of any other kind is recorded
-    /// with its bytes where they are written.
+    /// must not be zero. `kind` names the range only so a reserved extent
+    /// region reaches the fault recorder there; a range of any other kind is
+    /// recorded with its bytes where they are written.
     std::uint64_t reserve_range(
         std::uint64_t length, std::uint64_t align,
-        io_fault::WriteKind kind = io_fault::WriteKind::Page);
+        io_fault::WriteKind kind = io_fault::WriteKind::Extent);
 
     /// The descriptor this writer appends to, -1 once closed.
     int fd() const noexcept { return fd_; }
@@ -137,13 +138,13 @@ class DataFileWriter {
 
     dstd::Expected<void, dstd::Error> write_header();
     dstd::Expected<void, dstd::Error> sync_data();
-    /// Every item a checkpoint or the footer lists, with the page refs of the
+    /// Every item a checkpoint or the footer lists, with the extent refs of the
     /// commit not yet written.
-    RecordItems items_with_pending_pages() const;
-    /// Summarizes the page refs of the record just written into one commit ref
-    /// per sequence, which later checkpoints and the footer list.
+    RecordItems items_with_pending_extents() const;
+    /// Summarizes the extent refs of the record just written into one commit
+    /// ref per sequence, which later checkpoints and the footer list.
     void add_commit_refs();
-    /// Builds the section block of every copy of every commit, the directory
+    /// Builds the segment block of every copy of every commit, the directory
     /// blocks and the items block of a closed file into `out`, as they land
     /// when `out` is written at `base`, and returns the footer item that names
     /// them. Each block is read by one pread, and its crc covers its bytes.
@@ -161,7 +162,7 @@ class DataFileWriter {
     dstd::Error latched_result() const;
 
     int fd_ = -1;
-    std::uint32_t page_size_ = 0;
+    std::uint32_t extent_size_ = 0;
     std::atomic<std::uint64_t> next_offset_{FILE_HEADER_BYTES};
     std::uint64_t last_sequence_ = 0;
     std::uint64_t tail_offset_ = 0;
@@ -174,10 +175,10 @@ class DataFileWriter {
     dstd::String label_;
     RecordItems pending_items_;
     RecordItems all_items_;
-    /// Every committed page ref, in commit order: close() builds the page
-    /// table, the section blocks and the directory from them without reading
+    /// Every committed extent ref, in commit order: close() builds the extent
+    /// table, the segment blocks and the directory from them without reading
     /// the file again.
-    dstd::Vector<PageRefItem> committed_pages_;
+    dstd::Vector<ExtentRefItem> committed_extents_;
     /// The committer thread closes and latches while commit threads read, so
     /// both are flags. The error behind `latched_` is written first and read
     /// under `error_mutex_`.
@@ -212,12 +213,13 @@ class DataFileReader {
     /// Reads one block whole and checks its crc: the stored bytes, as a big
     /// value run holds them. Parse when the block is out of the file or its
     /// crc fails, Io when the read fails.
-    dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_page(
-        const PageRef& ref) const;
-    /// Reads one page of sections: read_page, then its raw bytes decoded from
-    /// the stored form (page_codec.h). Parse also when it does not decode.
-    dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_data_page(
-        const PageRef& ref) const;
+    dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_extent(
+        const ExtentRef& ref) const;
+    /// Reads one extent of segments: read_extent, then its raw bytes decoded
+    /// from the stored form (extent_codec.h). Parse also when it does not
+    /// decode.
+    dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_data_extent(
+        const ExtentRef& ref) const;
     /// Reads one metadata block whole: one pread, then the crc of its bytes.
     /// Parse when the block lies outside the file or its crc fails, Io when
     /// the read itself fails. `reads` counts the call and its bytes.
@@ -225,37 +227,37 @@ class DataFileReader {
         const BlockHandle& handle, BlockReads* reads) const;
     /// Checks the crc of a block without keeping its bytes: reads it in
     /// VERIFY_CHUNK_BYTES chunks, so memory stays bounded for a big value run.
-    /// Parse when the block is out of the file or its crc fails, as read_page
+    /// Parse when the block is out of the file or its crc fails, as read_extent
     /// does. `reads` counts the pread calls it made and the bytes they
     /// returned.
-    dstd::Expected<void, dstd::Error> verify_block(const PageRef& ref,
+    dstd::Expected<void, dstd::Error> verify_block(const ExtentRef& ref,
                                                    BlockReads* reads) const;
-    /// Reads the pages of one run into their own buffers, one preadv per group
-    /// of at most IOV_MAX refs with one iovec per page pointing straight into
-    /// that page's buffer, then checks each page crc and decodes it to its raw
-    /// bytes (page_codec.h). `refs` and `targets` are
+    /// Reads the extents of one run into their own buffers, one preadv per
+    /// group of at most IOV_MAX refs with one iovec per extent pointing
+    /// straight into that extent's buffer, then checks each extent crc and
+    /// decodes it to its raw bytes (extent_codec.h). `refs` and `targets` are
     /// parallel spans of equal length; `refs` must be in ascending offset order
     /// with each ref starting where the previous one ends, so one preadv covers
-    /// a group. A ref of zero length or out of the file, and a page whose crc
-    /// fails, is left empty and marked bad through its target. A short read
-    /// past the end of the file (a truncated file) leaves the pages it did not
-    /// fill empty and bad, as read_page reports them. A page that does not
-    /// decode is bad too. The only error is Io,
-    /// when a read call itself fails, and the caller must then treat the whole
-    /// file as unreadable. The bytes of a bad page are dropped.
-    dstd::Expected<BlockReads, dstd::Error> read_pages(
-        dstd::Span<const PageRef> refs,
-        dstd::Span<const PageTarget> targets) const;
-    /// The page refs of one commit a summary lists, read from its record. Parse
-    /// when the record does not decode, sits elsewhere or is not the one the
-    /// summary names by crc; Io when the read fails. `reads` counts the calls
-    /// and bytes.
-    dstd::Expected<dstd::Vector<PageRefItem>, dstd::Error> read_commit(
+    /// a group. A ref of zero length or out of the file, and an extent whose
+    /// crc fails, is left empty and marked bad through its target. A short read
+    /// past the end of the file (a truncated file) leaves the extents it did
+    /// not fill empty and bad, as read_extent reports them. An extent that does
+    /// not decode is bad too. The only error is Io, when a read call itself
+    /// fails, and the caller must then treat the whole file as unreadable. The
+    /// bytes of a bad extent are dropped.
+    dstd::Expected<BlockReads, dstd::Error> read_extents(
+        dstd::Span<const ExtentRef> refs,
+        dstd::Span<const ExtentTarget> targets) const;
+    /// The extent refs of one commit a summary lists, read from its record.
+    /// Parse when the record does not decode, sits elsewhere or is not the one
+    /// the summary names by crc; Io when the read fails. `reads` counts the
+    /// calls and bytes.
+    dstd::Expected<dstd::Vector<ExtentRefItem>, dstd::Error> read_commit(
         const CommitRefItem& ref, BlockReads* reads) const;
-    /// Every page ref of the file in commit order: those the chain lists, and
+    /// Every extent ref of the file in commit order: those the chain lists, and
     /// those of every commit summary, read from their records.
-    dstd::Expected<dstd::Vector<IndexedPageRef>, dstd::Error> all_page_refs()
-        const;
+    dstd::Expected<dstd::Vector<IndexedExtentRef>, dstd::Error>
+    all_extent_refs() const;
 
    private:
     DataFileReader() = default;

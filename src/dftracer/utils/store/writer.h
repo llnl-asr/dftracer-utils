@@ -17,9 +17,9 @@
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
-#include <dftracer/utils/store/open_page.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/snapshot.h>
-#include <dftracer/utils/store/writer_pages.h>
+#include <dftracer/utils/store/writer_extents.h>
 
 #include <atomic>
 #include <chrono>
@@ -57,17 +57,17 @@ constexpr const dstd::ErrorCodeInfo& error_info(WriterErrc code) noexcept {
 }
 
 struct WriterOptions {
-    /// The page size of the data file. Unset means the page size of `dir`, from
-    /// page_size_for().
-    dstd::Optional<std::uint32_t> page_size;
-    /// The most page bytes the writer holds while it holds any: the bytes
-    /// appended to a page and not yet written. Unset means max(16, 4 * the
-    /// number of executor threads) pages. Zero is InvalidArgument.
-    dstd::Optional<std::uint64_t> page_quota_bytes;
-    /// Pending section bytes, raw, at which a group commit starts without
+    /// The extent size of the data file. Unset means the extent size of `dir`,
+    /// from extent_size_for().
+    dstd::Optional<std::uint32_t> extent_size;
+    /// The most extent bytes the writer holds while it holds any: the bytes
+    /// appended to an extent and not yet written. Unset means max(16, 4 * the
+    /// number of executor threads) extents. Zero is InvalidArgument.
+    dstd::Optional<std::uint64_t> extent_quota_bytes;
+    /// Pending segment bytes, raw, at which a group commit starts without
     /// waiting for commit_interval.
     std::uint64_t commit_bytes = std::uint64_t{64} << 20;
-    /// The longest a queued page or copy state change waits for its record.
+    /// The longest a queued extent or copy state change waits for its record.
     std::chrono::milliseconds commit_interval{100};
     dstd::String host;
     dstd::String label;
@@ -129,19 +129,19 @@ class Batch {
 };
 
 /// One data file of one process. Entries become visible at the group commit
-/// that records their page.
+/// that records their extent.
 ///
 /// add_namespace, batch, commit, fail and drop are safe from several threads at
 /// once; commit takes one lock of this writer, and that is the only one it
-/// shares with the others. A batch is sorted and sealed into one section and
-/// appended to its namespace's open page, so a page of the file holds the
-/// sections of several batches. flush() and close() are coroutines of the
+/// shares with the others. A batch is sorted and sealed into one segment and
+/// appended to its namespace's open extent, so an extent of the file holds the
+/// segments of several batches. flush() and close() are coroutines of the
 /// executor the writer was created with, and close() must not run while another
 /// thread is still calling the writer.
 class Writer {
    public:
     /// InvalidArgument when the executor has no I/O backend, and when
-    /// `options.page_size` is set but out of range.
+    /// `options.extent_size` is set but out of range.
     static dstd::Expected<std::unique_ptr<Writer>, dstd::Error> create(
         dstd::StringView dir, Executor& executor,
         const WriterOptions& options = WriterOptions{});
@@ -150,9 +150,9 @@ class Writer {
     Writer& operator=(const Writer&) = delete;
     Writer(Writer&&) = delete;
     Writer& operator=(Writer&&) = delete;
-    /// Without a preceding close(), seals the open pages and blocks until their
-    /// writes completed, so no completion outlives this object. Blocking means
-    /// the destructor must not run on a thread of the writer's executor.
+    /// Without a preceding close(), seals the open extents and blocks until
+    /// their writes completed, so no completion outlives this object. Blocking
+    /// means the destructor must not run on a thread of the writer's executor.
     ~Writer();
 
     dstd::Expected<NamespaceId, dstd::Error> add_namespace(
@@ -167,7 +167,7 @@ class Writer {
 
     /// InvalidArgument on a closed writer, an unknown namespace, an invalid
     /// batch, or a closed pool; the committer's error once it failed; and
-    /// WriterErrc::Busy while the page bytes of earlier commits are not
+    /// WriterErrc::Busy while the extent bytes of earlier commits are not
     /// written. A Busy commit assigns no scope, copy or generation and leaves
     /// `batch` whole, so the caller retries it, waiting on space():
     /// `while (commit(std::move(b)) is Busy) co_await space();`
@@ -187,23 +187,23 @@ class Writer {
                                            ByteView begin, ByteView end);
 
     /// Covers every batch whose commit returned before this call: seals the
-    /// open pages, waits for their writes and runs one group commit, syncing
+    /// open extents, waits for their writes and runs one group commit, syncing
     /// when any of those batches is durable.
     coro::CoroTask<dstd::Expected<void, dstd::Error>> flush();
     /// flush(), then stops the committer task, then closes the data file.
     coro::CoroTask<dstd::Expected<void, dstd::Error>> close();
 
     /// Waits until a write that started after this call completed, the writer
-    /// holds no page bytes, or it latched an error: what a retry after a Busy
+    /// holds no extent bytes, or it latched an error: what a retry after a Busy
     /// commit waits for. It reports nothing; the retry reports the outcome.
-    /// Seals the open pages first, so the bytes it waits for are in flight.
+    /// Seals the open extents first, so the bytes it waits for are in flight.
     /// Runs on a thread of the writer's executor.
     coro::CoroTask<void> space();
 
     /// The file name and the full path of the data file this writer owns.
     const dstd::String& name() const { return name_; }
     const dstd::String& path() const { return path_; }
-    std::uint32_t page_size() const { return page_size_; }
+    std::uint32_t extent_size() const { return extent_size_; }
 
    private:
     struct NamespaceEntry {
@@ -247,17 +247,17 @@ class Writer {
                static_cast<std::uint64_t>(scope_id);
     }
 
-    struct SectionBytes {
+    struct SegmentBytes {
         dstd::Vector<std::uint8_t> bytes;
         std::uint64_t entry_count = 0;
         dstd::Vector<std::uint8_t> first_key;
         dstd::Vector<std::uint8_t> last_key;
-        dstd::Vector<PageRef> big_runs;
+        dstd::Vector<ExtentRef> big_runs;
     };
 
-    Writer(dstd::String name, dstd::String path, std::uint32_t page_size,
+    Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
            dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
-           memory::PoolHandle page_pool, std::uint64_t page_quota,
+           memory::PoolHandle extent_pool, std::uint64_t extent_quota,
            Executor& executor, const WriterOptions& options);
 
     NamespaceEntry* find_namespace(std::uint32_t id);
@@ -276,11 +276,11 @@ class Writer {
     /// and ids of `pending`; takes the writer lock.
     dstd::Expected<void, dstd::Error> prepare(const Batch& batch,
                                               PendingBatch& pending);
-    /// Sizes the section, charges its exact length to the page count and only
+    /// Sizes the segment, charges its exact length to the extent count and only
     /// then seals it, so a Busy result (WriterErrc::Busy) comes before any big
     /// value is written. On every other failure the charge is given back.
-    dstd::Expected<SectionBytes, dstd::Error> build_section(const Batch& batch);
-    /// Seals the open pages, so the bytes a Busy commit waits for are in
+    dstd::Expected<SegmentBytes, dstd::Error> build_segment(const Batch& batch);
+    /// Seals the open extents, so the bytes a Busy commit waits for are in
     /// flight, then reports WriterErrc::Busy, or the seal error instead.
     dstd::Unexpected<dstd::Error> busy_error();
     void latch(const dstd::Error& error);
@@ -288,31 +288,32 @@ class Writer {
 
     friend struct WriterTestHook;
 
-    /// The placer context of one section seal: the big value runs it wrote
+    /// The placer context of one segment seal: the big value runs it wrote
     /// are collected for the commit record.
     struct BigPlacement {
         Writer* writer = nullptr;
-        dstd::Vector<PageRef>* runs = nullptr;
+        dstd::Vector<ExtentRef>* runs = nullptr;
     };
     static BigRef place_big(void* context, ByteView value);
-    /// The WrittenPageFn of the page writer: releases the bytes the page held
-    /// and hands it to the committer. Runs on an I/O backend thread.
-    static void wrote_page(void* context, WrittenPage&& page);
-    /// The IdleFn of the page writer: wakes back-pressure waiters once no page
-    /// write is in flight, so one of them seals the open pages.
-    static void pages_idle(void* context);
+    /// The WrittenExtentFn of the extent writer: releases the bytes the extent
+    /// held and hands it to the committer. Runs on an I/O backend thread.
+    static void wrote_extent(void* context, WrittenExtent&& extent);
+    /// The IdleFn of the extent writer: wakes back-pressure waiters once no
+    /// extent write is in flight, so one of them seals the open extents.
+    static void extents_idle(void* context);
 
     DataFileWriter file_;
     Committer committer_;
-    /// The pool the page bytes are charged to. Declared before the pieces that
-    /// reserve from it and the completions that release them.
-    memory::PoolHandle page_pool_;
-    WriterPages page_bytes_;
-    // Declared after the committer, so a page completion can never outlive it.
-    PageWriter pages_;
+    /// The pool the extent bytes are charged to. Declared before the pieces
+    /// that reserve from it and the completions that release them.
+    memory::PoolHandle extent_pool_;
+    WriterExtents extent_bytes_;
+    // Declared after the committer, so an extent completion can never outlive
+    // it.
+    ExtentWriter extents_;
     dstd::String name_;
     dstd::String path_;
-    std::uint32_t page_size_ = 0;
+    std::uint32_t extent_size_ = 0;
     std::uint32_t next_namespace_id_ = 1;
     std::uint32_t next_scope_id_ = 1;
     std::uint32_t next_copy_id_ = 1;
@@ -332,13 +333,13 @@ class Writer {
 
 /// Test-only access to the parts of a writer.
 struct WriterTestHook {
-    /// The data file the writer appends pages and records to.
+    /// The data file the writer appends extents and records to.
     static DataFileWriter& file(Writer& writer);
-    /// The page bytes the writer holds, the most it held, and its counts.
-    static WriterPagesCounters pages(const Writer& writer);
+    /// The extent bytes the writer holds, the most it held, and its counts.
+    static WriterExtentsCounters extents(const Writer& writer);
 
     using SpaceSealedFn = void (*)(Writer& writer);
-    /// Runs inside every space() after it sealed the open pages and before it
+    /// Runs inside every space() after it sealed the open extents and before it
     /// parks; nullptr turns it off. Process-wide.
     static void set_space_sealed(SpaceSealedFn fn);
 };

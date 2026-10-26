@@ -1,6 +1,6 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/runtime/executor/executor.h>
-#include <dftracer/utils/store/page_size.h>
+#include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/writer.h>
 #include <unistd.h>
 
@@ -22,7 +22,7 @@ namespace {
 
 using dftracer::utils::ByteView;
 
-constexpr std::size_t SECTION_HEADER_BYTES = 20;
+constexpr std::size_t SEGMENT_HEADER_BYTES = 20;
 
 const std::array<std::uint8_t, 8> COUNT_VALUE = {1, 0, 0, 0, 0, 0, 0, 0};
 
@@ -31,15 +31,16 @@ dstd::Unexpected<dstd::Error> invalid_error() {
         dstd::Error(dstd::Condition::InvalidArgument));
 }
 
-/// The bytes one writer may hold in pages when the caller names no quota: the
-/// commits of four executor threads, counted in pages of the store's default
-/// page size at least, so a page size the caller shrank for a test does not
-/// shrink the bound to a few kilobytes.
-std::uint64_t default_page_quota(Executor& executor, std::uint32_t page_size) {
+/// The bytes one writer may hold in extents when the caller names no quota: the
+/// commits of four executor threads, counted in extents of the store's default
+/// extent size at least, so an extent size the caller shrank for a test does
+/// not shrink the bound to a few kilobytes.
+std::uint64_t default_extent_quota(Executor& executor,
+                                   std::uint32_t extent_size) {
     const std::uint64_t threads =
         std::max<std::uint64_t>(executor.get_num_threads(), 1);
     const std::uint64_t unit = std::max<std::uint64_t>(
-        page_size, constants::store::STORE_DEFAULT_PAGE_BYTES);
+        extent_size, constants::store::STORE_DEFAULT_EXTENT_BYTES);
     return std::max<std::uint64_t>(16, 4 * threads) * unit;
 }
 
@@ -91,15 +92,15 @@ dstd::Vector<std::uint8_t> copy_bytes(ByteView bytes) {
     return out;
 }
 
-/// The exact length SectionBuilder::seal produces for the entries added so far.
-struct SectionSizer {
-    std::size_t index_bytes = SECTION_HEADER_BYTES;
+/// The exact length SegmentBuilder::seal produces for the entries added so far.
+struct SegmentSizer {
+    std::size_t index_bytes = SEGMENT_HEADER_BYTES;
     std::size_t body_bytes = 0;
     std::size_t group_bytes = 0;
     bool have_group = false;
 
     void add(std::size_t key_length, std::size_t entry_bytes) {
-        if (have_group && group_bytes + entry_bytes > SUBPAGE_BYTES) {
+        if (have_group && group_bytes + entry_bytes > GRANULE_BYTES) {
             group_bytes = 0;
             have_group = false;
         }
@@ -112,7 +113,7 @@ struct SectionSizer {
     }
 
     std::size_t size() const {
-        return align_up(index_bytes + body_bytes, SECTION_ALIGN);
+        return align_up(index_bytes + body_bytes, SEGMENT_ALIGN);
     }
 };
 
@@ -143,15 +144,15 @@ struct KeyGroup {
     std::uint64_t value_length = 0;
 };
 
-/// Frees a batch whose page no write carried, including the one a failed page
-/// write left behind, and releases the bytes it charged so no wait for them
-/// outlives the failure. A discard means a failed write or a writer going
+/// Frees a batch whose extent no write carried, including the one a failed
+/// extent write left behind, and releases the bytes it charged so no wait for
+/// them outlives the failure. A discard means a failed write or a writer going
 /// away, so the count latches too.
 void discard_batch(void* context) {
     auto* pending = static_cast<PendingBatch*>(context);
-    if (pending->pages != nullptr) {
-        pending->pages->release(pending->charged_bytes);
-        pending->pages->latch();
+    if (pending->extents != nullptr) {
+        pending->extents->release(pending->charged_bytes);
+        pending->extents->latch();
     }
     delete pending;
 }
@@ -273,36 +274,37 @@ dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
                         "store writer needs an executor with an I/O backend"));
     }
 
-    std::uint32_t page_size = 0;
-    if (options.page_size) {
-        auto chosen = choose_page_size(0, options.page_size);
+    std::uint32_t extent_size = 0;
+    if (options.extent_size) {
+        auto chosen = choose_extent_size(0, options.extent_size);
         if (!chosen) return dstd::Unexpected<dstd::Error>(chosen.error());
-        page_size = *chosen;
+        extent_size = *chosen;
     } else {
-        auto chosen = page_size_for(dir);
+        auto chosen = extent_size_for(dir);
         if (!chosen) return dstd::Unexpected<dstd::Error>(chosen.error());
-        page_size = *chosen;
+        extent_size = *chosen;
     }
 
-    std::uint64_t page_quota = 0;
-    if (options.page_quota_bytes) {
-        page_quota = *options.page_quota_bytes;
-        if (page_quota == 0) {
+    std::uint64_t extent_quota = 0;
+    if (options.extent_quota_bytes) {
+        extent_quota = *options.extent_quota_bytes;
+        if (extent_quota == 0) {
             return dstd::Unexpected<dstd::Error>(dstd::Error(
-                dstd::Condition::InvalidArgument, "page quota is zero"));
+                dstd::Condition::InvalidArgument, "extent quota is zero"));
         }
     } else {
-        page_quota = default_page_quota(executor, page_size);
+        extent_quota = default_extent_quota(executor, extent_size);
     }
 
-    // The bytes of the pages in flight are charged here, so a caller that
-    // builds one writer inside its own pool bounds this writer's page memory
+    // The bytes of the extents in flight are charged here, so a caller that
+    // builds one writer inside its own pool bounds this writer's extent memory
     // with that pool's limit.
-    auto page_pool = memory::current_pool().child(
+    auto extent_pool = memory::current_pool().child(
         "index store writer", memory::PoolKind::Scratch, memory::Limits{});
-    if (!page_pool) {
-        return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Internal, "no pool for the writer's page bytes"));
+    if (!extent_pool) {
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error(dstd::Condition::Internal,
+                        "no pool for the writer's extent bytes"));
     }
 
     auto snapshot = Snapshot::open(dir);
@@ -327,36 +329,38 @@ dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
                        random_bits(), options.label);
     dstd::String path(path_of(dir, name));
     auto file =
-        DataFileWriter::create(path, page_size, options.host, options.label);
+        DataFileWriter::create(path, extent_size, options.host, options.label);
     if (!file) return dstd::Unexpected<dstd::Error>(file.error());
 
-    std::unique_ptr<Writer> writer(new Writer(
-        std::move(name), std::move(path), page_size, std::move(generations),
-        std::move(*file), std::move(page_pool), page_quota, executor, options));
+    std::unique_ptr<Writer> writer(
+        new Writer(std::move(name), std::move(path), extent_size,
+                   std::move(generations), std::move(*file),
+                   std::move(extent_pool), extent_quota, executor, options));
     writer->committer_.start();
     return writer;
 }
 
-Writer::Writer(dstd::String name, dstd::String path, std::uint32_t page_size,
+Writer::Writer(dstd::String name, dstd::String path, std::uint32_t extent_size,
                dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
-               memory::PoolHandle page_pool, std::uint64_t page_quota,
+               memory::PoolHandle extent_pool, std::uint64_t extent_quota,
                Executor& executor, const WriterOptions& options)
     : file_(std::move(file)),
       committer_(file_, executor, options.commit_bytes,
                  options.commit_interval),
-      page_pool_(std::move(page_pool)),
-      page_bytes_(page_quota, *page_pool_.get()),
-      pages_(file_, executor.io_backend(), executor, page_size,
-             &Writer::wrote_page, this, &discard_batch, &Writer::pages_idle),
+      extent_pool_(std::move(extent_pool)),
+      extent_bytes_(extent_quota, *extent_pool_.get()),
+      extents_(file_, executor.io_backend(), executor, extent_size,
+               &Writer::wrote_extent, this, &discard_batch,
+               &Writer::extents_idle),
       name_(std::move(name)),
       path_(std::move(path)),
-      page_size_(page_size),
+      extent_size_(extent_size),
       generations_(std::move(generations)) {}
 
 Writer::~Writer() {
     if (!closed_.load(std::memory_order_acquire)) {
-        pages_.seal_all();
-        pages_.wait_idle();
+        extents_.seal_all();
+        extents_.wait_idle();
     }
 }
 
@@ -366,8 +370,8 @@ void WriterTestHook::set_space_sealed(SpaceSealedFn fn) {
     space_sealed_hook().store(fn, std::memory_order_release);
 }
 
-WriterPagesCounters WriterTestHook::pages(const Writer& writer) {
-    return writer.page_bytes_.counters();
+WriterExtentsCounters WriterTestHook::extents(const Writer& writer) {
+    return writer.extent_bytes_.counters();
 }
 
 Writer::NamespaceEntry* Writer::find_namespace(std::uint32_t id) {
@@ -508,22 +512,23 @@ BigRef Writer::place_big(void* context, ByteView value) {
     return BigRef{placed->offset, placed->length, placed->crc};
 }
 
-void Writer::pages_idle(void* context) {
-    static_cast<Writer*>(context)->page_bytes_.nudge();
+void Writer::extents_idle(void* context) {
+    static_cast<Writer*>(context)->extent_bytes_.nudge();
 }
 
-void Writer::wrote_page(void* context, WrittenPage&& page) {
+void Writer::wrote_extent(void* context, WrittenExtent&& extent) {
     auto* writer = static_cast<Writer*>(context);
     std::uint64_t bytes = 0;
-    for (const PageSection& section : page.sections) bytes += section.length;
-    writer->page_bytes_.release(bytes);
-    writer->committer_.on_page(std::move(page));
+    for (const ExtentSegment& segment : extent.segments)
+        bytes += segment.length;
+    writer->extent_bytes_.release(bytes);
+    writer->committer_.on_extent(std::move(extent));
 }
 
-dstd::Expected<Writer::SectionBytes, dstd::Error> Writer::build_section(
+dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
     const Batch& batch) {
-    SectionBytes section;
-    if (batch.entries_.empty()) return section;
+    SegmentBytes segment;
+    if (batch.entries_.empty()) return segment;
 
     const auto key_of = [&batch](std::size_t index) {
         const Batch::Entry& entry = batch.entries_[index];
@@ -570,9 +575,10 @@ dstd::Expected<Writer::SectionBytes, dstd::Error> Writer::build_section(
         i = end;
     }
 
-    // One batch is one section: a section of a page or more becomes a run of
-    // its own in PageWriter, and a page holds the sections of several batches.
-    SectionSizer sizer;
+    // One batch is one segment: a segment of an extent or more becomes a run of
+    // its own in ExtentWriter, and an extent holds the segments of several
+    // batches.
+    SegmentSizer sizer;
     for (const KeyGroup& group : groups) {
         sizer.add(group.key_length,
                   encoded_entry_size(group.key_length, group.value_length));
@@ -585,37 +591,37 @@ dstd::Expected<Writer::SectionBytes, dstd::Error> Writer::build_section(
     // Charged before the seal places big values and before any id is
     // assigned, so a Busy commit writes nothing and changes no writer state.
     const std::uint64_t charged = static_cast<std::uint64_t>(sizer.size());
-    if (page_bytes_.take(charged) == WriterPages::Take::Busy) {
+    if (extent_bytes_.take(charged) == WriterExtents::Take::Busy) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(WriterErrc::Busy));
     }
 
     const FoldFn fold = fold_fn(batch.fold_);
-    SectionBuilder builder;
+    SegmentBuilder builder;
     for (std::size_t i = 0; i < order.size(); ++i) {
         builder.add(key_of(order[i]), value_of(order[i]));
     }
-    BigPlacement placement{this, &section.big_runs};
+    BigPlacement placement{this, &segment.big_runs};
     auto sealed = builder.seal(fold, &Writer::place_big, &placement);
     if (auto error = latched()) {
-        page_bytes_.release(charged);
+        extent_bytes_.release(charged);
         return dstd::Unexpected<dstd::Error>(*error);
     }
     if (!sealed) {
-        page_bytes_.release(charged);
+        extent_bytes_.release(charged);
         return dstd::Unexpected<dstd::Error>(sealed.error());
     }
     if (sealed->size() != charged) {
-        page_bytes_.release(charged);
+        extent_bytes_.release(charged);
         return dstd::Unexpected<dstd::Error>(
             dstd::Error(dstd::Condition::Internal,
-                        "store section size differs from its plan"));
+                        "store segment size differs from its plan"));
     }
 
-    section.bytes = std::move(*sealed);
-    section.entry_count = builder.entry_count();
-    section.first_key = copy_bytes(builder.first_key());
-    section.last_key = copy_bytes(builder.last_key());
-    return section;
+    segment.bytes = std::move(*sealed);
+    segment.entry_count = builder.entry_count();
+    segment.first_key = copy_bytes(builder.first_key());
+    segment.last_key = copy_bytes(builder.last_key());
+    return segment;
 }
 
 dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
@@ -651,26 +657,26 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     if (batch.writer_ != this) return invalid_error();
     if (batch.error_) return dstd::Unexpected<dstd::Error>(*batch.error_);
 
-    auto section = build_section(batch);
-    if (!section) {
-        if (section.error().is_code(WriterErrc::Busy)) return busy_error();
-        return dstd::Unexpected<dstd::Error>(section.error());
+    auto segment = build_segment(batch);
+    if (!segment) {
+        if (segment.error().is_code(WriterErrc::Busy)) return busy_error();
+        return dstd::Unexpected<dstd::Error>(segment.error());
     }
-    const std::uint64_t section_bytes =
-        static_cast<std::uint64_t>(section->bytes.size());
-    const bool charged = section_bytes != 0;
+    const std::uint64_t segment_bytes =
+        static_cast<std::uint64_t>(segment->bytes.size());
+    const bool charged = segment_bytes != 0;
 
     auto* pending = new PendingBatch;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (latched_error_) {
-            if (charged) page_bytes_.release(section_bytes);
+            if (charged) extent_bytes_.release(segment_bytes);
             delete pending;
             return dstd::Unexpected<dstd::Error>(*latched_error_);
         }
         auto prepared = prepare(batch, *pending);
         if (!prepared) {
-            if (charged) page_bytes_.release(section_bytes);
+            if (charged) extent_bytes_.release(segment_bytes);
             delete pending;
             return prepared;
         }
@@ -681,51 +687,51 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
         return {};
     }
 
-    pending->pages = &page_bytes_;
-    pending->charged_bytes = section_bytes;
-    pending->big_runs = std::move(section->big_runs);
+    pending->extents = &extent_bytes_;
+    pending->charged_bytes = segment_bytes;
+    pending->big_runs = std::move(segment->big_runs);
 
-    PageSection info;
+    ExtentSegment info;
     info.copy_id = pending->copy_item.local_id;
-    info.entry_count = section->entry_count;
-    info.first_key = std::move(section->first_key);
-    info.last_key = std::move(section->last_key);
+    info.entry_count = segment->entry_count;
+    info.first_key = std::move(segment->first_key);
+    info.last_key = std::move(segment->last_key);
 
     auto appended =
-        pages_.append(pending->namespace_id,
-                      ByteView{section->bytes.data(), section->bytes.size()},
-                      std::move(info), pending);
+        extents_.append(pending->namespace_id,
+                        ByteView{segment->bytes.data(), segment->bytes.size()},
+                        std::move(info), pending);
     if (!appended) {
-        page_bytes_.release(section_bytes);
-        // The page writer reports this error from every later append, so a
+        extent_bytes_.release(segment_bytes);
+        // The extent writer reports this error from every later append, so a
         // wait for bytes it will never release has to end here.
-        page_bytes_.latch();
+        extent_bytes_.latch();
         delete pending;
         return appended;
     }
     // A waiter needs a release. A write in flight brings one; with none in
-    // flight, this append's page must be sealed or the waiter waits forever.
-    // Sealing only then keeps pages full under steady back pressure.
-    if (page_bytes_.waiting() && !pages_.writing()) {
-        auto sealed = pages_.seal_all();
+    // flight, this append's extent must be sealed or the waiter waits forever.
+    // Sealing only then keeps extents full under steady back pressure.
+    if (extent_bytes_.waiting() && !extents_.writing()) {
+        auto sealed = extents_.seal_all();
         if (!sealed) {
             committer_.latch(sealed.error());
-            page_bytes_.latch();
+            extent_bytes_.latch();
         }
     }
     return {};
 }
 
 dstd::Unexpected<dstd::Error> Writer::busy_error() {
-    // With no write in flight, the held bytes sit in open pages nobody writes:
-    // seal them, so threads that all hold a partial batch cannot deadlock.
-    // With a write in flight its completion frees bytes, and a seal would only
-    // write a partial page.
-    if (!pages_.writing()) {
-        auto sealed = pages_.seal_all();
+    // With no write in flight, the held bytes sit in open extents nobody
+    // writes: seal them, so threads that all hold a partial batch cannot
+    // deadlock. With a write in flight its completion frees bytes, and a seal
+    // would only write a partial extent.
+    if (!extents_.writing()) {
+        auto sealed = extents_.seal_all();
         if (!sealed) {
             committer_.latch(sealed.error());
-            page_bytes_.latch();
+            extent_bytes_.latch();
             return dstd::Unexpected<dstd::Error>(sealed.error());
         }
     }
@@ -735,30 +741,30 @@ dstd::Unexpected<dstd::Error> Writer::busy_error() {
 coro::CoroTask<void> Writer::space() {
     dstd::Optional<dstd::Error> latched_error = latched();
     if (latched_error) {
-        page_bytes_.latch();
+        extent_bytes_.latch();
         co_return;
     }
     if (closed_.load(std::memory_order_acquire) || committer_.failed() ||
-        page_bytes_.latched()) {
+        extent_bytes_.latched()) {
         co_return;
     }
     // Announced before the check: a write in flight at the check releases
     // bytes after the announce, and with none in flight the seal here, or the
     // seal of an append the seal misses, starts one. Either way the release
     // this waits for comes.
-    WriterPages::WaitAnnounce announce(page_bytes_);
-    if (!pages_.writing()) {
-        auto sealed = pages_.seal_all();
+    WriterExtents::WaitAnnounce announce(extent_bytes_);
+    if (!extents_.writing()) {
+        auto sealed = extents_.seal_all();
         if (!sealed) {
             committer_.latch(sealed.error());
-            page_bytes_.latch();
+            extent_bytes_.latch();
             co_return;
         }
     }
     if (auto* hook = space_sealed_hook().load(std::memory_order_acquire)) {
         hook(*this);
     }
-    auto wait = page_bytes_.wait_release(announce.epoch());
+    auto wait = extent_bytes_.wait_release(announce.epoch());
     co_await wait;
     co_return;
 }
@@ -877,16 +883,16 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::flush() {
         co_return dstd::Unexpected<dstd::Error>(
             dstd::Error(dstd::Condition::InvalidArgument));
     }
-    auto sealed = pages_.seal_all();
+    auto sealed = extents_.seal_all();
     if (!sealed) {
         committer_.latch(sealed.error());
-        page_bytes_.latch();
+        extent_bytes_.latch();
         co_return sealed;
     }
-    auto idle = co_await pages_.wait_idle_async();
+    auto idle = co_await extents_.wait_idle_async();
     if (!idle) {
         committer_.latch(idle.error());
-        page_bytes_.latch();
+        extent_bytes_.latch();
         co_return idle;
     }
     co_return committer_.commit_pending();
@@ -902,16 +908,16 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::close() {
     closed_.store(true, std::memory_order_release);
 
     dstd::Optional<dstd::Error> first;
-    auto sealed = pages_.seal_all();
+    auto sealed = extents_.seal_all();
     if (!sealed) {
         committer_.latch(sealed.error());
-        page_bytes_.latch();
+        extent_bytes_.latch();
         first = sealed.error();
     }
-    auto idle = co_await pages_.wait_idle_async();
+    auto idle = co_await extents_.wait_idle_async();
     if (!idle) {
         committer_.latch(idle.error());
-        page_bytes_.latch();
+        extent_bytes_.latch();
         if (!first) first = idle.error();
     }
     auto committed = committer_.commit_pending();

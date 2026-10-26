@@ -17,9 +17,9 @@
 //   store_bench --dir /private/tmp --case fold --fold-scopes 1000,8404
 //   --fold-keys 1024
 //
-// Output: comment lines naming the page size, the I/O backend, the file system
-// kind and the options both engines run under, then TSV rows. A write row is
-// one mode, engine and thread count; its I/O counts come from io_fault's
+// Output: comment lines naming the extent size, the I/O backend, the file
+// system kind and the options both engines run under, then TSV rows. A write
+// row is one mode, engine and thread count; its I/O counts come from io_fault's
 // counting mode and cover every descriptor of the case, so they leave out the
 // header each writer writes when it is created, and the RocksDB side prints a
 // dash there. A query row is one operation and engine, read from the data the
@@ -38,8 +38,8 @@
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/io_fault.h>
-#include <dftracer/utils/store/page_size.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
 #include <rocksdb/db.h>
@@ -372,7 +372,7 @@ std::string format_ms(std::uint64_t nanos) {
 std::string format_read_stats(const store::ReadStats& reads) {
     std::ostringstream out;
     out << "commits_read=" << reads.commits_verified
-        << " blocks_read=" << reads.blocks_read
+        << " extents_read=" << reads.extents_read
         << " metadata_blocks_read=" << reads.metadata_blocks_read
         << " read_calls=" << reads.read_calls << " mib_read=" << std::fixed
         << std::setprecision(1)
@@ -386,7 +386,7 @@ std::string format_read_stats(const store::ReadStats& reads) {
 std::string format_stats(const store::OpenStats& stats,
                          const store::ReadStats& reads) {
     std::ostringstream out;
-    out << "files=" << stats.files << " pages=" << stats.pages << " "
+    out << "files=" << stats.files << " extents=" << stats.extents << " "
         << format_read_stats(reads) << " ms list=" << std::setprecision(3)
         << stats.ms_list << " files=" << stats.ms_open_files
         << " tables=" << stats.ms_tables << " total=" << stats.ms_total;
@@ -550,14 +550,14 @@ std::uint64_t fold_key_index(ByteView key) {
     return index;
 }
 
-/// The value the first section of one scope holds for one key; the second
-/// section holds 1 for every key of the scope.
+/// The value the first segment of one scope holds for one key; the second
+/// segment holds 1 for every key of the scope.
 std::uint64_t fold_value(std::uint64_t scope, std::uint64_t key) {
     return (scope + key) % FOLD_VALUE_MODULUS;
 }
 
 /// What a fold scan over `scopes` scopes must sum one key to: the two
-/// sections of every scope, the first (scope + key) mod FOLD_VALUE_MODULUS and
+/// segments of every scope, the first (scope + key) mod FOLD_VALUE_MODULUS and
 /// the second one.
 std::vector<std::int64_t> fold_expectation(std::uint64_t scopes,
                                            std::uint64_t keys) {
@@ -778,7 +778,7 @@ struct Bench {
     bool fold_header_written = false;
     bool comment_written = false;
     bool failed = false;
-    std::uint32_t page_size = 0;
+    std::uint32_t extent_size = 0;
     std::uint64_t case_index = 0;
     std::vector<QueryRow> query_rows;
 
@@ -830,12 +830,12 @@ struct Bench {
             fail("cannot create a directory under " + base.string());
             return false;
         }
-        auto chosen = store::page_size_for(root);
+        auto chosen = store::extent_size_for(root);
         if (!chosen) {
-            fail("page size of " + root + ": " + to_std(chosen.error()));
+            fail("extent size of " + root + ": " + to_std(chosen.error()));
             return false;
         }
-        page_size = *chosen;
+        extent_size = *chosen;
         return true;
     }
 
@@ -862,12 +862,13 @@ struct Bench {
         const auto cf = dftracer::utils::index::store::RocksDatabase::
             default_column_family_options();
         std::cout
-            << "# page_size=" << page_size << " backend=" << backend
+            << "# extent_size=" << extent_size << " backend=" << backend
             << " fs=" << filesystem_name(dftracer::utils::filesystem_kind(root))
             << " dir=" << root << "\n"
-            << "# ours codec=zstd level 1 per page (raw when it saves under an"
+            << "# ours codec=zstd level 1 per extent (raw when it saves under "
+               "an"
                " eighth); Snapshot::open reads only the metadata, and a query"
-               " reads, checks and decodes each page on its first read\n"
+               " reads, checks and decodes each extent on its first read\n"
             << "# rocksdb compression=" << compression_name(cf.compression)
             << " bottommost=" << compression_name(cf.bottommost_compression)
             << " wal=off block_cache_mib="
@@ -885,7 +886,7 @@ struct Bench {
                " async prefetch)\n"
             << (opt.trace_values
                     ? "# values: 4096 different DFTracer-like event lines, "
-                      "picked by key hash; ours compresses each page with "
+                      "picked by key hash; ours compresses each extent with "
                       "zstd\n"
                     : "# values: one repeated byte, so RocksDB compression is "
                       "at its best and ours stores it uncompressed\n")
@@ -900,12 +901,13 @@ struct Bench {
         write_header_written = true;
         std::cout
             << "mode\tengine\tthreads\tpayload_bytes\tseconds\tgib_per_s"
-               "\tseconds_flushed\tseconds_compacted\tpage_writes\tpage_bytes"
+               "\tseconds_flushed\tseconds_compacted\textent_writes"
+               "\textent_bytes"
                "\tbig_writes\tbig_bytes\trecord_writes\trecord_bytes"
                "\theader_writes\theader_bytes\tfooter_bytes\ttrailer_bytes"
                "\tsyncs\ttotal_bytes\twrite_amp\tdisk_bytes\tdisk_amp"
                "\tdb_bytes_written\tdb_compaction_bytes\tdb_write_amp\tbusy"
-               "\tmax_page_bytes\tcommits_per_s\n";
+               "\tmax_extent_bytes\tcommits_per_s\n";
     }
 
     void ensure_query_header() {
@@ -1040,8 +1042,8 @@ void Bench::print_write_row(const WriteRow& row) {
         }
         line << '\t';
     };
-    ours_only(writes_of(io_fault::WriteKind::Page));
-    ours_only(indexed(counts, io_fault::WriteKind::Page));
+    ours_only(writes_of(io_fault::WriteKind::Extent));
+    ours_only(indexed(counts, io_fault::WriteKind::Extent));
     ours_only(writes_of(io_fault::WriteKind::Big));
     ours_only(indexed(counts, io_fault::WriteKind::Big));
     ours_only(writes_of(io_fault::WriteKind::Record));
@@ -1069,7 +1071,8 @@ void Bench::print_write_row(const WriteRow& row) {
     line << '\t';
     ours_only(row.busy);
     ours_only(
-        counts.max_bytes[static_cast<std::size_t>(io_fault::WriteKind::Page)]);
+        counts
+            .max_bytes[static_cast<std::size_t>(io_fault::WriteKind::Extent)]);
     line << std::setprecision(1) << commits_per_s;
     std::cout << line.str() << '\n';
 }
@@ -1140,8 +1143,8 @@ bool Bench::report_single_thread_open(const std::string& dir,
 
 bool Bench::check_write_row(const WriteRow& row) {
     const auto& counts = row.counts;
-    const std::size_t page =
-        static_cast<std::size_t>(io_fault::WriteKind::Page);
+    const std::size_t extent =
+        static_cast<std::size_t>(io_fault::WriteKind::Extent);
     const std::size_t record =
         static_cast<std::size_t>(io_fault::WriteKind::Record);
     const std::size_t header =
@@ -1170,8 +1173,8 @@ bool Bench::check_write_row(const WriteRow& row) {
                 "the compaction time is below the flush time");
         return ok;
     }
-    require(counts.writes[page] > 0, "no page write");
-    require(counts.bytes[page] > 0, "no page bytes");
+    require(counts.writes[extent] > 0, "no extent write");
+    require(counts.bytes[extent] > 0, "no extent bytes");
     require(counts.writes[record] > 0, "no record write");
     require(counts.bytes[record] > 0, "no record bytes");
     require(counts.writes[header] > 0, "no header write");
@@ -1180,7 +1183,7 @@ bool Bench::check_write_row(const WriteRow& row) {
     require(counts.bytes[trailer] > 0, "no trailer bytes");
     require(counts.syncs > 0, "no sync");
     const std::uint64_t total = total_bytes(counts);
-    // Pages are compressed, so the bytes written can be fewer than the
+    // Extents are compressed, so the bytes written can be fewer than the
     // payload; the reads of each run check that every row is there.
     require(total > 0, "no bytes written");
     return ok;
@@ -1326,7 +1329,7 @@ WriteRow Bench::run_ours_write_case(Runtime& runtime, const Workload& workload,
     row.seconds_flushed = row.seconds;
     row.seconds_compacted = row.seconds;
     for (const auto& writer : writers) {
-        row.busy += WriterTestHook::pages(*writer).busy;
+        row.busy += WriterTestHook::extents(*writer).busy;
     }
     if (errors.load() > 0) {
         fail(row.mode + " " + std::to_string(workload.threads) +
@@ -1994,7 +1997,7 @@ bool Bench::write_fold_ours(Runtime& runtime, const std::string& dir,
         return false;
     }
 
-    // Two batches per scope, so every scope holds two sections and the scan
+    // Two batches per scope, so every scope holds two segments and the scan
     // folds across them: the first with fold_value(scope, key), the second
     // with 1 for every key.
     const std::vector<std::string> names = fold_key_names(keys);
@@ -2007,13 +2010,13 @@ bool Bench::write_fold_ours(Runtime& runtime, const std::string& dir,
         "store_bench fold write", [&](CoroScope&) -> coro::CoroTask<void> {
             for (std::uint64_t scope = 0; scope < scopes; ++scope) {
                 const ScopeKey scope_key = ScopeKey::file(scope_name(0, scope));
-                for (std::size_t section = 0; section < 2; ++section) {
+                for (std::size_t segment = 0; segment < 2; ++segment) {
                     Batch batch = writer->batch(*namespace_id, scope_key, 0);
                     for (std::uint64_t key = 0; key < keys; ++key) {
                         const std::size_t at =
                             static_cast<std::size_t>(key) * FOLD_VALUE_BYTES;
                         const std::uint8_t* bytes = one.data();
-                        if (section == 0) {
+                        if (segment == 0) {
                             dftracer::utils::write_u64_le(
                                 values.data() + at, fold_value(scope, key));
                             bytes = values.data() + at;
@@ -2071,14 +2074,14 @@ bool Bench::write_fold_rocksdb(const std::string& dir, std::uint64_t scopes,
     std::string key;
     for (std::uint64_t scope = 0; scope < scopes; ++scope) {
         const std::string prefix = scope_prefix(0, scope);
-        for (std::uint8_t section = 0; section < 2; ++section) {
+        for (std::uint8_t segment = 0; segment < 2; ++segment) {
             ::rocksdb::WriteBatch batch;
             for (std::uint64_t at = 0; at < keys; ++at) {
                 dftracer::utils::write_u64_le(
-                    value.data(), section == 0 ? fold_value(scope, at) : 1);
+                    value.data(), segment == 0 ? fold_value(scope, at) : 1);
                 key.assign(prefix);
                 key += names[static_cast<std::size_t>(at)];
-                key.push_back(static_cast<char>(section));
+                key.push_back(static_cast<char>(segment));
                 batch.Put(::rocksdb::Slice(key),
                           ::rocksdb::Slice(
                               reinterpret_cast<const char*>(value.data()),

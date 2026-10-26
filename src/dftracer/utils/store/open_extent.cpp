@@ -1,0 +1,491 @@
+#include <dftracer/utils/runtime/coro/completion_latch.h>
+#include <dftracer/utils/store/crc.h>
+#include <dftracer/utils/store/extent_codec.h>
+#include <dftracer/utils/store/open_extent.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <coroutine>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <thread>
+#include <utility>
+
+namespace dftracer::utils::store {
+
+namespace {
+
+/// Bits 0..31 of the extent state word: bytes used of the extent.
+constexpr std::uint64_t OPEN_EXTENT_BUMP_MASK = 0xFFFFFFFFULL;
+/// Bits 32..47: appenders currently inside the extent, at most 0xFFFF of them.
+constexpr std::uint64_t OPEN_EXTENT_WRITER_ONE = 1ULL << 32U;
+constexpr std::uint64_t OPEN_EXTENT_WRITER_MASK = 0xFFFFULL << 32U;
+constexpr std::uint64_t OPEN_EXTENT_MAX_WRITERS = 0xFFFFULL;
+/// Bit 63: no appender may reserve space in the extent any more.
+constexpr std::uint64_t OPEN_EXTENT_SEALED = 1ULL << 63U;
+constexpr std::uint32_t OPEN_EXTENT_WRITE_ALIGN = 4096;
+
+dstd::Unexpected<dstd::Error> invalid_error() {
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error(dstd::Condition::InvalidArgument));
+}
+
+}  // namespace
+
+struct ExtentWriter::OpenSegment {
+    ExtentSegment segment;
+    void* context = nullptr;
+};
+
+struct ExtentWriter::OpenExtent {
+    OpenExtent(std::uint32_t open_namespace_id, std::uint32_t bytes)
+        : namespace_id(open_namespace_id), buffer(bytes, 0) {}
+
+    std::uint32_t namespace_id = 0;
+    std::atomic<std::uint64_t> state{0};
+    std::atomic_flag segments_lock = ATOMIC_FLAG_INIT;
+    dstd::Vector<std::uint8_t> buffer;
+    dstd::Vector<OpenSegment> segments;
+};
+
+struct ExtentWriter::NamespaceSlot {
+    std::uint32_t id = 0;
+    std::atomic<OpenExtent*> extent{nullptr};
+    NamespaceSlot* next = nullptr;
+};
+
+struct ExtentWriter::PendingWrite {
+    ExtentWriter* owner = nullptr;
+    WrittenExtent written;
+    dstd::Vector<std::uint8_t> buffer;
+    std::size_t written_bytes = 0;
+};
+
+ExtentWriter::ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
+                           Executor& executor, std::uint32_t extent_size,
+                           WrittenExtentFn on_written, void* context,
+                           DiscardedContextFn on_discarded, IdleFn on_idle)
+    : file_(file),
+      backend_(backend),
+      executor_(executor),
+      extent_size_(extent_size),
+      on_written_(on_written),
+      on_written_context_(context),
+      on_discarded_(on_discarded),
+      on_idle_(on_idle) {}
+
+ExtentWriter::~ExtentWriter() {
+    for (NamespaceSlot* slot : slots_) {
+        OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
+        if (extent != nullptr) retire(extent);
+        delete slot;
+    }
+    for (OpenExtent* extent : retired_) {
+        discard(extent);
+        delete extent;
+    }
+}
+
+void ExtentWriter::discard(OpenExtent* extent) {
+    if (on_discarded_ == nullptr) return;
+    for (OpenSegment& open : extent->segments) on_discarded_(open.context);
+    extent->segments.clear();
+}
+
+ExtentWriter::NamespaceSlot* ExtentWriter::find_slot(
+    std::uint32_t namespace_id) {
+    for (NamespaceSlot* slot = namespaces_.load(std::memory_order_acquire);
+         slot != nullptr; slot = slot->next) {
+        if (slot->id == namespace_id) return slot;
+    }
+
+    std::lock_guard<std::mutex> lock(namespaces_mutex_);
+    for (NamespaceSlot* slot = namespaces_.load(std::memory_order_relaxed);
+         slot != nullptr; slot = slot->next) {
+        if (slot->id == namespace_id) return slot;
+    }
+    auto* slot = new NamespaceSlot;
+    slot->id = namespace_id;
+    slot->next = namespaces_.load(std::memory_order_relaxed);
+    namespaces_.store(slot, std::memory_order_release);
+    slots_.push_back(slot);
+    return slot;
+}
+
+ExtentWriter::OpenExtent* ExtentWriter::publish_extent(NamespaceSlot& slot,
+                                                       OpenExtent* expected) {
+    OpenExtent* current = slot.extent.load(std::memory_order_acquire);
+    if (current != expected) return current;
+    auto* fresh = new OpenExtent(slot.id, extent_size_);
+    if (slot.extent.compare_exchange_strong(expected, fresh,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+        return fresh;
+    }
+    // A failed exchange leaves the extent another thread installed in
+    // `expected`, so the caller retries on it.
+    delete fresh;
+    return expected;
+}
+
+void ExtentWriter::push_segment(OpenExtent* extent, OpenSegment segment) {
+    while (extent->segments_lock.test_and_set(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    extent->segments.push_back(std::move(segment));
+    extent->segments_lock.clear(std::memory_order_release);
+}
+
+void ExtentWriter::leave_extent(OpenExtent* extent) {
+    std::uint64_t state = extent->state.load(std::memory_order_acquire);
+    for (;;) {
+        const std::uint64_t next = state - OPEN_EXTENT_WRITER_ONE;
+        if (extent->state.compare_exchange_weak(state, next,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_acquire)) {
+            if ((next & OPEN_EXTENT_SEALED) != 0 &&
+                (next & OPEN_EXTENT_WRITER_MASK) == 0) {
+                start_extent_write(extent);
+            }
+            return;
+        }
+    }
+}
+
+void ExtentWriter::retire(OpenExtent* extent) {
+    std::lock_guard<std::mutex> lock(retired_mutex_);
+    retired_.push_back(extent);
+}
+
+bool ExtentWriter::seal_extent(OpenExtent* extent) {
+    std::uint64_t state = extent->state.load(std::memory_order_acquire);
+    if ((state & OPEN_EXTENT_SEALED) != 0) return false;
+    // Counted before the seal is visible, so that a wait which observes the
+    // sealed extent also observes this write: the crc and the range of that
+    // write are still to be computed.
+    begin_write();
+    for (;;) {
+        if ((state & OPEN_EXTENT_SEALED) != 0) {
+            release_in_flight();
+            return false;
+        }
+        const std::uint64_t writers = (state & OPEN_EXTENT_WRITER_MASK) >> 32U;
+        if (writers == OPEN_EXTENT_MAX_WRITERS) {
+            std::this_thread::yield();
+            state = extent->state.load(std::memory_order_acquire);
+            continue;
+        }
+        if (extent->state.compare_exchange_weak(
+                state, (state + OPEN_EXTENT_WRITER_ONE) | OPEN_EXTENT_SEALED,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return true;
+        }
+    }
+}
+
+void ExtentWriter::latch_error(int error_number) {
+    int expected = 0;
+    latched_errno_.compare_exchange_strong(expected, error_number,
+                                           std::memory_order_acq_rel,
+                                           std::memory_order_acquire);
+}
+
+dstd::Error ExtentWriter::latched_error() const {
+    return dstd::Error(
+        dstd::Condition::Io,
+        "store extent write failed with errno " +
+            std::to_string(latched_errno_.load(std::memory_order_acquire)));
+}
+
+void ExtentWriter::begin_write() {
+    std::lock_guard<std::mutex> lock(idle_mutex_);
+    ++in_flight_;
+}
+
+void ExtentWriter::release_in_flight() {
+    dstd::Vector<std::coroutine_handle<>> waiters;
+    {
+        std::lock_guard<std::mutex> lock(idle_mutex_);
+        --in_flight_;
+        // Under the lock, so wait_idle() cannot observe the zero count, return
+        // and let the writer be destroyed while this notify is still running.
+        if (in_flight_ == 0) {
+            waiters.swap(idle_waiters_);
+            if (on_idle_ != nullptr) on_idle_(on_written_context_);
+        }
+        idle_cv_.notify_all();
+    }
+    for (std::coroutine_handle<> waiter : waiters) {
+        coro::resume_continuation(&executor_, waiter);
+    }
+}
+
+void ExtentWriter::submit(PendingWrite* pending) {
+    backend_.submit_pwrite_callback(file_.fd(), pending->buffer.data(),
+                                    pending->buffer.size(),
+                                    static_cast<off_t>(pending->written.offset),
+                                    &ExtentWriter::on_write_done, pending);
+    backend_.flush();
+}
+
+void ExtentWriter::resubmit(PendingWrite* pending) {
+    const std::size_t done = pending->written_bytes;
+    backend_.submit_pwrite_callback(
+        file_.fd(), pending->buffer.data() + done,
+        pending->buffer.size() - done,
+        static_cast<off_t>(pending->written.offset + done),
+        &ExtentWriter::on_write_done, pending);
+    backend_.flush();
+}
+
+void ExtentWriter::on_write_done(void* context, ssize_t result) noexcept {
+    auto* pending = static_cast<PendingWrite*>(context);
+    ExtentWriter* writer = pending->owner;
+    if (result == -EINTR) {
+        writer->resubmit(pending);
+        return;
+    }
+    if (result < 0 || result == 0) {
+        // A zero result with bytes left is not progress towards a full write.
+        writer->latch_error(result < 0 ? static_cast<int>(-result) : EIO);
+        if (writer->on_discarded_ != nullptr) {
+            for (void* segment_context : pending->written.contexts) {
+                writer->on_discarded_(segment_context);
+            }
+        }
+        delete pending;
+        writer->release_in_flight();
+        return;
+    }
+
+    pending->written_bytes += static_cast<std::size_t>(result);
+    if (pending->written_bytes < pending->buffer.size()) {
+        writer->resubmit(pending);
+        return;
+    }
+
+    WrittenExtent written = std::move(pending->written);
+    delete pending;
+    if (writer->on_written_ != nullptr) {
+        writer->on_written_(writer->on_written_context_, std::move(written));
+    }
+    writer->release_in_flight();
+}
+
+void ExtentWriter::start_extent_write(OpenExtent* extent) {
+    const std::uint64_t state = extent->state.load(std::memory_order_acquire);
+    const std::uint32_t used =
+        static_cast<std::uint32_t>(state & OPEN_EXTENT_BUMP_MASK);
+    if (used == 0) {
+        retire(extent);
+        release_in_flight();
+        return;
+    }
+
+    auto stored = encode_extent(
+        ByteView(reinterpret_cast<const std::byte*>(extent->buffer.data()),
+                 used),
+        OPEN_EXTENT_WRITE_ALIGN);
+    if (!stored) {
+        latch_error(EINVAL);
+        discard(extent);
+        retire(extent);
+        release_in_flight();
+        return;
+    }
+    // The raw bytes go with the extent: only the stored form stays in flight.
+    extent->buffer = dstd::Vector<std::uint8_t>();
+    const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
+    auto* pending = new PendingWrite;
+    pending->owner = this;
+    pending->written.offset = file_.reserve_range(length, extent_size_);
+    pending->written.length = length;
+    pending->buffer = std::move(*stored);
+    pending->written.crc = crc32(0, pending->buffer.data(), length);
+    pending->written.segments.reserve(extent->segments.size());
+    pending->written.contexts.reserve(extent->segments.size());
+    std::sort(extent->segments.begin(), extent->segments.end(),
+              [](const OpenSegment& a, const OpenSegment& b) {
+                  return a.segment.offset_in_extent <
+                         b.segment.offset_in_extent;
+              });
+    for (OpenSegment& open : extent->segments) {
+        pending->written.segments.push_back(std::move(open.segment));
+        pending->written.contexts.push_back(open.context);
+    }
+    extent->segments.clear();
+    retire(extent);
+    submit(pending);
+}
+
+dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
+    ByteView segment_bytes, ExtentSegment info, void* context) {
+    auto stored = encode_extent(segment_bytes, OPEN_EXTENT_WRITE_ALIGN);
+    if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
+    const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
+    auto* pending = new PendingWrite;
+    pending->owner = this;
+    pending->buffer = std::move(*stored);
+    pending->written.offset = file_.reserve_range(length, extent_size_);
+    pending->written.length = length;
+    pending->written.crc = crc32(0, pending->buffer.data(), length);
+    info.offset_in_extent = 0;
+    info.length = static_cast<std::uint32_t>(segment_bytes.size());
+    pending->written.segments.push_back(std::move(info));
+    pending->written.contexts.push_back(context);
+    begin_write();
+    submit(pending);
+    return {};
+}
+
+dstd::Expected<void, dstd::Error> ExtentWriter::append(
+    std::uint32_t namespace_id, ByteView segment_bytes, ExtentSegment info,
+    void* context) {
+    const int latched = latched_errno_.load(std::memory_order_acquire);
+    if (latched != 0) return dstd::Unexpected<dstd::Error>(latched_error());
+    if (segment_bytes.empty() ||
+        segment_bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
+        return invalid_error();
+    }
+    // An extent keeps room for the header of its stored form.
+    const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
+    if (segment_bytes.size() >= capacity) {
+        return append_run(segment_bytes, std::move(info), context);
+    }
+
+    NamespaceSlot* slot = find_slot(namespace_id);
+    const std::uint32_t length =
+        static_cast<std::uint32_t>(segment_bytes.size());
+    for (;;) {
+        OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
+        if (extent == nullptr) extent = publish_extent(*slot, nullptr);
+
+        std::uint64_t state = extent->state.load(std::memory_order_acquire);
+        for (;;) {
+            if ((state & OPEN_EXTENT_SEALED) != 0) break;
+            const std::uint64_t used = state & OPEN_EXTENT_BUMP_MASK;
+            const std::uint64_t writers =
+                (state & OPEN_EXTENT_WRITER_MASK) >> 32U;
+            if (used + length > capacity ||
+                writers == OPEN_EXTENT_MAX_WRITERS) {
+                break;
+            }
+            if (extent->state.compare_exchange_weak(
+                    state, state + length + OPEN_EXTENT_WRITER_ONE,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                std::memcpy(extent->buffer.data() + used, segment_bytes.data(),
+                            length);
+                info.offset_in_extent = static_cast<std::uint32_t>(used);
+                info.length = length;
+                OpenSegment open;
+                open.segment = std::move(info);
+                open.context = context;
+                push_segment(extent, std::move(open));
+                leave_extent(extent);
+                return {};
+            }
+        }
+
+        // Sealing counts as a writer, so whoever leaves last writes the extent,
+        // and that is this thread when no appender is inside.
+        if (seal_extent(extent)) leave_extent(extent);
+        publish_extent(*slot, extent);
+    }
+}
+
+dstd::Expected<void, dstd::Error> ExtentWriter::seal_all() {
+    const int latched = latched_errno_.load(std::memory_order_acquire);
+    if (latched != 0) return dstd::Unexpected<dstd::Error>(latched_error());
+    for (NamespaceSlot* slot = namespaces_.load(std::memory_order_acquire);
+         slot != nullptr; slot = slot->next) {
+        OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
+        if (extent == nullptr) continue;
+        // An empty extent has nothing to write, and sealing it would install a
+        // fresh buffer while retaining this one for no gain.
+        if ((extent->state.load(std::memory_order_acquire) &
+             OPEN_EXTENT_BUMP_MASK) == 0) {
+            continue;
+        }
+        if (seal_extent(extent)) leave_extent(extent);
+        publish_extent(*slot, extent);
+    }
+    return {};
+}
+
+dstd::Expected<void, dstd::Error> ExtentWriter::wait_idle() {
+    {
+        std::unique_lock<std::mutex> lock(idle_mutex_);
+        idle_cv_.wait(lock, [this] { return in_flight_ == 0; });
+    }
+    const int latched = latched_errno_.load(std::memory_order_acquire);
+    if (latched != 0) return dstd::Unexpected<dstd::Error>(latched_error());
+    return {};
+}
+
+/// Suspends the calling coroutine while an extent write is in flight. The last
+/// completion resumes it through the writer's executor, under the same lock
+/// the check takes, so a completion that lands first is not lost.
+struct ExtentWriter::IdleWait {
+    ExtentWriter& writer;
+
+    bool await_ready() const {
+        std::lock_guard<std::mutex> lock(writer.idle_mutex_);
+        return writer.in_flight_ == 0;
+    }
+
+    bool await_suspend(std::coroutine_handle<> handle) {
+        std::lock_guard<std::mutex> lock(writer.idle_mutex_);
+        if (writer.in_flight_ == 0) return false;
+        writer.idle_waiters_.push_back(handle);
+        return true;
+    }
+
+    dstd::Expected<void, dstd::Error> await_resume() const {
+        const int latched =
+            writer.latched_errno_.load(std::memory_order_acquire);
+        if (latched != 0) {
+            return dstd::Unexpected<dstd::Error>(writer.latched_error());
+        }
+        return {};
+    }
+};
+
+coro::CoroTask<dstd::Expected<void, dstd::Error>>
+ExtentWriter::wait_idle_async() {
+    IdleWait idle{*this};
+    co_return co_await idle;
+}
+
+bool ExtentWriterTestHook::seal_in_place(ExtentWriter& writer,
+                                         std::uint32_t namespace_id) {
+    ExtentWriter::NamespaceSlot* slot = writer.find_slot(namespace_id);
+    ExtentWriter::OpenExtent* extent =
+        slot->extent.load(std::memory_order_acquire);
+    if (extent == nullptr) return false;
+    if (!writer.seal_extent(extent)) return false;
+    writer.leave_extent(extent);
+    return true;
+}
+
+std::size_t ExtentWriterTestHook::retired_bytes(ExtentWriter& writer) {
+    std::lock_guard<std::mutex> lock(writer.retired_mutex_);
+    std::size_t bytes = 0;
+    for (ExtentWriter::OpenExtent* extent : writer.retired_) {
+        bytes += extent->buffer.size() +
+                 extent->segments.size() * sizeof(ExtentWriter::OpenSegment);
+    }
+    return bytes;
+}
+
+std::size_t ExtentWriterTestHook::retired_extents(ExtentWriter& writer) {
+    std::lock_guard<std::mutex> lock(writer.retired_mutex_);
+    return writer.retired_.size();
+}
+
+bool ExtentWriter::writing() {
+    std::lock_guard<std::mutex> lock(idle_mutex_);
+    return in_flight_ != 0;
+}
+
+}  // namespace dftracer::utils::store

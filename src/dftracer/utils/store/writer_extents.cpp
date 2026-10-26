@@ -1,23 +1,24 @@
 #include <dftracer/utils/runtime/coro/completion_latch.h>
 #include <dftracer/utils/runtime/executor/executor.h>
-#include <dftracer/utils/store/writer_pages.h>
+#include <dftracer/utils/store/writer_extents.h>
 
 #include <algorithm>
 
 namespace dftracer::utils::store {
 
-WriterPages::WriterPages(std::uint64_t quota_bytes, memory::Pool& pool) noexcept
+WriterExtents::WriterExtents(std::uint64_t quota_bytes,
+                             memory::Pool& pool) noexcept
     : pool_(&pool), quota_(quota_bytes) {}
 
-WriterPages::~WriterPages() { reservation_.release(); }
+WriterExtents::~WriterExtents() { reservation_.release(); }
 
-bool WriterPages::grow(std::uint64_t bytes) noexcept {
+bool WriterExtents::grow(std::uint64_t bytes) noexcept {
     if (reservation_) return reservation_.try_grow(bytes) == memory::Status::Ok;
     reservation_ = pool_->try_reserve(bytes);
     return static_cast<bool>(reservation_);
 }
 
-void WriterPages::grow_forced(std::uint64_t bytes) noexcept {
+void WriterExtents::grow_forced(std::uint64_t bytes) noexcept {
     if (reservation_) {
         reservation_.grow(bytes);
         return;
@@ -25,12 +26,12 @@ void WriterPages::grow_forced(std::uint64_t bytes) noexcept {
     reservation_ = pool_->reserve(bytes);
 }
 
-void WriterPages::charge(std::uint64_t bytes) noexcept {
+void WriterExtents::charge(std::uint64_t bytes) noexcept {
     held_ += bytes;
     if (held_ > peak_held_) peak_held_ = held_;
 }
 
-WriterPages::Take WriterPages::take(std::uint64_t bytes) {
+WriterExtents::Take WriterExtents::take(std::uint64_t bytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (held_ + bytes <= quota_ && grow(bytes)) {
         charge(bytes);
@@ -49,7 +50,7 @@ WriterPages::Take WriterPages::take(std::uint64_t bytes) {
     return Take::TakenOverQuota;
 }
 
-void WriterPages::release(std::uint64_t bytes) noexcept {
+void WriterExtents::release(std::uint64_t bytes) noexcept {
     dstd::Vector<Waiter> waiters;
     memory::Reservation freed;
     {
@@ -73,7 +74,7 @@ void WriterPages::release(std::uint64_t bytes) noexcept {
     wake(waiters);
 }
 
-void WriterPages::latch() noexcept {
+void WriterExtents::latch() noexcept {
     if (latched_.exchange(true, std::memory_order_acq_rel)) return;
     dstd::Vector<Waiter> waiters;
     {
@@ -83,7 +84,7 @@ void WriterPages::latch() noexcept {
     wake(waiters);
 }
 
-void WriterPages::nudge() noexcept {
+void WriterExtents::nudge() noexcept {
     dstd::Vector<Waiter> waiters;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -93,36 +94,36 @@ void WriterPages::nudge() noexcept {
     wake(waiters);
 }
 
-void WriterPages::wake(dstd::Vector<Waiter>& waiters) noexcept {
+void WriterExtents::wake(dstd::Vector<Waiter>& waiters) noexcept {
     for (const Waiter& waiter : waiters) {
         coro::resume_continuation(waiter.executor, waiter.handle);
     }
 }
 
-bool WriterPages::ready_locked(std::uint64_t epoch) const noexcept {
+bool WriterExtents::ready_locked(std::uint64_t epoch) const noexcept {
     return latched_.load(std::memory_order_acquire) || held_ == 0 ||
            epoch_ != epoch;
 }
 
-bool WriterPages::SpaceWait::await_ready() const {
-    std::lock_guard<std::mutex> lock(pages_->mutex_);
-    return pages_->ready_locked(epoch_);
+bool WriterExtents::SpaceWait::await_ready() const {
+    std::lock_guard<std::mutex> lock(extents_->mutex_);
+    return extents_->ready_locked(epoch_);
 }
 
-bool WriterPages::SpaceWait::await_suspend(std::coroutine_handle<> handle) {
+bool WriterExtents::SpaceWait::await_suspend(std::coroutine_handle<> handle) {
     // Read before the lock: a handle parked with no executor can never resume.
     Executor* executor = Executor::current();
-    std::lock_guard<std::mutex> lock(pages_->mutex_);
-    if (pages_->ready_locked(epoch_)) return false;
-    pages_->waiters_.push_back(Waiter{handle, executor});
+    std::lock_guard<std::mutex> lock(extents_->mutex_);
+    if (extents_->ready_locked(epoch_)) return false;
+    extents_->waiters_.push_back(Waiter{handle, executor});
     parked_ = handle;
     return true;
 }
 
-WriterPages::SpaceWait::~SpaceWait() {
+WriterExtents::SpaceWait::~SpaceWait() {
     if (!parked_) return;
-    std::lock_guard<std::mutex> lock(pages_->mutex_);
-    auto& waiters = pages_->waiters_;
+    std::lock_guard<std::mutex> lock(extents_->mutex_);
+    auto& waiters = extents_->waiters_;
     for (std::size_t i = 0; i < waiters.size(); ++i) {
         if (waiters[i].handle == parked_) {
             waiters.erase(waiters.begin() + static_cast<std::ptrdiff_t>(i));
@@ -131,26 +132,26 @@ WriterPages::SpaceWait::~SpaceWait() {
     }
 }
 
-WriterPages::WaitAnnounce::WaitAnnounce(WriterPages& pages) noexcept
-    : pages_(&pages) {
-    pages_->waits_.fetch_add(1, std::memory_order_seq_cst);
+WriterExtents::WaitAnnounce::WaitAnnounce(WriterExtents& extents) noexcept
+    : extents_(&extents) {
+    extents_->waits_.fetch_add(1, std::memory_order_seq_cst);
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    std::lock_guard<std::mutex> lock(pages_->mutex_);
-    epoch_ = pages_->epoch_;
+    std::lock_guard<std::mutex> lock(extents_->mutex_);
+    epoch_ = extents_->epoch_;
 }
 
-WriterPages::WaitAnnounce::~WaitAnnounce() {
-    pages_->waits_.fetch_sub(1, std::memory_order_relaxed);
+WriterExtents::WaitAnnounce::~WaitAnnounce() {
+    extents_->waits_.fetch_sub(1, std::memory_order_relaxed);
 }
 
-bool WriterPages::waiting() const noexcept {
+bool WriterExtents::waiting() const noexcept {
     std::atomic_thread_fence(std::memory_order_seq_cst);
     return waits_.load(std::memory_order_relaxed) != 0;
 }
 
-WriterPagesCounters WriterPages::counters() const {
+WriterExtentsCounters WriterExtents::counters() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    WriterPagesCounters out;
+    WriterExtentsCounters out;
     out.quota = quota_;
     out.held = held_;
     out.peak_held = peak_held_;

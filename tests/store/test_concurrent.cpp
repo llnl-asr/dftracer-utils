@@ -4,7 +4,7 @@
 #include <dftracer/utils/store/committer.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
-#include <dftracer/utils/store/open_page.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
 #include <doctest/doctest.h>
@@ -63,7 +63,7 @@ using store::Writer;
 using store::WriterErrc;
 using store::WriterOptions;
 
-constexpr std::uint32_t PAGE = 4096;
+constexpr std::uint32_t EXTENT = 4096;
 constexpr int RUNTIME_THREADS = 8;
 
 // A sanitizer build runs under a ctest timeout of 120 s (ASan) or 300 s (TSan)
@@ -145,10 +145,11 @@ std::string scope_path(int index) {
     return "/data/file-" + std::to_string(index) + ".dft";
 }
 
-WriterOptions store_options(std::uint32_t page_size, std::uint64_t commit_bytes,
+WriterOptions store_options(std::uint32_t extent_size,
+                            std::uint64_t commit_bytes,
                             std::chrono::milliseconds commit_interval) {
     WriterOptions options;
-    options.page_size = page_size;
+    options.extent_size = extent_size;
     options.commit_bytes = commit_bytes;
     options.commit_interval = commit_interval;
     options.host = dstring("host");
@@ -157,8 +158,8 @@ WriterOptions store_options(std::uint32_t page_size, std::uint64_t commit_bytes,
 }
 
 /// Commits only when asked: neither the size nor the interval ever fires.
-WriterOptions manual_options(std::uint32_t page_size) {
-    return store_options(page_size, std::uint64_t{1} << 40,
+WriterOptions manual_options(std::uint32_t extent_size) {
+    return store_options(extent_size, std::uint64_t{1} << 40,
                          std::chrono::hours(1));
 }
 
@@ -224,18 +225,18 @@ std::size_t record_count(const std::string& path) {
     return reader->records_read();
 }
 
-/// Every page ref a file holds names a copy the same file announces, so a byte
-/// copy of it never holds a page whose items are still to come.
-void check_page_refs_announced(const std::string& path) {
+/// Every extent ref a file holds names a copy the same file announces, so a
+/// byte copy of it never holds an extent whose items are still to come.
+void check_extent_refs_announced(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     REQUIRE(reader.has_value());
     std::vector<std::uint32_t> copies;
     for (const store::CopyItem& copy : reader->index().copies) {
         copies.push_back(copy.local_id);
     }
-    for (const store::IndexedPageRef& page : reader->index().page_refs) {
-        for (const store::PageSection& section : page.ref.sections) {
-            REQUIRE(std::find(copies.begin(), copies.end(), section.copy_id) !=
+    for (const store::IndexedExtentRef& extent : reader->index().extent_refs) {
+        for (const store::ExtentSegment& segment : extent.ref.segments) {
+            REQUIRE(std::find(copies.begin(), copies.end(), segment.copy_id) !=
                     copies.end());
         }
     }
@@ -417,7 +418,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_atomic");
     dftu_utils_test::ScopedTestDir copies("store_concurrent_atomic_copies");
     auto writer = make_writer(
-        dir, store_options(PAGE, 256 * 1024, std::chrono::milliseconds(5)));
+        dir, store_options(EXTENT, 256 * 1024, std::chrono::milliseconds(5)));
     const NamespaceSpec spec = put_spec("atomic", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
@@ -456,7 +457,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
     const auto sample = [&] {
         const std::string copy =
             copy_out(to_std(writer->path()), copies, file_name);
-        check_page_refs_announced(copies.file(file_name));
+        check_extent_refs_announced(copies.file(file_name));
         auto snapshot = Snapshot::open(copy);
         if (!snapshot.has_value() ||
             snapshot->state(spec, scope) != ScopeState::Ready) {
@@ -475,7 +476,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
             cursor.next();
         }
         for (const auto& entry : per_batch) {
-            // A batch is one section of one page ref: it is recorded whole or
+            // A batch is one segment of one extent ref: it is recorded whole or
             // not at all.
             REQUIRE(entry.second == static_cast<std::size_t>(KEYS));
         }
@@ -513,7 +514,7 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
 TEST_CASE("flush makes a committed batch visible in a byte copy") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_flush");
     dftu_utils_test::ScopedTestDir copies("store_concurrent_flush_copies");
-    auto writer = make_writer(dir, manual_options(PAGE));
+    auto writer = make_writer(dir, manual_options(EXTENT));
     const NamespaceSpec spec = put_spec("flush", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
@@ -561,8 +562,8 @@ static std::vector<std::uint8_t> read_range(const std::string& path,
     return bytes;
 }
 
-/// True when the record the file's header names as its tail holds a page ref
-/// with a section whose key range is exactly `key`, which is what makes the
+/// True when the record the file's header names as its tail holds an extent ref
+/// with a segment whose key range is exactly `key`, which is what makes the
 /// one-entry marker batch visible. The group commit interval does not fire in
 /// this case, so the tail record is the one the last flush wrote, and reading
 /// it alone keeps the check off the rest of the file, which grows while it
@@ -586,18 +587,18 @@ static bool marker_recorded(const std::string& path, const std::string& key) {
     auto record = store::decode_record(ByteView{bytes.data(), bytes.size()});
     if (!record.has_value() || record->offset != tail) return false;
     for (const store::RecordItem& item : record->items) {
-        const auto* ref = std::get_if<store::PageRefItem>(&item);
+        const auto* ref = std::get_if<store::ExtentRefItem>(&item);
         if (ref == nullptr) continue;
-        for (const store::PageSection& section : ref->sections) {
-            if (section.first_key.size() != key.size() ||
-                section.last_key.size() != key.size()) {
+        for (const store::ExtentSegment& segment : ref->segments) {
+            if (segment.first_key.size() != key.size() ||
+                segment.last_key.size() != key.size()) {
                 continue;
             }
-            if (std::memcmp(section.first_key.data(), key.data(), key.size()) !=
+            if (std::memcmp(segment.first_key.data(), key.data(), key.size()) !=
                 0) {
                 continue;
             }
-            if (std::memcmp(section.last_key.data(), key.data(), key.size()) !=
+            if (std::memcmp(segment.last_key.data(), key.data(), key.size()) !=
                 0) {
                 continue;
             }
@@ -608,13 +609,13 @@ static bool marker_recorded(const std::string& path, const std::string& key) {
 }
 
 TEST_CASE("flush holds every batch committed before it under other threads") {
-    // A page of many small sections costs the sealing append a sort of all of
-    // them before its write is submitted, and four appenders seal such a page
-    // often, so the window between the seal of a page and the submit of its
-    // write is one a flush meets: a flush that counts a sealed page in flight
-    // only from its submit then returns without recording the page that holds
-    // the marker.
-    constexpr std::uint32_t RACE_PAGE = 64 * 1024;
+    // An extent of many small segments costs the sealing append a sort of all
+    // of them before its write is submitted, and four appenders seal such an
+    // extent often, so the window between the seal of an extent and the submit
+    // of its write is one a flush meets: a flush that counts a sealed extent in
+    // flight only from its submit then returns without recording the extent
+    // that holds the marker.
+    constexpr std::uint32_t RACE_EXTENT = 64 * 1024;
     constexpr std::uint32_t BACKGROUND = 4;
     constexpr int ROUNDS = SANITIZED ? 40 : 200;
     constexpr int KEYS = 2;
@@ -623,7 +624,7 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     // Neither the interval nor the size of a group commit of the task's own
     // fires here, so every record is one a flush wrote and the tail record is
     // the one the last flush wrote.
-    auto writer = make_writer(dir, manual_options(RACE_PAGE));
+    auto writer = make_writer(dir, manual_options(RACE_EXTENT));
     const NamespaceSpec spec = put_spec("raced", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
@@ -680,9 +681,9 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     REQUIRE(close_writer(*writer).has_value());
 }
 
-TEST_CASE("every page ref carries the sequence of the record that holds it") {
+TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_ref_sequence");
-    auto writer = make_writer(dir, manual_options(PAGE));
+    auto writer = make_writer(dir, manual_options(EXTENT));
     const NamespaceSpec spec = put_spec("sequences", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
@@ -711,10 +712,10 @@ TEST_CASE("every page ref carries the sequence of the record that holds it") {
             ByteView{file.data() + offset, file.size() - offset});
         if (!record.has_value() || record->offset != offset) continue;
         // The footer repeats the items of the chain, so it carries the sequence
-        // each page ref was first recorded under, not its own.
+        // each extent ref was first recorded under, not its own.
         if (record->kind == store::RecordKind::Footer) continue;
         for (const store::RecordItem& item : record->items) {
-            const auto* ref = std::get_if<store::PageRefItem>(&item);
+            const auto* ref = std::get_if<store::ExtentRefItem>(&item);
             if (ref == nullptr) continue;
             ++refs;
             CHECK(ref->sequence == record->sequence);
@@ -728,18 +729,20 @@ TEST_CASE("every page ref carries the sequence of the record that holds it") {
           static_cast<std::uint64_t>(ROUNDS) + 1U);
 }
 
-TEST_CASE("group commit by size writes a record once enough page bytes wait") {
+TEST_CASE(
+    "group commit by size writes a record once enough extent bytes wait") {
     constexpr std::uint64_t COMMIT_BYTES = 128 * 1024;
-    // A 5000-byte value makes each batch a section longer than a page, so every
-    // batch is written as its own run; the commit size counts its raw section
-    // bytes, about 5 KB, so 16 batches stay below COMMIT_BYTES and 40 pass it.
+    // A 5000-byte value makes each batch a segment longer than an extent, so
+    // every batch is written as its own run; the commit size counts its raw
+    // segment bytes, about 5 KB, so 16 batches stay below COMMIT_BYTES and 40
+    // pass it.
     constexpr int QUIET_BATCHES = 16;
     constexpr int HELD_BATCHES = 40;
 
     dftu_utils_test::ScopedTestDir dir("store_concurrent_size");
     dftu_utils_test::ScopedTestDir copies("store_concurrent_size_copies");
     auto writer = make_writer(
-        dir, store_options(PAGE, COMMIT_BYTES, std::chrono::hours(1)));
+        dir, store_options(EXTENT, COMMIT_BYTES, std::chrono::hours(1)));
     const NamespaceSpec spec = put_spec("sized", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
@@ -747,13 +750,13 @@ TEST_CASE("group commit by size writes a record once enough page bytes wait") {
     const std::string file_name = to_std(writer->name());
     const std::string big_value(5000, 'x');
 
-    int page = 0;
-    const auto commit_page = [&] {
-        const std::string key = "p" + std::to_string(page);
+    int extent = 0;
+    const auto commit_extent = [&] {
+        const std::string key = "p" + std::to_string(extent);
         Batch entries = writer->batch(*created, scope, 0);
         entries.put(view_of(key), view_of(big_value));
         REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
-        ++page;
+        ++extent;
     };
     // The record is in the file as soon as its pwrite returns, so the reader
     // of the live file sees it; a byte copy adds an fd and a race to that.
@@ -761,11 +764,11 @@ TEST_CASE("group commit by size writes a record once enough page bytes wait") {
         return record_count(to_std(writer->path()));
     };
 
-    for (int i = 0; i < QUIET_BATCHES; ++i) commit_page();
+    for (int i = 0; i < QUIET_BATCHES; ++i) commit_extent();
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     CHECK(records_now() == 0);
 
-    for (int i = QUIET_BATCHES; i < HELD_BATCHES; ++i) commit_page();
+    for (int i = QUIET_BATCHES; i < HELD_BATCHES; ++i) commit_extent();
     bool appeared = false;
     for (int attempt = 0; attempt < 200 && !appeared; ++attempt) {
         if (records_now() >= 1) {
@@ -784,7 +787,7 @@ TEST_CASE("group commit by time writes a record without flush") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_time");
     dftu_utils_test::ScopedTestDir copies("store_concurrent_time_copies");
     auto writer =
-        make_writer(dir, store_options(PAGE, std::uint64_t{1} << 40,
+        make_writer(dir, store_options(EXTENT, std::uint64_t{1} << 40,
                                        std::chrono::milliseconds(50)));
     const NamespaceSpec spec = put_spec("timed", 0);
     auto created = writer->add_namespace(spec);
@@ -794,8 +797,8 @@ TEST_CASE("group commit by time writes a record without flush") {
 
     Batch entries = writer->batch(*created, scope, 0);
     const std::string key = "only";
-    // Longer than a page, so the batch is written as a run of its own without
-    // waiting for a page to fill.
+    // Longer than an extent, so the batch is written as a run of its own
+    // without waiting for an extent to fill.
     const std::string big_value(5000, 'y');
     entries.put(view_of(key), view_of(big_value));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -822,7 +825,7 @@ TEST_CASE(
     dftu_utils_test::ScopedTestDir dir("store_concurrent_durable");
     CommitterTestHook::reset();
 
-    auto writer = make_writer(dir, manual_options(PAGE));
+    auto writer = make_writer(dir, manual_options(EXTENT));
     auto created = writer->add_namespace(durable_spec("durable", true));
     REQUIRE(created.has_value());
     const NamespaceId durable = *created;
@@ -952,28 +955,28 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
     }
 }
 
-TEST_CASE("a writer destroyed without close drains its page writes") {
+TEST_CASE("a writer destroyed without close drains its extent writes") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_teardown");
     const std::uint64_t before = CommitterTestHook::live_batches();
     {
-        auto writer = make_writer(dir, manual_options(PAGE));
+        auto writer = make_writer(dir, manual_options(EXTENT));
         const NamespaceSpec spec = put_spec("teardown", 0);
         auto created = writer->add_namespace(spec);
         REQUIRE(created.has_value());
         const ScopeKey scope = file_scope("/data/teardown.dft");
-        // A value longer than a page makes every batch a run of its own, so
+        // A value longer than an extent makes every batch a run of its own, so
         // writes are in flight while the writer is destroyed, and the last one
-        // stays in an open page no record names.
+        // stays in an open extent no record names.
         const std::string big_value(5000, 't');
         for (int i = 0; i < 64; ++i) {
             Batch entries = writer->batch(*created, scope, 0);
             entries.put(view_of("k" + std::to_string(i)), view_of(big_value));
             REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
         }
-        Batch open_page = writer->batch(*created, scope, 0);
-        open_page.put(view_of(std::string("open")),
-                      view_of(std::string("value")));
-        REQUIRE(commit_waiting(*writer, std::move(open_page)).has_value());
+        Batch open_extent = writer->batch(*created, scope, 0);
+        open_extent.put(view_of(std::string("open")),
+                        view_of(std::string("value")));
+        REQUIRE(commit_waiting(*writer, std::move(open_extent)).has_value());
         CHECK(CommitterTestHook::live_batches() > before);
 
         writer.reset();
@@ -984,14 +987,14 @@ TEST_CASE("a writer destroyed without close drains its page writes") {
     CHECK(CommitterTestHook::live_batches() == before);
 }
 
-TEST_CASE("a failed page write deletes the batches of its page") {
-    dftu_utils_test::ScopedTestDir dir("store_concurrent_failed_page");
+TEST_CASE("a failed extent write deletes the batches of its extent") {
+    dftu_utils_test::ScopedTestDir dir("store_concurrent_failed_extent");
     const std::uint64_t before = CommitterTestHook::live_batches();
-    auto writer = make_writer(dir, manual_options(PAGE));
-    const NamespaceSpec spec = put_spec("failed_page", 0);
+    auto writer = make_writer(dir, manual_options(EXTENT));
+    const NamespaceSpec spec = put_spec("failed_extent", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());
-    const ScopeKey scope = file_scope("/data/failed_page.dft");
+    const ScopeKey scope = file_scope("/data/failed_extent.dft");
 
     Batch entries = writer->batch(*created, scope, 0);
     entries.put(view_of(std::string("key")), view_of(std::string("value")));
@@ -1003,7 +1006,7 @@ TEST_CASE("a failed page write deletes the batches of its page") {
     auto flushed = flush_writer(*writer);
     REQUIRE_FALSE(flushed.has_value());
     CHECK(flushed.error().is(Condition::Io));
-    // The page write failed, so no record will ever name that batch and the
+    // The extent write failed, so no record will ever name that batch and the
     // failure path is the only one that can free it.
     CHECK(CommitterTestHook::live_batches() == before);
 }
@@ -1011,7 +1014,7 @@ TEST_CASE("a failed page write deletes the batches of its page") {
 TEST_CASE("a failed record write latches for commit, flush and close") {
     dftu_utils_test::ScopedTestDir dir("store_concurrent_latch");
     CommitterTestHook::reset();
-    auto writer = make_writer(dir, manual_options(PAGE));
+    auto writer = make_writer(dir, manual_options(EXTENT));
     const NamespaceSpec spec = put_spec("latched", 0);
     auto created = writer->add_namespace(spec);
     REQUIRE(created.has_value());

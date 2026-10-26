@@ -1,8 +1,8 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
+#include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/io_fault.h>
-#include <dftracer/utils/store/page_codec.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/varint.h>
 #include <fcntl.h>
@@ -37,7 +37,7 @@ struct HeaderInfo {
     bool magic_ok = false;
     bool header_crc_ok = false;
     std::uint32_t format_version = 0;
-    std::uint32_t page_size = 0;
+    std::uint32_t extent_size = 0;
     std::uint64_t writer_random = 0;
     std::uint32_t pid = 0;
     dstd::String host;
@@ -154,7 +154,7 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
     const std::uint32_t crc = crc32(0, crc_bytes.data(), crc_bytes.size());
     info.header_crc_ok = stored_crc == crc;
 
-    const std::uint32_t page_size = read_u32_le(data + 16);
+    const std::uint32_t extent_size = read_u32_le(data + 16);
     const std::uint64_t creation_time = read_u64_le(data + 24);
     const std::uint64_t writer_random = read_u64_le(data + 32);
     const std::uint32_t pid = read_u32_le(data + 40);
@@ -168,7 +168,7 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
         return info;
     }
 
-    info.page_size = page_size;
+    info.extent_size = extent_size;
     info.writer_random = writer_random;
     info.pid = pid;
     info.host.assign(reinterpret_cast<const char*>(data + 48), host_length);
@@ -183,7 +183,7 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
 }
 
 void fill_header_fields(FileIndex& index, const HeaderInfo& info) {
-    index.page_size = info.page_size;
+    index.extent_size = info.extent_size;
     index.writer_random = info.writer_random;
     index.pid = info.pid;
     index.host = info.host;
@@ -332,7 +332,7 @@ void apply_record(FileIndex& index, const Record& record) {
         index.scopes.clear();
         index.copies.clear();
         index.drops.clear();
-        index.page_refs.clear();
+        index.extent_refs.clear();
         index.commit_refs.clear();
     }
     for (const RecordItem& item : record.items) {
@@ -344,10 +344,10 @@ void apply_record(FileIndex& index, const Record& record) {
             index.copies.push_back(*copy_item);
         } else if (const auto* drop_item = std::get_if<DropItem>(&item)) {
             index.drops.push_back(*drop_item);
-        } else if (const auto* page_ref_item =
-                       std::get_if<PageRefItem>(&item)) {
-            index.page_refs.push_back(
-                {page_ref_item->sequence, *page_ref_item});
+        } else if (const auto* extent_ref_item =
+                       std::get_if<ExtentRefItem>(&item)) {
+            index.extent_refs.push_back(
+                {extent_ref_item->sequence, *extent_ref_item});
         } else if (const auto* commit_ref_item =
                        std::get_if<CommitRefItem>(&item)) {
             index.commit_refs.push_back(*commit_ref_item);
@@ -405,9 +405,10 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
 }
 
 dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
-    dstd::StringView path, std::uint32_t page_size, dstd::StringView host,
+    dstd::StringView path, std::uint32_t extent_size, dstd::StringView host,
     dstd::StringView label) {
-    if (page_size < FILE_HEADER_BYTES || page_size % FILE_HEADER_BYTES != 0) {
+    if (extent_size < FILE_HEADER_BYTES ||
+        extent_size % FILE_HEADER_BYTES != 0) {
         return invalid_error();
     }
     if (host.size() > 255 || label.size() > 255) return invalid_error();
@@ -419,7 +420,7 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
 
     DataFileWriter writer;
     writer.fd_ = fd;
-    writer.page_size_ = page_size;
+    writer.extent_size_ = extent_size;
     writer.host_.assign(host.data(), host.size());
     writer.label_.assign(label.data(), label.size());
     writer.pid_ = static_cast<std::uint32_t>(::getpid());
@@ -433,7 +434,7 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
 
 DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
     : fd_(other.fd_),
-      page_size_(other.page_size_),
+      extent_size_(other.extent_size_),
       next_offset_(other.next_offset_.load(std::memory_order_relaxed)),
       last_sequence_(other.last_sequence_),
       tail_offset_(other.tail_offset_),
@@ -446,7 +447,7 @@ DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
       label_(std::move(other.label_)),
       pending_items_(std::move(other.pending_items_)),
       all_items_(std::move(other.all_items_)),
-      committed_pages_(std::move(other.committed_pages_)),
+      committed_extents_(std::move(other.committed_extents_)),
       closed_(other.closed_.load(std::memory_order_relaxed)),
       latched_(other.latched_.load(std::memory_order_relaxed)),
       latched_error_(std::move(other.latched_error_)) {
@@ -457,7 +458,7 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     if (this == &other) return *this;
     if (fd_ >= 0) ::close(fd_);
     fd_ = other.fd_;
-    page_size_ = other.page_size_;
+    extent_size_ = other.extent_size_;
     next_offset_.store(other.next_offset_.load(std::memory_order_relaxed),
                        std::memory_order_relaxed);
     last_sequence_ = other.last_sequence_;
@@ -471,7 +472,7 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     label_ = std::move(other.label_);
     pending_items_ = std::move(other.pending_items_);
     all_items_ = std::move(other.all_items_);
-    committed_pages_ = std::move(other.committed_pages_);
+    committed_extents_ = std::move(other.committed_extents_);
     closed_.store(other.closed_.load(std::memory_order_relaxed),
                   std::memory_order_relaxed);
     latched_.store(other.latched_.load(std::memory_order_relaxed),
@@ -502,7 +503,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
     dstd::Vector<std::uint8_t> header(FILE_HEADER_BYTES, 0);
     std::memcpy(header.data(), FILE_MAGIC.data(), FILE_MAGIC.size());
     write_u32_le(header.data() + 8, FORMAT_VERSION);
-    write_u32_le(header.data() + 16, page_size_);
+    write_u32_le(header.data() + 16, extent_size_);
     write_u64_le(header.data() + 24, creation_time_);
     write_u64_le(header.data() + 32, writer_random_);
     write_u32_le(header.data() + 40, pid_);
@@ -529,19 +530,19 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
     return written;
 }
 
-dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_page(
+dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
     ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
-    if (bytes.empty() || bytes.size() > page_size_ - PAGE_HEADER_BYTES) {
+    if (bytes.empty() || bytes.size() > extent_size_ - EXTENT_HEADER_BYTES) {
         return invalid_error();
     }
-    auto stored = encode_page(bytes, 1);
+    auto stored = encode_extent(bytes, 1);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
-    // The reservation records the page range; the write below is its bytes.
-    const std::uint64_t offset =
-        reserve_range(stored->size(), page_size_, io_fault::WriteKind::Page);
-    PageRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
+    // The reservation records the extent range; the write below is its bytes.
+    const std::uint64_t offset = reserve_range(stored->size(), extent_size_,
+                                               io_fault::WriteKind::Extent);
+    ExtentRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
     ref.crc = crc32(0, stored->data(), stored->size());
     auto written = pwrite_all(fd_, stored->data(), stored->size(), offset);
     if (!written) {
@@ -551,7 +552,7 @@ dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_page(
     return ref;
 }
 
-dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_big(
+dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_big(
     ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
@@ -561,7 +562,7 @@ dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_big(
     }
     const std::uint64_t offset = reserve_range(bytes.size(), FILE_HEADER_BYTES,
                                                io_fault::WriteKind::Big);
-    PageRef ref{offset, static_cast<std::uint32_t>(bytes.size()), 0};
+    ExtentRef ref{offset, static_cast<std::uint32_t>(bytes.size()), 0};
     ref.crc = crc32(0, bytes.data(), bytes.size());
     auto written =
         pwrite_all(fd_, reinterpret_cast<const std::uint8_t*>(bytes.data()),
@@ -585,7 +586,7 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
         if (next_offset_.compare_exchange_weak(current, start + length,
                                                std::memory_order_acq_rel,
                                                std::memory_order_relaxed)) {
-            if (kind == io_fault::WriteKind::Page) {
+            if (kind == io_fault::WriteKind::Extent) {
                 io_fault::on_write(fd_, kind, start, nullptr, length);
             }
             return start;
@@ -595,16 +596,18 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
 
 void DataFileWriter::add(RecordItem item) {
     if (latched() || closed_.load(std::memory_order_acquire)) return;
-    // A page ref lives in its commit's record only: a checkpoint and the footer
-    // list the commit by the summary commit() adds once the record is written.
-    if (!std::holds_alternative<PageRefItem>(item)) all_items_.push_back(item);
+    // An extent ref lives in its commit's record only: a checkpoint and the
+    // footer list the commit by the summary commit() adds once the record is
+    // written.
+    if (!std::holds_alternative<ExtentRefItem>(item))
+        all_items_.push_back(item);
     pending_items_.push_back(std::move(item));
 }
 
-RecordItems DataFileWriter::items_with_pending_pages() const {
+RecordItems DataFileWriter::items_with_pending_extents() const {
     RecordItems items = all_items_;
     for (const RecordItem& item : pending_items_) {
-        if (std::holds_alternative<PageRefItem>(item)) items.push_back(item);
+        if (std::holds_alternative<ExtentRefItem>(item)) items.push_back(item);
     }
     return items;
 }
@@ -623,62 +626,65 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         out.insert(out.end(), bytes.begin(), bytes.end());
         return handle;
     };
-    // Every page ref the file holds a section of, sorted by offset and
-    // deduplicated, so the index of a page in this order names the page.
-    dstd::Vector<const PageRefItem*> pages;
-    for (const PageRefItem& page : committed_pages_) {
-        if (!page.sections.empty()) pages.push_back(&page);
+    // Every extent ref the file holds a segment of, sorted by offset and
+    // deduplicated, so the index of an extent in this order names the extent.
+    dstd::Vector<const ExtentRefItem*> extents;
+    for (const ExtentRefItem& extent : committed_extents_) {
+        if (!extent.segments.empty()) extents.push_back(&extent);
     }
     for (const RecordItem& item : items) {
-        const auto* page = std::get_if<PageRefItem>(&item);
-        if (page != nullptr && !page->sections.empty()) pages.push_back(page);
+        const auto* extent = std::get_if<ExtentRefItem>(&item);
+        if (extent != nullptr && !extent->segments.empty())
+            extents.push_back(extent);
     }
-    std::stable_sort(pages.begin(), pages.end(),
-                     [](const PageRefItem* a, const PageRefItem* b) {
+    std::stable_sort(extents.begin(), extents.end(),
+                     [](const ExtentRefItem* a, const ExtentRefItem* b) {
                          return a->offset < b->offset;
                      });
     std::size_t kept = 0;
-    for (std::size_t i = 0; i < pages.size(); ++i) {
-        if (kept > 0 && pages[kept - 1]->offset == pages[i]->offset) continue;
-        pages[kept++] = pages[i];
+    for (std::size_t i = 0; i < extents.size(); ++i) {
+        if (kept > 0 && extents[kept - 1]->offset == extents[i]->offset)
+            continue;
+        extents[kept++] = extents[i];
     }
-    pages.resize(kept);
-    if (pages.size() > std::numeric_limits<std::uint32_t>::max()) {
+    extents.resize(kept);
+    if (extents.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    // One section block per copy of one commit, in page order: every section
-    // sorted once by commit, copy, page and place in the page, cut in runs.
-    struct SectionKey {
+    // One segment block per copy of one commit, in extent order: every segment
+    // sorted once by commit, copy, extent and place in the extent, cut in runs.
+    struct SegmentKey {
         std::uint64_t sequence = 0;
         std::uint32_t copy_id = 0;
     };
-    const auto less = [](const SectionKey& a, const SectionKey& b) {
+    const auto less = [](const SegmentKey& a, const SegmentKey& b) {
         if (a.sequence != b.sequence) return a.sequence < b.sequence;
         return a.copy_id < b.copy_id;
     };
     struct Placed {
-        SectionKey key;
-        std::uint32_t page = 0;
-        const PageRefItem* ref = nullptr;
-        const PageSection* section = nullptr;
+        SegmentKey key;
+        std::uint32_t extent = 0;
+        const ExtentRefItem* ref = nullptr;
+        const ExtentSegment* segment = nullptr;
     };
     dstd::Vector<Placed> placed;
-    for (std::size_t page = 0; page < pages.size(); ++page) {
-        for (const PageSection& section : pages[page]->sections) {
-            placed.push_back({{pages[page]->sequence, section.copy_id},
-                              static_cast<std::uint32_t>(page),
-                              pages[page],
-                              &section});
+    for (std::size_t extent = 0; extent < extents.size(); ++extent) {
+        for (const ExtentSegment& segment : extents[extent]->segments) {
+            placed.push_back({{extents[extent]->sequence, segment.copy_id},
+                              static_cast<std::uint32_t>(extent),
+                              extents[extent],
+                              &segment});
         }
     }
     std::sort(placed.begin(), placed.end(),
               [&less](const Placed& a, const Placed& b) {
                   if (less(a.key, b.key)) return true;
                   if (less(b.key, a.key)) return false;
-                  if (a.page != b.page) return a.page < b.page;
-                  return a.section->offset_in_page < b.section->offset_in_page;
+                  if (a.extent != b.extent) return a.extent < b.extent;
+                  return a.segment->offset_in_extent <
+                         b.segment->offset_in_extent;
               });
-    dstd::Vector<std::pair<SectionKey, BlockHandle>> handles;
+    dstd::Vector<std::pair<SegmentKey, BlockHandle>> handles;
     for (std::size_t first = 0; first < placed.size();) {
         std::size_t end = first + 1;
         while (end < placed.size() &&
@@ -689,15 +695,15 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         append_u32_le(bytes, static_cast<std::uint32_t>(end - first));
         for (std::size_t at = first; at < end; ++at) {
             const Placed& entry = placed[at];
-            append_u32_le(bytes, entry.page);
+            append_u32_le(bytes, entry.extent);
             append_u64_le(bytes, entry.ref->offset);
             append_u32_le(bytes, entry.ref->length);
             append_u32_le(bytes, entry.ref->crc);
-            append_u32_le(bytes, entry.section->offset_in_page);
-            append_u32_le(bytes, entry.section->length);
-            append_u64_le(bytes, entry.section->entry_count);
+            append_u32_le(bytes, entry.segment->offset_in_extent);
+            append_u32_le(bytes, entry.segment->length);
+            append_u64_le(bytes, entry.segment->entry_count);
             for (const auto* key :
-                 {&entry.section->first_key, &entry.section->last_key}) {
+                 {&entry.segment->first_key, &entry.segment->last_key}) {
                 encode_varint(bytes, key->size());
                 bytes.insert(bytes.end(), key->begin(), key->end());
             }
@@ -705,13 +711,13 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         handles.push_back({placed[first].key, place(bytes)});
         first = end;
     }
-    const auto section_handle = [&handles, &less](std::uint64_t sequence,
+    const auto segment_handle = [&handles, &less](std::uint64_t sequence,
                                                   std::uint32_t copy_id) {
-        const SectionKey wanted{sequence, copy_id};
+        const SegmentKey wanted{sequence, copy_id};
         const auto at = std::lower_bound(
             handles.begin(), handles.end(), wanted,
-            [&less](const std::pair<SectionKey, BlockHandle>& entry,
-                    const SectionKey& key) { return less(entry.first, key); });
+            [&less](const std::pair<SegmentKey, BlockHandle>& entry,
+                    const SegmentKey& key) { return less(entry.first, key); });
         if (at == handles.end() || less(wanted, at->first))
             return BlockHandle{};
         return at->second;
@@ -736,14 +742,14 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
                 commits.push_back(
                     {commit->sequence, range.copy_id, bytes_of(range.first_key),
                      bytes_of(range.last_key),
-                     section_handle(commit->sequence, range.copy_id)});
+                     segment_handle(commit->sequence, range.copy_id)});
             }
-        } else if (const auto* page = std::get_if<PageRefItem>(&item)) {
-            for (const PageSection& section : page->sections) {
+        } else if (const auto* extent = std::get_if<ExtentRefItem>(&item)) {
+            for (const ExtentSegment& segment : extent->segments) {
                 commits.push_back(
-                    {page->sequence, section.copy_id,
-                     bytes_of(section.first_key), bytes_of(section.last_key),
-                     section_handle(page->sequence, section.copy_id)});
+                    {extent->sequence, segment.copy_id,
+                     bytes_of(segment.first_key), bytes_of(segment.last_key),
+                     segment_handle(extent->sequence, segment.copy_id)});
             }
         }
     }
@@ -788,45 +794,45 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
 
     FileTail tail;
     tail.format_version = FORMAT_VERSION;
-    tail.page_size = page_size_;
+    tail.extent_size = extent_size_;
     tail.writer_random = writer_random_;
     tail.pid = pid_;
     tail.host = host_;
     tail.label = label_;
     tail.creation_time = creation_time_;
     tail.items = items_block;
-    tail.page_count = static_cast<std::uint32_t>(pages.size());
+    tail.extent_count = static_cast<std::uint32_t>(extents.size());
     tail.directory_levels = levels;
     tail.top_table = std::move(top_table);
     return tail;
 }
 
 void DataFileWriter::add_commit_refs() {
-    // One item per section, sorted by sequence and copy so each copy of each
+    // One item per segment, sorted by sequence and copy so each copy of each
     // commit is one run: one allocation, and each key copied once per copy.
     struct Item {
         std::uint64_t sequence;
         std::uint32_t copy_id;
-        const PageSection* section;
+        const ExtentSegment* segment;
     };
     dstd::Vector<Item> items;
     dstd::Vector<CommitRefItem> refs;
     for (const RecordItem& item : pending_items_) {
-        const auto* page = std::get_if<PageRefItem>(&item);
-        if (page == nullptr) continue;
+        const auto* extent = std::get_if<ExtentRefItem>(&item);
+        if (extent == nullptr) continue;
         std::size_t at = 0;
-        while (at < refs.size() && refs[at].sequence != page->sequence) ++at;
+        while (at < refs.size() && refs[at].sequence != extent->sequence) ++at;
         if (at == refs.size()) {
             CommitRefItem fresh;
-            fresh.sequence = page->sequence;
+            fresh.sequence = extent->sequence;
             fresh.record_offset = tail_offset_;
             fresh.record_crc = tail_crc_;
             fresh.synced = 1;
             refs.push_back(std::move(fresh));
         }
-        if (page->synced == 0) refs[at].synced = 0;
-        for (const PageSection& section : page->sections) {
-            items.push_back({page->sequence, section.copy_id, &section});
+        if (extent->synced == 0) refs[at].synced = 0;
+        for (const ExtentSegment& segment : extent->segments) {
+            items.push_back({extent->sequence, segment.copy_id, &segment});
         }
     }
     std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
@@ -834,15 +840,15 @@ void DataFileWriter::add_commit_refs() {
         return a.copy_id < b.copy_id;
     });
     for (std::size_t at = 0; at < items.size();) {
-        const PageSection* low = items[at].section;
-        const PageSection* high = low;
+        const ExtentSegment* low = items[at].segment;
+        const ExtentSegment* high = low;
         std::size_t end = at + 1;
         while (end < items.size() &&
                items[end].sequence == items[at].sequence &&
                items[end].copy_id == items[at].copy_id) {
-            const PageSection& section = *items[end].section;
-            if (section.first_key < low->first_key) low = &section;
-            if (high->last_key < section.last_key) high = &section;
+            const ExtentSegment& segment = *items[end].segment;
+            if (segment.first_key < low->first_key) low = &segment;
+            if (high->last_key < segment.last_key) high = &segment;
             ++end;
         }
         for (CommitRefItem& ref : refs) {
@@ -904,12 +910,12 @@ dstd::Expected<void, dstd::Error> DataFileWriter::commit() {
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     const bool checkpoint = (last_sequence_ + 1) % CHECKPOINT_INTERVAL == 0;
     auto record = checkpoint ? write_record(RecordKind::Commit,
-                                            items_with_pending_pages())
+                                            items_with_pending_extents())
                              : write_record(RecordKind::Commit, pending_items_);
     if (!record) return record;
     for (const RecordItem& item : pending_items_) {
-        if (const auto* page = std::get_if<PageRefItem>(&item)) {
-            committed_pages_.push_back(*page);
+        if (const auto* extent = std::get_if<ExtentRefItem>(&item)) {
+            committed_extents_.push_back(*extent);
         }
     }
     add_commit_refs();
@@ -922,7 +928,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::commit() {
 dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return {};
-    const RecordItems items = items_with_pending_pages();
+    const RecordItems items = items_with_pending_extents();
     // Every block in one write, at a range whose offset the blocks name: the
     // range is taken only if no write took the end of the file meanwhile.
     dstd::Vector<std::uint8_t> blocks;
@@ -952,13 +958,13 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         io_fault::on_write(fd_, io_fault::WriteKind::Footer, base,
                            blocks.data(), blocks.size());
     }
-    // One sync covers the pages and every block above them, before the footer
-    // that names them. Every page before the footer, so a reader trusts the
-    // pages of a closed file one by one.
-    auto pages_synced = sync_data();
-    if (!pages_synced) {
-        latch(pages_synced.error());
-        return pages_synced;
+    // One sync covers the extents and every block above them, before the footer
+    // that names them. Every extent before the footer, so a reader trusts the
+    // extents of a closed file one by one.
+    auto extents_synced = sync_data();
+    if (!extents_synced) {
+        latch(extents_synced.error());
+        return extents_synced;
     }
     // The footer holds the namespaces and the tail: the items block holds
     // every other item again, and only a full open reads it.
@@ -1170,10 +1176,10 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
     }
     if (tail == nullptr) return false;
     if (tail->format_version != FORMAT_VERSION) return unsupported_error();
-    // Pages start at multiples of the page size, one page to each.
-    if (tail->page_count > file_size / tail->page_size + 1) return false;
+    // Extents start at multiples of the extent size, one extent to each.
+    if (tail->extent_count > file_size / tail->extent_size + 1) return false;
 
-    index_.page_size = tail->page_size;
+    index_.extent_size = tail->extent_size;
     index_.writer_random = tail->writer_random;
     index_.pid = tail->pid;
     index_.host = tail->host;
@@ -1223,7 +1229,7 @@ DataFileReader::~DataFileReader() {
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
-DataFileReader::read_page(const PageRef& ref) const {
+DataFileReader::read_extent(const ExtentRef& ref) const {
     if (ref.length == 0 || ref.offset > file_size_ ||
         ref.length > file_size_ - ref.offset) {
         return parse_error();
@@ -1236,10 +1242,10 @@ DataFileReader::read_page(const PageRef& ref) const {
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
-DataFileReader::read_data_page(const PageRef& ref) const {
-    auto bytes = read_page(ref);
+DataFileReader::read_data_extent(const ExtentRef& ref) const {
+    auto bytes = read_extent(ref);
     if (!bytes) return bytes;
-    auto decoded = decode_page(*bytes);
+    auto decoded = decode_extent(*bytes);
     if (!decoded) return dstd::Unexpected<dstd::Error>(decoded.error());
     return bytes;
 }
@@ -1266,7 +1272,7 @@ DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
-    const PageRef& ref, BlockReads* reads) const {
+    const ExtentRef& ref, BlockReads* reads) const {
     if (ref.length == 0 || ref.offset > file_size_ ||
         ref.length > file_size_ - ref.offset) {
         return parse_error();
@@ -1296,14 +1302,14 @@ dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
     return {};
 }
 
-dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
-    dstd::Span<const PageRef> refs,
-    dstd::Span<const PageTarget> targets) const {
-    const auto in_file = [this](const PageRef& ref) {
+dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
+    dstd::Span<const ExtentRef> refs,
+    dstd::Span<const ExtentTarget> targets) const {
+    const auto in_file = [this](const ExtentRef& ref) {
         return ref.length != 0 && ref.offset <= file_size_ &&
                ref.length <= file_size_ - ref.offset;
     };
-    const auto adjacent = [](const PageRef& previous, const PageRef& next) {
+    const auto adjacent = [](const ExtentRef& previous, const ExtentRef& next) {
         return next.offset == previous.offset + previous.length;
     };
 
@@ -1327,7 +1333,7 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
         vecs.resize(end - at);
         std::uint64_t group_bytes = 0;
         for (std::size_t i = at; i < end; ++i) {
-            const PageRef& ref = refs[i];
+            const ExtentRef& ref = refs[i];
             *targets[i].bytes =
                 dstd::Vector<std::uint8_t>(ref.length, std::uint8_t{0});
             vecs[i - at].iov_base = targets[i].bytes->data();
@@ -1352,28 +1358,29 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
             done += static_cast<std::uint64_t>(got);
             std::size_t left = static_cast<std::size_t>(got);
             while (left > 0) {
-                struct iovec* page = &vecs[served];
-                if (left < page->iov_len) {
-                    page->iov_base = static_cast<char*>(page->iov_base) + left;
-                    page->iov_len -= left;
+                struct iovec* extent = &vecs[served];
+                if (left < extent->iov_len) {
+                    extent->iov_base =
+                        static_cast<char*>(extent->iov_base) + left;
+                    extent->iov_len -= left;
                     left = 0;
                 } else {
-                    left -= page->iov_len;
+                    left -= extent->iov_len;
                     ++served;
                 }
             }
         }
 
         for (std::size_t i = at; i < end; ++i) {
-            const PageRef& ref = refs[i];
+            const ExtentRef& ref = refs[i];
             dstd::Vector<std::uint8_t>& bytes = *targets[i].bytes;
             const bool complete = i < at + served;
             if (complete && crc32(0, bytes.data(), bytes.size()) == ref.crc &&
-                decode_page(bytes)) {
+                decode_extent(bytes)) {
                 continue;
             }
-            // A page past the end of the file, or one whose crc fails, keeps no
-            // bytes: the codes of a copy reach the caller through its state.
+            // An extent past the end of the file, or one whose crc fails, keeps
+            // no bytes: the codes of a copy reach the caller through its state.
             *targets[i].bad = 1;
             dstd::Vector<std::uint8_t>().swap(bytes);
         }
@@ -1382,7 +1389,7 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
     return counts;
 }
 
-dstd::Expected<dstd::Vector<PageRefItem>, dstd::Error>
+dstd::Expected<dstd::Vector<ExtentRefItem>, dstd::Error>
 DataFileReader::read_commit(const CommitRefItem& ref, BlockReads* reads) const {
     auto length = read_record_length(fd_, file_size_, ref.record_offset);
     if (!length) return dstd::Unexpected<dstd::Error>(length.error());
@@ -1395,28 +1402,28 @@ DataFileReader::read_commit(const CommitRefItem& ref, BlockReads* reads) const {
     auto record = decode_record_at(bytes_of(*bytes), ref.record_offset);
     if (!record) return dstd::Unexpected<dstd::Error>(record.error());
     if (record->crc != ref.record_crc) return parse_error();
-    dstd::Vector<PageRefItem> refs;
+    dstd::Vector<ExtentRefItem> refs;
     for (RecordItem& item : record->items) {
-        auto* page = std::get_if<PageRefItem>(&item);
-        if (page != nullptr && page->sequence == ref.sequence) {
-            refs.push_back(std::move(*page));
+        auto* extent = std::get_if<ExtentRefItem>(&item);
+        if (extent != nullptr && extent->sequence == ref.sequence) {
+            refs.push_back(std::move(*extent));
         }
     }
     return refs;
 }
 
-dstd::Expected<dstd::Vector<IndexedPageRef>, dstd::Error>
-DataFileReader::all_page_refs() const {
-    dstd::Vector<IndexedPageRef> refs = index_.page_refs;
+dstd::Expected<dstd::Vector<IndexedExtentRef>, dstd::Error>
+DataFileReader::all_extent_refs() const {
+    dstd::Vector<IndexedExtentRef> refs = index_.extent_refs;
     for (const CommitRefItem& commit : index_.commit_refs) {
         auto listed = read_commit(commit, nullptr);
         if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
-        for (PageRefItem& page : *listed) {
-            refs.push_back({commit.sequence, std::move(page)});
+        for (ExtentRefItem& extent : *listed) {
+            refs.push_back({commit.sequence, std::move(extent)});
         }
     }
     std::stable_sort(refs.begin(), refs.end(),
-                     [](const IndexedPageRef& a, const IndexedPageRef& b) {
+                     [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
                          return a.sequence < b.sequence;
                      });
     return refs;

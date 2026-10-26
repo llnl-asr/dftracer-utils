@@ -8,7 +8,7 @@
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/data_file.h>
-#include <dftracer/utils/store/open_page.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/record.h>
 
 #include <atomic>
@@ -28,12 +28,12 @@ class Executor;
 
 namespace dftracer::utils::store {
 
-class WriterPages;
+class WriterExtents;
 
 /// What one batch adds to the group commit that records it: the namespace,
 /// scope and copy items it is the first to name, and whether its data must be
-/// on disk before its commit returns. The writer fills it, PageWriter::append
-/// carries it as the section context, and the committer deletes it once the
+/// on disk before its commit returns. The writer fills it, ExtentWriter::append
+/// carries it as the segment context, and the committer deletes it once the
 /// record naming it is written.
 struct PendingBatch {
     PendingBatch();
@@ -46,28 +46,28 @@ struct PendingBatch {
     ScopeItem scope_item;
     std::uint32_t scope_id = 0;
     CopyItem copy_item;
-    /// The count that charged this batch's section bytes, and how many. A
-    /// discarded batch gives them back there; a written page releases them
-    /// by its sections instead.
-    WriterPages* pages = nullptr;
+    /// The count that charged this batch's segment bytes, and how many. A
+    /// discarded batch gives them back there; a written extent releases them
+    /// by its segments instead.
+    WriterExtents* extents = nullptr;
     std::uint64_t charged_bytes = 0;
-    /// The big value runs the batch's section names. The record that lists
-    /// the section's page lists each run as a block of the same commit, so a
+    /// The big value runs the batch's segment names. The record that lists
+    /// the segment's extent lists each run as a block of the same commit, so a
     /// lost run makes that commit read as bad.
-    dstd::Vector<PageRef> big_runs;
+    dstd::Vector<ExtentRef> big_runs;
     bool durable = false;
 };
 
-/// Writes one record per group commit for the pages and copy state changes the
-/// writer produces, from one task of the writer's executor.
+/// Writes one record per group commit for the extents and copy state changes
+/// the writer produces, from one task of the writer's executor.
 ///
-/// on_page(), on_drop() and on_fail() take their item from any thread, and
+/// on_extent(), on_drop() and on_fail() take their item from any thread, and
 /// commit_pending() is called by the writer's flush and close; only the task
 /// and those callers write records, one at a time. A record error latches, and
 /// every later commit reports it.
 class Committer {
    public:
-    /// A group commit starts as soon as `commit_bytes` of section bytes, raw,
+    /// A group commit starts as soon as `commit_bytes` of segment bytes, raw,
     /// are pending, and at the latest `commit_interval` after the first pending
     /// item arrived.
     Committer(DataFileWriter& file, Executor& executor,
@@ -84,8 +84,8 @@ class Committer {
     /// Starts the group commit task on the executor. Call once.
     void start();
 
-    /// Queues a written page. Runs on an I/O backend thread.
-    void on_page(WrittenPage&& page);
+    /// Queues a written extent. Runs on an I/O backend thread.
+    void on_extent(WrittenExtent&& extent);
     /// Queues a drop of [begin, end) of a copy; an empty `end` means to the
     /// last key and both empty a whole-scope drop. Takes ownership of `batch`.
     void on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
@@ -117,11 +117,11 @@ class Committer {
    private:
     friend struct CommitterTestHook;
 
-    /// One queued item: a written page, or a copy that was dropped or failed.
+    /// One queued item: a written extent, or a copy that was dropped or failed.
     struct PendingEntry {
-        WrittenPage page;
+        WrittenExtent extent;
         PendingBatch* batch = nullptr;
-        bool has_page = false;
+        bool has_extent = false;
         bool emit_drop = false;
         dstd::Vector<std::uint8_t> begin_key;
         dstd::Vector<std::uint8_t> end_key;

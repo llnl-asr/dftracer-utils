@@ -22,7 +22,7 @@ std::atomic<bool>& record_failure_armed() {
     return armed;
 }
 
-/// Live PendingBatch objects, so a test can prove that a page write failure
+/// Live PendingBatch objects, so a test can prove that an extent write failure
 /// and a teardown leave none behind.
 std::atomic<std::uint64_t>& batch_count() {
     static std::atomic<std::uint64_t> count{0};
@@ -82,7 +82,7 @@ struct Committer::WakeState {
     }
 };
 
-/// Waits until `commit_bytes` of page bytes are pending or `commit_interval`
+/// Waits until `commit_bytes` of extent bytes are pending or `commit_interval`
 /// passed. The threshold is read under the queue lock that the producer adds
 /// the counter under, so a wake that arrives first is not lost.
 struct Committer::WaitForWork {
@@ -243,12 +243,12 @@ void Committer::wake() {
 }
 
 void Committer::add_entry(PendingEntry&& entry) {
-    // Raw section bytes, as the writer quota counts them: the stored length of
-    // a compressed page says little about how much data waits.
+    // Raw segment bytes, as the writer quota counts them: the stored length of
+    // a compressed extent says little about how much data waits.
     std::uint64_t bytes = 0;
-    if (entry.has_page) {
-        for (const PageSection& section : entry.page.sections) {
-            bytes += section.length;
+    if (entry.has_extent) {
+        for (const ExtentSegment& segment : entry.extent.segments) {
+            bytes += segment.length;
         }
     }
     bool wake_now = false;
@@ -261,10 +261,10 @@ void Committer::add_entry(PendingEntry&& entry) {
     if (wake_now) wake();
 }
 
-void Committer::on_page(WrittenPage&& page) {
+void Committer::on_extent(WrittenExtent&& extent) {
     PendingEntry entry;
-    entry.page = std::move(page);
-    entry.has_page = true;
+    entry.extent = std::move(extent);
+    entry.has_extent = true;
     add_entry(std::move(entry));
 }
 
@@ -293,11 +293,11 @@ void Committer::drain(dstd::Vector<PendingEntry>& out) {
 
 void Committer::free_entries(dstd::Vector<PendingEntry>& entries) noexcept {
     for (PendingEntry& entry : entries) {
-        if (entry.has_page) {
-            for (void* context : entry.page.contexts) {
+        if (entry.has_extent) {
+            for (void* context : entry.extent.contexts) {
                 delete static_cast<PendingBatch*>(context);
             }
-            entry.page.contexts.clear();
+            entry.extent.contexts.clear();
         }
         delete entry.batch;
         entry.batch = nullptr;
@@ -359,8 +359,8 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
 
     bool durable = false;
     for (const PendingEntry& entry : drained) {
-        if (entry.has_page) {
-            for (void* context : entry.page.contexts) {
+        if (entry.has_extent) {
+            for (void* context : entry.extent.contexts) {
                 const auto* batch = static_cast<const PendingBatch*>(context);
                 if (batch != nullptr && batch->durable) durable = true;
             }
@@ -379,8 +379,8 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
 
     const std::uint64_t sequence = next_sequence_;
     for (PendingEntry& entry : drained) {
-        if (entry.has_page) {
-            for (void* context : entry.page.contexts) {
+        if (entry.has_extent) {
+            for (void* context : entry.extent.contexts) {
                 auto* batch = static_cast<PendingBatch*>(context);
                 if (batch == nullptr) continue;
                 if (announce(announced_namespaces_, batch->namespace_id)) {
@@ -394,11 +394,11 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
                     file_.add(std::move(batch->copy_item));
                 }
             }
-            for (void* context : entry.page.contexts) {
+            for (void* context : entry.extent.contexts) {
                 auto* batch = static_cast<PendingBatch*>(context);
                 if (batch == nullptr) continue;
-                for (const PageRef& run : batch->big_runs) {
-                    PageRefItem big;
+                for (const ExtentRef& run : batch->big_runs) {
+                    ExtentRefItem big;
                     big.offset = run.offset;
                     big.length = run.length;
                     big.crc = run.crc;
@@ -407,13 +407,13 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
                     file_.add(std::move(big));
                 }
             }
-            PageRefItem reference;
-            reference.offset = entry.page.offset;
-            reference.length = entry.page.length;
-            reference.crc = entry.page.crc;
+            ExtentRefItem reference;
+            reference.offset = entry.extent.offset;
+            reference.length = entry.extent.length;
+            reference.crc = entry.extent.crc;
             reference.sequence = sequence;
             reference.synced = durable ? 1 : 0;
-            reference.sections = std::move(entry.page.sections);
+            reference.segments = std::move(entry.extent.segments);
             file_.add(std::move(reference));
             continue;
         }

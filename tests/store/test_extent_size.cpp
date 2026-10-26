@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
-#include <dftracer/utils/store/page_size.h>
+#include <dftracer/utils/store/extent_size.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
 
@@ -26,21 +26,23 @@ constexpr std::uint32_t SIXTEEN_MIB = 16U << 20;
 constexpr std::uint32_t SIXTY_FOUR_MIB = 64U << 20;
 constexpr std::uint32_t ONE_TWENTY_EIGHT_KIB = 128U << 10;
 
-/// Sets DFTRACER_UTILS_STORE_PAGE_BYTES for the lifetime of the scope.
-struct PageBytesOverride {
-    explicit PageBytesOverride(const char* value) {
-        ::setenv(constants::store::STORE_PAGE_BYTES_ENV, value, 1);
+/// Sets DFTRACER_UTILS_STORE_EXTENT_BYTES for the lifetime of the scope.
+struct ExtentBytesOverride {
+    explicit ExtentBytesOverride(const char* value) {
+        ::setenv(constants::store::STORE_EXTENT_BYTES_ENV, value, 1);
     }
-    PageBytesOverride(const PageBytesOverride&) = delete;
-    PageBytesOverride& operator=(const PageBytesOverride&) = delete;
-    ~PageBytesOverride() { ::unsetenv(constants::store::STORE_PAGE_BYTES_ENV); }
+    ExtentBytesOverride(const ExtentBytesOverride&) = delete;
+    ExtentBytesOverride& operator=(const ExtentBytesOverride&) = delete;
+    ~ExtentBytesOverride() {
+        ::unsetenv(constants::store::STORE_EXTENT_BYTES_ENV);
+    }
 };
 
 struct TempDir {
     fs::path path;
     TempDir() {
         path = fs::temp_directory_path() /
-               ("dftu_store_page_size_" + std::to_string(::getpid()));
+               ("dftu_store_extent_size_" + std::to_string(::getpid()));
         fs::remove_all(path);
         fs::create_directories(path);
     }
@@ -55,7 +57,7 @@ struct TempDir {
 std::uint32_t chosen(std::size_t stripe_size,
                      dstd::Optional<std::uint64_t> override_bytes =
                          dstd::Optional<std::uint64_t>{}) {
-    auto result = store::choose_page_size(stripe_size, override_bytes);
+    auto result = store::choose_extent_size(stripe_size, override_bytes);
     REQUIRE(result.has_value());
     return *result;
 }
@@ -63,21 +65,21 @@ std::uint32_t chosen(std::size_t stripe_size,
 void check_override_error(dstd::Expected<std::uint32_t, dstd::Error> result) {
     REQUIRE_FALSE(result.has_value());
     CHECK(result.error().is(dstd::Condition::InvalidArgument));
-    CHECK(
-        result.error().message().find(constants::store::STORE_PAGE_BYTES_ENV) !=
-        std::string_view::npos);
+    CHECK(result.error().message().find(
+              constants::store::STORE_EXTENT_BYTES_ENV) !=
+          std::string_view::npos);
 }
 
 }  // namespace
 
-TEST_CASE("store page size: the default is 1 MiB") {
-    CHECK(constants::store::STORE_DEFAULT_PAGE_BYTES == ONE_MIB);
-    CHECK(constants::store::STORE_MIN_PAGE_BYTES == 4096);
-    CHECK(constants::store::STORE_MAX_PAGE_BYTES == SIXTEEN_MIB);
+TEST_CASE("store extent size: the default is 1 MiB") {
+    CHECK(constants::store::STORE_DEFAULT_EXTENT_BYTES == ONE_MIB);
+    CHECK(constants::store::STORE_MIN_EXTENT_BYTES == 4096);
+    CHECK(constants::store::STORE_MAX_EXTENT_BYTES == SIXTEEN_MIB);
     CHECK(chosen(0) == ONE_MIB);
 }
 
-TEST_CASE("store page size: a stripe size becomes the page size") {
+TEST_CASE("store extent size: a stripe size becomes the extent size") {
     CHECK(chosen(4096) == 4096);
     CHECK(chosen(ONE_MIB) == ONE_MIB);
     CHECK(chosen(FOUR_MIB) == FOUR_MIB);
@@ -85,7 +87,7 @@ TEST_CASE("store page size: a stripe size becomes the page size") {
 }
 
 TEST_CASE(
-    "store page size: a big stripe size is capped and a ragged one is "
+    "store extent size: a big stripe size is capped and a ragged one is "
     "rounded down") {
     CHECK(chosen(SIXTY_FOUR_MIB) == SIXTEEN_MIB);
     CHECK(chosen(ONE_MIB + 100) == ONE_MIB);
@@ -93,7 +95,7 @@ TEST_CASE(
     CHECK(chosen(1000) == 4096);
 }
 
-TEST_CASE("store page size: an override wins over the stripe size") {
+TEST_CASE("store extent size: an override wins over the stripe size") {
     CHECK(chosen(0, 4096) == 4096);
     CHECK(chosen(0, ONE_TWENTY_EIGHT_KIB) == ONE_TWENTY_EIGHT_KIB);
     CHECK(chosen(0, SIXTEEN_MIB) == SIXTEEN_MIB);
@@ -101,21 +103,21 @@ TEST_CASE("store page size: an override wins over the stripe size") {
 }
 
 TEST_CASE(
-    "store page size: an override off the 4 KiB grid or out of range is "
+    "store extent size: an override off the 4 KiB grid or out of range is "
     "an error") {
-    check_override_error(store::choose_page_size(0, 0));
-    check_override_error(store::choose_page_size(0, 4095));
-    check_override_error(store::choose_page_size(0, 5000));
-    check_override_error(store::choose_page_size(0, 32U << 20U));
-    check_override_error(store::choose_page_size(0, SIXTEEN_MIB + 4096));
+    check_override_error(store::choose_extent_size(0, 0));
+    check_override_error(store::choose_extent_size(0, 4095));
+    check_override_error(store::choose_extent_size(0, 5000));
+    check_override_error(store::choose_extent_size(0, 32U << 20U));
+    check_override_error(store::choose_extent_size(0, SIXTEEN_MIB + 4096));
 }
 
 TEST_CASE(
-    "store page size: a directory without a Lustre stripe uses the "
+    "store extent size: a directory without a Lustre stripe uses the "
     "default") {
     TempDir dir;
     const std::size_t stripe = lustre_stripe(dir.path.string()).size;
-    auto result = store::page_size_for(dir.path.string());
+    auto result = store::extent_size_for(dir.path.string());
     REQUIRE(result.has_value());
     // A local or network file system reports no stripe, so a test host that is
     // not Lustre exercises the default.
@@ -127,32 +129,32 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "store page size: DFTRACER_UTILS_STORE_PAGE_BYTES overrides the "
+    "store extent size: DFTRACER_UTILS_STORE_EXTENT_BYTES overrides the "
     "directory") {
     TempDir dir;
     {
-        PageBytesOverride override_value("262144");
-        auto result = store::page_size_for(dir.path.string());
+        ExtentBytesOverride override_value("262144");
+        auto result = store::extent_size_for(dir.path.string());
         REQUIRE(result.has_value());
         CHECK(*result == 262144);
     }
     {
-        auto result = store::page_size_for(dir.path.string());
+        auto result = store::extent_size_for(dir.path.string());
         REQUIRE(result.has_value());
         CHECK(*result == chosen(lustre_stripe(dir.path.string()).size));
     }
 }
 
 TEST_CASE(
-    "store page size: an unparsable or out-of-range override is an "
+    "store extent size: an unparsable or out-of-range override is an "
     "error") {
     TempDir dir;
     {
-        PageBytesOverride override_value("abc");
-        check_override_error(store::page_size_for(dir.path.string()));
+        ExtentBytesOverride override_value("abc");
+        check_override_error(store::extent_size_for(dir.path.string()));
     }
     {
-        PageBytesOverride override_value("5000");
-        check_override_error(store::page_size_for(dir.path.string()));
+        ExtentBytesOverride override_value("5000");
+        check_override_error(store::extent_size_for(dir.path.string()));
     }
 }

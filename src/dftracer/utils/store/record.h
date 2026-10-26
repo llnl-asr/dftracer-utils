@@ -63,24 +63,24 @@ struct DropItem {
     dstd::Vector<std::uint8_t> end_key;
 };
 
-struct PageSection {
+struct ExtentSegment {
     std::uint32_t copy_id = 0;
-    std::uint32_t offset_in_page = 0;
+    std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
     dstd::Vector<std::uint8_t> first_key;
     dstd::Vector<std::uint8_t> last_key;
 };
 
-struct PageRefItem {
+struct ExtentRefItem {
     std::uint64_t offset = 0;
     std::uint32_t length = 0;
     std::uint32_t crc = 0;
     std::uint64_t sequence = 0;
     /// 1 when the bytes of the ref reached the disk before the record that
-    /// first listed it: a durable commit syncs its pages before its record.
+    /// first listed it: a durable commit syncs its extents before its record.
     std::uint8_t synced = 0;
-    dstd::Vector<PageSection> sections;
+    dstd::Vector<ExtentSegment> segments;
 };
 
 /// The key range one commit holds for one copy.
@@ -91,14 +91,14 @@ struct CommitCopy {
 };
 
 /// One commit as a checkpoint or a footer lists it: the record that holds its
-/// page refs, and the copies it holds a section of with their key ranges. The
-/// page refs stay in that record, so a reader reads them only when it first
+/// extent refs, and the copies it holds a segment of with their key ranges. The
+/// extent refs stay in that record, so a reader reads them only when it first
 /// needs a copy of the commit.
 struct CommitRefItem {
     std::uint64_t sequence = 0;
     std::uint64_t record_offset = 0;
     std::uint32_t record_crc = 0;
-    /// 1 when every page ref of the commit is synced.
+    /// 1 when every extent ref of the commit is synced.
     std::uint8_t synced = 0;
     dstd::Vector<CommitCopy> copies;
 };
@@ -115,28 +115,28 @@ struct BlockHandle {
 };
 
 /// The footer item that names the blocks of a closed file: the header fields
-/// a light open needs, the items block, the number of pages the section blocks
-/// name, and the directory the first query of a scope reads.
+/// a light open needs, the items block, the number of extents the segment
+/// blocks name, and the directory the first query of a scope reads.
 struct FileTail {
     /// The format version of the file, as the header holds it.
     std::uint32_t format_version = 0;
-    std::uint32_t page_size = 0;
+    std::uint32_t extent_size = 0;
     std::uint64_t writer_random = 0;
     std::uint32_t pid = 0;
     dstd::String host;
     dstd::String label;
     std::uint64_t creation_time = 0;
     BlockHandle items;
-    /// The distinct pages that hold a section; a section block names each by
+    /// The distinct extents that hold a segment; a segment block names each by
     /// its index below this count.
-    std::uint32_t page_count = 0;
+    std::uint32_t extent_count = 0;
     /// The levels below the top table; 1 when it points at leaves.
     std::uint32_t directory_levels = 0;
     dstd::Vector<std::uint8_t> top_table;
 };
 
 using RecordItem = std::variant<NamespaceItem, ScopeItem, CopyItem, DropItem,
-                                PageRefItem, CommitRefItem, FileTail>;
+                                ExtentRefItem, CommitRefItem, FileTail>;
 
 using RecordItems = dstd::Vector<RecordItem>;
 

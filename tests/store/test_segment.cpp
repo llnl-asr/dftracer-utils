@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/store/section.h>
+#include <dftracer/utils/store/segment.h>
 #include <doctest/doctest.h>
 
 #include <array>
@@ -19,11 +19,11 @@ using dftracer::utils::ByteView;
 using dftracer::utils::dstd::Condition;
 using dftracer::utils::store::BIG_VALUE_BYTES;
 using dftracer::utils::store::BigRef;
+using dftracer::utils::store::GRANULE_BYTES;
 using dftracer::utils::store::PlacerFn;
-using dftracer::utils::store::SECTION_ALIGN;
-using dftracer::utils::store::SectionBuilder;
-using dftracer::utils::store::SectionView;
-using dftracer::utils::store::SUBPAGE_BYTES;
+using dftracer::utils::store::SEGMENT_ALIGN;
+using dftracer::utils::store::SegmentBuilder;
+using dftracer::utils::store::SegmentView;
 
 constexpr std::uint64_t RANDOM_SEED = 0x5EC7105EED1234C0ULL;
 constexpr std::size_t PAIR_COUNT = 10000;
@@ -125,10 +125,10 @@ BigRef fixed_placer(void* context, ByteView) {
 
 }  // namespace
 
-TEST_SUITE("index store section") {
+TEST_SUITE("index store segment") {
     TEST_CASE("random entries round-trip by key and by range") {
         std::mt19937_64 rng(RANDOM_SEED);
-        SectionBuilder builder;
+        SegmentBuilder builder;
         SortedMap expected;
         for (std::size_t i = 0; i < PAIR_COUNT; ++i) {
             const std::string key = random_key(rng);
@@ -139,15 +139,15 @@ TEST_SUITE("index store section") {
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
-        CHECK(sealed->size() % SECTION_ALIGN == 0);
-        CHECK(sealed->size() > SUBPAGE_BYTES * 10);
+        CHECK(sealed->size() % SEGMENT_ALIGN == 0);
+        CHECK(sealed->size() > GRANULE_BYTES * 10);
         CHECK(builder.entry_count() == expected.size());
         CHECK(as_string(builder.first_key()) == expected.begin()->first);
         CHECK(as_string(builder.last_key()) == expected.rbegin()->first);
 
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
-        const SectionView& view = *opened;
+        const SegmentView& view = *opened;
         CHECK(view.entry_count() == expected.size());
 
         for (const auto& [key, value] : expected) {
@@ -183,7 +183,7 @@ TEST_SUITE("index store section") {
     }
 
     TEST_CASE("equal keys keep the last added value") {
-        SectionBuilder builder;
+        SegmentBuilder builder;
         builder.add(view_of(std::string("key")), view_of(std::string("first")));
         builder.add(view_of(std::string("key")),
                     view_of(std::string("second")));
@@ -191,7 +191,7 @@ TEST_SUITE("index store section") {
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
         CHECK(opened->entry_count() == 1);
 
@@ -201,7 +201,7 @@ TEST_SUITE("index store section") {
     }
 
     TEST_CASE("a fold combines equal keys in add order") {
-        SectionBuilder builder;
+        SegmentBuilder builder;
         builder.add(view_of(std::string("key")), view_of(std::string("A")));
         builder.add(view_of(std::string("key")), view_of(std::string("B")));
         builder.add(view_of(std::string("key")), view_of(std::string("C")));
@@ -209,7 +209,7 @@ TEST_SUITE("index store section") {
 
         const auto sealed = builder.seal(append_fold, nullptr, nullptr);
         REQUIRE(sealed.has_value());
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
 
         const auto entry = opened->find(view_of(std::string("key")));
@@ -218,7 +218,7 @@ TEST_SUITE("index store section") {
     }
 
     TEST_CASE("values above the threshold come back as big refs") {
-        SectionBuilder builder;
+        SegmentBuilder builder;
         const std::string inline_value(BIG_VALUE_BYTES, 'i');
         const std::string big_value(BIG_VALUE_BYTES + 1, 'b');
         const std::string other_big_value(BIG_VALUE_BYTES + 123, 'c');
@@ -230,7 +230,7 @@ TEST_SUITE("index store section") {
         PlacerContext context{0, 0x1020304050607080ULL, 0};
         const auto sealed = builder.seal(nullptr, placer, &context);
         REQUIRE(sealed.has_value());
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
 
         const auto inline_entry = opened->find(view_of(std::string("inline")));
@@ -259,8 +259,8 @@ TEST_SUITE("index store section") {
               make_big_ref(&context, view_of(other_big_value)).crc);
     }
 
-    TEST_CASE("a tiny section matches its exact bytes") {
-        SectionBuilder builder;
+    TEST_CASE("a tiny segment matches its exact bytes") {
+        SegmentBuilder builder;
         builder.add(view_of(std::string("a")), view_of(std::string("1")));
         builder.add(view_of(std::string("b")),
                     view_of(std::string(BIG_VALUE_BYTES + 1, 'b')));
@@ -283,9 +283,9 @@ TEST_SUITE("index store section") {
                          ByteView{expected.data(), expected.size()}));
     }
 
-    TEST_CASE("two entries over the sub-page byte limit make two sub-pages") {
-        SectionBuilder builder;
-        const std::string first_value(SUBPAGE_BYTES - 5U, 'v');
+    TEST_CASE("two entries over the granule byte limit make two granules") {
+        SegmentBuilder builder;
+        const std::string first_value(GRANULE_BYTES - 5U, 'v');
         builder.add(view_of(std::string("a")), view_of(first_value));
         builder.add(view_of(std::string("b")), view_of(std::string("w")));
 
@@ -294,23 +294,23 @@ TEST_SUITE("index store section") {
         REQUIRE(sealed->size() > 20U);
         CHECK(read_u32_le_at(view_of(*sealed), 12U) == 2U);
 
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
         CHECK(opened->entry_count() == 2);
     }
 
-    TEST_CASE("lower_bound and find are deterministic around sub-pages") {
-        SectionBuilder builder;
-        const std::string large_value(SUBPAGE_BYTES - 5U, 'v');
+    TEST_CASE("lower_bound and find are deterministic around granules") {
+        SegmentBuilder builder;
+        const std::string large_value(GRANULE_BYTES - 5U, 'v');
         builder.add(view_of(std::string("b")), view_of(large_value));
         builder.add(view_of(std::string("f")), view_of(large_value));
         builder.add(view_of(std::string("h")), view_of(large_value));
 
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
-        const SectionView& view = *opened;
+        const SegmentView& view = *opened;
 
         const auto check_lower = [&](const std::string& key,
                                      const char* expected) {
@@ -336,13 +336,13 @@ TEST_SUITE("index store section") {
         CHECK_FALSE(view.find(view_of(std::string("z"))).has_value());
     }
 
-    TEST_CASE("an empty builder seals an empty section") {
-        SectionBuilder builder;
+    TEST_CASE("an empty builder seals an empty segment") {
+        SegmentBuilder builder;
         const auto sealed = builder.seal(nullptr, nullptr, nullptr);
         REQUIRE(sealed.has_value());
-        CHECK(sealed->size() % SECTION_ALIGN == 0);
+        CHECK(sealed->size() % SEGMENT_ALIGN == 0);
 
-        const auto opened = SectionView::open(view_of(*sealed));
+        const auto opened = SegmentView::open(view_of(*sealed));
         REQUIRE(opened.has_value());
         CHECK(opened->entry_count() == 0);
         CHECK_FALSE(opened->find(view_of(std::string("absent"))).has_value());
@@ -354,7 +354,7 @@ TEST_SUITE("index store section") {
 
     TEST_CASE("targeted field corruption returns Parse") {
         const auto make_base = [] {
-            SectionBuilder builder;
+            SegmentBuilder builder;
             builder.add(view_of(std::string("a")), view_of(std::string("1")));
             builder.add(view_of(std::string("b")), view_of(std::string("2")));
             const auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -368,7 +368,7 @@ TEST_SUITE("index store section") {
             std::vector<std::uint8_t> mutated = base;
             REQUIRE(offset < mutated.size());
             mutated[offset] = value;
-            const auto opened = SectionView::open(view_of(mutated));
+            const auto opened = SegmentView::open(view_of(mutated));
             REQUIRE_FALSE(opened.has_value());
             CHECK(opened.error().is(Condition::Parse));
         };
@@ -383,7 +383,7 @@ TEST_SUITE("index store section") {
     }
 
     TEST_CASE("a big value with a null placer is an error") {
-        SectionBuilder builder;
+        SegmentBuilder builder;
         builder.add(view_of(std::string("key")),
                     view_of(std::string(BIG_VALUE_BYTES + 1, 'b')));
 
@@ -402,8 +402,8 @@ TEST_SUITE("index store section") {
         CHECK(as_string(builder.last_key()) == "key");
     }
 
-    TEST_CASE("corrupt sections return Parse or stay in bounds") {
-        SectionBuilder builder;
+    TEST_CASE("corrupt segments return Parse or stay in bounds") {
+        SegmentBuilder builder;
         std::vector<std::string> keys;
         for (std::size_t i = 0; i < 200; ++i) {
             const std::string key = "key-" + std::to_string(i);
@@ -431,7 +431,7 @@ TEST_SUITE("index store section") {
                 }
             }
 
-            const auto opened = SectionView::open(view_of(mutated));
+            const auto opened = SegmentView::open(view_of(mutated));
             if (!opened.has_value()) {
                 CHECK(opened.error().is(Condition::Parse));
                 continue;

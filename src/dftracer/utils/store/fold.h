@@ -4,7 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
-#include <dftracer/utils/store/section.h>
+#include <dftracer/utils/store/segment.h>
 
 #include <cstdint>
 
@@ -28,7 +28,7 @@ enum class FoldKind : std::uint8_t {
 /// or an IEEE double.
 bool is_numeric_fold(FoldKind kind);
 
-/// The fold to give SectionBuilder::seal, or nullptr for FoldKind::None.
+/// The fold to give SegmentBuilder::seal, or nullptr for FoldKind::None.
 FoldFn fold_fn(FoldKind kind);
 
 /// InvalidArgument when a numeric fold gets a value that is not 8 bytes.

@@ -8,7 +8,7 @@
 
 namespace dftracer::utils::store::io_fault {
 
-static_assert(KINDS == static_cast<std::size_t>(WriteKind::Page) + 1,
+static_assert(KINDS == static_cast<std::size_t>(WriteKind::Extent) + 1,
               "KINDS must name every WriteKind");
 
 namespace {
@@ -120,7 +120,7 @@ void on_write(int fd, WriteKind kind, std::uint64_t offset,
     event.kind = kind;
     event.offset = offset;
     event.length = length;
-    if (kind != WriteKind::Page && data != nullptr && length > 0) {
+    if (kind != WriteKind::Extent && data != nullptr && length > 0) {
         event.bytes.assign(data, data + length);
     }
     std::lock_guard<std::mutex> lock(log.mutex);

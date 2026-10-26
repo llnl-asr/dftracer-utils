@@ -13,7 +13,7 @@
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/scope_directory.h>
-#include <dftracer/utils/store/section.h>
+#include <dftracer/utils/store/segment.h>
 
 #include <atomic>
 #include <cstddef>
@@ -69,18 +69,18 @@ struct ScopeGeneration {
 };
 
 /// Every block read the snapshot has done, cumulative and readable at any time
-/// from any thread. A page is read once, the first time a query needs it, so
+/// from any thread. An extent is read once, the first time a query needs it, so
 /// an open leaves these at zero.
 struct ReadStats {
     /// The commits that are not synced and were read and checked whole.
     std::uint64_t commits_verified = 0;
-    /// The commit records read for the page refs a summary leaves out.
+    /// The commit records read for the extent refs a summary leaves out.
     std::uint64_t indexes_read = 0;
-    /// The blocks read, one per page ref: the pages of synced commits one at a
-    /// time, and every block of a commit checked whole.
-    std::uint64_t blocks_read = 0;
+    /// The blocks read, one per extent ref: the extents of synced commits one
+    /// at a time, and every block of a commit checked whole.
+    std::uint64_t extents_read = 0;
     /// The blocks of metadata read on first use: the directory blocks and the
-    /// section blocks of a closed file.
+    /// segment blocks of a closed file.
     std::uint64_t metadata_blocks_read = 0;
     std::uint64_t read_calls = 0;
     std::uint64_t bytes_read = 0;
@@ -92,8 +92,8 @@ struct SkippedFile {
     dstd::Error error;
 };
 
-/// A value the snapshot returned: a view into a page, or a buffer it owns for
-/// a big value or a folded value. Move-only: a copy would leave the view
+/// A value the snapshot returned: a view into an extent, or a buffer it owns
+/// for a big value or a folded value. Move-only: a copy would leave the view
 /// pointing at the first value's buffer.
 class Value {
    public:
@@ -118,37 +118,37 @@ namespace detail {
 enum class LoadState : std::uint8_t {
     /// Not read yet.
     Unknown = 0,
-    /// Read, its crc checked and every section of it opened.
+    /// Read, its crc checked and every segment of it opened.
     Good = 1,
-    /// Read, but a crc or a section does not verify.
+    /// Read, but a crc or a segment does not verify.
     Bad = 2,
     /// The read itself failed. The error is kept, so a later query reports it
     /// instead of reading again.
     Failed = 3
 };
 
-/// One block of a commit: a page holding sections, or the run of a big value,
-/// which holds none.
-struct CommitBlock {
-    /// The page ref the commit record listed.
-    PageRef ref;
-    /// What that ref names in the file index: its page sections, or nothing for
-    /// a big value run. Points into the file's reader, which the commit's own
-    /// file owns.
-    const PageRefItem* listed = nullptr;
+/// One block of a commit: an extent holding segments, or the run of a big
+/// value, which holds none.
+struct CommitExtent {
+    /// The extent ref the commit record listed.
+    ExtentRef ref;
+    /// What that ref names in the file index: its extent segments, or nothing
+    /// for a big value run. Points into the file's reader, which the commit's
+    /// own file owns.
+    const ExtentRefItem* listed = nullptr;
 };
 
-/// The bytes of one page, read once. A closed file holds one slot per page
-/// its section blocks name; a file that is not closed holds one per block of
+/// The bytes of one extent, read once. A closed file holds one frame per extent
+/// its segment blocks name; a file that is not closed holds one per block of
 /// its commits.
-struct PageSlot {
+struct Frame {
     std::atomic<std::uint8_t> state{
         static_cast<std::uint8_t>(LoadState::Unknown)};
     std::mutex mutex;
     /// Filled before the release store that publishes Good, and read only by a
     /// thread whose acquire load saw Good.
     dstd::Vector<std::uint8_t> bytes;
-    /// The error of a Failed slot, written before the release store.
+    /// The error of a Failed frame, written before the release store.
     dstd::Error error;
 };
 
@@ -156,24 +156,25 @@ struct Commit;
 struct LazyBlock;
 class GroupSlots;
 
-/// One section of the sections of one copy of one commit: the page holding it,
-/// its place in that page, its key range, and the view opened from it once.
-struct SectionSlot {
-    /// The page holding the section, for a closed file.
-    PageRef page;
-    /// The block of `owner` holding the page, for a file that is not closed.
+/// One segment of the segments of one copy of one commit: the extent holding
+/// it, its place in that extent, its key range, and the view opened from it
+/// once.
+struct SegmentSlot {
+    /// The extent holding the segment, for a closed file.
+    ExtentRef extent;
+    /// The block of `owner` holding the extent, for a file that is not closed.
     std::uint32_t block = 0;
-    /// The index of the page among the pages of a closed file.
-    std::uint32_t page_index = 0;
-    std::uint32_t offset_in_page = 0;
+    /// The index of the extent among the extents of a closed file.
+    std::uint32_t extent_index = 0;
+    std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
     /// Both views point into the file index the snapshot keeps, so a lookup
-    /// skips a section that cannot hold the key without reading it.
+    /// skips a segment that cannot hold the key without reading it.
     ByteView first_key;
     ByteView last_key;
-    /// Opened by the first query that reads the section, owned by the block.
-    std::atomic<SectionView*> view{nullptr};
+    /// Opened by the first query that reads the segment, owned by the block.
+    std::atomic<SegmentView*> view{nullptr};
 };
 
 /// What a block holds, so a load knows how to decode it.
@@ -182,8 +183,8 @@ enum class BlockKind : std::uint8_t {
     Leaf = 0,
     /// A middle of the directory: one separator per child block.
     Middle = 1,
-    /// The sections of one copy of one commit.
-    Sections = 2
+    /// The segments of one copy of one commit.
+    Segments = 2
 };
 
 /// One block of metadata, read once on its first use: its bytes, or the error
@@ -208,21 +209,21 @@ struct LazyBlock {
     /// A leaf block: its entries, and one group slot per entry.
     dstd::UniquePtr<ScopeDirectory> directory;
     dstd::UniquePtr<GroupSlots> groups;
-    /// A section block: the commit whose pages hold the sections, for a file
-    /// that is not closed. Null for a closed file, whose sections name their
-    /// pages.
+    /// A segment block: the commit whose extents hold the segments, for a file
+    /// that is not closed. Null for a closed file, whose segments name their
+    /// extents.
     Commit* owner = nullptr;
-    dstd::Vector<SectionSlot> sections;
+    dstd::Vector<SegmentSlot> segments;
 
     ~LazyBlock();
 };
 
-/// One commit of one file: every page ref of one sequence, deduplicated by
+/// One commit of one file: every extent ref of one sequence, deduplicated by
 /// offset. Owned through a pointer, because the copies of the snapshot point
 /// at it.
 ///
-/// A synced commit, one whose pages reached the disk before its record, loads
-/// each page on its first read, and a bad page fails only the queries that
+/// A synced commit, one whose extents reached the disk before its record, loads
+/// each extent on its first read, and a bad extent fails only the queries that
 /// read it. A commit that is not synced can be half written after a crash, so
 /// its first touch reads and checks all of it, under `mutex`, and any bad block
 /// makes the whole commit Bad.
@@ -230,46 +231,46 @@ struct Commit {
     std::uint64_t sequence = 0;
     std::size_t file_index = 0;
     bool synced = false;
-    dstd::Vector<CommitBlock> blocks;
+    dstd::Vector<CommitExtent> blocks;
     /// One per block, in block order.
-    dstd::Vector<PageSlot> pages;
+    dstd::Vector<Frame> frames;
     /// The whole-commit state of a commit that is not synced.
     std::atomic<std::uint8_t> state{
         static_cast<std::uint8_t>(LoadState::Unknown)};
     std::mutex mutex;
     dstd::Error error;
-    /// The summary a checkpoint or the footer lists, for a commit whose page
+    /// The summary a checkpoint or the footer lists, for a commit whose extent
     /// refs stay in their record until a query first needs them. Null when the
-    /// chain listed the page refs itself.
+    /// chain listed the extent refs itself.
     const CommitRefItem* summary = nullptr;
-    /// Good once `blocks`, `pages` and `section_blocks` are there: from open
+    /// Good once `blocks`, `frames` and `segment_blocks` are there: from open
     /// for a commit the chain listed, after load_index for one a summary
     /// names. Written under `index_mutex` before the release store.
     std::atomic<std::uint8_t> index_state{
         static_cast<std::uint8_t>(LoadState::Unknown)};
     std::mutex index_mutex;
     dstd::Error index_error;
-    /// The page refs read from the record of a summary commit; the blocks
+    /// The extent refs read from the record of a summary commit; the blocks
     /// point into them.
-    dstd::Vector<PageRefItem> listed_refs;
-    /// One section block per copy the commit holds a section of, built in
-    /// memory at open because the chain itself is in memory. `section_copies`
+    dstd::Vector<ExtentRefItem> listed_refs;
+    /// One segment block per copy the commit holds a segment of, built in
+    /// memory at open because the chain itself is in memory. `segment_copies`
     /// is parallel and sorted by copy id.
-    dstd::Vector<dstd::UniquePtr<LazyBlock>> section_blocks;
-    dstd::Vector<std::uint32_t> section_copies;
+    dstd::Vector<dstd::UniquePtr<LazyBlock>> segment_blocks;
+    dstd::Vector<std::uint32_t> segment_copies;
 };
 
-/// One commit holding a section of a copy, with the copy's key range in it.
+/// One commit holding a segment of a copy, with the copy's key range in it.
 /// The range comes from the commit record or from the summary, so a lookup
 /// skips a commit that cannot hold its key without reading anything.
 struct CopyCommit {
     std::uint64_t sequence = 0;
     ByteView first_key;
     ByteView last_key;
-    /// The section block of this copy in this commit of a closed file, owned
+    /// The segment block of this copy in this commit of a closed file, owned
     /// by the group. Null for a file that is not closed, whose commit holds
-    /// the block (Snapshot::copy_sections finds it).
-    LazyBlock* sections = nullptr;
+    /// the block (Snapshot::copy_segments finds it).
+    LazyBlock* segments = nullptr;
     /// The commit object, null for a closed file, every commit of which is
     /// synced.
     Commit* commit = nullptr;
@@ -287,9 +288,9 @@ struct CopyData {
     std::uint64_t params_hash = 0;
     FoldKind fold = FoldKind::None;
     CopyState state = CopyState::Ready;
-    /// The id of the copy in its file, which the sections of its commits name.
+    /// The id of the copy in its file, which the segments of its commits name.
     std::uint32_t local_id = 0;
-    /// The commits holding a section of this copy, oldest first. The copy is
+    /// The commits holding a segment of this copy, oldest first. The copy is
     /// readable only once every one of them that is not synced has verified.
     dstd::Vector<CopyCommit> commits;
 };
@@ -300,13 +301,13 @@ struct HiddenRange {
 };
 
 /// Every copy and drop of one scope over the files of the snapshot, built from
-/// their scope directories the first time a query needs the scope. The section
+/// their scope directories the first time a query needs the scope. The segment
 /// blocks of its copies are owned here, since two groups never share a
 /// (commit, copy).
 struct ScopeGroup {
     dstd::Vector<CopyData> copies;
     dstd::Vector<HiddenRange> hidden;
-    dstd::Vector<dstd::UniquePtr<LazyBlock>> sections;
+    dstd::Vector<dstd::UniquePtr<LazyBlock>> segments;
     std::uint64_t highest_generation = 0;
     bool dropped = false;
     std::size_t current = 0;
@@ -343,30 +344,30 @@ class GroupSlots {
     mutable dstd::Vector<std::atomic<ScopeGroup*>> slots_;
 };
 
-/// The page slots of a closed file, one per page its section blocks name,
-/// made a chunk at a time by the first query that reads a page of the chunk,
-/// so an open allocates one pointer per chunk.
-class PageSlots {
+/// The frames of a closed file, one per extent its segment blocks name, made a
+/// chunk at a time by the first query that reads an extent of the chunk, so an
+/// open allocates one pointer per chunk.
+class Frames {
    public:
-    PageSlots() = default;
-    PageSlots(const PageSlots&) = delete;
-    PageSlots& operator=(const PageSlots&) = delete;
-    PageSlots(PageSlots&&) noexcept = default;
-    PageSlots& operator=(PageSlots&&) noexcept = delete;
-    ~PageSlots();
+    Frames() = default;
+    Frames(const Frames&) = delete;
+    Frames& operator=(const Frames&) = delete;
+    Frames(Frames&&) noexcept = default;
+    Frames& operator=(Frames&&) noexcept = delete;
+    ~Frames();
 
-    /// Empty chunks for `count` pages; called once, before any query.
+    /// Empty chunks for `count` frames; called once, before any query.
     void assign(std::size_t count);
 
     std::size_t size() const { return count_; }
 
-    /// The slot of one page below size(), making its chunk on first use.
-    PageSlot& slot(std::size_t index) const;
+    /// The frame of one extent below size(), making its chunk on first use.
+    Frame& slot(std::size_t index) const;
 
    private:
-    static constexpr std::size_t CHUNK_PAGES = 256;
+    static constexpr std::size_t CHUNK_FRAMES = 256;
     struct Chunk {
-        PageSlot slots[CHUNK_PAGES];
+        Frame slots[CHUNK_FRAMES];
     };
 
     std::size_t count_ = 0;
@@ -396,8 +397,8 @@ struct FileData {
     dstd::Vector<dstd::UniquePtr<LazyBlock>> roots;
     /// The levels of the directory below its top table, 1 or more.
     std::uint32_t directory_levels = 0;
-    /// The pages of a closed file.
-    PageSlots pages;
+    /// The frames of a closed file.
+    Frames frames;
 };
 
 /// The counters of Snapshot::read_stats, shared by every thread that loads.
@@ -409,16 +410,16 @@ class ReadCounters {
         bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
     }
 
-    void add(std::uint64_t commits, std::uint64_t blocks,
+    void add(std::uint64_t commits, std::uint64_t extents,
              const BlockReads& reads) {
         commits_verified_.fetch_add(commits, std::memory_order_relaxed);
-        blocks_read_.fetch_add(blocks, std::memory_order_relaxed);
+        extents_read_.fetch_add(extents, std::memory_order_relaxed);
         read_calls_.fetch_add(reads.calls, std::memory_order_relaxed);
         bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
     }
 
     /// One block of metadata, read whole: the directory blocks and the
-    /// section blocks of a closed file.
+    /// segment blocks of a closed file.
     void add_metadata(const BlockReads& reads) {
         metadata_blocks_read_.fetch_add(1, std::memory_order_relaxed);
         read_calls_.fetch_add(reads.calls, std::memory_order_relaxed);
@@ -428,7 +429,7 @@ class ReadCounters {
     ReadStats read() const {
         return ReadStats{commits_verified_.load(std::memory_order_relaxed),
                          indexes_read_.load(std::memory_order_relaxed),
-                         blocks_read_.load(std::memory_order_relaxed),
+                         extents_read_.load(std::memory_order_relaxed),
                          metadata_blocks_read_.load(std::memory_order_relaxed),
                          read_calls_.load(std::memory_order_relaxed),
                          bytes_read_.load(std::memory_order_relaxed)};
@@ -437,7 +438,7 @@ class ReadCounters {
    private:
     std::atomic<std::uint64_t> commits_verified_{0};
     std::atomic<std::uint64_t> indexes_read_{0};
-    std::atomic<std::uint64_t> blocks_read_{0};
+    std::atomic<std::uint64_t> extents_read_{0};
     std::atomic<std::uint64_t> metadata_blocks_read_{0};
     std::atomic<std::uint64_t> read_calls_{0};
     std::atomic<std::uint64_t> bytes_read_{0};
@@ -445,18 +446,18 @@ class ReadCounters {
 
 struct ValueSource {
     std::size_t file_index = 0;
-    SectionView::Entry entry;
+    SegmentView::Entry entry;
 };
 
-/// One section a cursor holds: the block it is in and its index there.
-struct SectionLocation {
+/// One segment a cursor holds: the block it is in and its index there.
+struct SegmentLocation {
     LazyBlock* block = nullptr;
     std::size_t index = 0;
 };
 
 }  // namespace detail
 
-/// The keys of one copy of one scope, in key order, with the sections holding
+/// The keys of one copy of one scope, in key order, with the segments holding
 /// each key in commit order. A cursor is used by one thread.
 class ScopeCursor {
    public:
@@ -468,7 +469,7 @@ class ScopeCursor {
 
     bool at_end() const { return at_end_; }
     ByteView key() const { return key_; }
-    /// Section indices of the copy holding the current key, oldest first.
+    /// Segment indices of the copy holding the current key, oldest first.
     const dstd::Vector<std::size_t>& matching() const { return matching_; }
     const detail::CopyData* copy() const { return copy_; }
 
@@ -478,33 +479,33 @@ class ScopeCursor {
     friend class Snapshot;
     friend class ScanCursor;
 
-    /// Puts every section of the copy that can hold a key in [begin, end) on
-    /// the heap, keyed by its first key from the record: no page is read until
-    /// the section reaches the top. The page refs of a summary commit are read
-    /// here, for the commits whose range meets [begin, end). Every commit of
-    /// the copy that is not synced must be Good.
+    /// Puts every segment of the copy that can hold a key in [begin, end) on
+    /// the heap, keyed by its first key from the record: no extent is read
+    /// until the segment reaches the top. The extent refs of a summary commit
+    /// are read here, for the commits whose range meets [begin, end). Every
+    /// commit of the copy that is not synced must be Good.
     void open(const Snapshot& snapshot, const detail::CopyData& copy,
               const dstd::Vector<detail::HiddenRange>& hidden, ByteView begin,
               ByteView end);
     void settle();
     void advance_matching();
-    /// Loads the page of one section, stands its cursor at `begin_` and puts it
-    /// back on the heap. False, with `error_` set, when the page cannot be
+    /// Loads the extent of one segment, stands its cursor at `begin_` and puts
+    /// it back on the heap. False, with `error_` set, when the extent cannot be
     /// used.
     bool load(std::size_t index);
 
     void push(std::size_t index);
 
     const Snapshot* snapshot_ = nullptr;
-    /// The sections of every commit of the copy that can hold a key in range,
+    /// The segments of every commit of the copy that can hold a key in range,
     /// oldest commit first.
-    dstd::Vector<detail::SectionLocation> sections_;
-    dstd::Vector<SectionView::Cursor> cursors_;
+    dstd::Vector<detail::SegmentLocation> segments_;
+    dstd::Vector<SegmentView::Cursor> cursors_;
     /// The current key of each cursor, so the heap compares without parsing.
-    /// For a section not loaded yet, the lower bound its record gives.
+    /// For a segment not loaded yet, the lower bound its record gives.
     dstd::Vector<ByteView> keys_;
     dstd::Vector<std::uint8_t> loaded_;
-    /// Min-heap of the cursors not at their end, by key then section index.
+    /// Min-heap of the cursors not at their end, by key then segment index.
     dstd::Vector<std::size_t> heap_;
     dstd::Vector<std::size_t> matching_;
     const dstd::Vector<detail::HiddenRange>* hidden_ = nullptr;
@@ -531,10 +532,10 @@ class ScanCursor {
     const ScopeKey& scope() const;
     dstd::Expected<ByteView, dstd::Error> value();
 
-    /// Empty unless a page of one of the scopes could not be read, or a page of
-    /// a synced commit failed its crc: a cursor that stopped on one is at its
-    /// end. A copy with a bad commit that is not synced is skipped and leaves
-    /// this empty.
+    /// Empty unless an extent of one of the scopes could not be read, or an
+    /// extent of a synced commit failed its crc: a cursor that stopped on one
+    /// is at its end. A copy with a bad commit that is not synced is skipped
+    /// and leaves this empty.
     const dstd::Optional<dstd::Error>& error() const { return error_; }
 
     void next();
@@ -586,10 +587,10 @@ struct OpenStats {
     std::size_t files = 0;
     /// The commits of those files.
     std::size_t commits = 0;
-    /// The page refs the record chains list themselves. A checkpoint or a
-    /// footer lists a commit by summary, and its page refs are read with its
+    /// The extent refs the record chains list themselves. A checkpoint or a
+    /// footer lists a commit by summary, and its extent refs are read with its
     /// first query.
-    std::size_t pages = 0;
+    std::size_t extents = 0;
     double ms_list = 0;        ///< Listing the directory.
     double ms_open_files = 0;  ///< Opening and indexing every data file.
     double ms_tables = 0;  ///< Grouping the commits and building the tables.
@@ -597,47 +598,47 @@ struct OpenStats {
 };
 
 /// One commit the full check found unreadable: a block whose crc or bounds do
-/// not verify, or a section of the commit that does not open.
+/// not verify, or a segment of the commit that does not open.
 struct BadCommit {
     dstd::String file;
     std::uint64_t sequence = 0;
 };
 
-/// One section of a commit the full check could not walk: its bytes are not
+/// One segment of a commit the full check could not walk: its bytes are not
 /// there, its entries do not parse, or its keys do not strictly ascend.
-struct BadSection {
+struct BadSegment {
     dstd::String file;
-    /// The offset of the page ref, and of the section inside it.
-    std::uint64_t page_offset = 0;
-    std::uint32_t offset_in_page = 0;
+    /// The offset of the extent ref, and of the segment inside it.
+    std::uint64_t extent_offset = 0;
+    std::uint32_t offset_in_extent = 0;
 };
 
 /// What one full check read and what it found.
 struct CheckReport {
     std::size_t files = 0;
     std::size_t commits = 0;
-    /// The pages and big value runs checked, each once.
+    /// The extents and big value runs checked, each once.
     std::size_t blocks = 0;
-    /// The directory and section blocks of closed files checked.
+    /// The directory and segment blocks of closed files checked.
     std::size_t metadata_blocks = 0;
     std::uint64_t bytes_read = 0;
     dstd::Vector<BadCommit> bad_commits;
-    std::size_t sections = 0;
-    dstd::Vector<BadSection> bad_sections;
+    std::size_t segments = 0;
+    dstd::Vector<BadSegment> bad_segments;
 };
 
 /// The state of every data file in one directory, as of the moment it opened.
 ///
 /// Immutable to callers after open, so the const methods are safe from many
 /// threads: the metadata never changes, and each block a query needs is read
-/// and checked once behind the state of its block, page or commit. A cursor
+/// and checked once behind the state of its block, extent or commit. A cursor
 /// and the views it returns stay valid while the snapshot is alive and unmoved.
 class Snapshot {
    public:
     /// Opens every data file of `dir`. A closed file costs one read of its
     /// end: the footer and the top table of its directory. A file that is not
     /// closed is read through its header and record chain, and its directory
-    /// is built in memory. No page, directory block or section block of a
+    /// is built in memory. No extent, directory block or segment block of a
     /// closed file is read here; a query reads and checks each block it needs
     /// the first time it needs it. Listing, opening and indexing run in
     /// parallel on the process-wide default runtime, which is created if none
@@ -667,9 +668,9 @@ class Snapshot {
     }
 
     /// Reads and checks every block of every commit, and then walks every entry
-    /// of every section, reporting what is wrong. It runs its phases in
+    /// of every segment, reporting what is wrong. It runs its phases in
     /// parallel on the process-wide default runtime, under the rules `open`
-    /// follows, and it reports a commit whose section fails the full walk
+    /// follows, and it reports a commit whose segment fails the full walk
     /// without changing the state of that commit: a commit already known to be
     /// bad keeps the state it has, and one that a query read Good stays Good.
     /// Blocks already read are not read again. An error is returned only when a
@@ -723,11 +724,11 @@ class Snapshot {
     /// acquire load. A block built in memory at open is Good already.
     detail::LoadStatus load_block(const detail::FileData& file,
                                   detail::LazyBlock& block) const;
-    /// Reads one page of a closed file once, under the slot's mutex. An index
-    /// at or past the page count is Bad.
-    detail::LoadStatus load_page(const detail::FileData& file,
-                                 std::size_t page_index,
-                                 const PageRef& ref) const;
+    /// Reads one extent of a closed file once, under the slot's mutex. An index
+    /// at or past the extent count is Bad.
+    detail::LoadStatus load_frame(const detail::FileData& file,
+                                  std::size_t extent_index,
+                                  const ExtentRef& ref) const;
     /// Reads and checks every block of one commit that is not synced once,
     /// under its mutex, and stores Good, Bad or Failed with a release store.
     /// The fast path of a commit a query already read is one acquire load.
@@ -737,24 +738,24 @@ class Snapshot {
     /// since a copy whose data does not verify is unreadable whatever else
     /// could not be read.
     detail::LoadStatus ensure_copy(const detail::CopyData& copy) const;
-    /// Loads the page of one block of a synced commit once, under the slot's
+    /// Loads the extent of one block of a synced commit once, under the slot's
     /// mutex.
-    detail::LoadStatus load_page(detail::Commit& commit,
-                                 std::size_t block) const;
-    /// Reads the page refs of a summary commit once, under its index mutex,
-    /// and builds its blocks, pages and sections. The fast path is one acquire
-    /// load.
+    detail::LoadStatus load_frame(detail::Commit& commit,
+                                  std::size_t block) const;
+    /// Reads the extent refs of a summary commit once, under its index mutex,
+    /// and builds its blocks, extents and segments. The fast path is one
+    /// acquire load.
     detail::LoadStatus load_index(detail::Commit& commit) const;
-    /// The view of one section: its page loaded, or the error of the page. A
-    /// page that failed its crc is a Parse error.
-    dstd::Expected<const SectionView*, dstd::Error> section_view(
+    /// The view of one segment: its extent loaded, or the error of the extent.
+    /// A extent that failed its crc is a Parse error.
+    dstd::Expected<const SegmentView*, dstd::Error> segment_view(
         const detail::FileData& file, detail::LazyBlock& block,
         std::size_t index) const;
-    /// The section block of one copy in one commit, with what it needs read
-    /// first: the commit index of a file that is not closed, or the section
+    /// The segment block of one copy in one commit, with what it needs read
+    /// first: the commit index of a file that is not closed, or the segment
     /// block of a closed one. Null when the commit holds no
-    /// section of the copy; a block that does not verify is a Parse error.
-    dstd::Expected<detail::LazyBlock*, dstd::Error> copy_sections(
+    /// segment of the copy; a block that does not verify is a Parse error.
+    dstd::Expected<detail::LazyBlock*, dstd::Error> copy_segments(
         const detail::CopyData& copy, const detail::CopyCommit& held) const;
     dstd::Expected<void, dstd::Error> materialize(
         FoldKind fold, dstd::Span<const detail::ValueSource> sources,

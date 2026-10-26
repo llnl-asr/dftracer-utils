@@ -297,12 +297,12 @@ set(TEST_CPP_SOURCES
     trace/genesis/test_genesis.cpp
     index/test_indexer.cpp
     index/test_store_key.cpp
-    store/test_section.cpp
+    store/test_segment.cpp
     store/test_file.cpp
     store/test_snapshot.cpp
-    store/test_page_codec.cpp
-    store/test_page_size.cpp
-    store/test_open_page.cpp
+    store/test_extent_codec.cpp
+    store/test_extent_size.cpp
+    store/test_open_extent.cpp
     store/test_concurrent.cpp
     store/test_backpressure.cpp
     store/test_crash.cpp

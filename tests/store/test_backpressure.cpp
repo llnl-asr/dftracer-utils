@@ -5,10 +5,10 @@
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/io_fault.h>
-#include <dftracer/utils/store/open_page.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
-#include <dftracer/utils/store/writer_pages.h>
+#include <dftracer/utils/store/writer_extents.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <testing_utilities.h>
@@ -29,7 +29,7 @@
 namespace dftracer::utils::store {
 
 /// Swaps the writer's descriptor for a read-only one on the same file, so
-/// every pwrite fails and the page writes are the ones that fail.
+/// every pwrite fails and the extent writes are the ones that fail.
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
                                  const std::string& path) {
@@ -62,17 +62,17 @@ using store::ScopeState;
 using store::Snapshot;
 using store::Writer;
 using store::WriterErrc;
+using store::WriterExtentsCounters;
 using store::WriterOptions;
-using store::WriterPagesCounters;
 using store::WriterTestHook;
 
-constexpr std::uint32_t PAGE_BYTES = 64 * 1024;
+constexpr std::uint32_t EXTENT_BYTES = 64 * 1024;
 constexpr int RUNTIME_THREADS = 8;
-/// A section of one raw batch: two fit a page, so a page can stay open with
-/// sections of two commits in it and nothing writing them.
+/// A segment of one raw batch: two fit an extent, so an extent can stay open
+/// with segments of two commits in it and nothing writing them.
 constexpr std::size_t RAW_KEYS = 3;
 constexpr std::size_t RAW_VALUE_BYTES = 8000;
-/// A section of one fold batch of 8-byte values, about the size of a raw one.
+/// A segment of one fold batch of 8-byte values, about the size of a raw one.
 constexpr std::size_t FOLD_KEYS = 1600;
 constexpr int SCOPES = 4;
 /// A commit may report Busy this many times before the test calls it stuck.
@@ -134,7 +134,7 @@ memory::PoolHandle child_pool(const std::string& name, std::size_t limit) {
 }
 
 /// `head` padded with 'x' to exactly `length` bytes, so every value of a raw
-/// batch makes its section the size the quotas are counted in.
+/// batch makes its segment the size the quotas are counted in.
 std::string padded(const std::string& head, std::size_t length) {
     std::string out = head;
     out.resize(length, 'x');
@@ -166,11 +166,11 @@ std::string scope_path(int index) {
 }
 
 /// Options that commit only when asked: neither the size nor the interval ever
-/// fires, so a commit is the only thing that seals a page.
+/// fires, so a commit is the only thing that seals an extent.
 WriterOptions manual_options(std::uint64_t quota) {
     WriterOptions options;
-    options.page_size = PAGE_BYTES;
-    options.page_quota_bytes = quota;
+    options.extent_size = EXTENT_BYTES;
+    options.extent_quota_bytes = quota;
     options.commit_bytes = std::uint64_t{1} << 40;
     options.commit_interval = std::chrono::hours(1);
     options.host = dstring("host");
@@ -332,10 +332,10 @@ std::uint32_t copy_id_of(const std::vector<CopyRow>& copies,
 
 }  // namespace
 
-TEST_CASE("back pressure: 64 coroutines commit over a two page quota") {
+TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
     constexpr int COROS = SANITIZED ? 6 : 64;
     constexpr int ROUNDS = SANITIZED ? 4 : 20;
-    constexpr std::uint64_t QUOTA = 2 * PAGE_BYTES;
+    constexpr std::uint64_t QUOTA = 2 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_many");
     auto writer = make_writer(dir, manual_options(QUOTA));
@@ -418,13 +418,13 @@ TEST_CASE("back pressure: 64 coroutines commit over a two page quota") {
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const WriterPagesCounters counters = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
     CHECK(counters.quota == QUOTA);
     // The quota bound the bytes in flight, so a commit had to wait for a write.
     CHECK(counters.busy > 0);
-    // A section here is smaller than a page, so no take ran past the quota.
+    // A segment here is smaller than an extent, so no take ran past the quota.
     CHECK(counters.over_quota == 0);
-    CHECK(counters.peak_held <= counters.quota + PAGE_BYTES);
+    CHECK(counters.peak_held <= counters.quota + EXTENT_BYTES);
     CHECK(counters.held == 0);
     CHECK(counters.reserved == 0);
 
@@ -451,11 +451,11 @@ TEST_CASE("back pressure: 64 coroutines commit over a two page quota") {
     CHECK(got_sum == expected_sum);
 }
 
-TEST_CASE("back pressure: a one page quota holds one page at a time") {
+TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     constexpr int BATCHES = SANITIZED ? 8 : 40;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_quota");
-    auto writer = make_writer(dir, manual_options(PAGE_BYTES));
+    auto writer = make_writer(dir, manual_options(EXTENT_BYTES));
 
     auto created = writer->add_namespace(put_spec("quota", 0));
     REQUIRE(created.has_value());
@@ -497,8 +497,8 @@ TEST_CASE("back pressure: a one page quota holds one page at a time") {
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
-    const WriterPagesCounters before = WriterTestHook::pages(*writer);
-    CHECK(before.quota == PAGE_BYTES);
+    const WriterExtentsCounters before = WriterTestHook::extents(*writer);
+    CHECK(before.quota == EXTENT_BYTES);
     // One batch is held and the next does not fit it, so a commit waited.
     CHECK(before.busy > 0);
     CHECK(before.over_quota == 0);
@@ -506,7 +506,7 @@ TEST_CASE("back pressure: a one page quota holds one page at a time") {
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const WriterPagesCounters after = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.reserved == 0);
 
@@ -527,7 +527,7 @@ TEST_CASE("back pressure: a one page quota holds one page at a time") {
 
 TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     dftu_utils_test::ScopedTestDir dir("store_backpressure_busy");
-    auto writer = make_writer(dir, manual_options(PAGE_BYTES));
+    auto writer = make_writer(dir, manual_options(EXTENT_BYTES));
 
     auto created = writer->add_namespace(put_spec("busy", 0));
     REQUIRE(created.has_value());
@@ -538,8 +538,8 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     const ScopeKey first_scope = file_scope(scope_path(1));
     const ScopeKey third_scope = file_scope(scope_path(2));
 
-    // Two of these do not fit the one page quota, and one leaves its page open
-    // with room for the small third batch.
+    // Two of these do not fit the one extent quota, and one leaves its extent
+    // open with room for the small third batch.
     constexpr std::size_t BUSY_KEYS = 6;
     constexpr std::size_t BUSY_VALUE_BYTES = 8000;
     const auto one = [&](const ScopeKey& scope, const std::string& tag) {
@@ -552,14 +552,14 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
     REQUIRE(writer->commit(one(first_scope, "first")).has_value());
 
     // One batch, about three quarters of the quota, is held; the next does not
-    // fit, and nothing has sealed the open page yet.
+    // fit, and nothing has sealed the open extent yet.
     Batch refused = one(refused_scope, "refused");
     auto blocked = writer->commit(std::move(refused));
     REQUIRE_FALSE(blocked.has_value());
     REQUIRE(is_busy(blocked.error()));
 
-    // A third commit that fits the page the first one left open, so the page
-    // holds the copies of both and the refused scope is still unknown.
+    // A third commit that fits the extent the first one left open, so the
+    // extent holds the copies of both and the refused scope is still unknown.
     REQUIRE(writer
                 ->commit(raw_batch(
                     *writer, space, third_scope, 1, 64,
@@ -614,7 +614,7 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
     constexpr std::size_t BIG_VALUE_BYTES = 9000;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_over");
-    auto writer = make_writer(dir, manual_options(PAGE_BYTES));
+    auto writer = make_writer(dir, manual_options(EXTENT_BYTES));
 
     auto created = writer->add_namespace(put_spec("over", 0));
     REQUIRE(created.has_value());
@@ -634,8 +634,8 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
                                           BIG_VALUE_BYTES, key_of, value_of));
     REQUIRE(taken.has_value());
 
-    const WriterPagesCounters counters = WriterTestHook::pages(*writer);
-    CHECK(counters.quota == PAGE_BYTES);
+    const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
+    CHECK(counters.quota == EXTENT_BYTES);
     CHECK(counters.over_quota == 1);
     CHECK(counters.peak_held > counters.quota);
     CHECK(counters.busy == 0);
@@ -677,10 +677,10 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
     CHECK(to_std((*after)->bytes()) == padded("after", 64));
 }
 
-TEST_CASE("back pressure: the held page bytes are reserved in the pool") {
+TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     constexpr int COROS = SANITIZED ? 4 : 16;
     constexpr int BATCHES = SANITIZED ? 2 : 8;
-    constexpr std::uint64_t QUOTA = 8 * PAGE_BYTES;
+    constexpr std::uint64_t QUOTA = 8 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_budget");
     memory::PoolHandle budget_pool = child_pool("backpressure budget", 0);
@@ -743,10 +743,10 @@ TEST_CASE("back pressure: the held page bytes are reserved in the pool") {
                                 }),
                             RETRY_ATTEMPTS);
                         if (!done.has_value()) errors.fetch_add(1);
-                        // A commit leaves its section in an open page, so the
+                        // A commit leaves its segment in an open extent, so the
                         // bytes it charged are held at this point.
-                        const WriterPagesCounters counters =
-                            WriterTestHook::pages(*writer);
+                        const WriterExtentsCounters counters =
+                            WriterTestHook::extents(*writer);
                         if (counters.held == 0) continue;
                         if (counters.reserved >= counters.held) {
                             charged_while_held.fetch_add(1);
@@ -765,13 +765,13 @@ TEST_CASE("back pressure: the held page bytes are reserved in the pool") {
     CHECK(charged_while_held.load() > 0);
     CHECK(uncharged_while_held.load() == 0);
 
-    const WriterPagesCounters held = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters held = WriterTestHook::extents(*writer);
     CHECK(held.over_quota == 0);
     CHECK(held.peak_held <= held.quota);
 
     REQUIRE(close_writer(*writer).has_value());
 
-    const WriterPagesCounters after = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.reserved == 0);
 
@@ -785,11 +785,11 @@ TEST_CASE("back pressure: the held page bytes are reserved in the pool") {
 
 TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     constexpr int BATCHES = 4;
-    constexpr std::uint64_t QUOTA = 8 * PAGE_BYTES;
+    constexpr std::uint64_t QUOTA = 8 * EXTENT_BYTES;
     // Every charge of a child pool is counted against the pool above it in
     // whole mebibytes (PoolAccess::settle), the smallest of them as one: a
-    // three page limit is below that, so it refuses every charge.
-    constexpr std::size_t LIMIT_BYTES = 3 * PAGE_BYTES;
+    // three extent limit is below that, so it refuses every charge.
+    constexpr std::size_t LIMIT_BYTES = 3 * EXTENT_BYTES;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_refused");
     memory::PoolHandle budget_pool = child_pool("refused budget", LIMIT_BYTES);
@@ -845,13 +845,13 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
 
     // The pool refused every charge, so every batch either waited for the one
     // before it or was taken past the quota, and each of them completed.
-    const WriterPagesCounters counters = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
     CHECK(counters.over_quota == BATCHES);
     CHECK(counters.busy > 0);
     CHECK(counters.reserved == 0);
 
     REQUIRE(close_writer(*writer).has_value());
-    CHECK(WriterTestHook::pages(*writer).held == 0);
+    CHECK(WriterTestHook::extents(*writer).held == 0);
 
     auto snapshot = Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
@@ -861,9 +861,9 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     CHECK(got == expected);
 }
 
-TEST_CASE("back pressure: a latched page error ends space() and commit") {
+TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     dftu_utils_test::ScopedTestDir dir("store_backpressure_latched");
-    auto writer = make_writer(dir, manual_options(8 * PAGE_BYTES));
+    auto writer = make_writer(dir, manual_options(8 * EXTENT_BYTES));
 
     auto created = writer->add_namespace(put_spec("latched", 0));
     REQUIRE(created.has_value());
@@ -878,10 +878,10 @@ TEST_CASE("back pressure: a latched page error ends space() and commit") {
     };
 
     REQUIRE(writer->commit(one("held")).has_value());
-    const WriterPagesCounters before = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters before = WriterTestHook::extents(*writer);
     CHECK(before.held > 0);
 
-    // Every page write fails from here on, so the batch above is discarded:
+    // Every extent write fails from here on, so the batch above is discarded:
     // its bytes go back and the count latches.
     store::DataFileWriterTestHook::reopen_read_only(
         WriterTestHook::file(*writer), to_std(writer->path()));
@@ -892,7 +892,7 @@ TEST_CASE("back pressure: a latched page error ends space() and commit") {
     REQUIRE_FALSE(flush_result.has_value());
     CHECK(flush_result.error().is(Condition::Io));
 
-    const WriterPagesCounters failed = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters failed = WriterTestHook::extents(*writer);
     CHECK(failed.held == 0);
     CHECK(failed.reservation == 0);
 
@@ -910,9 +910,10 @@ TEST_CASE("back pressure: a latched page error ends space() and commit") {
     CHECK_FALSE(closed.get().has_value());
 }
 
-TEST_CASE("back pressure: a page write that fails ends a wait already parked") {
+TEST_CASE(
+    "back pressure: an extent write that fails ends a wait already parked") {
     dftu_utils_test::ScopedTestDir dir("store_backpressure_parked");
-    auto writer = make_writer(dir, manual_options(8 * PAGE_BYTES));
+    auto writer = make_writer(dir, manual_options(8 * EXTENT_BYTES));
 
     auto created = writer->add_namespace(put_spec("parked", 0));
     REQUIRE(created.has_value());
@@ -925,15 +926,15 @@ TEST_CASE("back pressure: a page write that fails ends a wait already parked") {
                     [](std::size_t k) { return "k" + std::to_string(k); },
                     [](std::size_t k) { return "v" + std::to_string(k); }))
                 .has_value());
-    CHECK(WriterTestHook::pages(*writer).held > 0);
+    CHECK(WriterTestHook::extents(*writer).held > 0);
 
-    // space() seals the open page and parks before its write fails; nothing
+    // space() seals the open extent and parks before its write fails; nothing
     // else touches the writer, so only the failed write can end the wait.
     store::DataFileWriterTestHook::reopen_read_only(
         WriterTestHook::file(*writer), to_std(writer->path()));
     await_space(*writer);
 
-    const WriterPagesCounters after = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.reservation == 0);
 
@@ -943,12 +944,12 @@ TEST_CASE("back pressure: a page write that fails ends a wait already parked") {
 }
 
 TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
-    // 24 KiB sections in many namespaces stay in their open pages (two fit a
-    // page and nothing seals them), so the held bytes grow with nothing in
+    // 24 KiB segments in many namespaces stay in their open extents (two fit a
+    // extent and nothing seals them), so the held bytes grow with nothing in
     // flight until the pool limit, not the quota, refuses a charge.
     constexpr std::size_t LIMIT_BYTES = std::size_t{1} << 20;
     constexpr int NAMESPACES = 40;
-    constexpr int SECTIONS_PER_NAMESPACE = 2;
+    constexpr int SEGMENTS_PER_NAMESPACE = 2;
 
     dftu_utils_test::ScopedTestDir dir("store_backpressure_limit");
     memory::PoolHandle budget_pool = child_pool("limit budget", LIMIT_BYTES);
@@ -985,7 +986,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
 
     int taken = 0;
     bool refused = false;
-    for (int s = 0; s < SECTIONS_PER_NAMESPACE && !refused; ++s) {
+    for (int s = 0; s < SEGMENTS_PER_NAMESPACE && !refused; ++s) {
         for (int n = 0; n < NAMESPACES && !refused; ++n) {
             auto committed = writer->commit(make(n, s));
             if (committed.has_value()) {
@@ -996,7 +997,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
             refused = true;
         }
     }
-    const WriterPagesCounters at_refusal = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters at_refusal = WriterTestHook::extents(*writer);
     CHECK(refused);
     CHECK(taken > 0);
     CHECK(at_refusal.busy == 1);
@@ -1010,7 +1011,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
         "limit", [&](CoroScope& runner) -> coro::CoroTask<void> {
             runner.spawn([&](CoroScope&) -> coro::CoroTask<void> {
                 int index = 0;
-                for (int s = 0; s < SECTIONS_PER_NAMESPACE; ++s) {
+                for (int s = 0; s < SEGMENTS_PER_NAMESPACE; ++s) {
                     for (int n = 0; n < NAMESPACES; ++n, ++index) {
                         if (index < taken) continue;
                         auto done = co_await commit_retrying(
@@ -1025,7 +1026,7 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     CHECK(errors.load() == 0);
 
     REQUIRE(close_writer(*writer).has_value());
-    const WriterPagesCounters after = WriterTestHook::pages(*writer);
+    const WriterExtentsCounters after = WriterTestHook::extents(*writer);
     CHECK(after.held == 0);
     CHECK(after.over_released == 0);
 
@@ -1034,26 +1035,26 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     for (int n = 0; n < NAMESPACES; ++n) {
         auto cursor = snapshot->scan_all(
             put_spec("limit-" + std::to_string(n), 0), {}, {});
-        CHECK(collect(cursor).size() == SECTIONS_PER_NAMESPACE * RAW_KEYS);
+        CHECK(collect(cursor).size() == SEGMENTS_PER_NAMESPACE * RAW_KEYS);
     }
 }
 
 TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     dftu_utils_test::ScopedTestDir dir("store_backpressure_big");
-    auto writer = make_writer(dir, manual_options(PAGE_BYTES / 2));
+    auto writer = make_writer(dir, manual_options(EXTENT_BYTES / 2));
 
     auto created = writer->add_namespace(put_spec("big", 0));
     REQUIRE(created.has_value());
     const NamespaceId space = *created;
     const ScopeKey scope = file_scope(scope_path(0));
 
-    // A 40 KiB section is past the half-page quota and stays in its open page:
-    // it is taken past the quota and holds bytes nothing writes yet.
+    // A 40 KiB segment is past the half-extent quota and stays in its open
+    // extent: it is taken past the quota and holds bytes nothing writes yet.
     Batch fill = writer->batch(space, scope, 0);
     const std::string fill_value(40 * 1024, 'f');
     fill.put(view_of(std::string("fill")), view_of(fill_value));
     REQUIRE(writer->commit(std::move(fill)).has_value());
-    CHECK(WriterTestHook::pages(*writer).over_quota == 1);
+    CHECK(WriterTestHook::extents(*writer).over_quota == 1);
 
     const std::string path = to_std(writer->path());
     const auto size_before = std::filesystem::file_size(path);
@@ -1063,7 +1064,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     auto busy = writer->commit(std::move(big));
     REQUIRE_FALSE(busy.has_value());
     CHECK(is_busy(busy.error()));
-    // The big value goes to the file as the section is sealed; a Busy commit
+    // The big value goes to the file as the segment is sealed; a Busy commit
     // sealed nothing, so the file did not grow by it.
     CHECK(std::filesystem::file_size(path) < size_before + big_value.size());
 
@@ -1085,7 +1086,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
 TEST_CASE(
     "back pressure: an append between a waiter's seal and its park is sealed") {
     dftu_utils_test::ScopedTestDir dir("store_backpressure_announce");
-    auto writer = make_writer(dir, manual_options(4 * PAGE_BYTES));
+    auto writer = make_writer(dir, manual_options(4 * EXTENT_BYTES));
 
     auto created = writer->add_namespace(put_spec("announce", 0));
     REQUIRE(created.has_value());
@@ -1102,7 +1103,7 @@ TEST_CASE(
     appended = false;
 
     // Nothing is held when space() seals, so its seal writes nothing. The hook
-    // then commits a batch that stays in an open page; only the commit's own
+    // then commits a batch that stays in an open extent; only the commit's own
     // seal, done because a wait is announced, writes it and wakes the waiter.
     WriterTestHook::set_space_sealed([](Writer& w) {
         if (&w != hooked || appended) return;
@@ -1114,7 +1115,7 @@ TEST_CASE(
     await_space(*writer);
     WriterTestHook::set_space_sealed(nullptr);
     CHECK(appended);
-    CHECK(WriterTestHook::pages(*writer).held == 0);
+    CHECK(WriterTestHook::extents(*writer).held == 0);
 
     REQUIRE(close_writer(*writer).has_value());
     auto snapshot = Snapshot::open(dir.str());
@@ -1123,14 +1124,14 @@ TEST_CASE(
     CHECK(collect(cursor).size() == 1);
 }
 
-TEST_CASE("back pressure keeps pages full under steady load") {
+TEST_CASE("back pressure keeps extents full under steady load") {
     // Many coroutines on one writer keep a waiter announced most of the time.
-    // Sealing on every Busy or every announced wait writes pages that are
+    // Sealing on every Busy or every announced wait writes extents that are
     // mostly empty; sealing only when no write is in flight keeps them full.
     constexpr int COROS = SANITIZED ? 4 : 16;
     constexpr int ROUNDS = SANITIZED ? 10 : 40;
-    dftu_utils_test::ScopedTestDir dir("store_backpressure_full_pages");
-    auto writer = make_writer(dir, manual_options(4 * PAGE_BYTES));
+    dftu_utils_test::ScopedTestDir dir("store_backpressure_full_extents");
+    auto writer = make_writer(dir, manual_options(4 * EXTENT_BYTES));
     auto created = writer->add_namespace(put_spec("full", 0));
     REQUIRE(created.has_value());
     const NamespaceId space = *created;
@@ -1139,7 +1140,7 @@ TEST_CASE("back pressure keeps pages full under steady load") {
     io_fault::start_counting();
     std::atomic<int> errors{0};
     TaskHandle handle = store_runtime().scope(
-        "full pages", [&](CoroScope& scope) -> coro::CoroTask<void> {
+        "full extents", [&](CoroScope& scope) -> coro::CoroTask<void> {
             for (int t = 0; t < COROS; ++t) {
                 scope.spawn([&, t](CoroScope&) -> coro::CoroTask<void> {
                     for (int r = 0; r < ROUNDS; ++r) {
@@ -1164,30 +1165,30 @@ TEST_CASE("back pressure keeps pages full under steady load") {
     const io_fault::Counts counts = io_fault::stop_counting();
     CHECK(errors.load() == 0);
 
-    const auto page = static_cast<std::size_t>(io_fault::WriteKind::Page);
-    const std::uint64_t pages = counts.writes[page];
-    const std::uint64_t bytes = counts.bytes[page];
-    const std::uint64_t busy = WriterTestHook::pages(*writer).busy;
-    INFO("pages " << pages << " bytes " << bytes << " busy " << busy);
-    REQUIRE(pages > 0);
+    const auto extent = static_cast<std::size_t>(io_fault::WriteKind::Extent);
+    const std::uint64_t extents = counts.writes[extent];
+    const std::uint64_t bytes = counts.bytes[extent];
+    const std::uint64_t busy = WriterTestHook::extents(*writer).busy;
+    INFO("extents " << extents << " bytes " << bytes << " busy " << busy);
+    REQUIRE(extents > 0);
     // The quota refused commits, so the rule was under test.
     if (!SANITIZED) CHECK(busy > 0);
-    // Pages hold at least half a page of raw section bytes on average; the
-    // stored pages are smaller, since they are compressed.
+    // Extents hold at least half an extent of raw segment bytes on average; the
+    // stored extents are smaller, since they are compressed.
     auto reader = store::DataFileReader::open(
         std::string(writer->path().data(), writer->path().size()));
     REQUIRE(reader.has_value());
-    auto refs = reader->all_page_refs();
+    auto refs = reader->all_extent_refs();
     REQUIRE(refs.has_value());
     std::uint64_t raw = 0;
     std::uint64_t written = 0;
-    for (const store::IndexedPageRef& indexed : *refs) {
-        if (indexed.ref.sections.empty()) continue;
+    for (const store::IndexedExtentRef& indexed : *refs) {
+        if (indexed.ref.segments.empty()) continue;
         ++written;
-        for (const store::PageSection& section : indexed.ref.sections) {
-            raw += section.length;
+        for (const store::ExtentSegment& segment : indexed.ref.segments) {
+            raw += segment.length;
         }
     }
     REQUIRE(written > 0);
-    CHECK(raw / written >= PAGE_BYTES / 2);
+    CHECK(raw / written >= EXTENT_BYTES / 2);
 }

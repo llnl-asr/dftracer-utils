@@ -122,27 +122,27 @@ void for_each_index(Runtime* runtime, std::size_t count, std::int64_t grain,
                           });
 }
 
-/// The error of a page of a synced commit whose crc or sections fail.
-dstd::Unexpected<dstd::Error> bad_page_error() {
+/// The error of an extent of a synced commit whose crc or segments fail.
+dstd::Unexpected<dstd::Error> bad_extent_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
 }
 
-/// Opens the view of one section over the bytes of its page and publishes it
+/// Opens the view of one segment over the bytes of its extent and publishes it
 /// in the slot, unless another thread did first.
-dstd::Expected<const SectionView*, dstd::Error> publish_view(
-    detail::SectionSlot& slot, const dstd::Vector<std::uint8_t>& bytes) {
-    if (SectionView* known = slot.view.load(std::memory_order_acquire)) {
+dstd::Expected<const SegmentView*, dstd::Error> publish_view(
+    detail::SegmentSlot& slot, const dstd::Vector<std::uint8_t>& bytes) {
+    if (SegmentView* known = slot.view.load(std::memory_order_acquire)) {
         return known;
     }
-    if (slot.offset_in_page > bytes.size() ||
-        slot.length > bytes.size() - slot.offset_in_page) {
-        return bad_page_error();
+    if (slot.offset_in_extent > bytes.size() ||
+        slot.length > bytes.size() - slot.offset_in_extent) {
+        return bad_extent_error();
     }
-    auto opened = SectionView::open_index(
-        ByteView{bytes.data() + slot.offset_in_page, slot.length});
-    if (!opened) return bad_page_error();
-    SectionView* fresh = new SectionView(std::move(*opened));
-    SectionView* expected = nullptr;
+    auto opened = SegmentView::open_index(
+        ByteView{bytes.data() + slot.offset_in_extent, slot.length});
+    if (!opened) return bad_extent_error();
+    SegmentView* fresh = new SegmentView(std::move(*opened));
+    SegmentView* expected = nullptr;
     if (slot.view.compare_exchange_strong(expected, fresh,
                                           std::memory_order_acq_rel,
                                           std::memory_order_acquire)) {
@@ -152,29 +152,29 @@ dstd::Expected<const SectionView*, dstd::Error> publish_view(
     return expected;
 }
 
-/// One in-memory section block per copy of a commit the chain lists: the
-/// sections of that copy, with the block of the page that holds each. Good
+/// One in-memory segment block per copy of a commit the chain lists: the
+/// segments of that copy, with the block of the extent that holds each. Good
 /// from the start, since the record is in memory.
-void fill_section_blocks(detail::Commit& commit) {
+void fill_segment_blocks(detail::Commit& commit) {
     struct Listed {
         std::uint32_t copy_id;
         std::uint32_t block;
-        const PageSection* section;
+        const ExtentSegment* segment;
     };
     dstd::Vector<Listed> listed;
     for (std::size_t block = 0; block < commit.blocks.size(); ++block) {
-        for (const PageSection& section :
-             commit.blocks[block].listed->sections) {
+        for (const ExtentSegment& segment :
+             commit.blocks[block].listed->segments) {
             listed.push_back(
-                {section.copy_id, static_cast<std::uint32_t>(block), &section});
+                {segment.copy_id, static_cast<std::uint32_t>(block), &segment});
         }
     }
-    std::sort(listed.begin(), listed.end(),
-              [](const Listed& a, const Listed& b) {
-                  if (a.copy_id != b.copy_id) return a.copy_id < b.copy_id;
-                  if (a.block != b.block) return a.block < b.block;
-                  return a.section->offset_in_page < b.section->offset_in_page;
-              });
+    std::sort(
+        listed.begin(), listed.end(), [](const Listed& a, const Listed& b) {
+            if (a.copy_id != b.copy_id) return a.copy_id < b.copy_id;
+            if (a.block != b.block) return a.block < b.block;
+            return a.segment->offset_in_extent < b.segment->offset_in_extent;
+        });
     std::size_t at = 0;
     while (at < listed.size()) {
         std::size_t end = at + 1;
@@ -183,36 +183,36 @@ void fill_section_blocks(detail::Commit& commit) {
             ++end;
         }
         auto block = dstd::make_unique<detail::LazyBlock>();
-        block->kind = detail::BlockKind::Sections;
+        block->kind = detail::BlockKind::Segments;
         block->state.store(static_cast<std::uint8_t>(detail::LoadState::Good),
                            std::memory_order_relaxed);
         block->owner = &commit;
-        block->sections = dstd::Vector<detail::SectionSlot>(end - at);
+        block->segments = dstd::Vector<detail::SegmentSlot>(end - at);
         for (std::size_t i = at; i < end; ++i) {
-            detail::SectionSlot& slot = block->sections[i - at];
+            detail::SegmentSlot& slot = block->segments[i - at];
             slot.block = listed[i].block;
-            slot.offset_in_page = listed[i].section->offset_in_page;
-            slot.length = listed[i].section->length;
-            slot.entry_count = listed[i].section->entry_count;
-            slot.first_key = bytes_of(listed[i].section->first_key);
-            slot.last_key = bytes_of(listed[i].section->last_key);
+            slot.offset_in_extent = listed[i].segment->offset_in_extent;
+            slot.length = listed[i].segment->length;
+            slot.entry_count = listed[i].segment->entry_count;
+            slot.first_key = bytes_of(listed[i].segment->first_key);
+            slot.last_key = bytes_of(listed[i].segment->last_key);
         }
-        commit.section_copies.push_back(listed[at].copy_id);
-        commit.section_blocks.push_back(std::move(block));
+        commit.segment_copies.push_back(listed[at].copy_id);
+        commit.segment_blocks.push_back(std::move(block));
         at = end;
     }
 }
 
-/// The section block of one copy of one commit, or null when the commit holds
-/// no section of it.
-detail::LazyBlock* section_block_of(detail::Commit& commit,
+/// The segment block of one copy of one commit, or null when the commit holds
+/// no segment of it.
+detail::LazyBlock* segment_block_of(detail::Commit& commit,
                                     std::uint32_t copy_id) {
-    const auto at = std::lower_bound(commit.section_copies.begin(),
-                                     commit.section_copies.end(), copy_id);
-    if (at == commit.section_copies.end() || *at != copy_id) return nullptr;
+    const auto at = std::lower_bound(commit.segment_copies.begin(),
+                                     commit.segment_copies.end(), copy_id);
+    if (at == commit.segment_copies.end() || *at != copy_id) return nullptr;
     return commit
-        .section_blocks[static_cast<std::size_t>(at -
-                                                 commit.section_copies.begin())]
+        .segment_blocks[static_cast<std::size_t>(at -
+                                                 commit.segment_copies.begin())]
         .get();
 }
 
@@ -254,56 +254,59 @@ constexpr std::size_t PARALLEL_OPEN_FILES = 8;
 /// refs of a file is cheap, but a root of many small files still spreads.
 constexpr std::int64_t COMMIT_GRAIN = 4;
 
-/// Builds the blocks, pages and section blocks of one commit from its page
-/// refs, deduplicated by offset and in offset order, so the pages the commit
-/// holds read together. A record may list the same page ref again, and one ref
-/// belongs to one commit: the first listing of an offset is the one kept.
-void fill_commit(detail::Commit& commit, std::vector<const PageRefItem*> refs) {
+/// Builds the blocks, extents and segment blocks of one commit from its extent
+/// refs, deduplicated by offset and in offset order, so the extents the commit
+/// holds read together. A record may list the same extent ref again, and one
+/// ref belongs to one commit: the first listing of an offset is the one kept.
+void fill_commit(detail::Commit& commit,
+                 std::vector<const ExtentRefItem*> refs) {
     std::stable_sort(refs.begin(), refs.end(),
-                     [](const PageRefItem* a, const PageRefItem* b) {
+                     [](const ExtentRefItem* a, const ExtentRefItem* b) {
                          return a->offset < b->offset;
                      });
-    dstd::Vector<detail::CommitBlock> blocks;
-    for (const PageRefItem* ref : refs) {
+    dstd::Vector<detail::CommitExtent> blocks;
+    for (const ExtentRefItem* ref : refs) {
         if (blocks.empty() || blocks.back().ref.offset != ref->offset) {
             blocks.push_back(
-                {PageRef{ref->offset, ref->length, ref->crc}, ref});
+                {ExtentRef{ref->offset, ref->length, ref->crc}, ref});
         }
     }
-    commit.pages = dstd::Vector<detail::PageSlot>(blocks.size());
+    commit.frames = dstd::Vector<detail::Frame>(blocks.size());
     commit.blocks = std::move(blocks);
-    fill_section_blocks(commit);
+    fill_segment_blocks(commit);
 }
 
-/// One commit per sequence of a file: those the chain lists with their page
+/// One commit per sequence of a file: those the chain lists with their extent
 /// refs, built now, and those a checkpoint or the footer lists by summary,
-/// whose page refs are read with their first query.
+/// whose extent refs are read with their first query.
 void build_commits(detail::FileData& file, std::size_t file_index) {
     const FileIndex& index = file.reader.index();
     // A closed file holds no commit object: every commit of it is synced, and
-    // its directory names the sections of each copy.
+    // its directory names the segments of each copy.
     if (index.tail.has_value()) return;
-    const dstd::Vector<IndexedPageRef>& page_refs = index.page_refs;
-    std::vector<std::size_t> order(page_refs.size());
+    const dstd::Vector<IndexedExtentRef>& extent_refs = index.extent_refs;
+    std::vector<std::size_t> order(extent_refs.size());
     std::iota(order.begin(), order.end(), std::size_t{0});
     std::stable_sort(order.begin(), order.end(),
-                     [&page_refs](std::size_t a, std::size_t b) {
-                         return page_refs[a].sequence < page_refs[b].sequence;
+                     [&extent_refs](std::size_t a, std::size_t b) {
+                         return extent_refs[a].sequence <
+                                extent_refs[b].sequence;
                      });
     for (std::size_t at = 0; at < order.size();) {
-        const std::uint64_t sequence = page_refs[order[at]].sequence;
+        const std::uint64_t sequence = extent_refs[order[at]].sequence;
         auto commit = dstd::make_unique<detail::Commit>();
         commit->sequence = sequence;
         commit->file_index = file_index;
-        std::vector<const PageRefItem*> refs;
+        std::vector<const ExtentRefItem*> refs;
         bool synced = true;
-        while (at < order.size() && page_refs[order[at]].sequence == sequence) {
-            const PageRefItem& ref = page_refs[order[at]].ref;
+        while (at < order.size() &&
+               extent_refs[order[at]].sequence == sequence) {
+            const ExtentRefItem& ref = extent_refs[order[at]].ref;
             if (ref.synced == 0) synced = false;
             refs.push_back(&ref);
             ++at;
         }
-        // A clean close syncs every page before its footer.
+        // A clean close syncs every extent before its footer.
         commit->synced = index.closed || synced;
         fill_commit(*commit, std::move(refs));
         commit->index_state.store(
@@ -328,7 +331,7 @@ void build_commits(detail::FileData& file, std::size_t file_index) {
 
 /// The scope directory of a file without a footer, built from the items and
 /// commits its chain gave: each commit's copies with their key ranges, from
-/// the summary of one a checkpoint lists and from the sections of one the
+/// the summary of one a checkpoint lists and from the segments of one the
 /// chain lists itself.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> chain_directory(
     const detail::FileData& file) {
@@ -343,10 +346,10 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> chain_directory(
             }
             continue;
         }
-        for (std::size_t at = 0; at < commit->section_blocks.size(); ++at) {
-            const std::uint32_t copy_id = commit->section_copies[at];
-            for (const detail::SectionSlot& slot :
-                 commit->section_blocks[at]->sections) {
+        for (std::size_t at = 0; at < commit->segment_blocks.size(); ++at) {
+            const std::uint32_t copy_id = commit->segment_copies[at];
+            for (const detail::SegmentSlot& slot :
+                 commit->segment_blocks[at]->segments) {
                 commits.push_back({commit->sequence, copy_id, slot.first_key,
                                    slot.last_key, BlockHandle{}});
             }
@@ -407,7 +410,7 @@ dstd::Expected<void, dstd::Error> build_file_directory(detail::FileData& file) {
                                                  : detail::BlockKind::Middle;
         file.roots.push_back(std::move(block));
     }
-    file.pages.assign(tail.page_count);
+    file.frames.assign(tail.extent_count);
     return {};
 }
 
@@ -573,7 +576,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     }
 
     // One commit per sequence of every file that is not closed, each behind a
-    // pointer its sections and copies keep. No page and no big value is read
+    // pointer its segments and copies keep. No extent and no big value is read
     // here: the blocks of a commit are read the first time a query needs one.
     const auto group_commits = [&](std::size_t file_index) {
         build_commits(files_[file_index], file_index);
@@ -607,7 +610,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     open_stats_.files = files_.size();
     for (const detail::FileData& file : files_) {
         open_stats_.commits += file.commits.size();
-        open_stats_.pages += file.reader.index().page_refs.size();
+        open_stats_.extents += file.reader.index().extent_refs.size();
     }
     open_stats_.ms_list =
         std::chrono::duration<double, std::milli>(listed - start).count();
@@ -627,9 +630,9 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
     std::vector<std::uint64_t> commits(file_count, 0);
     std::vector<std::uint64_t> blocks(file_count, 0);
     std::vector<std::uint64_t> metadata(file_count, 0);
-    std::vector<std::uint64_t> sections(file_count, 0);
+    std::vector<std::uint64_t> segments(file_count, 0);
     std::vector<dstd::Vector<BadCommit>> bad_commits(file_count);
-    std::vector<dstd::Vector<BadSection>> bad_sections(file_count);
+    std::vector<dstd::Vector<BadSegment>> bad_segments(file_count);
 
     const auto check_file = [&](std::size_t index) {
         const detail::FileData& file = files_[index];
@@ -644,27 +647,27 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                        ? status.error
                        : dstd::Error(dstd::Condition::Parse);
         };
-        // A big value run a closed file holds, with a commit whose section
+        // A big value run a closed file holds, with a commit whose segment
         // names it.
         struct BigRun {
             BigRef ref;
             std::uint64_t sequence = 0;
         };
-        // Every entry of the section decodes, not only its index. The big
+        // Every entry of the segment decodes, not only its index. The big
         // value runs it names are added to `bigs` when given.
         const auto walkable = [](const dstd::Vector<std::uint8_t>& bytes,
-                                 const detail::SectionSlot& slot,
+                                 const detail::SegmentSlot& slot,
                                  std::uint64_t sequence,
                                  dstd::Vector<BigRun>* bigs) {
-            if (slot.offset_in_page > bytes.size() ||
-                slot.length > bytes.size() - slot.offset_in_page) {
+            if (slot.offset_in_extent > bytes.size() ||
+                slot.length > bytes.size() - slot.offset_in_extent) {
                 return false;
             }
-            auto view = SectionView::open(
-                ByteView{bytes.data() + slot.offset_in_page, slot.length});
+            auto view = SegmentView::open(
+                ByteView{bytes.data() + slot.offset_in_extent, slot.length});
             if (!view) return false;
             if (bigs != nullptr) {
-                for (SectionView::Cursor at = view->lower_bound(ByteView{});
+                for (SegmentView::Cursor at = view->lower_bound(ByteView{});
                      !at.at_end(); at.next()) {
                     if (at.entry().is_big()) {
                         bigs->push_back({at.entry().big_ref(), sequence});
@@ -702,16 +705,16 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                 } else {
                     for (std::size_t block = 0; block < commit.blocks.size();
                          ++block) {
-                        const detail::CommitBlock& held = commit.blocks[block];
+                        const detail::CommitExtent& held = commit.blocks[block];
                         if (held.listed != nullptr &&
-                            !held.listed->sections.empty()) {
-                            const detail::LoadStatus page =
-                                load_page(commit, block);
-                            if (page.state == detail::LoadState::Failed) {
-                                fail(page.error);
+                            !held.listed->segments.empty()) {
+                            const detail::LoadStatus extent =
+                                load_frame(commit, block);
+                            if (extent.state == detail::LoadState::Failed) {
+                                fail(extent.error);
                                 return;
                             }
-                            if (page.state != detail::LoadState::Good) {
+                            if (extent.state != detail::LoadState::Good) {
                                 bad_commit(commit.sequence);
                             }
                             continue;
@@ -730,36 +733,36 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                     }
                 }
                 for (const dstd::UniquePtr<detail::LazyBlock>& block :
-                     commit.section_blocks) {
-                    for (const detail::SectionSlot& slot : block->sections) {
-                        // A page that does not verify is reported as its
+                     commit.segment_blocks) {
+                    for (const detail::SegmentSlot& slot : block->segments) {
+                        // An extent that does not verify is reported as its
                         // commit, since its bytes are not there to walk.
                         if (commit.synced &&
-                            load_page(commit, slot.block).state !=
+                            load_frame(commit, slot.block).state !=
                                 detail::LoadState::Good) {
                             continue;
                         }
-                        ++sections[index];
+                        ++segments[index];
                         const dstd::Vector<std::uint8_t>& bytes =
-                            commit.pages[slot.block].bytes;
+                            commit.frames[slot.block].bytes;
                         if (walkable(bytes, slot, commit.sequence, nullptr)) {
                             continue;
                         }
-                        bad_sections[index].push_back(
+                        bad_segments[index].push_back(
                             {file.name, commit.blocks[slot.block].ref.offset,
-                             slot.offset_in_page});
+                             slot.offset_in_extent});
                     }
                 }
             }
             return;
         }
 
-        // A closed file: every directory block, every section block and every
-        // page, each page counted once.
+        // A closed file: every directory block, every segment block and every
+        // extent, each extent counted once.
         struct Pending {
             std::uint64_t sequence = 0;
             std::uint32_t copy_id = 0;
-            BlockHandle sections;
+            BlockHandle segments;
         };
         dstd::Vector<Pending> pending;
         bool stopped = false;
@@ -791,7 +794,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                 for (const DirectoryCopy& copy : entry->copies) {
                     for (const DirectoryCommit& range : copy.commits) {
                         pending.push_back(
-                            {range.sequence, copy.local_id, range.sections});
+                            {range.sequence, copy.local_id, range.segments});
                     }
                 }
             }
@@ -809,25 +812,25 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
         sequences.erase(std::unique(sequences.begin(), sequences.end()),
                         sequences.end());
         commits[index] = sequences.size();
-        std::vector<std::uint8_t> seen(file.pages.size(), 0);
+        std::vector<std::uint8_t> seen(file.frames.size(), 0);
         dstd::Vector<BigRun> bigs;
 
         std::sort(pending.begin(), pending.end(),
                   [](const Pending& a, const Pending& b) {
-                      if (a.sections.offset != b.sections.offset) {
-                          return a.sections.offset < b.sections.offset;
+                      if (a.segments.offset != b.segments.offset) {
+                          return a.segments.offset < b.segments.offset;
                       }
                       return a.sequence < b.sequence;
                   });
         for (std::size_t i = 0; i < pending.size(); ++i) {
-            if (pending[i].sections.empty()) continue;
+            if (pending[i].segments.empty()) continue;
             if (i > 0 &&
-                pending[i - 1U].sections.offset == pending[i].sections.offset) {
+                pending[i - 1U].segments.offset == pending[i].segments.offset) {
                 continue;
             }
             detail::LazyBlock block;
-            block.kind = detail::BlockKind::Sections;
-            block.handle = pending[i].sections;
+            block.kind = detail::BlockKind::Segments;
+            block.handle = pending[i].segments;
             ++metadata[index];
             const detail::LoadStatus status = load_block(file, block);
             if (status.state != detail::LoadState::Good) {
@@ -836,37 +839,37 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                     return;
                 }
                 for (std::size_t at = i; at < pending.size(); ++at) {
-                    if (pending[at].sections.offset ==
-                        pending[i].sections.offset) {
+                    if (pending[at].segments.offset ==
+                        pending[i].segments.offset) {
                         bad_commit(pending[at].sequence);
                     }
                 }
                 continue;
             }
-            for (const detail::SectionSlot& slot : block.sections) {
-                if (slot.page_index < seen.size() &&
-                    seen[slot.page_index] == 0) {
-                    seen[slot.page_index] = 1;
+            for (const detail::SegmentSlot& slot : block.segments) {
+                if (slot.extent_index < seen.size() &&
+                    seen[slot.extent_index] == 0) {
+                    seen[slot.extent_index] = 1;
                     ++blocks[index];
                 }
-                const detail::LoadStatus page =
-                    load_page(file, slot.page_index, slot.page);
-                if (page.state == detail::LoadState::Failed) {
-                    fail(page.error);
+                const detail::LoadStatus extent =
+                    load_frame(file, slot.extent_index, slot.extent);
+                if (extent.state == detail::LoadState::Failed) {
+                    fail(extent.error);
                     return;
                 }
-                if (page.state != detail::LoadState::Good) {
+                if (extent.state != detail::LoadState::Good) {
                     // Its bytes are not there to walk.
                     bad_commit(pending[i].sequence);
                     continue;
                 }
-                ++sections[index];
-                if (walkable(file.pages.slot(slot.page_index).bytes, slot,
+                ++segments[index];
+                if (walkable(file.frames.slot(slot.extent_index).bytes, slot,
                              pending[i].sequence, &bigs)) {
                     continue;
                 }
-                bad_sections[index].push_back(
-                    {file.name, slot.page.offset, slot.offset_in_page});
+                bad_segments[index].push_back(
+                    {file.name, slot.extent.offset, slot.offset_in_extent});
             }
         }
 
@@ -890,8 +893,8 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
             if (!bad) {
                 BlockReads reads;
                 auto verified = file.reader.verify_block(
-                    PageRef{big.offset, static_cast<std::uint32_t>(big.length),
-                            big.crc},
+                    ExtentRef{big.offset,
+                              static_cast<std::uint32_t>(big.length), big.crc},
                     &reads);
                 reads_->add(0, 1, reads);
                 if (!verified) {
@@ -918,7 +921,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
         report.commits += commits[index];
         report.blocks += blocks[index];
         report.metadata_blocks += metadata[index];
-        report.sections += sections[index];
+        report.segments += segments[index];
         // A commit is reported once, however many of its blocks fail.
         std::sort(bad_commits[index].begin(), bad_commits[index].end(),
                   [](const BadCommit& a, const BadCommit& b) {
@@ -932,8 +935,8 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
             }
             report.bad_commits.push_back(bad);
         }
-        for (const BadSection& bad : bad_sections[index]) {
-            report.bad_sections.push_back(bad);
+        for (const BadSegment& bad : bad_segments[index]) {
+            report.bad_segments.push_back(bad);
         }
     }
     const ReadStats reads = read_stats();
@@ -1138,18 +1141,18 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                 detail::Commit* commit =
                     closed_file ? nullptr : commit_of(held, range.sequence);
                 if (!closed_file && commit == nullptr) continue;
-                // The section block of a commit of a file that is not closed
-                // is found through copy_sections, once its index is loaded.
-                detail::LazyBlock* sections = nullptr;
-                if (closed_file && !range.sections.empty()) {
+                // The segment block of a commit of a file that is not closed
+                // is found through copy_segments, once its index is loaded.
+                detail::LazyBlock* segments = nullptr;
+                if (closed_file && !range.segments.empty()) {
                     auto block = dstd::make_unique<detail::LazyBlock>();
-                    block->kind = detail::BlockKind::Sections;
-                    block->handle = range.sections;
-                    sections = block.get();
-                    group->sections.push_back(std::move(block));
+                    block->kind = detail::BlockKind::Segments;
+                    block->handle = range.segments;
+                    segments = block.get();
+                    group->segments.push_back(std::move(block));
                 }
                 copy.commits.push_back({range.sequence, range.first_key,
-                                        range.last_key, sections, commit});
+                                        range.last_key, segments, commit});
             }
             group->copies.push_back(std::move(copy));
         }
@@ -1229,47 +1232,47 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
     if (again != detail::LoadState::Unknown) return state_of(again);
 
     const DataFileReader& reader = files_[commit.file_index].reader;
-    std::vector<std::size_t> page_blocks;
+    std::vector<std::size_t> extent_blocks;
     std::vector<std::size_t> big_blocks;
     for (std::size_t block = 0; block < commit.blocks.size(); ++block) {
-        const detail::CommitBlock& held = commit.blocks[block];
-        if (held.listed != nullptr && !held.listed->sections.empty()) {
-            page_blocks.push_back(block);
+        const detail::CommitExtent& held = commit.blocks[block];
+        if (held.listed != nullptr && !held.listed->segments.empty()) {
+            extent_blocks.push_back(block);
         } else {
             big_blocks.push_back(block);
         }
     }
 
-    // Every page in one read, on this thread: the commit's lock is held, and a
-    // fork-join here could wait on a pool worker that waits on this lock.
-    dstd::Vector<PageRef> refs;
-    dstd::Vector<PageTarget> targets;
+    // Every extent in one read, on this thread: the commit's lock is held, and
+    // a fork-join here could wait on a pool worker that waits on this lock.
+    dstd::Vector<ExtentRef> refs;
+    dstd::Vector<ExtentTarget> targets;
     std::vector<std::uint8_t> bad(commit.blocks.size(), 0);
-    for (const std::size_t block : page_blocks) {
+    for (const std::size_t block : extent_blocks) {
         refs.push_back(commit.blocks[block].ref);
-        targets.push_back({&commit.pages[block].bytes, &bad[block]});
+        targets.push_back({&commit.frames[block].bytes, &bad[block]});
     }
     BlockReads reads;
     bool any_bad = false;
     dstd::Optional<dstd::Error> failure;
     if (!refs.empty()) {
-        auto read = reader.read_pages(refs, targets);
+        auto read = reader.read_extents(refs, targets);
         if (!read) {
             failure = read.error();
         } else {
             reads = *read;
-            for (const std::size_t block : page_blocks) {
+            for (const std::size_t block : extent_blocks) {
                 if (bad[block] != 0) any_bad = true;
             }
         }
     }
-    // Every section of the commit must open, so a section that cannot be read
-    // makes the whole commit Bad, as the views of its pages once did.
+    // Every segment of the commit must open, so a segment that cannot be read
+    // makes the whole commit Bad, as the views of its extents once did.
     if (!failure && !any_bad) {
         for (const dstd::UniquePtr<detail::LazyBlock>& block :
-             commit.section_blocks) {
-            for (detail::SectionSlot& slot : block->sections) {
-                auto view = publish_view(slot, commit.pages[slot.block].bytes);
+             commit.segment_blocks) {
+            for (detail::SegmentSlot& slot : block->segments) {
+                auto view = publish_view(slot, commit.frames[slot.block].bytes);
                 if (!view) {
                     any_bad = true;
                     break;
@@ -1356,9 +1359,9 @@ detail::LoadStatus Snapshot::load_index(detail::Commit& commit) const {
                                                      : detail::LoadState::Bad;
     } else {
         commit.listed_refs = std::move(*refs);
-        std::vector<const PageRefItem*> listed;
+        std::vector<const ExtentRefItem*> listed;
         listed.reserve(commit.listed_refs.size());
-        for (const PageRefItem& ref : commit.listed_refs)
+        for (const ExtentRefItem& ref : commit.listed_refs)
             listed.push_back(&ref);
         fill_commit(commit, std::move(listed));
     }
@@ -1454,11 +1457,11 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                 block.separators = *table;
                 break;
             }
-            case detail::BlockKind::Sections: {
+            case detail::BlockKind::Segments: {
                 struct Raw {
-                    PageRef page;
-                    std::uint32_t page_index = 0;
-                    std::uint32_t offset_in_page = 0;
+                    ExtentRef extent;
+                    std::uint32_t extent_index = 0;
+                    std::uint32_t offset_in_extent = 0;
                     std::uint32_t length = 0;
                     std::uint64_t entry_count = 0;
                     std::size_t first_at = 0;
@@ -1487,11 +1490,11 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                         break;
                     }
                     Raw raw;
-                    raw.page_index = read_u32_le(data + at);
-                    raw.page.offset = read_u64_le(data + at + 4);
-                    raw.page.length = read_u32_le(data + at + 12);
-                    raw.page.crc = read_u32_le(data + at + 16);
-                    raw.offset_in_page = read_u32_le(data + at + 20);
+                    raw.extent_index = read_u32_le(data + at);
+                    raw.extent.offset = read_u64_le(data + at + 4);
+                    raw.extent.length = read_u32_le(data + at + 12);
+                    raw.extent.crc = read_u32_le(data + at + 16);
+                    raw.offset_in_extent = read_u32_le(data + at + 20);
                     raw.length = read_u32_le(data + at + 24);
                     raw.entry_count = read_u64_le(data + at + 28);
                     at += 36;
@@ -1518,12 +1521,12 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     state = detail::LoadState::Bad;
                     break;
                 }
-                block.sections = dstd::Vector<detail::SectionSlot>(raws.size());
+                block.segments = dstd::Vector<detail::SegmentSlot>(raws.size());
                 for (std::size_t i = 0; i < raws.size(); ++i) {
-                    detail::SectionSlot& slot = block.sections[i];
-                    slot.page = raws[i].page;
-                    slot.page_index = raws[i].page_index;
-                    slot.offset_in_page = raws[i].offset_in_page;
+                    detail::SegmentSlot& slot = block.segments[i];
+                    slot.extent = raws[i].extent;
+                    slot.extent_index = raws[i].extent_index;
+                    slot.offset_in_extent = raws[i].offset_in_extent;
                     slot.length = raws[i].length;
                     slot.entry_count = raws[i].entry_count;
                     slot.first_key =
@@ -1540,9 +1543,9 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
     return state_of(state);
 }
 
-detail::LoadStatus Snapshot::load_page(detail::Commit& commit,
-                                       std::size_t block) const {
-    detail::PageSlot& slot = commit.pages[block];
+detail::LoadStatus Snapshot::load_frame(detail::Commit& commit,
+                                        std::size_t block) const {
+    detail::Frame& slot = commit.frames[block];
     const auto state_of = [&](detail::LoadState known) {
         return detail::LoadStatus{known, known == detail::LoadState::Failed
                                              ? slot.error
@@ -1557,12 +1560,12 @@ detail::LoadStatus Snapshot::load_page(detail::Commit& commit,
         slot.state.load(std::memory_order_acquire));
     if (again != detail::LoadState::Unknown) return state_of(again);
 
-    const detail::CommitBlock& held = commit.blocks[block];
+    const detail::CommitExtent& held = commit.blocks[block];
     std::uint8_t bad = 0;
-    const PageTarget target{&slot.bytes, &bad};
-    auto read = files_[commit.file_index].reader.read_pages(
-        dstd::Span<const PageRef>(&held.ref, 1),
-        dstd::Span<const PageTarget>(&target, 1));
+    const ExtentTarget target{&slot.bytes, &bad};
+    auto read = files_[commit.file_index].reader.read_extents(
+        dstd::Span<const ExtentRef>(&held.ref, 1),
+        dstd::Span<const ExtentTarget>(&target, 1));
     detail::LoadState state = detail::LoadState::Good;
     if (!read) {
         slot.error = read.error();
@@ -1577,13 +1580,13 @@ detail::LoadStatus Snapshot::load_page(detail::Commit& commit,
     return state_of(state);
 }
 
-detail::LoadStatus Snapshot::load_page(const detail::FileData& file,
-                                       std::size_t page_index,
-                                       const PageRef& ref) const {
-    if (page_index >= file.pages.size()) {
+detail::LoadStatus Snapshot::load_frame(const detail::FileData& file,
+                                        std::size_t extent_index,
+                                        const ExtentRef& ref) const {
+    if (extent_index >= file.frames.size()) {
         return detail::LoadStatus{detail::LoadState::Bad, dstd::Error{}};
     }
-    detail::PageSlot& slot = file.pages.slot(page_index);
+    detail::Frame& slot = file.frames.slot(extent_index);
     const auto state_of = [&](detail::LoadState known) {
         return detail::LoadStatus{known, known == detail::LoadState::Failed
                                              ? slot.error
@@ -1598,7 +1601,7 @@ detail::LoadStatus Snapshot::load_page(const detail::FileData& file,
         slot.state.load(std::memory_order_acquire));
     if (again != detail::LoadState::Unknown) return state_of(again);
 
-    auto bytes = file.reader.read_data_page(ref);
+    auto bytes = file.reader.read_data_extent(ref);
     detail::LoadState state = detail::LoadState::Good;
     BlockReads reads;
     if (!bytes) {
@@ -1617,42 +1620,42 @@ detail::LoadStatus Snapshot::load_page(const detail::FileData& file,
     return state_of(state);
 }
 
-dstd::Expected<const SectionView*, dstd::Error> Snapshot::section_view(
+dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
     const detail::FileData& file, detail::LazyBlock& block,
     std::size_t index) const {
-    if (index >= block.sections.size()) return bad_page_error();
-    detail::SectionSlot& slot = block.sections[index];
-    if (SectionView* known = slot.view.load(std::memory_order_acquire)) {
+    if (index >= block.segments.size()) return bad_extent_error();
+    detail::SegmentSlot& slot = block.segments[index];
+    if (SegmentView* known = slot.view.load(std::memory_order_acquire)) {
         return known;
     }
     const dstd::Vector<std::uint8_t>* bytes = nullptr;
     if (block.owner == nullptr) {
         const detail::LoadStatus status =
-            load_page(file, slot.page_index, slot.page);
+            load_frame(file, slot.extent_index, slot.extent);
         if (status.state == detail::LoadState::Failed) {
             return dstd::Unexpected<dstd::Error>(status.error);
         }
-        if (status.state != detail::LoadState::Good) return bad_page_error();
-        bytes = &file.pages.slot(slot.page_index).bytes;
+        if (status.state != detail::LoadState::Good) return bad_extent_error();
+        bytes = &file.frames.slot(slot.extent_index).bytes;
     } else {
         detail::Commit& commit = *block.owner;
         if (commit.synced) {
-            const detail::LoadStatus status = load_page(commit, slot.block);
+            const detail::LoadStatus status = load_frame(commit, slot.block);
             if (status.state == detail::LoadState::Failed) {
                 return dstd::Unexpected<dstd::Error>(status.error);
             }
             if (status.state != detail::LoadState::Good)
-                return bad_page_error();
+                return bad_extent_error();
         } else if (static_cast<detail::LoadState>(commit.state.load(
                        std::memory_order_acquire)) != detail::LoadState::Good) {
-            return bad_page_error();
+            return bad_extent_error();
         }
-        bytes = &commit.pages[slot.block].bytes;
+        bytes = &commit.frames[slot.block].bytes;
     }
     return publish_view(slot, *bytes);
 }
 
-dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_sections(
+dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_segments(
     const detail::CopyData& copy, const detail::CopyCommit& held) const {
     const auto block_result = [](const detail::LoadStatus& status)
         -> dstd::Expected<void, dstd::Error> {
@@ -1660,30 +1663,30 @@ dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_sections(
         if (status.state == detail::LoadState::Failed) {
             return dstd::Unexpected<dstd::Error>(status.error);
         }
-        return bad_page_error();
+        return bad_extent_error();
     };
     if (held.commit != nullptr) {
         auto indexed = index_result(load_index(*held.commit));
         if (!indexed) return dstd::Unexpected<dstd::Error>(indexed.error());
-        return section_block_of(*held.commit, copy.local_id);
+        return segment_block_of(*held.commit, copy.local_id);
     }
-    if (held.sections == nullptr) {
+    if (held.segments == nullptr) {
         return static_cast<detail::LazyBlock*>(nullptr);
     }
     const detail::FileData& file = files_[copy.file_index];
-    auto sections = block_result(load_block(file, *held.sections));
-    if (!sections) return dstd::Unexpected<dstd::Error>(sections.error());
-    return held.sections;
+    auto segments = block_result(load_block(file, *held.segments));
+    if (!segments) return dstd::Unexpected<dstd::Error>(segments.error());
+    return held.segments;
 }
 
-void detail::PageSlots::assign(std::size_t count) {
+void detail::Frames::assign(std::size_t count) {
     count_ = count;
-    chunks_ = dstd::Vector<std::atomic<Chunk*>>((count + CHUNK_PAGES - 1) /
-                                                CHUNK_PAGES);
+    chunks_ = dstd::Vector<std::atomic<Chunk*>>((count + CHUNK_FRAMES - 1) /
+                                                CHUNK_FRAMES);
 }
 
-detail::PageSlot& detail::PageSlots::slot(std::size_t index) const {
-    std::atomic<Chunk*>& held = chunks_[index / CHUNK_PAGES];
+detail::Frame& detail::Frames::slot(std::size_t index) const {
+    std::atomic<Chunk*>& held = chunks_[index / CHUNK_FRAMES];
     Chunk* chunk = held.load(std::memory_order_acquire);
     if (chunk == nullptr) {
         auto fresh = dstd::make_unique<Chunk>();
@@ -1696,10 +1699,10 @@ detail::PageSlot& detail::PageSlots::slot(std::size_t index) const {
             chunk = expected;
         }
     }
-    return chunk->slots[index % CHUNK_PAGES];
+    return chunk->slots[index % CHUNK_FRAMES];
 }
 
-detail::PageSlots::~PageSlots() {
+detail::Frames::~Frames() {
     // Each chunk came from dstd::make_unique, so its own deleter frees it.
     for (std::atomic<Chunk*>& held : chunks_) {
         dstd::UniquePtr<Chunk> owned(held.load(std::memory_order_relaxed));
@@ -1707,7 +1710,7 @@ detail::PageSlots::~PageSlots() {
 }
 
 detail::LazyBlock::~LazyBlock() {
-    for (SectionSlot& slot : sections) {
+    for (SegmentSlot& slot : segments) {
         delete slot.view.load(std::memory_order_relaxed);
     }
 }
@@ -1721,8 +1724,9 @@ dstd::Expected<void, dstd::Error> Snapshot::read_big(
         ref.length > std::numeric_limits<std::uint32_t>::max()) {
         return parse_error();
     }
-    PageRef page{ref.offset, static_cast<std::uint32_t>(ref.length), ref.crc};
-    auto bytes = files_[file_index].reader.read_page(page);
+    ExtentRef extent{ref.offset, static_cast<std::uint32_t>(ref.length),
+                     ref.crc};
+    auto bytes = files_[file_index].reader.read_extent(extent);
     if (!bytes) {
         return dstd::Unexpected<dstd::Error>(bytes.error());
     }
@@ -1825,16 +1829,16 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
     dstd::Vector<detail::ValueSource> sources;
     for (const detail::CopyCommit& held : copy.commits) {
         if (!holds_key(held.first_key, held.last_key)) continue;
-        auto held_sections = copy_sections(copy, held);
-        if (!held_sections) {
-            return dstd::Unexpected<dstd::Error>(held_sections.error());
+        auto held_segments = copy_segments(copy, held);
+        if (!held_segments) {
+            return dstd::Unexpected<dstd::Error>(held_segments.error());
         }
-        if (*held_sections == nullptr) continue;
-        detail::LazyBlock& block = **held_sections;
-        for (std::size_t i = 0; i < block.sections.size(); ++i) {
-            const detail::SectionSlot& slot = block.sections[i];
+        if (*held_segments == nullptr) continue;
+        detail::LazyBlock& block = **held_segments;
+        for (std::size_t i = 0; i < block.segments.size(); ++i) {
+            const detail::SegmentSlot& slot = block.segments[i];
             if (!holds_key(slot.first_key, slot.last_key)) continue;
-            auto view = section_view(files_[copy.file_index], block, i);
+            auto view = segment_view(files_[copy.file_index], block, i);
             if (!view) return dstd::Unexpected<dstd::Error>(view.error());
             const auto entry = (*view)->find(key);
             if (entry) sources.push_back({copy.file_index, *entry});
@@ -1864,13 +1868,13 @@ dstd::Expected<ByteView, dstd::Error> ScanCursor::value() {
     sources_.clear();
     if (at_end_) return ByteView{};
     if (fold_ != FoldKind::None) {
-        // Each matching section's cursor already stands on the key.
+        // Each matching segment's cursor already stands on the key.
         for (const std::size_t arm_index : at_key_) {
             const ScopeCursor& cursor = arms_[arm_index].cursor;
             const std::size_t file_index = cursor.copy()->file_index;
-            for (const std::size_t section_index : cursor.matching()) {
+            for (const std::size_t segment_index : cursor.matching()) {
                 sources_.push_back(
-                    {file_index, cursor.cursors_[section_index].entry()});
+                    {file_index, cursor.cursors_[segment_index].entry()});
             }
         }
     } else {
@@ -1905,7 +1909,7 @@ void ScanCursor::next() {
 
 bool ScanCursor::take_error(const ScopeCursor& cursor) {
     if (!cursor.error_) return false;
-    // A row after an unreadable page cannot be trusted, so the scan stops.
+    // A row after an unreadable extent cannot be trusted, so the scan stops.
     error_ = cursor.error_;
     at_end_ = true;
     key_ = {};
@@ -1988,7 +1992,7 @@ void ScanCursor::settle() {
 
 namespace {
 
-/// The heap order: the smaller key first, and on a tie the older section.
+/// The heap order: the smaller key first, and on a tie the older segment.
 struct HeapAfter {
     const dstd::Vector<ByteView>* keys;
     bool operator()(std::size_t a, std::size_t b) const {
@@ -2009,7 +2013,7 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
     begin_ = begin;
     end_ = end;
     error_.reset();
-    sections_.clear();
+    segments_.clear();
     heap_.clear();
     // A range wholly before begin or at or past end yields nothing.
     const auto outside = [&](ByteView first, ByteView last) {
@@ -2018,33 +2022,33 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
     };
     for (const detail::CopyCommit& held : copy.commits) {
         if (outside(held.first_key, held.last_key)) continue;
-        auto held_sections = snapshot.copy_sections(copy, held);
-        if (!held_sections) {
-            error_ = held_sections.error();
+        auto held_segments = snapshot.copy_segments(copy, held);
+        if (!held_segments) {
+            error_ = held_segments.error();
             at_end_ = true;
             key_ = {};
             matching_.clear();
             return;
         }
-        if (*held_sections == nullptr) continue;
-        const dstd::Vector<detail::SectionSlot>& slots =
-            (*held_sections)->sections;
+        if (*held_segments == nullptr) continue;
+        const dstd::Vector<detail::SegmentSlot>& slots =
+            (*held_segments)->segments;
         for (std::size_t i = 0; i < slots.size(); ++i) {
             if (outside(slots[i].first_key, slots[i].last_key)) continue;
-            sections_.push_back({*held_sections, i});
+            segments_.push_back({*held_segments, i});
         }
     }
-    cursors_.assign(sections_.size(), SectionView::Cursor{});
-    keys_.assign(sections_.size(), ByteView{});
-    loaded_.assign(sections_.size(), 0);
-    for (std::size_t i = 0; i < sections_.size(); ++i) {
-        const detail::SectionSlot& section =
-            sections_[i].block->sections[sections_[i].index];
+    cursors_.assign(segments_.size(), SegmentView::Cursor{});
+    keys_.assign(segments_.size(), ByteView{});
+    loaded_.assign(segments_.size(), 0);
+    for (std::size_t i = 0; i < segments_.size(); ++i) {
+        const detail::SegmentSlot& segment =
+            segments_[i].block->segments[segments_[i].index];
         // Its first key at or after begin is at least the larger of the two,
-        // so the heap orders it right before its page is read.
-        keys_[i] = compare_bytes(section.first_key, begin) < 0
+        // so the heap orders it right before its extent is read.
+        keys_[i] = compare_bytes(segment.first_key, begin) < 0
                        ? begin
-                       : section.first_key;
+                       : segment.first_key;
         heap_.push_back(i);
     }
     std::make_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
@@ -2052,8 +2056,8 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
 }
 
 bool ScopeCursor::load(std::size_t index) {
-    const detail::SectionLocation& at = sections_[index];
-    auto view = snapshot_->section_view(snapshot_->files_[copy_->file_index],
+    const detail::SegmentLocation& at = segments_[index];
+    auto view = snapshot_->segment_view(snapshot_->files_[copy_->file_index],
                                         *at.block, at.index);
     if (!view) {
         error_ = view.error();
@@ -2098,7 +2102,7 @@ void ScopeCursor::settle() {
         const std::size_t top = heap_.front();
         if (loaded_[top] == 0) {
             // The bound from the record is the smallest key on the heap, so
-            // the page of this section is the next one to read.
+            // the extent of this segment is the next one to read.
             std::pop_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
             heap_.pop_back();
             if (!load(top)) return;
@@ -2117,7 +2121,7 @@ void ScopeCursor::settle() {
             const std::size_t index = heap_.back();
             heap_.pop_back();
             if (loaded_[index] == 0) {
-                // A section whose bound ties the key may hold it too: read it,
+                // A segment whose bound ties the key may hold it too: read it,
                 // put back what was taken and settle again.
                 if (!load(index)) return;
                 for (const std::size_t taken : matching_) {

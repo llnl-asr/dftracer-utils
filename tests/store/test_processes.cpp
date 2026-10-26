@@ -50,10 +50,10 @@ constexpr int CHILDREN = 8;
 constexpr int RUNTIME_THREADS = 4;
 constexpr int RAW_SCOPES = 20;
 constexpr int FOLD_SCOPES = 20;
-constexpr std::uint32_t PAGE_BYTES = 16 * 1024;
-/// One page, so a commit whose section would cross the page is Busy and the
+constexpr std::uint32_t EXTENT_BYTES = 16 * 1024;
+/// One extent, so a commit whose segment would cross the extent is Busy and the
 /// retry loop runs.
-constexpr std::uint64_t PAGE_QUOTA_BYTES = PAGE_BYTES;
+constexpr std::uint64_t EXTENT_QUOTA_BYTES = EXTENT_BYTES;
 constexpr int RETRY_ATTEMPTS = 4000;
 constexpr std::chrono::seconds CHILD_LIMIT{90};
 constexpr std::chrono::seconds REAP_LIMIT{120};
@@ -534,8 +534,8 @@ void run_child(const std::string& root, int child, int round,
     (void)::close(barrier_read);
 
     WriterOptions options;
-    options.page_size = PAGE_BYTES;
-    options.page_quota_bytes = PAGE_QUOTA_BYTES;
+    options.extent_size = EXTENT_BYTES;
+    options.extent_quota_bytes = EXTENT_QUOTA_BYTES;
     options.commit_bytes = std::uint64_t{1} << 20;
     options.commit_interval = std::chrono::milliseconds{20};
     options.host = dstring("proc");

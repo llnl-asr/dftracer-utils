@@ -16,14 +16,14 @@
 namespace dftracer::utils::store {
 
 /// The key range one commit holds for one copy of a file, and the block that
-/// holds that copy's sections in that commit. A commit listed by summary
-/// without a section block carries an empty handle.
+/// holds that copy's segments in that commit. A commit listed by summary
+/// without a segment block carries an empty handle.
 struct DirectoryCommit {
     std::uint64_t sequence = 0;
     std::uint32_t copy_id = 0;
     ByteView first_key;
     ByteView last_key;
-    BlockHandle sections;
+    BlockHandle segments;
 };
 
 /// One copy of one directory entry. The views point into the directory.
@@ -33,7 +33,7 @@ struct DirectoryCopy {
     std::uint64_t params_hash = 0;
     CopyState state = CopyState::Ready;
     std::uint8_t fold_kind = 0;
-    /// The commits holding a section of the copy, in sequence order.
+    /// The commits holding a segment of the copy, in sequence order.
     dstd::Vector<DirectoryCommit> commits;
 };
 

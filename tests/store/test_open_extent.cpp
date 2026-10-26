@@ -4,9 +4,9 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
-#include <dftracer/utils/store/open_page.h>
-#include <dftracer/utils/store/page_codec.h>
-#include <dftracer/utils/store/section.h>
+#include <dftracer/utils/store/extent_codec.h>
+#include <dftracer/utils/store/open_extent.h>
+#include <dftracer/utils/store/segment.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -51,22 +51,22 @@ using dftracer::utils::ByteView;
 using dftracer::utils::Executor;
 using dftracer::utils::Runtime;
 using store::DataFileWriter;
-using store::PageSection;
-using store::PageWriter;
-using store::SectionBuilder;
-using store::SectionView;
-using store::WrittenPage;
+using store::ExtentSegment;
+using store::ExtentWriter;
+using store::SegmentBuilder;
+using store::SegmentView;
+using store::WrittenExtent;
 
 constexpr std::uint32_t FOUR_KIB = 4096;
 constexpr std::uint32_t SIXTY_FOUR_KIB = 64 * 1024;
 constexpr std::uint32_t EIGHT_KIB = 8 * 1024;
-constexpr std::chrono::milliseconds PAGE_WRITE_DEADLINE{5000};
+constexpr std::chrono::milliseconds EXTENT_WRITE_DEADLINE{5000};
 
 struct TempDir {
     fs::path path;
     TempDir() {
         path = fs::temp_directory_path() /
-               ("dftu_store_open_page_" + std::to_string(::getpid()));
+               ("dftu_store_open_extent_" + std::to_string(::getpid()));
         fs::remove_all(path);
         fs::create_directories(path);
     }
@@ -78,36 +78,37 @@ struct TempDir {
     }
 };
 
-/// Collects the pages the writer reports from its I/O completion threads.
+/// Collects the extents the writer reports from its I/O completion threads.
 struct Collector {
     std::mutex mutex;
     std::condition_variable cv;
-    std::vector<WrittenPage> pages;
+    std::vector<WrittenExtent> extents;
 
-    void add(WrittenPage&& page) {
+    void add(WrittenExtent&& extent) {
         {
             std::lock_guard<std::mutex> lock(mutex);
-            pages.push_back(std::move(page));
+            extents.push_back(std::move(extent));
         }
         cv.notify_all();
     }
 
     bool wait_for(std::size_t count, std::chrono::milliseconds limit) {
         std::unique_lock<std::mutex> lock(mutex);
-        return cv.wait_for(lock, limit, [&] { return pages.size() >= count; });
+        return cv.wait_for(lock, limit,
+                           [&] { return extents.size() >= count; });
     }
 
-    std::vector<WrittenPage> take() {
+    std::vector<WrittenExtent> take() {
         std::lock_guard<std::mutex> lock(mutex);
-        return std::move(pages);
+        return std::move(extents);
     }
 };
 
-void collect_written(void* context, WrittenPage&& page) {
-    static_cast<Collector*>(context)->add(std::move(page));
+void collect_written(void* context, WrittenExtent&& extent) {
+    static_cast<Collector*>(context)->add(std::move(extent));
 }
 
-/// Counts one discarded context; pass the counter itself as the section
+/// Counts one discarded context; pass the counter itself as the segment
 /// context.
 void count_discarded(void* context) {
     static_cast<std::atomic<std::size_t>*>(context)->fetch_add(
@@ -208,9 +209,9 @@ std::uint32_t read_id(const std::uint8_t* in) {
     return static_cast<std::uint32_t>(dftracer::utils::read_u64_le(in));
 }
 
-/// A sealed section whose single entry names `id` and whose value is
+/// A sealed segment whose single entry names `id` and whose value is
 /// `value_bytes` long and derived from `id`.
-std::vector<std::uint8_t> make_section(std::uint32_t id,
+std::vector<std::uint8_t> make_segment(std::uint32_t id,
                                        std::size_t value_bytes) {
     std::uint8_t key[8];
     write_id(key, id);
@@ -219,7 +220,7 @@ std::vector<std::uint8_t> make_section(std::uint32_t id,
     for (std::size_t i = 8; i < value.size(); ++i) {
         value[i] = static_cast<std::uint8_t>((id + i) & 0xFFU);
     }
-    SectionBuilder builder;
+    SegmentBuilder builder;
     builder.add(ByteView(key, sizeof(key)),
                 ByteView(value.data(), value.size()));
     auto sealed = builder.seal(nullptr, nullptr, nullptr);
@@ -227,7 +228,7 @@ std::vector<std::uint8_t> make_section(std::uint32_t id,
     return std::vector<std::uint8_t>(sealed->begin(), sealed->end());
 }
 
-/// A section-shaped payload of exactly `length` bytes that names `id`.
+/// A segment-shaped payload of exactly `length` bytes that names `id`.
 std::vector<std::uint8_t> make_payload(std::uint32_t id, std::size_t length) {
     std::vector<std::uint8_t> bytes(length, 0);
     write_id(bytes.data(), id);
@@ -237,12 +238,12 @@ std::vector<std::uint8_t> make_payload(std::uint32_t id, std::size_t length) {
     return bytes;
 }
 
-void check_payload(const std::vector<std::uint8_t>& page_bytes,
-                   const PageSection& section, std::uint32_t id) {
-    REQUIRE(section.offset_in_page + section.length <= page_bytes.size());
-    const std::uint8_t* at = page_bytes.data() + section.offset_in_page;
+void check_payload(const std::vector<std::uint8_t>& extent_bytes,
+                   const ExtentSegment& segment, std::uint32_t id) {
+    REQUIRE(segment.offset_in_extent + segment.length <= extent_bytes.size());
+    const std::uint8_t* at = extent_bytes.data() + segment.offset_in_extent;
     CHECK(read_id(at) == id);
-    for (std::size_t i = 8; i < section.length; ++i) {
+    for (std::size_t i = 8; i < segment.length; ++i) {
         CHECK(at[i] == static_cast<std::uint8_t>((id * 31U + i) & 0xFFU));
     }
 }
@@ -260,50 +261,51 @@ std::vector<std::uint8_t> read_range(int fd, std::uint64_t offset,
     return bytes;
 }
 
-/// The raw bytes of one written page: its stored bytes, checked against the
-/// page crc, then decoded.
-std::vector<std::uint8_t> read_page_raw(int fd, const WrittenPage& page) {
+/// The raw bytes of one written extent: its stored bytes, checked against the
+/// extent crc, then decoded.
+std::vector<std::uint8_t> read_extent_raw(int fd, const WrittenExtent& extent) {
     const std::vector<std::uint8_t> stored =
-        read_range(fd, page.offset, page.length);
-    CHECK(store::crc32(0, stored.data(), stored.size()) == page.crc);
+        read_range(fd, extent.offset, extent.length);
+    CHECK(store::crc32(0, stored.data(), stored.size()) == extent.crc);
     dstd::Vector<std::uint8_t> bytes(stored.begin(), stored.end());
-    REQUIRE(store::decode_page(bytes).has_value());
+    REQUIRE(store::decode_extent(bytes).has_value());
     return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
-/// Ascending pages, none of them overlapping another.
-void check_page_layout(std::vector<WrittenPage>& pages,
-                       std::uint32_t page_size) {
-    std::sort(pages.begin(), pages.end(),
-              [](const WrittenPage& a, const WrittenPage& b) {
+/// Ascending extents, none of them overlapping another.
+void check_extent_layout(std::vector<WrittenExtent>& extents,
+                         std::uint32_t extent_size) {
+    std::sort(extents.begin(), extents.end(),
+              [](const WrittenExtent& a, const WrittenExtent& b) {
                   return a.offset < b.offset;
               });
-    for (std::size_t i = 0; i < pages.size(); ++i) {
-        CHECK(pages[i].offset % page_size == 0);
-        CHECK(pages[i].length % FOUR_KIB == 0);
-        CHECK(pages[i].length <= page_size);
-        CHECK(!pages[i].sections.empty());
-        CHECK(pages[i].contexts.size() == pages[i].sections.size());
+    for (std::size_t i = 0; i < extents.size(); ++i) {
+        CHECK(extents[i].offset % extent_size == 0);
+        CHECK(extents[i].length % FOUR_KIB == 0);
+        CHECK(extents[i].length <= extent_size);
+        CHECK(!extents[i].segments.empty());
+        CHECK(extents[i].contexts.size() == extents[i].segments.size());
         if (i != 0) {
-            CHECK(pages[i].offset >= pages[i - 1].offset + pages[i - 1].length);
+            CHECK(extents[i].offset >=
+                  extents[i - 1].offset + extents[i - 1].length);
         }
     }
 }
 
-/// Checks every page against the file and reports how often each section id
+/// Checks every extent against the file and reports how often each segment id
 /// was found. `ids` bounds the ids the caller appended.
-void check_pages_on_disk(int fd, const std::vector<WrittenPage>& pages,
-                         std::vector<int>& seen) {
-    for (const WrittenPage& page : pages) {
-        const std::vector<std::uint8_t> bytes = read_page_raw(fd, page);
+void check_extents_on_disk(int fd, const std::vector<WrittenExtent>& extents,
+                           std::vector<int>& seen) {
+    for (const WrittenExtent& extent : extents) {
+        const std::vector<std::uint8_t> bytes = read_extent_raw(fd, extent);
         std::uint64_t previous_end = 0;
-        for (const PageSection& section : page.sections) {
-            CHECK(section.offset_in_page >= previous_end);
-            previous_end = section.offset_in_page + section.length;
+        for (const ExtentSegment& segment : extent.segments) {
+            CHECK(segment.offset_in_extent >= previous_end);
+            previous_end = segment.offset_in_extent + segment.length;
             CHECK(previous_end <= bytes.size());
-            const ByteView view(bytes.data() + section.offset_in_page,
-                                section.length);
-            auto opened = SectionView::open(view);
+            const ByteView view(bytes.data() + segment.offset_in_extent,
+                                segment.length);
+            auto opened = SegmentView::open(view);
             REQUIRE(opened.has_value());
             CHECK(opened->entry_count() == 1);
             auto cursor = opened->lower_bound(ByteView{});
@@ -323,8 +325,8 @@ void check_pages_on_disk(int fd, const std::vector<WrittenPage>& pages,
     }
 }
 
-PageSection section_info(std::uint32_t copy_id, std::uint64_t entry_count) {
-    PageSection info;
+ExtentSegment segment_info(std::uint32_t copy_id, std::uint64_t entry_count) {
+    ExtentSegment info;
     info.copy_id = copy_id;
     info.entry_count = entry_count;
     return info;
@@ -332,7 +334,7 @@ PageSection section_info(std::uint32_t copy_id, std::uint64_t entry_count) {
 
 }  // namespace
 
-TEST_CASE("store open page: one thread fills one namespace") {
+TEST_CASE("store open extent: one thread fills one namespace") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -346,34 +348,34 @@ TEST_CASE("store open page: one thread fills one namespace") {
     CHECK(file->fd() >= 0);
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), SIXTY_FOUR_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), SIXTY_FOUR_KIB,
+                        &collect_written, &collector);
 
-    constexpr std::uint32_t SECTIONS = 1000;
-    for (std::uint32_t id = 0; id < SECTIONS; ++id) {
-        const std::vector<std::uint8_t> bytes = make_section(id, 400);
+    constexpr std::uint32_t SEGMENTS = 1000;
+    for (std::uint32_t id = 0; id < SEGMENTS; ++id) {
+        const std::vector<std::uint8_t> bytes = make_segment(id, 400);
         auto appended = writer.append(1, ByteView(bytes.data(), bytes.size()),
-                                      section_info(7, 1), nullptr);
+                                      segment_info(7, 1), nullptr);
         REQUIRE(appended.has_value());
     }
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(!pages.empty());
-    check_page_layout(pages, SIXTY_FOUR_KIB);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(!extents.empty());
+    check_extent_layout(extents, SIXTY_FOUR_KIB);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    std::vector<int> seen(SECTIONS, 0);
-    check_pages_on_disk(fd, pages, seen);
-    for (std::uint32_t id = 0; id < SECTIONS; ++id) {
+    std::vector<int> seen(SEGMENTS, 0);
+    check_extents_on_disk(fd, extents, seen);
+    for (std::uint32_t id = 0; id < SEGMENTS; ++id) {
         CHECK(seen[id] == 1);
     }
     ::close(fd);
 }
 
-TEST_CASE("store open page: many threads across three namespaces") {
+TEST_CASE("store open extent: many threads across three namespaces") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -386,8 +388,8 @@ TEST_CASE("store open page: many threads across three namespaces") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), SIXTY_FOUR_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), SIXTY_FOUR_KIB,
+                        &collect_written, &collector);
 
     constexpr std::uint32_t THREADS = 16;
     constexpr std::uint32_t PER_THREAD = 2000;
@@ -400,10 +402,10 @@ TEST_CASE("store open page: many threads across three namespaces") {
             for (std::uint32_t i = 0; i < PER_THREAD; ++i) {
                 const std::uint32_t id = t * PER_THREAD + i;
                 const std::uint32_t namespace_id = id % NAMESPACES;
-                const std::vector<std::uint8_t> bytes = make_section(id, 40);
+                const std::vector<std::uint8_t> bytes = make_segment(id, 40);
                 auto appended = writer.append(
                     namespace_id, ByteView(bytes.data(), bytes.size()),
-                    section_info(namespace_id + 1, 1), nullptr);
+                    segment_info(namespace_id + 1, 1), nullptr);
                 if (!appended) ++failures;
             }
         });
@@ -414,29 +416,29 @@ TEST_CASE("store open page: many threads across three namespaces") {
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(!pages.empty());
-    check_page_layout(pages, SIXTY_FOUR_KIB);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(!extents.empty());
+    check_extent_layout(extents, SIXTY_FOUR_KIB);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     const std::uint32_t total = THREADS * PER_THREAD;
     std::vector<int> seen(total, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < total; ++id) {
         CHECK(seen[id] == 1);
     }
     ::close(fd);
 
-    for (const WrittenPage& page : pages) {
-        const std::uint32_t namespace_id = page.sections.front().copy_id - 1;
-        for (const PageSection& section : page.sections) {
-            CHECK(section.copy_id == namespace_id + 1);
+    for (const WrittenExtent& extent : extents) {
+        const std::uint32_t namespace_id = extent.segments.front().copy_id - 1;
+        for (const ExtentSegment& segment : extent.segments) {
+            CHECK(segment.copy_id == namespace_id + 1);
         }
     }
 }
 
-TEST_CASE("store open page: a section of three pages is written alone") {
+TEST_CASE("store open extent: a segment of three extents is written alone") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -449,37 +451,37 @@ TEST_CASE("store open page: a section of three pages is written alone") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
     const std::size_t length = 3U * EIGHT_KIB;
     const std::vector<std::uint8_t> payload = make_payload(11, length);
     REQUIRE(writer
                 .append(1, ByteView(payload.data(), payload.size()),
-                        section_info(1, 5), nullptr)
+                        segment_info(1, 5), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 1);
-    const WrittenPage& page = pages.front();
-    CHECK(page.offset % EIGHT_KIB == 0);
-    CHECK(page.length % FOUR_KIB == 0);
-    REQUIRE(page.sections.size() == 1);
-    CHECK(page.sections.front().offset_in_page == 0);
-    CHECK(page.sections.front().length == length);
-    CHECK(page.sections.front().entry_count == 5);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 1);
+    const WrittenExtent& extent = extents.front();
+    CHECK(extent.offset % EIGHT_KIB == 0);
+    CHECK(extent.length % FOUR_KIB == 0);
+    REQUIRE(extent.segments.size() == 1);
+    CHECK(extent.segments.front().offset_in_extent == 0);
+    CHECK(extent.segments.front().length == length);
+    CHECK(extent.segments.front().entry_count == 5);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> bytes = read_page_raw(fd, page);
+    const std::vector<std::uint8_t> bytes = read_extent_raw(fd, extent);
     CHECK(bytes == payload);
     ::close(fd);
 }
 
 TEST_CASE(
-    "store open page: an exact fit fills the page and one more seals it") {
+    "store open extent: an exact fit fills the extent and one more seals it") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -492,11 +494,11 @@ TEST_CASE(
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
-    // The page keeps room for the header of its stored form.
-    const std::size_t first = EIGHT_KIB - store::PAGE_HEADER_BYTES - 64;
+    // The extent keeps room for the header of its stored form.
+    const std::size_t first = EIGHT_KIB - store::EXTENT_HEADER_BYTES - 64;
     std::vector<std::uint8_t> a = make_payload(1, first);
     std::vector<std::uint8_t> b = make_payload(2, 64);
     std::vector<std::uint8_t> c(1, 0x5AU);
@@ -505,54 +507,54 @@ TEST_CASE(
     int context_b = 0;
     int context_c = 0;
     REQUIRE(writer
-                .append(1, ByteView(a.data(), a.size()), section_info(1, 1),
+                .append(1, ByteView(a.data(), a.size()), segment_info(1, 1),
                         &context_a)
                 .has_value());
     REQUIRE(writer
-                .append(1, ByteView(b.data(), b.size()), section_info(1, 1),
+                .append(1, ByteView(b.data(), b.size()), segment_info(1, 1),
                         &context_b)
                 .has_value());
     REQUIRE(writer
-                .append(1, ByteView(c.data(), c.size()), section_info(1, 1),
+                .append(1, ByteView(c.data(), c.size()), segment_info(1, 1),
                         &context_c)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    check_page_layout(pages, EIGHT_KIB);
-    REQUIRE(pages.size() == 2);
+    std::vector<WrittenExtent> extents = collector.take();
+    check_extent_layout(extents, EIGHT_KIB);
+    REQUIRE(extents.size() == 2);
 
-    const WrittenPage& full = pages[0];
-    REQUIRE(full.sections.size() == 2);
-    CHECK(full.sections[0].offset_in_page == 0);
-    CHECK(full.sections[0].length == first);
-    CHECK(full.sections[1].offset_in_page == first);
-    CHECK(full.sections[1].length == 64);
+    const WrittenExtent& full = extents[0];
+    REQUIRE(full.segments.size() == 2);
+    CHECK(full.segments[0].offset_in_extent == 0);
+    CHECK(full.segments[0].length == first);
+    CHECK(full.segments[1].offset_in_extent == first);
+    CHECK(full.segments[1].length == 64);
     CHECK(full.length <= EIGHT_KIB);
     REQUIRE(full.contexts.size() == 2);
     CHECK(full.contexts[0] == &context_a);
     CHECK(full.contexts[1] == &context_b);
 
-    const WrittenPage& rest = pages[1];
-    REQUIRE(rest.sections.size() == 1);
-    CHECK(rest.sections[0].offset_in_page == 0);
-    CHECK(rest.sections[0].length == 1);
+    const WrittenExtent& rest = extents[1];
+    REQUIRE(rest.segments.size() == 1);
+    CHECK(rest.segments[0].offset_in_extent == 0);
+    CHECK(rest.segments[0].length == 1);
     CHECK(rest.length == FOUR_KIB);
     REQUIRE(rest.contexts.size() == 1);
     CHECK(rest.contexts[0] == &context_c);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> full_bytes = read_page_raw(fd, full);
-    check_payload(full_bytes, full.sections[0], 1);
-    check_payload(full_bytes, full.sections[1], 2);
-    const std::vector<std::uint8_t> rest_bytes = read_page_raw(fd, rest);
-    CHECK(rest_bytes[rest.sections[0].offset_in_page] == 0x5AU);
+    const std::vector<std::uint8_t> full_bytes = read_extent_raw(fd, full);
+    check_payload(full_bytes, full.segments[0], 1);
+    check_payload(full_bytes, full.segments[1], 2);
+    const std::vector<std::uint8_t> rest_bytes = read_extent_raw(fd, rest);
+    CHECK(rest_bytes[rest.segments[0].offset_in_extent] == 0x5AU);
     ::close(fd);
 }
 
-TEST_CASE("store open page: a failed write latches and reports no page") {
+TEST_CASE("store open extent: a failed write latches and reports no extent") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -567,13 +569,13 @@ TEST_CASE("store open page: a failed write latches and reports no page") {
 
     Collector collector;
     std::atomic<std::size_t> discarded{0};
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector, &count_discarded);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector, &count_discarded);
 
     const std::vector<std::uint8_t> payload = make_payload(1, 1024);
     REQUIRE(writer
                 .append(1, ByteView(payload.data(), payload.size()),
-                        section_info(1, 1), &discarded)
+                        segment_info(1, 1), &discarded)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
 
@@ -581,12 +583,12 @@ TEST_CASE("store open page: a failed write latches and reports no page") {
     REQUIRE_FALSE(idle.has_value());
     CHECK(idle.error().is(dstd::Condition::Io));
     CHECK(collector.take().empty());
-    // The page write failed, so no record will ever name that section and the
+    // The extent write failed, so no record will ever name that segment and the
     // failure path is the only one that can hand its context back.
     CHECK(discarded.load() == 1);
 
     auto later = writer.append(21, ByteView(payload.data(), payload.size()),
-                               section_info(1, 1), nullptr);
+                               segment_info(1, 1), nullptr);
     REQUIRE_FALSE(later.has_value());
     CHECK(later.error().is(dstd::Condition::Io));
     auto sealed = writer.seal_all();
@@ -594,7 +596,8 @@ TEST_CASE("store open page: a failed write latches and reports no page") {
     CHECK(sealed.error().is(dstd::Condition::Io));
 }
 
-TEST_CASE("store open page: the pages no write took hand back their contexts") {
+TEST_CASE(
+    "store open extent: the extents no write took hand back their contexts") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -609,25 +612,25 @@ TEST_CASE("store open page: the pages no write took hand back their contexts") {
     Collector collector;
     std::atomic<std::size_t> discarded{0};
     {
-        PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                          &collect_written, &collector, &count_discarded);
-        constexpr std::uint32_t SECTIONS = 3;
-        for (std::uint32_t id = 0; id < SECTIONS; ++id) {
-            const std::vector<std::uint8_t> bytes = make_section(id, 120);
+        ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                            &collect_written, &collector, &count_discarded);
+        constexpr std::uint32_t SEGMENTS = 3;
+        for (std::uint32_t id = 0; id < SEGMENTS; ++id) {
+            const std::vector<std::uint8_t> bytes = make_segment(id, 120);
             REQUIRE(writer
                         .append(1, ByteView(bytes.data(), bytes.size()),
-                                section_info(1, 1), &discarded)
+                                segment_info(1, 1), &discarded)
                         .has_value());
         }
         CHECK(discarded.load() == 0);
     }
-    // Nothing sealed the page, so its contexts are the writer's to hand back.
+    // Nothing sealed the extent, so its contexts are the writer's to hand back.
     CHECK(discarded.load() == 3);
     CHECK(collector.take().empty());
 }
 
 TEST_CASE(
-    "store open page: the file hands out aligned ranges from one counter") {
+    "store open extent: the file hands out aligned ranges from one counter") {
     TempDir dir;
     const fs::path file_path = dir.path / "data.dfs";
     auto file = DataFileWriter::create(file_path.string(), SIXTY_FOUR_KIB,
@@ -640,16 +643,16 @@ TEST_CASE(
     CHECK(file->reserve_range(20, FOUR_KIB) == SIXTY_FOUR_KIB + FOUR_KIB);
 
     const std::vector<std::uint8_t> payload = make_payload(4, 512);
-    auto page = file->append_page(ByteView(payload.data(), payload.size()));
-    REQUIRE(page.has_value());
-    CHECK(page->offset == 2 * SIXTY_FOUR_KIB);
-    CHECK(page->length <= store::PAGE_HEADER_BYTES + payload.size());
+    auto extent = file->append_extent(ByteView(payload.data(), payload.size()));
+    REQUIRE(extent.has_value());
+    CHECK(extent->offset == 2 * SIXTY_FOUR_KIB);
+    CHECK(extent->length <= store::EXTENT_HEADER_BYTES + payload.size());
     auto big = file->append_big(ByteView(payload.data(), payload.size()));
     REQUIRE(big.has_value());
     CHECK(big->offset == 2 * SIXTY_FOUR_KIB + FOUR_KIB);
 }
 
-TEST_CASE("store open page: stress a small page from many threads") {
+TEST_CASE("store open extent: stress a small extent from many threads") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -662,8 +665,8 @@ TEST_CASE("store open page: stress a small page from many threads") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
     constexpr std::uint32_t THREADS = 32;
     constexpr std::uint32_t PER_THREAD = 1563;
@@ -674,10 +677,10 @@ TEST_CASE("store open page: stress a small page from many threads") {
         threads.emplace_back([&, t] {
             for (std::uint32_t i = 0; i < PER_THREAD; ++i) {
                 const std::uint32_t id = t * PER_THREAD + i;
-                const std::vector<std::uint8_t> bytes = make_section(id, 80);
+                const std::vector<std::uint8_t> bytes = make_segment(id, 80);
                 auto appended =
                     writer.append(1, ByteView(bytes.data(), bytes.size()),
-                                  section_info(1, 1), nullptr);
+                                  segment_info(1, 1), nullptr);
                 if (!appended) ++failures;
             }
         });
@@ -688,22 +691,22 @@ TEST_CASE("store open page: stress a small page from many threads") {
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(!pages.empty());
-    check_page_layout(pages, EIGHT_KIB);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(!extents.empty());
+    check_extent_layout(extents, EIGHT_KIB);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     const std::uint32_t total = THREADS * PER_THREAD;
     std::vector<int> seen(total, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < total; ++id) {
         CHECK(seen[id] == 1);
     }
     ::close(fd);
 }
 
-TEST_CASE("store open page: a short write is finished with resubmissions") {
+TEST_CASE("store open extent: a short write is finished with resubmissions") {
     Runtime runtime(1);
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::ShortWrite);
 
@@ -714,31 +717,31 @@ TEST_CASE("store open page: a short write is finished with resubmissions") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
-    const std::vector<std::uint8_t> bytes = make_section(3, 200);
+    const std::vector<std::uint8_t> bytes = make_segment(3, 200);
     REQUIRE(writer
                 .append(1, ByteView(bytes.data(), bytes.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
     CHECK(backend.completions() > 1);
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 1);
-    CHECK(pages.front().length == FOUR_KIB);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 1);
+    CHECK(extents.front().length == FOUR_KIB);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     std::vector<int> seen(4, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     CHECK(seen[3] == 1);
     ::close(fd);
 }
 
-TEST_CASE("store open page: an interrupted write is retried in full") {
+TEST_CASE("store open extent: an interrupted write is retried in full") {
     Runtime runtime(1);
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::EintrOnce);
 
@@ -749,30 +752,30 @@ TEST_CASE("store open page: an interrupted write is retried in full") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
-    const std::vector<std::uint8_t> bytes = make_section(4, 300);
+    const std::vector<std::uint8_t> bytes = make_segment(4, 300);
     REQUIRE(writer
                 .append(1, ByteView(bytes.data(), bytes.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
     CHECK(backend.completions() > 1);
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 1);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 1);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     std::vector<int> seen(5, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     CHECK(seen[4] == 1);
     ::close(fd);
 }
 
-TEST_CASE("store open page: a zero write result latches an Io error") {
+TEST_CASE("store open extent: a zero write result latches an Io error") {
     Runtime runtime(1);
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::ZeroOnce);
 
@@ -783,13 +786,13 @@ TEST_CASE("store open page: a zero write result latches an Io error") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
-    const std::vector<std::uint8_t> bytes = make_section(5, 128);
+    const std::vector<std::uint8_t> bytes = make_segment(5, 128);
     REQUIRE(writer
                 .append(1, ByteView(bytes.data(), bytes.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
 
@@ -799,7 +802,7 @@ TEST_CASE("store open page: a zero write result latches an Io error") {
     CHECK(collector.take().empty());
 }
 
-TEST_CASE("store open page: a page write needs the backend flush") {
+TEST_CASE("store open extent: an extent write needs the backend flush") {
     Runtime runtime(1);
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::None);
 
@@ -810,31 +813,32 @@ TEST_CASE("store open page: a page write needs the backend flush") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
-    const std::vector<std::uint8_t> bytes = make_section(6, 96);
+    const std::vector<std::uint8_t> bytes = make_segment(6, 96);
     REQUIRE(writer
                 .append(1, ByteView(bytes.data(), bytes.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
-    REQUIRE(collector.wait_for(1, PAGE_WRITE_DEADLINE));
+    REQUIRE(collector.wait_for(1, EXTENT_WRITE_DEADLINE));
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 1);
-    CHECK(pages.front().length == FOUR_KIB);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 1);
+    CHECK(extents.front().length == FOUR_KIB);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     std::vector<int> seen(7, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     CHECK(seen[6] == 1);
     ::close(fd);
 }
 
-TEST_CASE("store open page: a section of exactly one page is written alone") {
+TEST_CASE(
+    "store open extent: a segment of exactly one extent is written alone") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -847,34 +851,34 @@ TEST_CASE("store open page: a section of exactly one page is written alone") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
     const std::vector<std::uint8_t> payload = make_payload(11, EIGHT_KIB);
     REQUIRE(writer
                 .append(1, ByteView(payload.data(), payload.size()),
-                        section_info(1, 5), nullptr)
+                        segment_info(1, 5), nullptr)
                 .has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 1);
-    const WrittenPage& page = pages.front();
-    CHECK(page.offset % EIGHT_KIB == 0);
-    CHECK(page.length % FOUR_KIB == 0);
-    REQUIRE(page.sections.size() == 1);
-    CHECK(page.sections.front().offset_in_page == 0);
-    CHECK(page.sections.front().length == EIGHT_KIB);
-    CHECK(page.sections.front().entry_count == 5);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 1);
+    const WrittenExtent& extent = extents.front();
+    CHECK(extent.offset % EIGHT_KIB == 0);
+    CHECK(extent.length % FOUR_KIB == 0);
+    REQUIRE(extent.segments.size() == 1);
+    CHECK(extent.segments.front().offset_in_extent == 0);
+    CHECK(extent.segments.front().length == EIGHT_KIB);
+    CHECK(extent.segments.front().entry_count == 5);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> bytes = read_page_raw(fd, page);
+    const std::vector<std::uint8_t> bytes = read_extent_raw(fd, extent);
     CHECK(bytes == payload);
     ::close(fd);
 }
 
-TEST_CASE("store open page: appends concurrent with seal_all land once") {
+TEST_CASE("store open extent: appends concurrent with seal_all land once") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -887,8 +891,8 @@ TEST_CASE("store open page: appends concurrent with seal_all land once") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
     constexpr std::uint32_t APPENDERS = 8;
     constexpr std::uint32_t SEALERS = 2;
@@ -901,10 +905,10 @@ TEST_CASE("store open page: appends concurrent with seal_all land once") {
         threads.emplace_back([&, t] {
             for (std::uint32_t i = 0; i < PER_THREAD; ++i) {
                 const std::uint32_t id = t * PER_THREAD + i;
-                const std::vector<std::uint8_t> bytes = make_section(id, 40);
+                const std::vector<std::uint8_t> bytes = make_segment(id, 40);
                 auto appended =
                     writer.append(1, ByteView(bytes.data(), bytes.size()),
-                                  section_info(1, 1), nullptr);
+                                  segment_info(1, 1), nullptr);
                 if (!appended) ++failures;
             }
         });
@@ -926,22 +930,23 @@ TEST_CASE("store open page: appends concurrent with seal_all land once") {
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(!pages.empty());
-    check_page_layout(pages, EIGHT_KIB);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(!extents.empty());
+    check_extent_layout(extents, EIGHT_KIB);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     const std::uint32_t total = APPENDERS * PER_THREAD;
     std::vector<int> seen(total, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     for (std::uint32_t id = 0; id < total; ++id) {
         CHECK(seen[id] == 1);
     }
     ::close(fd);
 }
 
-TEST_CASE("store open page: an append on a sealed page goes to the next page") {
+TEST_CASE(
+    "store open extent: an append on a sealed extent goes to the next extent") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -954,39 +959,41 @@ TEST_CASE("store open page: an append on a sealed page goes to the next page") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
     const std::vector<std::uint8_t> first = make_payload(1, 300);
     const std::vector<std::uint8_t> second = make_payload(2, 300);
     REQUIRE(writer
                 .append(1, ByteView(first.data(), first.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
-    REQUIRE(store::PageWriterTestHook::seal_in_place(writer, 1));
+    REQUIRE(store::ExtentWriterTestHook::seal_in_place(writer, 1));
     REQUIRE(writer
                 .append(1, ByteView(second.data(), second.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
     REQUIRE(writer.seal_all().has_value());
     REQUIRE(writer.wait_idle().has_value());
 
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 2);
-    check_page_layout(pages, EIGHT_KIB);
-    REQUIRE(pages[0].sections.size() == 1);
-    REQUIRE(pages[1].sections.size() == 1);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 2);
+    check_extent_layout(extents, EIGHT_KIB);
+    REQUIRE(extents[0].segments.size() == 1);
+    REQUIRE(extents[1].segments.size() == 1);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> first_bytes = read_page_raw(fd, pages[0]);
-    check_payload(first_bytes, pages[0].sections[0], 1);
-    const std::vector<std::uint8_t> second_bytes = read_page_raw(fd, pages[1]);
-    check_payload(second_bytes, pages[1].sections[0], 2);
+    const std::vector<std::uint8_t> first_bytes =
+        read_extent_raw(fd, extents[0]);
+    check_payload(first_bytes, extents[0].segments[0], 1);
+    const std::vector<std::uint8_t> second_bytes =
+        read_extent_raw(fd, extents[1]);
+    check_payload(second_bytes, extents[1].segments[0], 2);
     ::close(fd);
 }
 
-TEST_CASE("store open page: sealing an empty page holds no buffer") {
+TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
     Runtime runtime(4);
     auto* executor = runtime.executor();
     REQUIRE(executor->has_io_backend());
@@ -999,33 +1006,33 @@ TEST_CASE("store open page: sealing an empty page holds no buffer") {
     REQUIRE(file.has_value());
 
     Collector collector;
-    PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
-                      &collect_written, &collector);
+    ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
+                        &collect_written, &collector);
 
-    const std::vector<std::uint8_t> bytes = make_section(7, 120);
+    const std::vector<std::uint8_t> bytes = make_segment(7, 120);
     REQUIRE(writer
                 .append(1, ByteView(bytes.data(), bytes.size()),
-                        section_info(1, 1), nullptr)
+                        segment_info(1, 1), nullptr)
                 .has_value());
 
     constexpr int SEALS = 2000;
     for (int i = 0; i < SEALS; ++i) {
         REQUIRE(writer.seal_all().has_value());
     }
-    CHECK(store::PageWriterTestHook::retired_bytes(writer) <
+    CHECK(store::ExtentWriterTestHook::retired_bytes(writer) <
           2 * std::size_t{EIGHT_KIB});
-    // Sealing an empty page retires nothing, so 2000 seals leave only the page
-    // that held the append.
-    CHECK(store::PageWriterTestHook::retired_pages(writer) <= 2);
+    // Sealing an empty extent retires nothing, so 2000 seals leave only the
+    // extent that held the append.
+    CHECK(store::ExtentWriterTestHook::retired_extents(writer) <= 2);
 
     REQUIRE(writer.wait_idle().has_value());
-    std::vector<WrittenPage> pages = collector.take();
-    REQUIRE(pages.size() == 1);
+    std::vector<WrittenExtent> extents = collector.take();
+    REQUIRE(extents.size() == 1);
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
     std::vector<int> seen(8, 0);
-    check_pages_on_disk(fd, pages, seen);
+    check_extents_on_disk(fd, extents, seen);
     CHECK(seen[7] == 1);
     ::close(fd);
 }

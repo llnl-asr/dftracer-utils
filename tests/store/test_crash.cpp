@@ -2,9 +2,9 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/data_file.h>
+#include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/io_fault.h>
-#include <dftracer/utils/store/page_codec.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
@@ -40,10 +40,10 @@ using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
 
-constexpr std::uint32_t PAGE_BYTES = 4 * 1024;
+constexpr std::uint32_t EXTENT_BYTES = 4 * 1024;
 constexpr std::uint64_t COMMIT_BYTES = 4 * 1024;
 constexpr std::chrono::milliseconds COMMIT_INTERVAL{20};
-constexpr std::uint64_t PAGE_QUOTA_BYTES = 4ULL * PAGE_BYTES;
+constexpr std::uint64_t EXTENT_QUOTA_BYTES = 4ULL * EXTENT_BYTES;
 constexpr int RUNTIME_THREADS = 8;
 constexpr int COROUTINES = 16;
 constexpr int ROUNDS = 20;
@@ -53,9 +53,9 @@ constexpr int DURABLE_EVERY = 4;
 constexpr int TAIL_COMMITS = 45;
 constexpr std::size_t RAW_KEYS = 1;
 constexpr std::size_t RAW_VALUE_BYTES = 1000;
-/// A raw value longer than the format's big-value bound: its section holds a
+/// A raw value longer than the format's big-value bound: its segment holds a
 /// reference and the bytes go to a range of their own, so a lost big value is a
-/// loss the reader has to answer for without its page.
+/// loss the reader has to answer for without its extent.
 constexpr std::size_t BIG_VALUE_LENGTH = store::BIG_VALUE_BYTES + 1;
 constexpr std::size_t FOLD_KEYS = 1;
 constexpr int RETRY_ATTEMPTS = 4000;
@@ -63,13 +63,13 @@ constexpr std::chrono::seconds TASK_LIMIT{120};
 /// Images per kill point of the lost and the reordered variants.
 constexpr std::size_t LOST_SEEDS = 3;
 constexpr std::size_t REORDER_SEEDS = 2;
-/// A torn write keeps a prefix: a whole number of 512-byte units for a page,
+/// A torn write keeps a prefix: a whole number of 512-byte units for an extent,
 /// a record or a tail, and any prefix up to the end of the tail fields for a
 /// header, the one write that changes bytes of an earlier write in place.
 constexpr std::uint64_t TEAR_UNIT = 512;
 /// The header crc field: bytes [12, 16) of a data file header.
 constexpr std::uint64_t HEADER_CRC_BYTES = 16;
-/// Reference R_m carries the header of its m-th commit, so a page of the log
+/// Reference R_m carries the header of its m-th commit, so an extent of the log
 /// that no applied record names cannot change a dump.
 constexpr std::size_t FAILURE_REPORTS = 4;
 
@@ -400,7 +400,7 @@ std::string group_text(const std::string& space, const store::ScopeKey& scope) {
 }
 
 /// The dump of one image, or why the reader refused it: a scan of a copy whose
-/// page or big value is gone may fail instead of reading Bad.
+/// extent or big value is gone may fail instead of reading Bad.
 struct Dumped {
     bool ok = false;
     std::string error;
@@ -478,11 +478,11 @@ std::uint64_t whole_length(const io_fault::Event& event) {
     return is_sync(event) ? 0 : event.length;
 }
 
-/// The bytes one event wrote: a page's range of the finished file, because a
-/// page is never rewritten, or the bytes the log copied.
+/// The bytes one event wrote: an extent's range of the finished file, because a
+/// extent is never rewritten, or the bytes the log copied.
 const std::uint8_t* event_bytes(const io_fault::Event& event,
                                 const std::string& final_bytes) {
-    if (event.kind == io_fault::WriteKind::Page) {
+    if (event.kind == io_fault::WriteKind::Extent) {
         return reinterpret_cast<const std::uint8_t*>(final_bytes.data()) +
                event.offset;
     }
@@ -561,7 +561,7 @@ std::size_t last_write_below(const dstd::Vector<io_fault::Event>& log,
 /// One event per line, for a failure report.
 std::string log_text(const dstd::Vector<io_fault::Event>& log) {
     static const char* const KINDS[] = {"header", "record",  "big",
-                                        "footer", "trailer", "page"};
+                                        "footer", "trailer", "extent"};
     std::string out;
     for (std::size_t i = 0; i < log.size(); ++i) {
         const io_fault::Event& event = log[i];
@@ -593,16 +593,16 @@ store::ScopeKey scope_key_of(const store::ScopeItem& item) {
     return key;
 }
 
-/// The log decoded once: the copies every record announces, the page and big
+/// The log decoded once: the copies every record announces, the extent and big
 /// writes of every sequence, the group of every copy, and which copies are
-/// durable. A page ref keeps the sequence of the commit that wrote it, so a
-/// checkpoint that lists it again does not change which sequence a lost page
-/// withdraws: the reader marks every copy of a page whose sequence does not
+/// durable. An extent ref keeps the sequence of the commit that wrote it, so a
+/// checkpoint that lists it again does not change which sequence a lost extent
+/// withdraws: the reader marks every copy of an extent whose sequence does not
 /// verify Bad.
 struct CrashModel {
     std::vector<std::map<std::uint32_t, std::uint64_t>> copies;
     std::map<std::uint64_t, std::vector<std::pair<std::size_t, std::uint32_t>>>
-        pages;
+        extents;
     std::map<std::uint64_t, std::vector<std::pair<std::size_t, std::uint32_t>>>
         bigs;
     /// The big value runs each sequence lists as blocks of its commit.
@@ -615,11 +615,11 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
                        const std::vector<std::size_t>& record_at,
                        const std::string& final_bytes) {
     CrashModel model;
-    std::map<std::uint64_t, std::size_t> page_event;
+    std::map<std::uint64_t, std::size_t> extent_event;
     std::map<std::uint64_t, std::size_t> big_event;
     for (std::size_t i = 0; i < log.size(); ++i) {
-        if (log[i].kind == io_fault::WriteKind::Page) {
-            page_event[log[i].offset] = i;
+        if (log[i].kind == io_fault::WriteKind::Extent) {
+            extent_event[log[i].offset] = i;
         } else if (log[i].kind == io_fault::WriteKind::Big) {
             big_event[log[i].offset] = i;
         }
@@ -649,40 +649,40 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
                 model.copies[c][copy->local_id] = copy->generation;
                 ids_of_copy[copy->local_id] = {copy->namespace_id,
                                                copy->scope_id};
-            } else if (const auto* page =
-                           std::get_if<store::PageRefItem>(&item)) {
-                if (page->sections.empty()) {
-                    const auto block = big_event.find(page->offset);
+            } else if (const auto* extent =
+                           std::get_if<store::ExtentRefItem>(&item)) {
+                if (extent->segments.empty()) {
+                    const auto block = big_event.find(extent->offset);
                     REQUIRE(block != big_event.end());
-                    model.big_blocks[page->sequence].push_back(block->second);
+                    model.big_blocks[extent->sequence].push_back(block->second);
                     continue;
                 }
-                const auto at = page_event.find(page->offset);
-                REQUIRE(at != page_event.end());
-                REQUIRE(page->offset + page->length <= final_bytes.size());
+                const auto at = extent_event.find(extent->offset);
+                REQUIRE(at != extent_event.end());
+                REQUIRE(extent->offset + extent->length <= final_bytes.size());
                 const auto* stored_at =
                     reinterpret_cast<const std::uint8_t*>(final_bytes.data()) +
-                    page->offset;
+                    extent->offset;
                 dstd::Vector<std::uint8_t> raw(stored_at,
-                                               stored_at + page->length);
-                REQUIRE(store::decode_page(raw).has_value());
+                                               stored_at + extent->length);
+                REQUIRE(store::decode_extent(raw).has_value());
                 const ByteView bytes{raw.data(), raw.size()};
-                for (const store::PageSection& section : page->sections) {
-                    model.pages[page->sequence].emplace_back(at->second,
-                                                             section.copy_id);
-                    auto view = store::SectionView::open(
-                        bytes.subspan(section.offset_in_page, section.length));
+                for (const store::ExtentSegment& segment : extent->segments) {
+                    model.extents[extent->sequence].emplace_back(
+                        at->second, segment.copy_id);
+                    auto view = store::SegmentView::open(bytes.subspan(
+                        segment.offset_in_extent, segment.length));
                     REQUIRE(view.has_value());
-                    store::SectionView::Cursor cursor =
+                    store::SegmentView::Cursor cursor =
                         view->lower_bound(ByteView{});
                     while (!cursor.at_end()) {
-                        const store::SectionView::Entry found = cursor.entry();
+                        const store::SegmentView::Entry found = cursor.entry();
                         if (found.is_big()) {
                             const auto big =
                                 big_event.find(found.big_ref().offset);
                             REQUIRE(big != big_event.end());
-                            model.bigs[page->sequence].emplace_back(
-                                big->second, section.copy_id);
+                            model.bigs[extent->sequence].emplace_back(
+                                big->second, segment.copy_id);
                         }
                         cursor.next();
                     }
@@ -703,7 +703,7 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
 }
 
 /// The reference dumps one image of the lost variant must reach: R_m for its m,
-/// with every copy of L_m reading Bad. L_m holds the copies whose page or big
+/// with every copy of L_m reading Bad. L_m holds the copies whose extent or big
 /// value the image lost and a record among the first m names.
 struct LostOracle {
     std::vector<std::string> expected;
@@ -732,29 +732,30 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
                     current[group] = {entry.first, entry.second};
                 }
             }
-            const auto pages = model.pages.find(m);
-            if (pages != model.pages.end()) {
-                // A page of this sequence does not verify, so the sequence does
-                // not: every copy with a section on a page of it reads Bad.
-                bool page_lost = false;
-                for (const auto& write : pages->second) {
+            const auto extents = model.extents.find(m);
+            if (extents != model.extents.end()) {
+                // An extent of this sequence does not verify, so the sequence
+                // does not: every copy with a segment on an extent of it reads
+                // Bad.
+                bool extent_lost = false;
+                for (const auto& write : extents->second) {
                     if (dropped[write.first] == 0) continue;
-                    page_lost = true;
+                    extent_lost = true;
                     break;
                 }
                 // A big value run is a block of its commit too.
                 const auto blocks = model.big_blocks.find(m);
                 if (blocks != model.big_blocks.end()) {
                     for (const std::size_t write : blocks->second) {
-                        if (dropped[write] != 0) page_lost = true;
+                        if (dropped[write] != 0) extent_lost = true;
                     }
                 }
-                if (page_lost) {
-                    for (const auto& write : pages->second) {
+                if (extent_lost) {
+                    for (const auto& write : extents->second) {
                         lost_copies.insert(write.second);
                     }
                 }
-                for (const auto& write : pages->second) {
+                for (const auto& write : extents->second) {
                     if (model.durable_copies.count(write.second) == 0) continue;
                     if (dropped[write.first] != 0) {
                         ++oracle.durable_lost;
@@ -781,16 +782,16 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
         if (m < lo || m > hi) continue;
         // The newest checkpoint at or before m lists every earlier commit by a
         // summary that names its record: a lost record of one of them makes
-        // its copies Bad, as a lost page does.
+        // its copies Bad, as a lost extent does.
         std::set<std::uint32_t> lost_here = lost_copies;
         const std::size_t base =
             m / store::CHECKPOINT_INTERVAL * store::CHECKPOINT_INTERVAL;
         bool record_lost = false;
         for (std::size_t sequence = 1; sequence < base; ++sequence) {
             if (dropped[record_at[sequence - 1]] == 0) continue;
-            const auto pages = model.pages.find(sequence);
-            if (pages == model.pages.end()) continue;
-            for (const auto& write : pages->second) {
+            const auto extents = model.extents.find(sequence);
+            if (extents == model.extents.end()) continue;
+            for (const auto& write : extents->second) {
                 lost_here.insert(write.second);
                 record_lost = true;
             }
@@ -817,8 +818,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
 
     dftu_utils_test::ScopedTestDir dir("store_crash");
     WriterOptions options;
-    options.page_size = PAGE_BYTES;
-    options.page_quota_bytes = PAGE_QUOTA_BYTES;
+    options.extent_size = EXTENT_BYTES;
+    options.extent_quota_bytes = EXTENT_QUOTA_BYTES;
     options.commit_bytes = COMMIT_BYTES;
     options.commit_interval = COMMIT_INTERVAL;
     options.host = dstring("host");
@@ -858,9 +859,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             });
         await_handle(work, TASK_LIMIT);
         REQUIRE(errors.load() == 0);
-        // A flush after every round: it waits for the page writes of the round
-        // and runs one group commit, so the log holds at least one record per
-        // round whatever the scheduler does with the committer task.
+        // A flush after every round: it waits for the extent writes of the
+        // round and runs one group commit, so the log holds at least one record
+        // per round whatever the scheduler does with the committer task.
         REQUIRE(flush_writer(*writer).has_value());
     };
 
@@ -897,16 +898,16 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
         if (event.kind == io_fault::WriteKind::Header) header_at.push_back(i);
     }
 
-    std::size_t pages = 0;
+    std::size_t extents = 0;
     std::size_t bigs = 0;
     for (const io_fault::Event& event : log) {
-        if (event.kind == io_fault::WriteKind::Page) ++pages;
+        if (event.kind == io_fault::WriteKind::Extent) ++extents;
         if (event.kind == io_fault::WriteKind::Big) ++bigs;
     }
     std::printf(
-        "crash log: events=%zu records=%zu headers=%zu pages=%zu bigs=%zu "
+        "crash log: events=%zu records=%zu headers=%zu extents=%zu bigs=%zu "
         "syncs=%zu file=%zu\n",
-        log.size(), record_at.size(), header_at.size(), pages, bigs, syncs,
+        log.size(), record_at.size(), header_at.size(), extents, bigs, syncs,
         final_bytes.size());
 
     // Coverage: the log has to be rich enough for the oracle to say anything.
@@ -921,8 +922,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     // makes m_lo below a statement about durability: a writer that skips the
     // durable sync says nothing about the commits that must survive.
     CHECK(syncs >= static_cast<std::size_t>(2 * (ROUNDS / DURABLE_EVERY)));
-    // The last write of the run released every page byte it held.
-    CHECK(WriterTestHook::pages(*writer).held == 0);
+    // The last write of the run released every extent byte it held.
+    CHECK(WriterTestHook::extents(*writer).held == 0);
     // One header per commit, plus the one close() writes last.
     REQUIRE(header_at.size() == record_at.size() + 1);
 
@@ -943,7 +944,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     };
 
     // The references: R_m is the in-order image of the first m commits, with
-    // the header of the m-th commit and every page of the log. A commit's
+    // the header of the m-th commit and every extent of the log. A commit's
     // header is written right after its record, so the m-th header names the
     // m-th record.
     std::vector<std::string> texts;
@@ -958,10 +959,10 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             applied.emplace_back(record_at[c], whole_length(log[record_at[c]]));
         }
         for (std::size_t i = 0; i < log.size(); ++i) {
-            // Every page of the log and every big value of it: a write no
+            // Every extent of the log and every big value of it: a write no
             // applied record names cannot change a dump, and both are written
             // once and never rewritten.
-            if (log[i].kind == io_fault::WriteKind::Page ||
+            if (log[i].kind == io_fault::WriteKind::Extent ||
                 log[i].kind == io_fault::WriteKind::Big) {
                 applied.emplace_back(i, whole_length(log[i]));
             }
@@ -988,20 +989,20 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     };
     std::size_t durable_commits = 0;
     for (std::size_t c = 0; c < record_at.size(); ++c) {
-        const auto sequence_pages = model.pages.find(c + 1);
-        if (sequence_pages == model.pages.end()) continue;
+        const auto sequence_extents = model.extents.find(c + 1);
+        if (sequence_extents == model.extents.end()) continue;
         bool names_durable = false;
-        for (const auto& write : sequence_pages->second) {
+        for (const auto& write : sequence_extents->second) {
             if (model.durable_copies.count(write.second) != 0) {
                 names_durable = true;
             }
         }
         if (!names_durable) continue;
         ++durable_commits;
-        // Only this commit's own blocks: a page of a later commit can be
+        // Only this commit's own blocks: an extent of a later commit can be
         // reserved after the sync and before this record.
         std::size_t last_data = 0;
-        for (const auto& write : sequence_pages->second) {
+        for (const auto& write : sequence_extents->second) {
             last_data = std::max(last_data, write.first);
         }
         const auto sequence_bigs = model.big_blocks.find(c + 1);
@@ -1154,15 +1155,15 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                    render_image(applied, log, final_bytes), exact);
         }
 
-        // c. an unsynced record, header, tail, page or big value is lost with
-        // probability 1/2, once per seed. A page written before the record that
-        // names it leaves that record's copies unreadable, and a big value lost
-        // on its own leaves its section pointing at bytes that are gone, so a
-        // dump of the image says which copies read Bad.
+        // c. an unsynced record, header, tail, extent or big value is lost with
+        // probability 1/2, once per seed. An extent written before the record
+        // that names it leaves that record's copies unreadable, and a big value
+        // lost on its own leaves its segment pointing at bytes that are gone,
+        // so a dump of the image says which copies read Bad.
         for (std::size_t seed = 0; seed < LOST_SEEDS; ++seed) {
             std::mt19937_64 rng(seed_of(k, 2, seed));
             std::vector<char> dropped(log.size(), 0);
-            bool dropped_page = false;
+            bool dropped_extent = false;
             std::vector<std::pair<std::size_t, std::uint64_t>> kept;
             kept.reserve(k);
             for (std::size_t i = 0; i < k; ++i) {
@@ -1170,8 +1171,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                 const bool droppable = !is_sync(event) && i >= from;
                 if (droppable && (rng() % 2) == 0) {
                     dropped[i] = 1;
-                    if (event.kind == io_fault::WriteKind::Page) {
-                        dropped_page = true;
+                    if (event.kind == io_fault::WriteKind::Extent) {
+                        dropped_extent = true;
                     }
                     if (event.kind == io_fault::WriteKind::Big) ++big_dropped;
                     continue;
@@ -1182,7 +1183,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                 lost_oracle(model, refs, dropped, record_at, m_lo, m_hi);
             durable_lost += oracle.durable_lost;
             summary_records_lost += oracle.summary_records_lost;
-            if (dropped_page && oracle.durable_kept > 0) ++durable_kept_images;
+            if (dropped_extent && oracle.durable_kept > 0)
+                ++durable_kept_images;
             const std::size_t seen =
                 verify(2, k, m_lo, oracle.expected,
                        render_image(kept, log, final_bytes), SIZE_MAX);
@@ -1253,8 +1255,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     CHECK(stats[3].lowered);
     // The m of a match has to fall where durability says it does.
     CHECK(stats[0].have_m);
-    // A copy that lost its page reads Bad in at least one image, a big value is
-    // dropped in at least one, a durable copy the writer synced before its
+    // A copy that lost its extent reads Bad in at least one image, a big value
+    // is dropped in at least one, a durable copy the writer synced before its
     // record is never one of them, and no image is skipped whole once a commit
     // is durable.
     CHECK(lost_with_copies > 0);

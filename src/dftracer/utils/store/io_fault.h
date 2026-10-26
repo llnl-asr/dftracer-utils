@@ -8,9 +8,9 @@
 
 namespace dftracer::utils::store::io_fault {
 
-/// Which write of a data file an event is. A Page goes through the I/O backend,
-/// so only the range it reserved is recorded and its bytes come from the
-/// finished file; every other write goes through pwrite_all and carries its
+/// Which write of a data file an event is. An Extent goes through the I/O
+/// backend, so only the range it reserved is recorded and its bytes come from
+/// the finished file; every other write goes through pwrite_all and carries its
 /// bytes, because the header is rewritten in place.
 enum class WriteKind : std::uint8_t {
     Header,
@@ -18,14 +18,14 @@ enum class WriteKind : std::uint8_t {
     Big,
     Footer,
     Trailer,
-    Page
+    Extent
 };
 
 /// The number of WriteKind values, the length of a Counts array.
 inline constexpr std::size_t KINDS = 6;
 
 /// What every descriptor wrote and synced since start_counting(), indexed by
-/// WriteKind. A Page counts the range it reserved, which is what it writes.
+/// WriteKind. An Extent counts the range it reserved, which is what it writes.
 /// `max_bytes` is the longest single write of the kind.
 struct Counts {
     std::uint64_t writes[KINDS] = {};

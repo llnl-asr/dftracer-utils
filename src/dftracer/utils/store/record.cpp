@@ -17,7 +17,7 @@ namespace dstd = dftracer::utils::dstd;
 constexpr std::string_view RECORD_MAGIC = "DFTUREC0";
 constexpr std::size_t RECORD_HEADER_BYTES = 40;
 constexpr std::size_t MIN_SCOPE_PATH_BYTES = 25;
-constexpr std::size_t MIN_PAGE_SECTION_BYTES = 22;
+constexpr std::size_t MIN_EXTENT_SEGMENT_BYTES = 22;
 constexpr std::size_t MIN_COMMIT_COPY_BYTES = 6;
 
 dstd::Unexpected<dstd::Error> parse_error() {
@@ -171,33 +171,34 @@ dstd::Expected<DropItem, dstd::Error> decode_drop(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<PageRefItem, dstd::Error> decode_page_ref(ByteView bytes) {
-    PageRefItem item;
-    std::uint32_t section_count = 0;
+dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(ByteView bytes) {
+    ExtentRefItem item;
+    std::uint32_t segment_count = 0;
     std::size_t at = 0;
     if (!read_u64(bytes, at, item.offset) ||
         !read_u32(bytes, at, item.length) || !read_u32(bytes, at, item.crc) ||
         !read_u64(bytes, at, item.sequence) ||
         !read_u8(bytes, at, item.synced) ||
-        !read_u32(bytes, at, section_count)) {
+        !read_u32(bytes, at, segment_count)) {
         return parse_error();
     }
     if (item.sequence == 0 || item.synced > 1) return parse_error();
-    if (!count_fits(bytes.size() - at, section_count, MIN_PAGE_SECTION_BYTES)) {
+    if (!count_fits(bytes.size() - at, segment_count,
+                    MIN_EXTENT_SEGMENT_BYTES)) {
         return parse_error();
     }
-    item.sections.reserve(section_count);
-    for (std::uint32_t i = 0; i < section_count; ++i) {
-        PageSection section;
-        if (!read_u32(bytes, at, section.copy_id) ||
-            !read_u32(bytes, at, section.offset_in_page) ||
-            !read_u32(bytes, at, section.length) ||
-            !read_u64(bytes, at, section.entry_count) ||
-            !read_bytes(bytes, at, section.first_key) ||
-            !read_bytes(bytes, at, section.last_key)) {
+    item.segments.reserve(segment_count);
+    for (std::uint32_t i = 0; i < segment_count; ++i) {
+        ExtentSegment segment;
+        if (!read_u32(bytes, at, segment.copy_id) ||
+            !read_u32(bytes, at, segment.offset_in_extent) ||
+            !read_u32(bytes, at, segment.length) ||
+            !read_u64(bytes, at, segment.entry_count) ||
+            !read_bytes(bytes, at, segment.first_key) ||
+            !read_bytes(bytes, at, segment.last_key)) {
             return parse_error();
         }
-        item.sections.push_back(std::move(section));
+        item.segments.push_back(std::move(segment));
     }
     if (at != bytes.size()) return parse_error();
     return item;
@@ -288,35 +289,35 @@ void encode_commit_ref(dstd::Vector<std::uint8_t>& payload,
     }
 }
 
-void encode_page_ref(dstd::Vector<std::uint8_t>& payload,
-                     const PageRefItem& item) {
+void encode_extent_ref(dstd::Vector<std::uint8_t>& payload,
+                       const ExtentRefItem& item) {
     append_u64_le(payload, item.offset);
     append_u32_le(payload, item.length);
     append_u32_le(payload, item.crc);
     append_u64_le(payload, item.sequence);
     payload.push_back(item.synced);
-    append_u32_le(payload, static_cast<std::uint32_t>(item.sections.size()));
-    for (const PageSection& section : item.sections) {
-        append_u32_le(payload, section.copy_id);
-        append_u32_le(payload, section.offset_in_page);
-        append_u32_le(payload, section.length);
-        append_u64_le(payload, section.entry_count);
-        append_byte_vector(payload, section.first_key);
-        append_byte_vector(payload, section.last_key);
+    append_u32_le(payload, static_cast<std::uint32_t>(item.segments.size()));
+    for (const ExtentSegment& segment : item.segments) {
+        append_u32_le(payload, segment.copy_id);
+        append_u32_le(payload, segment.offset_in_extent);
+        append_u32_le(payload, segment.length);
+        append_u64_le(payload, segment.entry_count);
+        append_byte_vector(payload, segment.first_key);
+        append_byte_vector(payload, segment.last_key);
     }
 }
 
 void encode_file_tail(dstd::Vector<std::uint8_t>& payload,
                       const FileTail& item) {
     append_u32_le(payload, item.format_version);
-    append_u32_le(payload, item.page_size);
+    append_u32_le(payload, item.extent_size);
     append_u64_le(payload, item.writer_random);
     append_u32_le(payload, item.pid);
     append_byte_string(payload, item.host);
     append_byte_string(payload, item.label);
     append_u64_le(payload, item.creation_time);
     append_block_handle(payload, item.items);
-    append_u32_le(payload, item.page_count);
+    append_u32_le(payload, item.extent_count);
     append_u32_le(payload, item.directory_levels);
     append_byte_vector(payload, item.top_table);
 }
@@ -325,19 +326,19 @@ dstd::Expected<FileTail, dstd::Error> decode_file_tail(ByteView bytes) {
     FileTail item;
     std::size_t at = 0;
     if (!read_u32(bytes, at, item.format_version) ||
-        !read_u32(bytes, at, item.page_size) ||
+        !read_u32(bytes, at, item.extent_size) ||
         !read_u64(bytes, at, item.writer_random) ||
         !read_u32(bytes, at, item.pid) || !read_string(bytes, at, item.host) ||
         !read_string(bytes, at, item.label) ||
         !read_u64(bytes, at, item.creation_time) ||
         !read_block_handle(bytes, at, item.items) ||
-        !read_u32(bytes, at, item.page_count) ||
+        !read_u32(bytes, at, item.extent_count) ||
         !read_u32(bytes, at, item.directory_levels) ||
         !read_bytes(bytes, at, item.top_table) || at != bytes.size()) {
         return parse_error();
     }
     // One level at least, so the top table names leaves or middle blocks.
-    if (item.page_size == 0 || item.directory_levels == 0 ||
+    if (item.extent_size == 0 || item.directory_levels == 0 ||
         item.directory_levels > 8) {
         return parse_error();
     }
@@ -363,8 +364,8 @@ namespace {
 /// The checks an item must pass to encode, kept apart from the encoder so
 /// encode_items has none.
 bool item_is_valid(const RecordItem& item) {
-    if (const auto* page = std::get_if<PageRefItem>(&item)) {
-        return page->sequence != 0;
+    if (const auto* extent = std::get_if<ExtentRefItem>(&item)) {
+        return extent->sequence != 0;
     }
     if (const auto* commit = std::get_if<CommitRefItem>(&item)) {
         return commit->sequence != 0 && commit->synced <= 1 &&
@@ -392,9 +393,9 @@ dstd::Vector<std::uint8_t> encode_items(const RecordItems& items) {
         } else if (const auto* drop_item = std::get_if<DropItem>(&item)) {
             encode_drop(payload, *drop_item);
             append_item(body, 4, payload);
-        } else if (const auto* page_ref_item =
-                       std::get_if<PageRefItem>(&item)) {
-            encode_page_ref(payload, *page_ref_item);
+        } else if (const auto* extent_ref_item =
+                       std::get_if<ExtentRefItem>(&item)) {
+            encode_extent_ref(payload, *extent_ref_item);
             append_item(body, 5, payload);
         } else if (const auto* commit_ref_item =
                        std::get_if<CommitRefItem>(&item)) {
@@ -446,7 +447,7 @@ dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body) {
                 break;
             }
             case 5: {
-                auto item = decode_page_ref(item_bytes);
+                auto item = decode_extent_ref(item_bytes);
                 if (!item) return parse_error();
                 items.push_back(std::move(*item));
                 break;

@@ -688,17 +688,17 @@ set(DFTRACER_UTILS_STORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/committer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/crc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/data_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/extent_codec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/extent_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/io_fault.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/open_page.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/page_codec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/page_size.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/open_extent.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/record.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/scope_directory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/section.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/segment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/snapshot.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer_pages.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer_extents.cpp)
 
 create_library(
   NAME

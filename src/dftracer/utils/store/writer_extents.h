@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_STORE_WRITER_PAGES_H
-#define DFTRACER_UTILS_STORE_WRITER_PAGES_H
+#ifndef DFTRACER_UTILS_STORE_WRITER_EXTENTS_H
+#define DFTRACER_UTILS_STORE_WRITER_EXTENTS_H
 
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
@@ -18,10 +18,10 @@ class Executor;
 namespace dftracer::utils::store {
 
 /// What a writer holds now, the most it ever held, and how its takes went.
-struct WriterPagesCounters {
+struct WriterExtentsCounters {
     /// The bytes a take() charges while anything is held.
     std::uint64_t quota = 0;
-    /// The bytes of the sections appended and not yet written.
+    /// The bytes of the segments appended and not yet written.
     std::uint64_t held = 0;
     /// The most `held` ever was.
     std::uint64_t peak_held = 0;
@@ -39,25 +39,25 @@ struct WriterPagesCounters {
 };
 
 /**
- * @brief The section bytes one writer holds: appended to a page and not
+ * @brief The segment bytes one writer holds: appended to an extent and not
  * written yet, charged as a reservation of `pool`.
  *
  * take() refuses with Busy while the bytes of an earlier commit are not
- * written, so the bytes of the pages in flight are the back pressure of the
- * writer. A section that does not fit the quota is still taken when nothing is
+ * written, so the bytes of the extents in flight are the back pressure of the
+ * writer. A segment that does not fit the quota is still taken when nothing is
  * held, because then no write can free room, and reported as TakenOverQuota so
  * the caller knows the quota did not bound it. `held` falls only in release(),
- * which runs as a page write completes, after the writer sealed the page it
- * was in: a commit that returns Busy seals the open pages first, so the bytes
- * it waits for are in flight and not sitting in a page nobody writes.
+ * which runs as an extent write completes, after the writer sealed the extent
+ * it was in: a commit that returns Busy seals the open extents first, so the
+ * bytes it waits for are in flight and not sitting in an extent nobody writes.
  *
- * Bytes a failed page write discarded are never released, so a writer that
+ * Bytes a failed extent write discarded are never released, so a writer that
  * sees such an error must latch() it: every wait ends at the latch.
  *
  * Thread safe. A waiter is resumed through the executor it parked with, never
  * on the thread that released the bytes.
  */
-class WriterPages {
+class WriterExtents {
    public:
     /// What take() did with the bytes.
     enum class Take : std::uint8_t {
@@ -69,12 +69,12 @@ class WriterPages {
 
     /// @p quota_bytes is the most take() charges while anything is held; it
     /// must not be zero.
-    WriterPages(std::uint64_t quota_bytes, memory::Pool& pool) noexcept;
-    ~WriterPages();
-    WriterPages(const WriterPages&) = delete;
-    WriterPages& operator=(const WriterPages&) = delete;
-    WriterPages(WriterPages&&) = delete;
-    WriterPages& operator=(WriterPages&&) = delete;
+    WriterExtents(std::uint64_t quota_bytes, memory::Pool& pool) noexcept;
+    ~WriterExtents();
+    WriterExtents(const WriterExtents&) = delete;
+    WriterExtents& operator=(const WriterExtents&) = delete;
+    WriterExtents(WriterExtents&&) = delete;
+    WriterExtents& operator=(WriterExtents&&) = delete;
 
     /// Charges @p bytes, or refuses them. Never blocks and never waits for
     /// the pool: a refused reservation past the quota is taken anyway.
@@ -104,8 +104,8 @@ class WriterPages {
      */
     class SpaceWait {
        public:
-        SpaceWait(WriterPages& pages, std::uint64_t epoch) noexcept
-            : pages_(&pages), epoch_(epoch) {}
+        SpaceWait(WriterExtents& extents, std::uint64_t epoch) noexcept
+            : extents_(&extents), epoch_(epoch) {}
         SpaceWait(const SpaceWait&) = delete;
         SpaceWait& operator=(const SpaceWait&) = delete;
         /// Drops the parked handle when the waiting coroutine is destroyed
@@ -117,7 +117,7 @@ class WriterPages {
         void await_resume() const noexcept {}
 
        private:
-        WriterPages* pages_;
+        WriterExtents* extents_;
         std::uint64_t epoch_;
         std::coroutine_handle<> parked_;
     };
@@ -130,14 +130,14 @@ class WriterPages {
     /**
      * @brief An announced wait, ended when it is destroyed.
      *
-     * Create it before the waiter seals the open pages. An appender reads
-     * waiting() after its append and then seals the open pages: either it
+     * Create it before the waiter seals the open extents. An appender reads
+     * waiting() after its append and then seals the open extents: either it
      * sees the announce, or the waiter's seal sees its bytes, so no byte a
-     * waiter needs stays in an open page nobody writes.
+     * waiter needs stays in an open extent nobody writes.
      */
     class WaitAnnounce {
        public:
-        explicit WaitAnnounce(WriterPages& pages) noexcept;
+        explicit WaitAnnounce(WriterExtents& extents) noexcept;
         WaitAnnounce(const WaitAnnounce&) = delete;
         WaitAnnounce& operator=(const WaitAnnounce&) = delete;
         ~WaitAnnounce();
@@ -146,14 +146,14 @@ class WriterPages {
         std::uint64_t epoch() const noexcept { return epoch_; }
 
        private:
-        WriterPages* pages_;
+        WriterExtents* extents_;
         std::uint64_t epoch_ = 0;
     };
 
     /// True while a wait is announced.
     bool waiting() const noexcept;
 
-    WriterPagesCounters counters() const;
+    WriterExtentsCounters counters() const;
 
    private:
     /// A parked wait: the coroutine and the executor it must resume through.
@@ -189,4 +189,4 @@ class WriterPages {
 
 }  // namespace dftracer::utils::store
 
-#endif  // DFTRACER_UTILS_STORE_WRITER_PAGES_H
+#endif  // DFTRACER_UTILS_STORE_WRITER_EXTENTS_H

@@ -1,5 +1,5 @@
 #include <dftracer/utils/dstd/little_endian.h>
-#include <dftracer/utils/store/section.h>
+#include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/varint.h>
 
 #include <algorithm>
@@ -14,8 +14,8 @@ namespace dftracer::utils::store {
 namespace {
 
 constexpr std::size_t HEADER_BYTES = 20;
-constexpr std::size_t MIN_SUBPAGE_INDEX_BYTES = 9;
-constexpr std::array<std::uint8_t, 4> SECTION_MAGIC = {'S', 'E', 'C', 'T'};
+constexpr std::size_t MIN_GRANULE_INDEX_BYTES = 9;
+constexpr std::array<std::uint8_t, 4> SEGMENT_MAGIC = {'S', 'E', 'C', 'T'};
 
 dstd::Unexpected<dstd::Error> parse_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
@@ -88,7 +88,7 @@ struct SealedEntry {
 
 }  // namespace
 
-bool SectionView::parse_entry(ByteView bytes, std::size_t& at, std::size_t end,
+bool SegmentView::parse_entry(ByteView bytes, std::size_t& at, std::size_t end,
                               Entry& out) {
     const auto* data = byte_data(bytes);
 
@@ -125,21 +125,21 @@ bool SectionView::parse_entry(ByteView bytes, std::size_t& at, std::size_t end,
     return true;
 }
 
-ByteView SectionBuilder::view_at(std::size_t offset, std::size_t length) const {
+ByteView SegmentBuilder::view_at(std::size_t offset, std::size_t length) const {
     return vector_view(arena_, offset, length);
 }
 
-ByteView SectionBuilder::first_key() const {
+ByteView SegmentBuilder::first_key() const {
     if (entry_count_ == 0) return {};
     return view_at(first_key_offset_, first_key_length_);
 }
 
-ByteView SectionBuilder::last_key() const {
+ByteView SegmentBuilder::last_key() const {
     if (entry_count_ == 0) return {};
     return view_at(last_key_offset_, last_key_length_);
 }
 
-void SectionBuilder::add(ByteView key, ByteView value) {
+void SegmentBuilder::add(ByteView key, ByteView value) {
     Record record;
     record.key_offset = arena_.size();
     if (!key.empty()) {
@@ -159,7 +159,7 @@ void SectionBuilder::add(ByteView key, ByteView value) {
     records_.push_back(record);
 }
 
-dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SegmentBuilder::seal(
     FoldFn fold, PlacerFn placer, void* placer_context) {
     std::sort(records_.begin(), records_.end(),
               [this](const Record& a, const Record& b) {
@@ -255,7 +255,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const std::size_t size = encoded_entry_size(key_of_entry(entries[i]),
                                                     value_of_entry(entries[i]));
-        if (group_bytes != 0 && group_bytes + size > SUBPAGE_BYTES) {
+        if (group_bytes != 0 && group_bytes + size > GRANULE_BYTES) {
             groups.push_back({group_begin, i, group_bytes});
             group_begin = i;
             group_bytes = 0;
@@ -274,7 +274,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
 
     std::size_t body_bytes = 0;
     for (const Group& group : groups) body_bytes += group.bytes;
-    const std::size_t padded = align_up(index_size + body_bytes, SECTION_ALIGN);
+    const std::size_t padded = align_up(index_size + body_bytes, SEGMENT_ALIGN);
 
     if (padded > std::numeric_limits<std::uint32_t>::max() ||
         entries.size() > std::numeric_limits<std::uint32_t>::max() ||
@@ -284,7 +284,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
 
     dstd::Vector<std::uint8_t> out;
     out.reserve(padded);
-    out.insert(out.end(), SECTION_MAGIC.begin(), SECTION_MAGIC.end());
+    out.insert(out.end(), SEGMENT_MAGIC.begin(), SEGMENT_MAGIC.end());
     dftracer::utils::append_u32_le(out, static_cast<std::uint32_t>(padded));
     dftracer::utils::append_u32_le(out,
                                    static_cast<std::uint32_t>(entries.size()));
@@ -295,16 +295,16 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
     out.push_back(0);
     out.push_back(0);
 
-    std::size_t subpage_offset = index_size;
+    std::size_t granule_offset = index_size;
     for (const Group& group : groups) {
         const ByteView first = key_of_entry(entries[group.begin]);
         dftracer::utils::append_u32_le(
-            out, static_cast<std::uint32_t>(subpage_offset));
+            out, static_cast<std::uint32_t>(granule_offset));
         dftracer::utils::append_u32_le(out,
                                        static_cast<std::uint32_t>(group.bytes));
         encode_varint(out, first.size());
         append_bytes(out, first);
-        subpage_offset += group.bytes;
+        granule_offset += group.bytes;
     }
 
     for (const Group& group : groups) {
@@ -347,36 +347,36 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SectionBuilder::seal(
     return out;
 }
 
-dstd::Expected<SectionView, dstd::Error> SectionView::open_index(
+dstd::Expected<SegmentView, dstd::Error> SegmentView::open_index(
     ByteView bytes) {
     if (bytes.size() < HEADER_BYTES) return parse_error();
     const auto* data = byte_data(bytes);
-    if (std::memcmp(data, SECTION_MAGIC.data(), SECTION_MAGIC.size()) != 0) {
+    if (std::memcmp(data, SEGMENT_MAGIC.data(), SEGMENT_MAGIC.size()) != 0) {
         return parse_error();
     }
 
-    const std::uint32_t section_length =
+    const std::uint32_t segment_length =
         dftracer::utils::read_u32_le(data + 4U);
-    if (section_length != bytes.size() ||
-        (section_length % SECTION_ALIGN) != 0) {
+    if (segment_length != bytes.size() ||
+        (segment_length % SEGMENT_ALIGN) != 0) {
         return parse_error();
     }
     const std::uint32_t entry_count = dftracer::utils::read_u32_le(data + 8U);
-    const std::uint32_t subpage_count =
+    const std::uint32_t granule_count =
         dftracer::utils::read_u32_le(data + 12U);
     if (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
         return parse_error();
     }
 
-    if (subpage_count >
-        (bytes.size() - HEADER_BYTES) / MIN_SUBPAGE_INDEX_BYTES) {
+    if (granule_count >
+        (bytes.size() - HEADER_BYTES) / MIN_GRANULE_INDEX_BYTES) {
         return parse_error();
     }
 
     std::size_t at = HEADER_BYTES;
-    dstd::Vector<Subpage> subpages;
-    subpages.reserve(subpage_count);
-    for (std::uint32_t i = 0; i < subpage_count; ++i) {
+    dstd::Vector<Granule> granules;
+    granules.reserve(granule_count);
+    for (std::uint32_t i = 0; i < granule_count; ++i) {
         if (bytes.size() - at < 8U) return parse_error();
         const std::uint32_t offset = dftracer::utils::read_u32_le(data + at);
         at += 4U;
@@ -393,52 +393,52 @@ dstd::Expected<SectionView, dstd::Error> SectionView::open_index(
         if (offset > bytes.size() || length > bytes.size() - offset) {
             return parse_error();
         }
-        subpages.push_back({offset, length, first_key});
+        granules.push_back({offset, length, first_key});
     }
 
-    for (std::size_t i = 1; i < subpages.size(); ++i) {
-        if (compare_bytes(subpages[i - 1].first_key, subpages[i].first_key) >=
+    for (std::size_t i = 1; i < granules.size(); ++i) {
+        if (compare_bytes(granules[i - 1].first_key, granules[i].first_key) >=
             0) {
             return parse_error();
         }
     }
 
-    if (entry_count == 0 && subpage_count == 0) {
-        return SectionView(bytes, std::move(subpages), entry_count);
+    if (entry_count == 0 && granule_count == 0) {
+        return SegmentView(bytes, std::move(granules), entry_count);
     }
-    if (entry_count == 0 || subpage_count == 0) return parse_error();
+    if (entry_count == 0 || granule_count == 0) return parse_error();
 
     std::size_t expected_offset = at;
-    for (const Subpage& subpage : subpages) {
-        if (subpage.offset != expected_offset || subpage.length == 0) {
+    for (const Granule& granule : granules) {
+        if (granule.offset != expected_offset || granule.length == 0) {
             return parse_error();
         }
-        expected_offset = subpage.offset + subpage.length;
+        expected_offset = granule.offset + granule.length;
     }
     if (expected_offset > bytes.size()) return parse_error();
     for (std::size_t i = expected_offset; i < bytes.size(); ++i) {
         if (data[i] != 0) return parse_error();
     }
 
-    return SectionView(bytes, std::move(subpages), entry_count);
+    return SegmentView(bytes, std::move(granules), entry_count);
 }
 
-bool SectionView::check_entries() const {
+bool SegmentView::check_entries() const {
     std::uint64_t seen = 0;
     ByteView previous_key;
     bool have_previous = false;
-    for (const Subpage& subpage : subpages_) {
-        std::size_t entry_at = subpage.offset;
-        const std::size_t subpage_end = subpage.offset + subpage.length;
+    for (const Granule& granule : granules_) {
+        std::size_t entry_at = granule.offset;
+        const std::size_t granule_end = granule.offset + granule.length;
         bool first = true;
-        while (entry_at < subpage_end) {
+        while (entry_at < granule_end) {
             Entry entry;
             const std::size_t before = entry_at;
-            if (!parse_entry(bytes_, entry_at, subpage_end, entry) ||
-                entry_at > subpage_end) {
+            if (!parse_entry(bytes_, entry_at, granule_end, entry) ||
+                entry_at > granule_end) {
                 return false;
             }
-            if (first && compare_bytes(entry.key(), subpage.first_key) != 0) {
+            if (first && compare_bytes(entry.key(), granule.first_key) != 0) {
                 return false;
             }
             if (have_previous &&
@@ -456,14 +456,14 @@ bool SectionView::check_entries() const {
     return seen == entry_count_;
 }
 
-dstd::Expected<SectionView, dstd::Error> SectionView::open(ByteView bytes) {
+dstd::Expected<SegmentView, dstd::Error> SegmentView::open(ByteView bytes) {
     auto view = open_index(bytes);
     if (!view) return dstd::Unexpected<dstd::Error>(view.error());
     if (!view->check_entries()) return parse_error();
     return view;
 }
 
-dstd::Optional<SectionView::Entry> SectionView::find(ByteView key) const {
+dstd::Optional<SegmentView::Entry> SegmentView::find(ByteView key) const {
     Cursor cursor = lower_bound(key);
     if (cursor.at_end()) return dstd::Optional<Entry>{};
     Entry entry = cursor.entry();
@@ -471,97 +471,97 @@ dstd::Optional<SectionView::Entry> SectionView::find(ByteView key) const {
     return entry;
 }
 
-SectionView::Cursor SectionView::lower_bound(ByteView key) const {
-    if (subpages_.empty()) return end();
+SegmentView::Cursor SegmentView::lower_bound(ByteView key) const {
+    if (granules_.empty()) return end();
 
     std::uint32_t low = 0;
-    std::uint32_t high = static_cast<std::uint32_t>(subpages_.size());
+    std::uint32_t high = static_cast<std::uint32_t>(granules_.size());
     while (low < high) {
         const std::uint32_t mid = low + (high - low) / 2U;
-        if (compare_bytes(subpages_[mid].first_key, key) <= 0) {
+        if (compare_bytes(granules_[mid].first_key, key) <= 0) {
             low = mid + 1U;
         } else {
             high = mid;
         }
     }
-    const std::uint32_t subpage = low == 0 ? 0 : low - 1U;
-    const Subpage& selected = subpages_[subpage];
+    const std::uint32_t granule = low == 0 ? 0 : low - 1U;
+    const Granule& selected = granules_[granule];
     const auto* data = byte_data(bytes_);
     std::size_t at = selected.offset;
-    const std::size_t subpage_end = selected.offset + selected.length;
-    while (at < subpage_end) {
+    const std::size_t granule_end = selected.offset + selected.length;
+    while (at < granule_end) {
         const std::size_t before = at;
         Entry entry;
-        if (!parse_entry(bytes_, at, subpage_end, entry)) return end();
+        if (!parse_entry(bytes_, at, granule_end, entry)) return end();
         if (compare_bytes(entry.key(), key) >= 0) {
-            return Cursor(this, subpage, data + before);
+            return Cursor(this, granule, data + before);
         }
     }
-    if (subpage + 1U < static_cast<std::uint32_t>(subpages_.size())) {
-        const Subpage& next = subpages_[subpage + 1U];
-        return Cursor(this, subpage + 1U, data + next.offset);
+    if (granule + 1U < static_cast<std::uint32_t>(granules_.size())) {
+        const Granule& next = granules_[granule + 1U];
+        return Cursor(this, granule + 1U, data + next.offset);
     }
     return end();
 }
 
-SectionView::Cursor SectionView::end() const {
-    return Cursor(this, static_cast<std::uint32_t>(subpages_.size()), nullptr);
+SegmentView::Cursor SegmentView::end() const {
+    return Cursor(this, static_cast<std::uint32_t>(granules_.size()), nullptr);
 }
 
-SectionView::SectionView(ByteView bytes, dstd::Vector<Subpage> subpages,
+SegmentView::SegmentView(ByteView bytes, dstd::Vector<Granule> granules,
                          std::uint64_t entry_count)
     : bytes_(bytes),
-      subpages_(std::move(subpages)),
+      granules_(std::move(granules)),
       entry_count_(entry_count) {}
 
-SectionView::Cursor::Cursor(const SectionView* view, std::uint32_t subpage,
+SegmentView::Cursor::Cursor(const SegmentView* view, std::uint32_t granule,
                             const std::uint8_t* position)
-    : view_(view), subpage_(subpage), position_(position) {
-    if (subpage_ < static_cast<std::uint32_t>(view_->subpages_.size())) {
+    : view_(view), granule_(granule), position_(position) {
+    if (granule_ < static_cast<std::uint32_t>(view_->granules_.size())) {
         const auto* data = byte_data(view_->bytes_);
-        const Subpage& selected = view_->subpages_[subpage_];
+        const Granule& selected = view_->granules_[granule_];
         position_ = position == nullptr ? data + selected.offset : position;
-        subpage_end_ = data + selected.offset + selected.length;
+        granule_end_ = data + selected.offset + selected.length;
     }
 }
 
-bool SectionView::Cursor::at_end() const {
+bool SegmentView::Cursor::at_end() const {
     return view_ == nullptr ||
-           subpage_ >= static_cast<std::uint32_t>(view_->subpages_.size());
+           granule_ >= static_cast<std::uint32_t>(view_->granules_.size());
 }
 
-SectionView::Entry SectionView::Cursor::entry() const {
+SegmentView::Entry SegmentView::Cursor::entry() const {
     Entry out;
     if (at_end()) return out;
     const auto* data = byte_data(view_->bytes_);
     std::size_t at = static_cast<std::size_t>(position_ - data);
-    const std::size_t end = static_cast<std::size_t>(subpage_end_ - data);
+    const std::size_t end = static_cast<std::size_t>(granule_end_ - data);
     if (!parse_entry(view_->bytes_, at, end, out)) return Entry{};
     return out;
 }
 
-void SectionView::Cursor::next() {
+void SegmentView::Cursor::next() {
     if (at_end()) return;
     const auto* data = byte_data(view_->bytes_);
     std::size_t at = static_cast<std::size_t>(position_ - data);
-    const std::size_t end = static_cast<std::size_t>(subpage_end_ - data);
+    const std::size_t end = static_cast<std::size_t>(granule_end_ - data);
     Entry ignored;
     if (!parse_entry(view_->bytes_, at, end, ignored)) {
-        subpage_ = static_cast<std::uint32_t>(view_->subpages_.size());
+        granule_ = static_cast<std::uint32_t>(view_->granules_.size());
         position_ = nullptr;
-        subpage_end_ = nullptr;
+        granule_end_ = nullptr;
         return;
     }
     position_ = data + at;
-    if (position_ == subpage_end_) {
-        ++subpage_;
-        if (subpage_ < static_cast<std::uint32_t>(view_->subpages_.size())) {
-            const Subpage& next = view_->subpages_[subpage_];
+    if (position_ == granule_end_) {
+        ++granule_;
+        if (granule_ < static_cast<std::uint32_t>(view_->granules_.size())) {
+            const Granule& next = view_->granules_[granule_];
             position_ = data + next.offset;
-            subpage_end_ = position_ + next.length;
+            granule_end_ = position_ + next.length;
         } else {
             position_ = nullptr;
-            subpage_end_ = nullptr;
+            granule_end_ = nullptr;
         }
     }
 }

@@ -251,7 +251,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
                   if (a.copy_id != b.copy_id) return a.copy_id < b.copy_id;
                   return a.sequence < b.sequence;
               });
-    // One range per copy and commit, however many sections gave it.
+    // One range per copy and commit, however many segments gave it.
     std::size_t kept = 0;
     for (std::size_t i = 0; i < sorted_commits.size(); ++i) {
         const DirectoryCommit& next = sorted_commits[i];
@@ -323,7 +323,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
                 append_u64_le(data, at->sequence);
                 append_view(data, at->first_key);
                 append_view(data, at->last_key);
-                append_block_handle(data, at->sections);
+                append_block_handle(data, at->segments);
             }
         }
         encode_varint(data, entry.drops.size());
@@ -497,7 +497,7 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
                 !cursor.bytes(commit.first_key) ||
                 !cursor.bytes(commit.last_key) ||
                 !read_block_handle(payload, cursor.position(),
-                                   commit.sections)) {
+                                   commit.segments)) {
                 return parse_error();
             }
             copy.commits.push_back(commit);

@@ -1904,7 +1904,8 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/quantile_store_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/pressure_read_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/slice_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/spill_harness.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/store_bench.cpp)
 
   foreach(bench ${DFTRACER_UTILS_BENCHMARKS})
     get_filename_component(bench_name ${bench} NAME_WE)
@@ -1958,6 +1959,9 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
     add_test(NAME bench_smoke/pressure_read COMMAND pressure_read_bench --smoke)
     set_tests_properties(bench_smoke/pressure_read PROPERTIES LABELS
                                                               bench_smoke)
+
+    add_test(NAME bench_smoke/store COMMAND store_bench --smoke)
+    set_tests_properties(bench_smoke/store PROPERTIES LABELS bench_smoke)
 
     add_executable(memory_probe_test
                    ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/memory_probe_test.cpp)

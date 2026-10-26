@@ -1172,6 +1172,22 @@ TEST_CASE("back pressure keeps pages full under steady load") {
     REQUIRE(pages > 0);
     // The quota refused commits, so the rule was under test.
     if (!SANITIZED) CHECK(busy > 0);
-    // Pages hold at least half a page on average.
-    CHECK(bytes / pages >= PAGE_BYTES / 2);
+    // Pages hold at least half a page of raw section bytes on average; the
+    // stored pages are smaller, since they are compressed.
+    auto reader = store::DataFileReader::open(
+        std::string(writer->path().data(), writer->path().size()));
+    REQUIRE(reader.has_value());
+    auto refs = reader->all_page_refs();
+    REQUIRE(refs.has_value());
+    std::uint64_t raw = 0;
+    std::uint64_t written = 0;
+    for (const store::IndexedPageRef& indexed : *refs) {
+        if (indexed.ref.sections.empty()) continue;
+        ++written;
+        for (const store::PageSection& section : indexed.ref.sections) {
+            raw += section.length;
+        }
+    }
+    REQUIRE(written > 0);
+    CHECK(raw / written >= PAGE_BYTES / 2);
 }

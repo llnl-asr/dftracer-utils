@@ -1598,7 +1598,7 @@ detail::LoadStatus Snapshot::load_page(const detail::FileData& file,
         slot.state.load(std::memory_order_acquire));
     if (again != detail::LoadState::Unknown) return state_of(again);
 
-    auto bytes = file.reader.read_page(ref);
+    auto bytes = file.reader.read_data_page(ref);
     detail::LoadState state = detail::LoadState::Good;
     BlockReads reads;
     if (!bytes) {
@@ -1608,7 +1608,7 @@ detail::LoadStatus Snapshot::load_page(const detail::FileData& file,
                     : detail::LoadState::Bad;
     } else {
         reads.calls = 1;
-        reads.bytes = bytes->size();
+        reads.bytes = ref.length;
         slot.bytes = std::move(*bytes);
     }
     reads_->add(0, 1, reads);

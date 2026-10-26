@@ -2,6 +2,7 @@
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/io_fault.h>
+#include <dftracer/utils/store/page_codec.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/varint.h>
 #include <fcntl.h>
@@ -532,18 +533,17 @@ dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_page(
     ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
-    if (bytes.empty() || bytes.size() > page_size_ ||
-        bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
+    if (bytes.empty() || bytes.size() > page_size_ - PAGE_HEADER_BYTES) {
         return invalid_error();
     }
+    auto stored = encode_page(bytes, 1);
+    if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     // The reservation records the page range; the write below is its bytes.
     const std::uint64_t offset =
-        reserve_range(bytes.size(), page_size_, io_fault::WriteKind::Page);
-    PageRef ref{offset, static_cast<std::uint32_t>(bytes.size()), 0};
-    ref.crc = crc32(0, bytes.data(), bytes.size());
-    auto written =
-        pwrite_all(fd_, reinterpret_cast<const std::uint8_t*>(bytes.data()),
-                   bytes.size(), offset);
+        reserve_range(stored->size(), page_size_, io_fault::WriteKind::Page);
+    PageRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
+    ref.crc = crc32(0, stored->data(), stored->size());
+    auto written = pwrite_all(fd_, stored->data(), stored->size(), offset);
     if (!written) {
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
@@ -1236,6 +1236,15 @@ DataFileReader::read_page(const PageRef& ref) const {
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
+DataFileReader::read_data_page(const PageRef& ref) const {
+    auto bytes = read_page(ref);
+    if (!bytes) return bytes;
+    auto decoded = decode_page(*bytes);
+    if (!decoded) return dstd::Unexpected<dstd::Error>(decoded.error());
+    return bytes;
+}
+
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
 DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
     if (handle.length == 0 && handle.offset == 0 && handle.crc == 0) {
         return dstd::Vector<std::uint8_t>{};
@@ -1359,7 +1368,8 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
             const PageRef& ref = refs[i];
             dstd::Vector<std::uint8_t>& bytes = *targets[i].bytes;
             const bool complete = i < at + served;
-            if (complete && crc32(0, bytes.data(), bytes.size()) == ref.crc) {
+            if (complete && crc32(0, bytes.data(), bytes.size()) == ref.crc &&
+                decode_page(bytes)) {
                 continue;
             }
             // A page past the end of the file, or one whose crc fails, keeps no

@@ -6,6 +6,7 @@
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
+#include <dftracer/utils/store/page_codec.h>
 #include <dftracer/utils/store/section.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
@@ -780,9 +781,10 @@ TEST_SUITE("index store snapshot") {
         store::BigRef ref{};
         bool found_ref = false;
         for (const store::IndexedPageRef& page : page_refs_of(*reader)) {
+            if (page.ref.sections.empty()) continue;
             const store::PageRef page_ref{page.ref.offset, page.ref.length,
                                           page.ref.crc};
-            auto bytes = reader->read_page(page_ref);
+            auto bytes = reader->read_data_page(page_ref);
             REQUIRE(bytes.has_value());
             for (const store::PageSection& section : page.ref.sections) {
                 auto view = SectionView::open(view_of(*bytes).subspan(
@@ -1850,7 +1852,8 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(page_refs_of(*reader).size() == std::size(lengths));
             for (const store::IndexedPageRef& page : page_refs_of(*reader)) {
                 REQUIRE(page.ref.sections.size() == 1);
-                CHECK(page.ref.length > SMALL_PAGE);
+                CHECK(page.ref.sections[0].length >=
+                      SMALL_PAGE - store::PAGE_HEADER_BYTES);
                 CHECK(page.ref.length % SMALL_PAGE == 0);
             }
             REQUIRE(close_writer(*writer).has_value());
@@ -1955,7 +1958,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(page_refs_of(*reader)[0].ref.sections.size() == 1);
         CHECK(page_refs_of(*reader)[0].ref.sections[0].entry_count ==
               BIG_COUNT + 1);
-        CHECK(page_refs_of(*reader)[0].ref.length == PAGE);
+        CHECK(page_refs_of(*reader)[0].ref.sections[0].length == PAGE);
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -2050,7 +2053,11 @@ TEST_SUITE("index store snapshot") {
         // One group commit per scope, so the middle reference is one commit's
         // pages, read in one preadv and crc-checked as one block.
         const store::PageRefItem middle = page_refs_of(*reader)[1].ref;
-        CHECK(middle.length > SMALL_PAGE);
+        std::uint64_t middle_raw = 0;
+        for (const store::PageSection& section : middle.sections) {
+            middle_raw += section.length;
+        }
+        CHECK(middle_raw > SMALL_PAGE);
         CHECK(middle.length % SMALL_PAGE == 0);
 
         std::vector<std::uint8_t> bytes = read_file(path);
@@ -2626,13 +2633,18 @@ TEST_SUITE("index store snapshot") {
         const std::string copied =
             std::filesystem::directory_iterator(cut_dir.str())->path().string();
         std::vector<std::uint8_t> bytes = read_file(copied);
-        REQUIRE(bytes.size() > 2 * SMALL_PAGE);
+        auto copied_reader = DataFileReader::open(copied);
+        REQUIRE(copied_reader.has_value());
+        REQUIRE(page_refs_of(*copied_reader).size() == 1);
+        const store::PageRefItem run = page_refs_of(*copied_reader)[0].ref;
         // Without a group commit per batch every record sits after the pages,
-        // so a cut in the pages leaves no index to recover.
+        // so a cut inside the pages leaves no index to recover.
+        const std::uint64_t cut = run.offset + run.length / 2U;
+        REQUIRE(cut < bytes.size());
         write_file(dir.file("w-cut.dfs"),
                    std::vector<std::uint8_t>(
-                       bytes.begin(), bytes.end() - static_cast<std::ptrdiff_t>(
-                                                        bytes.size() / 3U)));
+                       bytes.begin(),
+                       bytes.begin() + static_cast<std::ptrdiff_t>(cut)));
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         REQUIRE(snapshot->skipped().size() == 1);

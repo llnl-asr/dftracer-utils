@@ -300,6 +300,7 @@ set(TEST_CPP_SOURCES
     store/test_section.cpp
     store/test_file.cpp
     store/test_snapshot.cpp
+    store/test_page_codec.cpp
     store/test_page_size.cpp
     store/test_open_page.cpp
     store/test_concurrent.cpp

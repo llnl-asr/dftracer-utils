@@ -5,6 +5,7 @@
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/open_page.h>
+#include <dftracer/utils/store/page_codec.h>
 #include <dftracer/utils/store/section.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -259,6 +260,17 @@ std::vector<std::uint8_t> read_range(int fd, std::uint64_t offset,
     return bytes;
 }
 
+/// The raw bytes of one written page: its stored bytes, checked against the
+/// page crc, then decoded.
+std::vector<std::uint8_t> read_page_raw(int fd, const WrittenPage& page) {
+    const std::vector<std::uint8_t> stored =
+        read_range(fd, page.offset, page.length);
+    CHECK(store::crc32(0, stored.data(), stored.size()) == page.crc);
+    dstd::Vector<std::uint8_t> bytes(stored.begin(), stored.end());
+    REQUIRE(store::decode_page(bytes).has_value());
+    return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
+}
+
 /// Ascending pages, none of them overlapping another.
 void check_page_layout(std::vector<WrittenPage>& pages,
                        std::uint32_t page_size) {
@@ -283,14 +295,12 @@ void check_page_layout(std::vector<WrittenPage>& pages,
 void check_pages_on_disk(int fd, const std::vector<WrittenPage>& pages,
                          std::vector<int>& seen) {
     for (const WrittenPage& page : pages) {
-        const std::vector<std::uint8_t> bytes =
-            read_range(fd, page.offset, page.length);
-        CHECK(store::crc32(0, bytes.data(), bytes.size()) == page.crc);
+        const std::vector<std::uint8_t> bytes = read_page_raw(fd, page);
         std::uint64_t previous_end = 0;
         for (const PageSection& section : page.sections) {
             CHECK(section.offset_in_page >= previous_end);
             previous_end = section.offset_in_page + section.length;
-            CHECK(previous_end <= page.length);
+            CHECK(previous_end <= bytes.size());
             const ByteView view(bytes.data() + section.offset_in_page,
                                 section.length);
             auto opened = SectionView::open(view);
@@ -455,7 +465,7 @@ TEST_CASE("store open page: a section of three pages is written alone") {
     REQUIRE(pages.size() == 1);
     const WrittenPage& page = pages.front();
     CHECK(page.offset % EIGHT_KIB == 0);
-    CHECK(page.length == length);
+    CHECK(page.length % FOUR_KIB == 0);
     REQUIRE(page.sections.size() == 1);
     CHECK(page.sections.front().offset_in_page == 0);
     CHECK(page.sections.front().length == length);
@@ -463,9 +473,7 @@ TEST_CASE("store open page: a section of three pages is written alone") {
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> bytes =
-        read_range(fd, page.offset, page.length);
-    CHECK(store::crc32(0, bytes.data(), bytes.size()) == page.crc);
+    const std::vector<std::uint8_t> bytes = read_page_raw(fd, page);
     CHECK(bytes == payload);
     ::close(fd);
 }
@@ -487,7 +495,8 @@ TEST_CASE(
     PageWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
                       &collect_written, &collector);
 
-    const std::size_t first = EIGHT_KIB - 64;
+    // The page keeps room for the header of its stored form.
+    const std::size_t first = EIGHT_KIB - store::PAGE_HEADER_BYTES - 64;
     std::vector<std::uint8_t> a = make_payload(1, first);
     std::vector<std::uint8_t> b = make_payload(2, 64);
     std::vector<std::uint8_t> c(1, 0x5AU);
@@ -520,7 +529,7 @@ TEST_CASE(
     CHECK(full.sections[0].length == first);
     CHECK(full.sections[1].offset_in_page == first);
     CHECK(full.sections[1].length == 64);
-    CHECK(full.length == EIGHT_KIB);
+    CHECK(full.length <= EIGHT_KIB);
     REQUIRE(full.contexts.size() == 2);
     CHECK(full.contexts[0] == &context_a);
     CHECK(full.contexts[1] == &context_b);
@@ -535,12 +544,10 @@ TEST_CASE(
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> full_bytes =
-        read_range(fd, full.offset, full.length);
+    const std::vector<std::uint8_t> full_bytes = read_page_raw(fd, full);
     check_payload(full_bytes, full.sections[0], 1);
     check_payload(full_bytes, full.sections[1], 2);
-    const std::vector<std::uint8_t> rest_bytes =
-        read_range(fd, rest.offset, rest.length);
+    const std::vector<std::uint8_t> rest_bytes = read_page_raw(fd, rest);
     CHECK(rest_bytes[rest.sections[0].offset_in_page] == 0x5AU);
     ::close(fd);
 }
@@ -636,7 +643,7 @@ TEST_CASE(
     auto page = file->append_page(ByteView(payload.data(), payload.size()));
     REQUIRE(page.has_value());
     CHECK(page->offset == 2 * SIXTY_FOUR_KIB);
-    CHECK(page->length == payload.size());
+    CHECK(page->length <= store::PAGE_HEADER_BYTES + payload.size());
     auto big = file->append_big(ByteView(payload.data(), payload.size()));
     REQUIRE(big.has_value());
     CHECK(big->offset == 2 * SIXTY_FOUR_KIB + FOUR_KIB);
@@ -854,7 +861,7 @@ TEST_CASE("store open page: a section of exactly one page is written alone") {
     REQUIRE(pages.size() == 1);
     const WrittenPage& page = pages.front();
     CHECK(page.offset % EIGHT_KIB == 0);
-    CHECK(page.length == EIGHT_KIB);
+    CHECK(page.length % FOUR_KIB == 0);
     REQUIRE(page.sections.size() == 1);
     CHECK(page.sections.front().offset_in_page == 0);
     CHECK(page.sections.front().length == EIGHT_KIB);
@@ -862,9 +869,7 @@ TEST_CASE("store open page: a section of exactly one page is written alone") {
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> bytes =
-        read_range(fd, page.offset, page.length);
-    CHECK(store::crc32(0, bytes.data(), bytes.size()) == page.crc);
+    const std::vector<std::uint8_t> bytes = read_page_raw(fd, page);
     CHECK(bytes == payload);
     ::close(fd);
 }
@@ -974,11 +979,9 @@ TEST_CASE("store open page: an append on a sealed page goes to the next page") {
 
     const int fd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
     REQUIRE(fd >= 0);
-    const std::vector<std::uint8_t> first_bytes =
-        read_range(fd, pages[0].offset, pages[0].length);
+    const std::vector<std::uint8_t> first_bytes = read_page_raw(fd, pages[0]);
     check_payload(first_bytes, pages[0].sections[0], 1);
-    const std::vector<std::uint8_t> second_bytes =
-        read_range(fd, pages[1].offset, pages[1].length);
+    const std::vector<std::uint8_t> second_bytes = read_page_raw(fd, pages[1]);
     check_payload(second_bytes, pages[1].sections[0], 2);
     ::close(fd);
 }

@@ -67,8 +67,8 @@ struct PendingBatch {
 /// every later commit reports it.
 class Committer {
    public:
-    /// A group commit starts as soon as `commit_bytes` of page bytes are
-    /// pending, and at the latest `commit_interval` after the first pending
+    /// A group commit starts as soon as `commit_bytes` of section bytes, raw,
+    /// are pending, and at the latest `commit_interval` after the first pending
     /// item arrived.
     Committer(DataFileWriter& file, Executor& executor,
               std::uint64_t commit_bytes,

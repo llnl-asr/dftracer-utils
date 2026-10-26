@@ -243,7 +243,14 @@ void Committer::wake() {
 }
 
 void Committer::add_entry(PendingEntry&& entry) {
-    const std::uint64_t bytes = entry.has_page ? entry.page.length : 0;
+    // Raw section bytes, as the writer quota counts them: the stored length of
+    // a compressed page says little about how much data waits.
+    std::uint64_t bytes = 0;
+    if (entry.has_page) {
+        for (const PageSection& section : entry.page.sections) {
+            bytes += section.length;
+        }
+    }
     bool wake_now = false;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);

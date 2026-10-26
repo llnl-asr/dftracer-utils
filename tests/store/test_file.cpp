@@ -570,7 +570,7 @@ TEST_SUITE("index store file") {
         check_index_equal(*opened, expected);
 
         for (std::size_t i = 0; i < pages.size(); ++i) {
-            auto read = opened->read_page(pages[i]);
+            auto read = opened->read_data_page(pages[i]);
             REQUIRE(read.has_value());
             CHECK(same_bytes(
                 view_of(*read),
@@ -968,9 +968,10 @@ TEST_SUITE("index store file") {
         auto opened = DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
         REQUIRE(opened->index().page_refs.size() == 1);
-        auto read = opened->read_page({opened->index().page_refs[0].ref.offset,
-                                       opened->index().page_refs[0].ref.length,
-                                       opened->index().page_refs[0].ref.crc});
+        auto read =
+            opened->read_data_page({opened->index().page_refs[0].ref.offset,
+                                    opened->index().page_refs[0].ref.length,
+                                    opened->index().page_refs[0].ref.crc});
         REQUIRE_FALSE(read.has_value());
         CHECK(read.error().is(dstd::Condition::Parse));
     }

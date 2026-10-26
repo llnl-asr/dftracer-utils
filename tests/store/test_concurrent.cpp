@@ -729,9 +729,10 @@ TEST_CASE("every page ref carries the sequence of the record that holds it") {
 }
 
 TEST_CASE("group commit by size writes a record once enough page bytes wait") {
-    constexpr std::uint64_t COMMIT_BYTES = 256 * 1024;
+    constexpr std::uint64_t COMMIT_BYTES = 128 * 1024;
     // A 5000-byte value makes each batch a section longer than a page, so every
-    // batch is written as its own run of 8192 bytes.
+    // batch is written as its own run; the commit size counts its raw section
+    // bytes, about 5 KB, so 16 batches stay below COMMIT_BYTES and 40 pass it.
     constexpr int QUIET_BATCHES = 16;
     constexpr int HELD_BATCHES = 40;
 

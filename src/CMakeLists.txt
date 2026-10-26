@@ -691,6 +691,7 @@ set(DFTRACER_UTILS_STORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/io_fault.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/open_page.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/page_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/page_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/record.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/scope_directory.cpp

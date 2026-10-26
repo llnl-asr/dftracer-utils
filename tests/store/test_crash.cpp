@@ -4,6 +4,7 @@
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/io_fault.h>
+#include <dftracer/utils/store/page_codec.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
@@ -659,10 +660,13 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
                 const auto at = page_event.find(page->offset);
                 REQUIRE(at != page_event.end());
                 REQUIRE(page->offset + page->length <= final_bytes.size());
-                const ByteView bytes{
+                const auto* stored_at =
                     reinterpret_cast<const std::uint8_t*>(final_bytes.data()) +
-                        page->offset,
-                    page->length};
+                    page->offset;
+                dstd::Vector<std::uint8_t> raw(stored_at,
+                                               stored_at + page->length);
+                REQUIRE(store::decode_page(raw).has_value());
+                const ByteView bytes{raw.data(), raw.size()};
                 for (const store::PageSection& section : page->sections) {
                     model.pages[page->sequence].emplace_back(at->second,
                                                              section.copy_id);

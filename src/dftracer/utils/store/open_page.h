@@ -26,10 +26,11 @@ class Executor;
 namespace dftracer::utils::store {
 
 /// One written block of a data file: a page of sections, or the run of a
-/// section that does not fit in a page. `length` is the true length rounded up
-/// to 4096 and is what the file holds at `offset`; the bytes past the last
-/// section are zero, and `crc` covers all `length` bytes. `contexts` runs
-/// parallel to `sections` and holds the context the appender gave for each.
+/// section that does not fit in a page, in its stored form (page_codec.h).
+/// `length` is the stored length rounded up to 4096 and is what the file holds
+/// at `offset`; `crc` covers all `length` bytes, and section offsets count from
+/// the raw bytes. `contexts` runs parallel to `sections` and holds the context
+/// the appender gave for each.
 struct WrittenPage {
     std::uint64_t offset = 0;
     std::uint32_t length = 0;

@@ -865,8 +865,9 @@ struct Bench {
             << "# page_size=" << page_size << " backend=" << backend
             << " fs=" << filesystem_name(dftracer::utils::filesystem_kind(root))
             << " dir=" << root << "\n"
-            << "# ours codec=none; Snapshot::open reads only the metadata, and"
-               " a query reads and checks each page on its first read\n"
+            << "# ours codec=zstd level 1 per page (raw when it saves under an"
+               " eighth); Snapshot::open reads only the metadata, and a query"
+               " reads, checks and decodes each page on its first read\n"
             << "# rocksdb compression=" << compression_name(cf.compression)
             << " bottommost=" << compression_name(cf.bottommost_compression)
             << " wal=off block_cache_mib="
@@ -884,7 +885,8 @@ struct Bench {
                " async prefetch)\n"
             << (opt.trace_values
                     ? "# values: 4096 different DFTracer-like event lines, "
-                      "picked by key hash; ours stores them uncompressed\n"
+                      "picked by key hash; ours compresses each page with "
+                      "zstd\n"
                     : "# values: one repeated byte, so RocksDB compression is "
                       "at its best and ours stores it uncompressed\n")
             << "# rss_growth_mib is the growth of the peak resident set of the"
@@ -1178,8 +1180,9 @@ bool Bench::check_write_row(const WriteRow& row) {
     require(counts.bytes[trailer] > 0, "no trailer bytes");
     require(counts.syncs > 0, "no sync");
     const std::uint64_t total = total_bytes(counts);
+    // Pages are compressed, so the bytes written can be fewer than the
+    // payload; the reads of each run check that every row is there.
     require(total > 0, "no bytes written");
-    require(total >= row.payload, "wrote less than the payload");
     return ok;
 }
 

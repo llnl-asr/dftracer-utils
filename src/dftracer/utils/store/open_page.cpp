@@ -1,6 +1,7 @@
 #include <dftracer/utils/runtime/coro/completion_latch.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/open_page.h>
+#include <dftracer/utils/store/page_codec.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -24,11 +25,6 @@ constexpr std::uint64_t OPEN_PAGE_MAX_WRITERS = 0xFFFFULL;
 /// Bit 63: no appender may reserve space in the page any more.
 constexpr std::uint64_t OPEN_PAGE_SEALED = 1ULL << 63U;
 constexpr std::uint32_t OPEN_PAGE_WRITE_ALIGN = 4096;
-
-std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment) {
-    const std::uint64_t remainder = value % alignment;
-    return remainder == 0 ? value : value + (alignment - remainder);
-}
 
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
@@ -286,14 +282,24 @@ void PageWriter::start_page_write(OpenPage* page) {
         return;
     }
 
-    const std::uint32_t length =
-        static_cast<std::uint32_t>(align_up(used, OPEN_PAGE_WRITE_ALIGN));
+    auto stored = encode_page(
+        ByteView(reinterpret_cast<const std::byte*>(page->buffer.data()), used),
+        OPEN_PAGE_WRITE_ALIGN);
+    if (!stored) {
+        latch_error(EINVAL);
+        discard(page);
+        retire(page);
+        release_in_flight();
+        return;
+    }
+    // The raw bytes go with the page: only the stored form stays in flight.
+    page->buffer = dstd::Vector<std::uint8_t>();
+    const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
     pending->written.offset = file_.reserve_range(length, page_size_);
     pending->written.length = length;
-    pending->buffer = std::move(page->buffer);
-    pending->buffer.resize(length);
+    pending->buffer = std::move(*stored);
     pending->written.crc = crc32(0, pending->buffer.data(), length);
     pending->written.sections.reserve(page->sections.size());
     pending->written.contexts.reserve(page->sections.size());
@@ -313,18 +319,12 @@ void PageWriter::start_page_write(OpenPage* page) {
 dstd::Expected<void, dstd::Error> PageWriter::append_run(ByteView section_bytes,
                                                          PageSection info,
                                                          void* context) {
-    if (section_bytes.size() >
-        std::numeric_limits<std::uint32_t>::max() - OPEN_PAGE_WRITE_ALIGN) {
-        return invalid_error();
-    }
-    const std::uint32_t length = static_cast<std::uint32_t>(
-        align_up(section_bytes.size(), OPEN_PAGE_WRITE_ALIGN));
+    auto stored = encode_page(section_bytes, OPEN_PAGE_WRITE_ALIGN);
+    if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
+    const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
-    const auto* begin =
-        reinterpret_cast<const std::uint8_t*>(section_bytes.data());
-    pending->buffer.assign(begin, begin + section_bytes.size());
-    pending->buffer.resize(length);
+    pending->buffer = std::move(*stored);
     pending->written.offset = file_.reserve_range(length, page_size_);
     pending->written.length = length;
     pending->written.crc = crc32(0, pending->buffer.data(), length);
@@ -347,7 +347,9 @@ dstd::Expected<void, dstd::Error> PageWriter::append(std::uint32_t namespace_id,
         section_bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    if (section_bytes.size() >= page_size_) {
+    // A page keeps room for the header of its stored form.
+    const std::size_t capacity = page_size_ - PAGE_HEADER_BYTES;
+    if (section_bytes.size() >= capacity) {
         return append_run(section_bytes, std::move(info), context);
     }
 
@@ -364,8 +366,7 @@ dstd::Expected<void, dstd::Error> PageWriter::append(std::uint32_t namespace_id,
             const std::uint64_t used = state & OPEN_PAGE_BUMP_MASK;
             const std::uint64_t writers =
                 (state & OPEN_PAGE_WRITER_MASK) >> 32U;
-            if (used + length > page_size_ ||
-                writers == OPEN_PAGE_MAX_WRITERS) {
+            if (used + length > capacity || writers == OPEN_PAGE_MAX_WRITERS) {
                 break;
             }
             if (page->state.compare_exchange_weak(

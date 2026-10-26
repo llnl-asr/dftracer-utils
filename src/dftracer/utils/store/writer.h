@@ -64,8 +64,8 @@ struct WriterOptions {
     /// appended to a page and not yet written. Unset means max(16, 4 * the
     /// number of executor threads) pages. Zero is InvalidArgument.
     dstd::Optional<std::uint64_t> page_quota_bytes;
-    /// Pending page bytes at which a group commit starts without waiting for
-    /// commit_interval.
+    /// Pending section bytes, raw, at which a group commit starts without
+    /// waiting for commit_interval.
     std::uint64_t commit_bytes = std::uint64_t{64} << 20;
     /// The longest a queued page or copy state change waits for its record.
     std::chrono::milliseconds commit_interval{100};

@@ -1,6 +1,8 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/store/engine/data_file.h>
 #include <dftracer/utils/index/store/engine/io_fault.h>
+#include <dftracer/utils/index/store/engine/scope_directory.h>
+#include <dftracer/utils/index/store/engine/varint.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -29,7 +31,6 @@ namespace compress = dftracer::utils::utilities::fileio::compress;
 constexpr std::string_view FILE_MAGIC = "DFTUSTR0";
 constexpr std::string_view TRAILER_MAGIC = "DFTUEND0";
 constexpr std::uint32_t FORMAT_VERSION = 0;
-constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
 constexpr std::uint64_t RECORD_HEADER_BYTES = 40;
 
 struct HeaderInfo {
@@ -333,6 +334,7 @@ void apply_record(FileIndex& index, const Record& record) {
         index.copies.clear();
         index.drops.clear();
         index.page_refs.clear();
+        index.commit_refs.clear();
     }
     for (const RecordItem& item : record.items) {
         if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
@@ -347,9 +349,15 @@ void apply_record(FileIndex& index, const Record& record) {
                        std::get_if<PageRefItem>(&item)) {
             index.page_refs.push_back(
                 {page_ref_item->sequence, *page_ref_item});
+        } else if (const auto* commit_ref_item =
+                       std::get_if<CommitRefItem>(&item)) {
+            index.commit_refs.push_back(*commit_ref_item);
+        } else if (const auto* file_tail = std::get_if<FileTail>(&item)) {
+            index.tail = *file_tail;
         }
     }
     index.last_sequence = record.sequence;
+    index.closed = record.kind == RecordKind::Footer;
 }
 
 void apply_chain(FileIndex& index, const dstd::Vector<Record>& chain) {
@@ -439,6 +447,7 @@ DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
       label_(std::move(other.label_)),
       pending_items_(std::move(other.pending_items_)),
       all_items_(std::move(other.all_items_)),
+      committed_pages_(std::move(other.committed_pages_)),
       closed_(other.closed_.load(std::memory_order_relaxed)),
       latched_(other.latched_.load(std::memory_order_relaxed)),
       latched_error_(std::move(other.latched_error_)) {
@@ -463,6 +472,7 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     label_ = std::move(other.label_);
     pending_items_ = std::move(other.pending_items_);
     all_items_ = std::move(other.all_items_);
+    committed_pages_ = std::move(other.committed_pages_);
     closed_.store(other.closed_.load(std::memory_order_relaxed),
                   std::memory_order_relaxed);
     latched_.store(other.latched_.load(std::memory_order_relaxed),
@@ -588,8 +598,264 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
 
 void DataFileWriter::add(RecordItem item) {
     if (latched() || closed_.load(std::memory_order_acquire)) return;
-    all_items_.push_back(item);
+    // A page ref lives in its commit's record only: a checkpoint and the footer
+    // list the commit by the summary commit() adds once the record is written.
+    if (!std::holds_alternative<PageRefItem>(item)) all_items_.push_back(item);
     pending_items_.push_back(std::move(item));
+}
+
+RecordItems DataFileWriter::items_with_pending_pages() const {
+    RecordItems items = all_items_;
+    for (const RecordItem& item : pending_items_) {
+        if (std::holds_alternative<PageRefItem>(item)) items.push_back(item);
+    }
+    return items;
+}
+
+dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
+    const RecordItems& items, std::uint64_t base,
+    dstd::Vector<std::uint8_t>& out) const {
+    // Each block goes at the end of `out`, which lands at `base` in the file.
+    // An empty block takes no bytes and a zero handle.
+    const auto place = [base, &out](const dstd::Vector<std::uint8_t>& bytes) {
+        if (bytes.empty()) return BlockHandle{};
+        BlockHandle handle;
+        handle.offset = base + out.size();
+        handle.length = static_cast<std::uint32_t>(bytes.size());
+        handle.crc = compress::gzip_crc32(0, bytes.data(), bytes.size());
+        out.insert(out.end(), bytes.begin(), bytes.end());
+        return handle;
+    };
+    // Every page ref the file holds a section of, sorted by offset and
+    // deduplicated, so the index of a page in this order names the page.
+    dstd::Vector<const PageRefItem*> pages;
+    for (const PageRefItem& page : committed_pages_) {
+        if (!page.sections.empty()) pages.push_back(&page);
+    }
+    for (const RecordItem& item : items) {
+        const auto* page = std::get_if<PageRefItem>(&item);
+        if (page != nullptr && !page->sections.empty()) pages.push_back(page);
+    }
+    std::stable_sort(pages.begin(), pages.end(),
+                     [](const PageRefItem* a, const PageRefItem* b) {
+                         return a->offset < b->offset;
+                     });
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        if (kept > 0 && pages[kept - 1]->offset == pages[i]->offset) continue;
+        pages[kept++] = pages[i];
+    }
+    pages.resize(kept);
+    if (pages.size() > std::numeric_limits<std::uint32_t>::max()) {
+        return invalid_error();
+    }
+    // One section block per copy of one commit, in page order: every section
+    // sorted once by commit, copy, page and place in the page, cut in runs.
+    struct SectionKey {
+        std::uint64_t sequence = 0;
+        std::uint32_t copy_id = 0;
+    };
+    const auto less = [](const SectionKey& a, const SectionKey& b) {
+        if (a.sequence != b.sequence) return a.sequence < b.sequence;
+        return a.copy_id < b.copy_id;
+    };
+    struct Placed {
+        SectionKey key;
+        std::uint32_t page = 0;
+        const PageRefItem* ref = nullptr;
+        const PageSection* section = nullptr;
+    };
+    dstd::Vector<Placed> placed;
+    for (std::size_t page = 0; page < pages.size(); ++page) {
+        for (const PageSection& section : pages[page]->sections) {
+            placed.push_back({{pages[page]->sequence, section.copy_id},
+                              static_cast<std::uint32_t>(page),
+                              pages[page],
+                              &section});
+        }
+    }
+    std::sort(placed.begin(), placed.end(),
+              [&less](const Placed& a, const Placed& b) {
+                  if (less(a.key, b.key)) return true;
+                  if (less(b.key, a.key)) return false;
+                  if (a.page != b.page) return a.page < b.page;
+                  return a.section->offset_in_page < b.section->offset_in_page;
+              });
+    dstd::Vector<std::pair<SectionKey, BlockHandle>> handles;
+    for (std::size_t first = 0; first < placed.size();) {
+        std::size_t end = first + 1;
+        while (end < placed.size() &&
+               !less(placed[first].key, placed[end].key)) {
+            ++end;
+        }
+        dstd::Vector<std::uint8_t> bytes;
+        append_u32_le(bytes, static_cast<std::uint32_t>(end - first));
+        for (std::size_t at = first; at < end; ++at) {
+            const Placed& entry = placed[at];
+            append_u32_le(bytes, entry.page);
+            append_u64_le(bytes, entry.ref->offset);
+            append_u32_le(bytes, entry.ref->length);
+            append_u32_le(bytes, entry.ref->crc);
+            append_u32_le(bytes, entry.section->offset_in_page);
+            append_u32_le(bytes, entry.section->length);
+            append_u64_le(bytes, entry.section->entry_count);
+            for (const auto* key :
+                 {&entry.section->first_key, &entry.section->last_key}) {
+                encode_varint(bytes, key->size());
+                bytes.insert(bytes.end(), key->begin(), key->end());
+            }
+        }
+        handles.push_back({placed[first].key, place(bytes)});
+        first = end;
+    }
+    const auto section_handle = [&handles, &less](std::uint64_t sequence,
+                                                  std::uint32_t copy_id) {
+        const SectionKey wanted{sequence, copy_id};
+        const auto at = std::lower_bound(
+            handles.begin(), handles.end(), wanted,
+            [&less](const std::pair<SectionKey, BlockHandle>& entry,
+                    const SectionKey& key) { return less(entry.first, key); });
+        if (at == handles.end() || less(wanted, at->first))
+            return BlockHandle{};
+        return at->second;
+    };
+
+    dstd::Vector<NamespaceItem> namespaces;
+    dstd::Vector<ScopeItem> scopes;
+    dstd::Vector<CopyItem> copies;
+    dstd::Vector<DropItem> drops;
+    dstd::Vector<DirectoryCommit> commits;
+    for (const RecordItem& item : items) {
+        if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
+            namespaces.push_back(*namespace_item);
+        } else if (const auto* scope = std::get_if<ScopeItem>(&item)) {
+            scopes.push_back(*scope);
+        } else if (const auto* copy = std::get_if<CopyItem>(&item)) {
+            copies.push_back(*copy);
+        } else if (const auto* drop = std::get_if<DropItem>(&item)) {
+            drops.push_back(*drop);
+        } else if (const auto* commit = std::get_if<CommitRefItem>(&item)) {
+            for (const CommitCopy& range : commit->copies) {
+                commits.push_back(
+                    {commit->sequence, range.copy_id, bytes_of(range.first_key),
+                     bytes_of(range.last_key),
+                     section_handle(commit->sequence, range.copy_id)});
+            }
+        } else if (const auto* page = std::get_if<PageRefItem>(&item)) {
+            for (const PageSection& section : page->sections) {
+                commits.push_back(
+                    {page->sequence, section.copy_id,
+                     bytes_of(section.first_key), bytes_of(section.last_key),
+                     section_handle(page->sequence, section.copy_id)});
+            }
+        }
+    }
+    auto directory =
+        build_scope_directory(namespaces, scopes, copies, drops, commits);
+    if (!directory) {
+        return dstd::Unexpected<dstd::Error>(directory.error());
+    }
+
+    // The directory: blocks of entries in key order, then one separator per
+    // child while the table is too large for the footer, then the top table.
+    auto leaves =
+        split_slot_table(bytes_of(*directory), DIRECTORY_BLOCK_ENTRIES);
+    if (!leaves) return dstd::Unexpected<dstd::Error>(leaves.error());
+    dstd::Vector<BlockHandle> children;
+    children.reserve(leaves->size());
+    for (const TableBlock& leaf : *leaves) {
+        children.push_back(place(leaf.bytes));
+    }
+    std::uint32_t levels = 1;
+    auto child_blocks = std::move(*leaves);
+    auto top = encode_separator_table(child_blocks, children);
+    if (!top) return dstd::Unexpected<dstd::Error>(top.error());
+    dstd::Vector<std::uint8_t> top_table = std::move(*top);
+    while (top_table.size() > DIRECTORY_TOP_BYTES && child_blocks.size() > 1) {
+        auto middles =
+            split_slot_table(bytes_of(top_table), DIRECTORY_BLOCK_ENTRIES);
+        if (!middles) return dstd::Unexpected<dstd::Error>(middles.error());
+        dstd::Vector<BlockHandle> handles_at;
+        handles_at.reserve(middles->size());
+        for (const TableBlock& middle : *middles) {
+            handles_at.push_back(place(middle.bytes));
+        }
+        auto next = encode_separator_table(*middles, handles_at);
+        if (!next) return dstd::Unexpected<dstd::Error>(next.error());
+        top_table = std::move(*next);
+        child_blocks = std::move(*middles);
+        ++levels;
+    }
+
+    const BlockHandle items_block = place(encode_items(items));
+
+    FileTail tail;
+    tail.format_version = FORMAT_VERSION;
+    tail.page_size = page_size_;
+    tail.writer_random = writer_random_;
+    tail.pid = pid_;
+    tail.host = host_;
+    tail.label = label_;
+    tail.creation_time = creation_time_;
+    tail.items = items_block;
+    tail.page_count = static_cast<std::uint32_t>(pages.size());
+    tail.directory_levels = levels;
+    tail.top_table = std::move(top_table);
+    return tail;
+}
+
+void DataFileWriter::add_commit_refs() {
+    // One item per section, sorted by sequence and copy so each copy of each
+    // commit is one run: one allocation, and each key copied once per copy.
+    struct Item {
+        std::uint64_t sequence;
+        std::uint32_t copy_id;
+        const PageSection* section;
+    };
+    dstd::Vector<Item> items;
+    dstd::Vector<CommitRefItem> refs;
+    for (const RecordItem& item : pending_items_) {
+        const auto* page = std::get_if<PageRefItem>(&item);
+        if (page == nullptr) continue;
+        std::size_t at = 0;
+        while (at < refs.size() && refs[at].sequence != page->sequence) ++at;
+        if (at == refs.size()) {
+            CommitRefItem fresh;
+            fresh.sequence = page->sequence;
+            fresh.record_offset = tail_offset_;
+            fresh.record_crc = tail_crc_;
+            fresh.synced = 1;
+            refs.push_back(std::move(fresh));
+        }
+        if (page->synced == 0) refs[at].synced = 0;
+        for (const PageSection& section : page->sections) {
+            items.push_back({page->sequence, section.copy_id, &section});
+        }
+    }
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        if (a.sequence != b.sequence) return a.sequence < b.sequence;
+        return a.copy_id < b.copy_id;
+    });
+    for (std::size_t at = 0; at < items.size();) {
+        const PageSection* low = items[at].section;
+        const PageSection* high = low;
+        std::size_t end = at + 1;
+        while (end < items.size() &&
+               items[end].sequence == items[at].sequence &&
+               items[end].copy_id == items[at].copy_id) {
+            const PageSection& section = *items[end].section;
+            if (section.first_key < low->first_key) low = &section;
+            if (high->last_key < section.last_key) high = &section;
+            ++end;
+        }
+        for (CommitRefItem& ref : refs) {
+            if (ref.sequence != items[at].sequence) continue;
+            ref.copies.push_back(
+                {items[at].copy_id, low->first_key, high->last_key});
+        }
+        at = end;
+    }
+    for (CommitRefItem& ref : refs) all_items_.push_back(std::move(ref));
 }
 
 dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
@@ -640,9 +906,16 @@ dstd::Expected<void, dstd::Error> DataFileWriter::commit() {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     const bool checkpoint = (last_sequence_ + 1) % CHECKPOINT_INTERVAL == 0;
-    auto record = write_record(RecordKind::Commit,
-                               checkpoint ? all_items_ : pending_items_);
+    auto record = checkpoint ? write_record(RecordKind::Commit,
+                                            items_with_pending_pages())
+                             : write_record(RecordKind::Commit, pending_items_);
     if (!record) return record;
+    for (const RecordItem& item : pending_items_) {
+        if (const auto* page = std::get_if<PageRefItem>(&item)) {
+            committed_pages_.push_back(*page);
+        }
+    }
+    add_commit_refs();
     auto header = write_header();
     if (!header) return header;
     pending_items_.clear();
@@ -652,7 +925,52 @@ dstd::Expected<void, dstd::Error> DataFileWriter::commit() {
 dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return {};
-    auto record = write_record(RecordKind::Footer, all_items_);
+    const RecordItems items = items_with_pending_pages();
+    // Every block in one write, at a range whose offset the blocks name: the
+    // range is taken only if no write took the end of the file meanwhile.
+    dstd::Vector<std::uint8_t> blocks;
+    dstd::Expected<FileTail, dstd::Error> tail = invalid_error();
+    std::uint64_t base = 0;
+    for (;;) {
+        base = next_offset_.load(std::memory_order_acquire);
+        blocks.clear();
+        tail = build_blocks(items, base, blocks);
+        if (!tail) {
+            latch(tail.error());
+            return dstd::Unexpected<dstd::Error>(tail.error());
+        }
+        std::uint64_t expected = base;
+        if (next_offset_.compare_exchange_strong(expected, base + blocks.size(),
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+            break;
+        }
+    }
+    if (!blocks.empty()) {
+        auto written = pwrite_all(fd_, blocks.data(), blocks.size(), base);
+        if (!written) {
+            latch(written.error());
+            return written;
+        }
+        io_fault::on_write(fd_, io_fault::WriteKind::Footer, base,
+                           blocks.data(), blocks.size());
+    }
+    // One sync covers the pages and every block above them, before the footer
+    // that names them. Every page before the footer, so a reader trusts the
+    // pages of a closed file one by one.
+    auto pages_synced = sync_data();
+    if (!pages_synced) {
+        latch(pages_synced.error());
+        return pages_synced;
+    }
+    // The footer holds the namespaces and the tail: the items block holds
+    // every other item again, and only a full open reads it.
+    RecordItems footer;
+    for (const RecordItem& item : items) {
+        if (std::holds_alternative<NamespaceItem>(item)) footer.push_back(item);
+    }
+    footer.push_back(std::move(*tail));
+    auto record = write_record(RecordKind::Footer, footer);
     if (!record) return record;
 
     const std::uint64_t trailer_offset =
@@ -675,9 +993,17 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     io_fault::on_write(fd_, io_fault::WriteKind::Trailer, trailer_offset,
                        trailer.data(), trailer.size());
 
+    // No sync after the footer: a footer lost to a crash leaves a file that
+    // reads as not closed, whose commits are checked whole.
     auto header = write_header();
+    ::close(fd_);
+    fd_ = -1;
+    closed_.store(true, std::memory_order_release);
     if (!header) return header;
+    return {};
+}
 
+dstd::Expected<void, dstd::Error> DataFileWriter::sync_data() {
     int sync_result = -1;
     do {
 #if defined(__APPLE__)
@@ -687,20 +1013,14 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
 #endif
     } while (sync_result != 0 && errno == EINTR);
     io_fault::on_sync(fd_);
-    const bool synced = sync_result == 0;
-    ::close(fd_);
-    fd_ = -1;
-    closed_.store(true, std::memory_order_release);
-    if (!synced) {
-        const dstd::Error error(dstd::Condition::Io);
-        latch(error);
-        return dstd::Unexpected<dstd::Error>(error);
+    if (sync_result != 0) {
+        return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
     }
     return {};
 }
 
 dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
-    dstd::StringView path) {
+    dstd::StringView path, FooterItems footer) {
     const std::string path_std = path_string(path);
     const int fd = ::open(path_std.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return io_error();
@@ -724,6 +1044,25 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     reader.fd_ = fd;
     reader.file_size_ = file_size;
 
+    // One bounded read of the file end: the trailer, the footer and the whole
+    // directory top table. Nothing else is read until a query needs it.
+    if (footer == FooterItems::Directory) {
+        auto light = reader.open_light(file_size);
+        if (!light) return dstd::Unexpected<dstd::Error>(light.error());
+        if (*light) return reader;
+    }
+
+    const auto finish =
+        [&footer, &reader]() -> dstd::Expected<DataFileReader, dstd::Error> {
+        if (footer == FooterItems::All) {
+            auto applied = reader.apply_items_block();
+            if (!applied) {
+                return dstd::Unexpected<dstd::Error>(applied.error());
+            }
+        }
+        return std::move(reader);
+    };
+
     auto header_result = read_header(fd);
     if (!header_result)
         return dstd::Unexpected<dstd::Error>(header_result.error());
@@ -736,12 +1075,12 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     if (header.header_crc_ok && header.tail_kind == 0) {
         auto found = scan_records(fd, file_size, reader.records_read_);
         if (!found) return dstd::Unexpected<dstd::Error>(found.error());
-        if (found->empty()) return reader;
+        if (found->empty()) return finish();
         auto recovered =
             recover_from_scan(fd, file_size, *found, reader.records_read_);
         if (!recovered) return dstd::Unexpected<dstd::Error>(recovered.error());
         apply_chain(reader.index_, *recovered);
-        return reader;
+        return finish();
     }
 
     dstd::Vector<Record> chain;
@@ -780,7 +1119,88 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     }
 
     apply_chain(reader.index_, chain);
-    return reader;
+    return finish();
+}
+
+dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
+    std::uint64_t file_size) {
+    const std::uint64_t want =
+        std::min<std::uint64_t>(file_size, TAIL_READ_BYTES);
+    if (want < FILE_TRAILER_BYTES) return false;
+    const std::uint64_t start = file_size - want;
+    ++records_read_;
+    auto buffer = pread_all(fd_, start, static_cast<std::size_t>(want));
+    if (!buffer) return false;
+    const ByteView bytes = bytes_of(*buffer);
+
+    const std::size_t trailer_at =
+        static_cast<std::size_t>(want) - FILE_TRAILER_BYTES;
+    const auto* trailer =
+        reinterpret_cast<const std::uint8_t*>(bytes.data() + trailer_at);
+    if (std::memcmp(trailer, TRAILER_MAGIC.data(), TRAILER_MAGIC.size()) != 0) {
+        return false;
+    }
+    if (read_u32_le(trailer + 20) !=
+        compress::gzip_crc32(0, trailer, FILE_TRAILER_BYTES - 12)) {
+        return false;
+    }
+    const std::uint64_t tail_offset = read_u64_le(trailer + 8);
+    const std::uint32_t footer_length = read_u32_le(trailer + 16);
+    if (tail_offset < FILE_HEADER_BYTES ||
+        tail_offset % FILE_HEADER_BYTES != 0 ||
+        tail_offset > file_size - FILE_TRAILER_BYTES ||
+        footer_length < RECORD_HEADER_BYTES + 4) {
+        return false;
+    }
+
+    dstd::Expected<Record, dstd::Error> decoded = parse_error();
+    if (tail_offset >= start) {
+        const std::size_t at = static_cast<std::size_t>(tail_offset - start);
+        const std::size_t length = std::min<std::size_t>(
+            footer_length, static_cast<std::size_t>(want) - at);
+        decoded = decode_record_at(bytes.subspan(at, length), tail_offset);
+    } else {
+        decoded = read_record_at(fd_, file_size, tail_offset, records_read_);
+    }
+    if (!decoded || decoded->kind != RecordKind::Footer) return false;
+
+    const FileTail* tail = nullptr;
+    for (const RecordItem& item : decoded->items) {
+        if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
+            index_.namespaces.push_back(*namespace_item);
+        } else if (const auto* file_tail = std::get_if<FileTail>(&item)) {
+            tail = file_tail;
+        }
+    }
+    if (tail == nullptr) return false;
+    if (tail->format_version != FORMAT_VERSION) return unsupported_error();
+    // Pages start at multiples of the page size, one page to each.
+    if (tail->page_count > file_size / tail->page_size + 1) return false;
+
+    index_.page_size = tail->page_size;
+    index_.writer_random = tail->writer_random;
+    index_.pid = tail->pid;
+    index_.host = tail->host;
+    index_.label = tail->label;
+    index_.creation_time = tail->creation_time;
+    index_.last_sequence = decoded->sequence;
+    index_.closed = true;
+    index_.tail = *tail;
+    return true;
+}
+
+dstd::Expected<void, dstd::Error> DataFileReader::apply_items_block() {
+    if (!index_.tail.has_value()) return {};
+    auto bytes = read_block(index_.tail->items, nullptr);
+    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+    auto items = decode_items(bytes_of(*bytes));
+    if (!items) return dstd::Unexpected<dstd::Error>(items.error());
+    Record record;
+    record.kind = RecordKind::Footer;
+    record.sequence = index_.last_sequence;
+    record.items = std::move(*items);
+    apply_record(index_, record);
+    return {};
 }
 
 DataFileReader::DataFileReader(DataFileReader&& other) noexcept
@@ -817,6 +1237,27 @@ DataFileReader::read_page(const PageRef& ref) const {
     const std::uint32_t crc =
         compress::gzip_crc32(0, bytes->data(), bytes->size());
     if (crc != ref.crc) return parse_error();
+    return bytes;
+}
+
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
+DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
+    if (handle.length == 0 && handle.offset == 0 && handle.crc == 0) {
+        return dstd::Vector<std::uint8_t>{};
+    }
+    if (handle.length == 0 || handle.offset > file_size_ ||
+        handle.length > file_size_ - handle.offset) {
+        return parse_error();
+    }
+    if (reads != nullptr) {
+        ++reads->calls;
+        reads->bytes += handle.length;
+    }
+    auto bytes = pread_all(fd_, handle.offset, handle.length);
+    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+    if (compress::gzip_crc32(0, bytes->data(), bytes->size()) != handle.crc) {
+        return parse_error();
+    }
     return bytes;
 }
 
@@ -936,6 +1377,46 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
         at = end;
     }
     return counts;
+}
+
+dstd::Expected<dstd::Vector<PageRefItem>, dstd::Error>
+DataFileReader::read_commit(const CommitRefItem& ref, BlockReads* reads) const {
+    auto length = read_record_length(fd_, file_size_, ref.record_offset);
+    if (!length) return dstd::Unexpected<dstd::Error>(length.error());
+    auto bytes = pread_all(fd_, ref.record_offset, *length);
+    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+    if (reads != nullptr) {
+        reads->calls += 2;
+        reads->bytes += RECORD_HEADER_BYTES + *length;
+    }
+    auto record = decode_record_at(bytes_of(*bytes), ref.record_offset);
+    if (!record) return dstd::Unexpected<dstd::Error>(record.error());
+    if (record->crc != ref.record_crc) return parse_error();
+    dstd::Vector<PageRefItem> refs;
+    for (RecordItem& item : record->items) {
+        auto* page = std::get_if<PageRefItem>(&item);
+        if (page != nullptr && page->sequence == ref.sequence) {
+            refs.push_back(std::move(*page));
+        }
+    }
+    return refs;
+}
+
+dstd::Expected<dstd::Vector<IndexedPageRef>, dstd::Error>
+DataFileReader::all_page_refs() const {
+    dstd::Vector<IndexedPageRef> refs = index_.page_refs;
+    for (const CommitRefItem& commit : index_.commit_refs) {
+        auto listed = read_commit(commit, nullptr);
+        if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
+        for (PageRefItem& page : *listed) {
+            refs.push_back({commit.sequence, std::move(page)});
+        }
+    }
+    std::stable_sort(refs.begin(), refs.end(),
+                     [](const IndexedPageRef& a, const IndexedPageRef& b) {
+                         return a.sequence < b.sequence;
+                     });
+    return refs;
 }
 
 }  // namespace dftracer::utils::index::store::engine

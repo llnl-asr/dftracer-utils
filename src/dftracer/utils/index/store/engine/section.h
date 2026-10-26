@@ -83,6 +83,9 @@ class SectionView {
 
     class Cursor {
        public:
+        /// At its end, over no section.
+        Cursor() = default;
+
         bool at_end() const;
         Entry entry() const;
         void next();
@@ -99,7 +102,21 @@ class SectionView {
         const std::uint8_t* subpage_end_ = nullptr;
     };
 
+    /// Opens the header, the subpage index, the bounds of every subpage and the
+    /// zero tail of `bytes`, and checks that the first keys of the subpages
+    /// ascend, without walking the entries. Cheap enough for a query, which
+    /// needs only the subpage holding its key.
+    static dstd::Expected<SectionView, dstd::Error> open_index(ByteView bytes);
+
+    /// `open_index` and then `check_entries`: the whole section, every entry of
+    /// it walked.
     static dstd::Expected<SectionView, dstd::Error> open(ByteView bytes);
+
+    /// The walk `open` makes after `open_index`, on a view it returned. False
+    /// when an entry does not parse, when a subpage does not start with the
+    /// first key the index names, when the keys are not strictly ascending, or
+    /// when there are not as many of them as the header says.
+    bool check_entries() const;
 
     dstd::Optional<Entry> find(ByteView key) const;
     Cursor lower_bound(ByteView key) const;

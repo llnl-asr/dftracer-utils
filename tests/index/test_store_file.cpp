@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/store/engine/data_file.h>
+#include <dftracer/utils/index/store/engine/scope_directory.h>
 #include <dftracer/utils/index/store/engine/section.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -379,6 +380,17 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     }
 }
 
+/// Compares the index of an open file, with the page refs its summaries name
+/// read from their records, to the expected state.
+void check_index_equal(const DataFileReader& reader,
+                       const FileIndex& expected) {
+    FileIndex actual = reader.index();
+    auto refs = reader.all_page_refs();
+    REQUIRE(refs.has_value());
+    actual.page_refs = std::move(*refs);
+    check_index_equal(actual, expected);
+}
+
 FileIndex prefix_state(const FileIndex& full, std::size_t commit_count) {
     FileIndex prefix;
     prefix.last_sequence = static_cast<std::uint64_t>(commit_count);
@@ -556,7 +568,7 @@ TEST_SUITE("index store file") {
         CHECK(actual.pid == static_cast<std::uint32_t>(::getpid()));
         CHECK(actual.writer_random != 0);
         CHECK(actual.creation_time != 0);
-        check_index_equal(actual, expected);
+        check_index_equal(*opened, expected);
 
         for (std::size_t i = 0; i < pages.size(); ++i) {
             auto read = opened->read_page(pages[i]);
@@ -590,7 +602,7 @@ TEST_SUITE("index store file") {
         auto opened = DataFileReader::open(path);
         REQUIRE(opened.has_value());
         CHECK(opened->records_read() == 5);
-        check_index_equal(opened->index(), expected);
+        check_index_equal(*opened, expected);
     }
 
     TEST_CASE("200 commits recover through the newest checkpoint") {
@@ -626,15 +638,23 @@ TEST_SUITE("index store file") {
         CHECK(opened->index().last_sequence == 200);
         REQUIRE(opened->index().namespaces.size() ==
                 expected_namespaces.size());
-        REQUIRE(opened->index().page_refs.size() == expected_pages.size());
+        auto page_refs = opened->all_page_refs();
+        REQUIRE(page_refs.has_value());
+        REQUIRE(page_refs->size() == expected_pages.size());
         for (std::size_t i = 0; i < expected_namespaces.size(); ++i) {
             check_namespace(opened->index().namespaces[i],
                             expected_namespaces[i]);
         }
+        // The chain lists the newest checkpoint's own pages and the commits
+        // after it itself, and the checkpoint lists the 191 earlier ones by
+        // summary.
+        CHECK(opened->index().commit_refs.size() == 191);
         for (std::size_t i = 0; i < expected_pages.size(); ++i) {
-            CHECK(opened->index().page_refs[i].sequence == i + 1);
-            CHECK(opened->index().page_refs[i].ref.offset ==
-                  expected_pages[i].offset);
+            const auto& found = std::find_if(
+                page_refs->begin(), page_refs->end(),
+                [i](const auto& ref) { return ref.sequence == i + 1; });
+            REQUIRE(found != page_refs->end());
+            CHECK(found->ref.offset == expected_pages[i].offset);
         }
     }
 
@@ -701,8 +721,7 @@ TEST_SUITE("index store file") {
             }
 
             REQUIRE(opened.has_value());
-            check_index_equal(opened->index(),
-                              prefix_state(expected, commits_before));
+            check_index_equal(*opened, prefix_state(expected, commits_before));
         }
     }
 
@@ -738,7 +757,7 @@ TEST_SUITE("index store file") {
 
             auto opened = DataFileReader::open(copy_path);
             REQUIRE(opened.has_value());
-            check_index_equal(opened->index(), prefix_state(expected, 2));
+            check_index_equal(*opened, prefix_state(expected, 2));
         }
     }
 
@@ -773,7 +792,7 @@ TEST_SUITE("index store file") {
 
         auto opened = DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
-        check_index_equal(opened->index(), expected);
+        check_index_equal(*opened, expected);
     }
 
     TEST_CASE("an empty file opens as an empty index with and without close") {
@@ -886,7 +905,7 @@ TEST_SUITE("index store file") {
 
         auto opened = DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
-        check_index_equal(opened->index(), expected);
+        check_index_equal(*opened, expected);
     }
 
     TEST_CASE("garbage and truncated headers open with an error") {
@@ -1174,7 +1193,7 @@ TEST_SUITE("index store file") {
 
         auto opened = DataFileReader::open(copy_path);
         REQUIRE(opened.has_value());
-        check_index_equal(opened->index(), prefix_state(expected, 4));
+        check_index_equal(*opened, prefix_state(expected, 4));
     }
 
     TEST_CASE("record bit flips recover to the newest intact chain") {
@@ -1213,8 +1232,7 @@ TEST_SUITE("index store file") {
                     newest_visible_sequence(records, record.sequence);
                 REQUIRE(visible_sequence != 0);
                 check_index_equal(
-                    opened->index(),
-                    state_after_sequence(expected, visible_sequence));
+                    *opened, state_after_sequence(expected, visible_sequence));
             }
         }
 
@@ -1233,8 +1251,7 @@ TEST_SUITE("index store file") {
 
                 auto opened = DataFileReader::open(copy_path);
                 REQUIRE(opened.has_value());
-                check_index_equal(opened->index(),
-                                  state_after_sequence(expected, 70));
+                check_index_equal(*opened, state_after_sequence(expected, 70));
             }
         }
     }
@@ -1274,7 +1291,7 @@ TEST_SUITE("index store file") {
         write_file(stale_path, stale_header);
         auto opened_stale = DataFileReader::open(stale_path);
         REQUIRE(opened_stale.has_value());
-        check_index_equal(opened_stale->index(), prefix_state(expected, 3));
+        check_index_equal(*opened_stale, prefix_state(expected, 3));
 
         std::vector<std::uint8_t> torn = stale_header;
         write_u64_le_at(torn, tail_at, read_u64_le_at(current, tail_at));
@@ -1286,12 +1303,144 @@ TEST_SUITE("index store file") {
         write_file(torn_path, torn);
         auto opened_torn = DataFileReader::open(torn_path);
         REQUIRE(opened_torn.has_value());
-        check_index_equal(opened_torn->index(), expected);
+        check_index_equal(*opened_torn, expected);
     }
 
     TEST_CASE("data file names keep only safe characters") {
         const auto name = engine::data_file_name(
             "my host.example_", 42, 0x0123456789ABCDEFULL, "a/b:c+d");
         CHECK(to_std(name) == "w-myhost.example_-42-0123456789abcdef-abcd.dfs");
+    }
+
+    TEST_CASE("a scope directory finds every scope in scope order") {
+        dstd::Vector<NamespaceItem> namespaces(2);
+        namespaces[0].local_id = 1;
+        namespaces[0].name = dstring("b.space");
+        namespaces[0].fold_kind = 1;
+        namespaces[1].local_id = 2;
+        namespaces[1].name = dstring("a.space");
+        namespaces[1].format_version = 3;
+
+        // Ids out of path order, a files scope after the file scopes, and one
+        // path that is a prefix of another.
+        const std::vector<std::vector<std::string>> scope_paths = {
+            {"/t/b.pfw"}, {"/t/a.pfw"}, {"/t/a.pfw", "/t/c.pfw"}, {"/t/a"}};
+        dstd::Vector<ScopeItem> scopes;
+        for (std::size_t i = 0; i < scope_paths.size(); ++i) {
+            ScopeItem scope;
+            scope.local_id = static_cast<std::uint32_t>(10 + i);
+            scope.kind =
+                scope_paths[i].size() > 1 ? ScopeKind::Files : ScopeKind::File;
+            for (const std::string& path : scope_paths[i]) {
+                scope.paths.push_back({dstring(path), 1, 2, 3});
+            }
+            scopes.push_back(std::move(scope));
+        }
+        dstd::Vector<CopyItem> copies;
+        for (std::uint32_t i = 0; i < 4; ++i) {
+            copies.push_back({100 + i, 1, 10 + i, 7, i + 1, CopyState::Ready});
+        }
+        // The same scope in the other namespace, and a copy whose scope no
+        // item names, which the directory leaves out.
+        copies.push_back({200, 2, 10, 0, 5, CopyState::Failed});
+        copies.push_back({201, 2, 99, 0, 6, CopyState::Ready});
+        dstd::Vector<DropItem> drops;
+        drops.push_back({1, 10, 9, {}, {}});
+
+        const std::string low = "k0";
+        const std::string mid = "k5";
+        const std::string high = "k9";
+        // Two ranges of one copy in one commit merge into one.
+        const std::vector<engine::DirectoryCommit> commits = {
+            {4, 100, view_of(mid), view_of(high), {}},
+            {4, 100, view_of(low), view_of(mid), {}},
+            {2, 100, view_of(low), view_of(low), {}},
+            {3, 200, view_of(mid), view_of(mid), {}}};
+        auto built = engine::build_scope_directory(
+            namespaces, scopes, copies, drops,
+            dstd::Span<const engine::DirectoryCommit>(commits.data(),
+                                                      commits.size()));
+        REQUIRE(built.has_value());
+        auto directory = engine::ScopeDirectory::open(view_of(*built));
+        REQUIRE(directory.has_value());
+        REQUIRE(directory->size() == 5);
+
+        // a.space sorts first, then b.space with its file scopes by path
+        // ("/t/a" before "/t/a.pfw") and the files scope last.
+        const std::vector<std::pair<std::string, std::vector<std::string>>>
+            order = {{"a.space", {"/t/b.pfw"}},
+                     {"b.space", {"/t/a"}},
+                     {"b.space", {"/t/a.pfw"}},
+                     {"b.space", {"/t/b.pfw"}},
+                     {"b.space", {"/t/a.pfw", "/t/c.pfw"}}};
+        for (std::size_t i = 0; i < order.size(); ++i) {
+            auto key = directory->key(i);
+            REQUIRE(key.has_value());
+            CHECK(std::string(key->name) == order[i].first);
+            REQUIRE(key->paths.size() == order[i].second.size());
+            for (std::size_t p = 0; p < key->paths.size(); ++p) {
+                CHECK(std::string(key->paths[p]) == order[i].second[p]);
+            }
+            dstd::Vector<dstd::String> paths;
+            for (const std::string& path : order[i].second) {
+                paths.push_back(dstring(path));
+            }
+            CHECK(directory->find(key->name, key->format_version, key->kind,
+                                  paths) == i);
+        }
+        CHECK(directory->namespace_range("a.space", 3) ==
+              std::pair<std::size_t, std::size_t>{0, 1});
+        CHECK(directory->namespace_range("b.space", 0) ==
+              std::pair<std::size_t, std::size_t>{1, 5});
+        CHECK(directory->namespace_range("a.space", 0).first ==
+              directory->namespace_range("a.space", 0).second);
+        dstd::Vector<dstd::String> absent;
+        absent.push_back(dstring("/t/z.pfw"));
+        CHECK(directory->find("b.space", 0, ScopeKind::File, absent) ==
+              directory->size());
+
+        // b.space /t/b.pfw: copy 100 with its two commits, the second merged,
+        // and the drop of generation 9.
+        auto entry = directory->entry(3);
+        REQUIRE(entry.has_value());
+        CHECK(entry->highest_generation == 9);
+        REQUIRE(entry->copies.size() == 1);
+        const engine::DirectoryCopy& copy = entry->copies[0];
+        CHECK(copy.local_id == 100);
+        CHECK(copy.generation == 1);
+        CHECK(copy.params_hash == 7);
+        CHECK(copy.fold_kind == 1);
+        REQUIRE(copy.commits.size() == 2);
+        CHECK(copy.commits[0].sequence == 2);
+        CHECK(copy.commits[1].sequence == 4);
+        CHECK(same_bytes(copy.commits[1].first_key, view_of(low)));
+        CHECK(same_bytes(copy.commits[1].last_key, view_of(high)));
+        REQUIRE(entry->drops.size() == 1);
+        CHECK(entry->drops[0].generation == 9);
+
+        auto other = directory->entry(0);
+        REQUIRE(other.has_value());
+        REQUIRE(other->copies.size() == 1);
+        CHECK(other->copies[0].state == CopyState::Failed);
+        CHECK(other->copies[0].commits.size() == 1);
+    }
+
+    TEST_CASE("a scope directory whose slot leaves its bytes does not open") {
+        dstd::Vector<NamespaceItem> namespaces(1);
+        namespaces[0].local_id = 1;
+        namespaces[0].name = dstring("ns");
+        dstd::Vector<ScopeItem> scopes(1);
+        scopes[0].local_id = 2;
+        dstd::Vector<CopyItem> copies;
+        copies.push_back({3, 1, 2, 0, 1, CopyState::Ready});
+        auto built =
+            engine::build_scope_directory(namespaces, scopes, copies, {}, {});
+        REQUIRE(built.has_value());
+        CHECK(engine::ScopeDirectory::open(view_of(*built)).has_value());
+        dstd::Vector<std::uint8_t> broken = *built;
+        // The payload length of the one slot, past the end.
+        dftracer::utils::write_u32_le(broken.data() + 4 + 12, 1U << 20);
+        CHECK_FALSE(engine::ScopeDirectory::open(view_of(broken)).has_value());
+        CHECK(engine::ScopeDirectory::open(ByteView{}).has_value());
     }
 }

@@ -366,18 +366,29 @@ std::string format_ms(std::uint64_t nanos) {
     return out.str();
 }
 
-/// The work one open did and where its time went, as one extra column: the
-/// files and pages it read, the read calls coalescing the runs cut, and the
-/// milliseconds of each phase.
-std::string format_open_stats(const engine::OpenStats& stats) {
+/// Every block the snapshot has read so far: the commits it verified, the
+/// blocks of them, the read calls that covered them and the bytes. An open
+/// leaves these at zero, and the first query for a copy pays its commits.
+std::string format_read_stats(const engine::ReadStats& reads) {
     std::ostringstream out;
-    out << "files=" << stats.files << " pages=" << stats.pages
-        << " read_calls=" << stats.read_calls << " mib_read=" << std::fixed
+    out << "commits_read=" << reads.commits_verified
+        << " blocks_read=" << reads.blocks_read
+        << " metadata_blocks_read=" << reads.metadata_blocks_read
+        << " read_calls=" << reads.read_calls << " mib_read=" << std::fixed
         << std::setprecision(1)
-        << static_cast<double>(stats.bytes_read) /
-               static_cast<double>(MIB_BYTES)
-        << " ms list=" << std::setprecision(3) << stats.ms_list
-        << " files=" << stats.ms_open_files << " read=" << stats.ms_read
+        << static_cast<double>(reads.bytes_read) /
+               static_cast<double>(MIB_BYTES);
+    return out.str();
+}
+
+/// What one open did, and what the snapshot has read so far, as one extra
+/// column.
+std::string format_stats(const engine::OpenStats& stats,
+                         const engine::ReadStats& reads) {
+    std::ostringstream out;
+    out << "files=" << stats.files << " pages=" << stats.pages << " "
+        << format_read_stats(reads) << " ms list=" << std::setprecision(3)
+        << stats.ms_list << " files=" << stats.ms_open_files
         << " tables=" << stats.ms_tables << " total=" << stats.ms_total;
     return out.str();
 }
@@ -725,6 +736,8 @@ struct FoldRow {
     double ms_scan = 0;
     double ns_per_key = 0;
     std::uint64_t mismatches = 0;
+    /// What the snapshot had read when the scan of this row finished.
+    engine::ReadStats reads;
 };
 
 /// One timed fold scan: its parts added, against the sums written.
@@ -852,8 +865,8 @@ struct Bench {
             << "# page_size=" << page_size << " backend=" << backend
             << " fs=" << filesystem_name(dftracer::utils::filesystem_kind(root))
             << " dir=" << root << "\n"
-            << "# ours codec=none; Snapshot::open reads and verifies every page"
-               " of the data files, so its open time grows with the data\n"
+            << "# ours codec=none; Snapshot::open reads only the metadata, and"
+               " a query reads and checks each page on its first read\n"
             << "# rocksdb compression=" << compression_name(cf.compression)
             << " bottommost=" << compression_name(cf.bottommost_compression)
             << " wal=off block_cache_mib="
@@ -910,7 +923,7 @@ struct Bench {
         if (fold_header_written) return;
         fold_header_written = true;
         std::cout << "engine\tscopes\tkeys\tthreads\tms_open\tms_scan"
-                     "\tns_per_key\tmismatches\n";
+                     "\tns_per_key\tmismatches\treads\n";
     }
 
     bool run();
@@ -1086,7 +1099,8 @@ void Bench::print_fold_row(const FoldRow& row) {
     line << row.engine << '\t' << row.scopes << '\t' << row.keys << '\t'
          << row.threads << '\t' << std::fixed << std::setprecision(3)
          << row.ms_open << '\t' << row.ms_scan << '\t' << std::setprecision(1)
-         << row.ns_per_key << '\t' << row.mismatches;
+         << row.ns_per_key << '\t' << row.mismatches << '\t'
+         << format_read_stats(row.reads);
     std::cout << line.str() << '\n';
 }
 
@@ -1111,8 +1125,9 @@ bool Bench::report_single_thread_open(const std::string& dir,
         fail("one-thread snapshot of " + dir + ": " + to_std(opened.error()));
         return false;
     }
-    QueryRow row = query_row("ours", "open_1t", 1, nanos, rss,
-                             prefix + format_open_stats(opened->open_stats()));
+    QueryRow row = query_row(
+        "ours", "open_1t", 1, nanos, rss,
+        prefix + format_stats(opened->open_stats(), opened->read_stats()));
     if (print_now) {
         print_query_row(row);
     } else {
@@ -1179,6 +1194,9 @@ std::uint64_t Bench::count_keys(const std::string& dir) {
     while (!cursor.at_end()) {
         ++count;
         cursor.next();
+    }
+    if (cursor.error()) {
+        fail("scan of " + dir + ": " + to_std(*cursor.error()));
     }
     return count;
 }
@@ -1518,14 +1536,17 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
     const std::uint64_t cold_rss = dftu::bench::peak_heap_bytes();
     const auto cold_started = std::chrono::steady_clock::now();
     std::uint64_t cold_nanos = 0;
+    dstd::Optional<Snapshot> cold;
     {
-        auto cold = Snapshot::open(dir);
+        auto opened_cold = Snapshot::open(dir);
         cold_nanos =
             nanos_between(cold_started, std::chrono::steady_clock::now());
-        if (!cold) {
-            fail("cold snapshot of " + dir + ": " + to_std(cold.error()));
+        if (!opened_cold) {
+            fail("cold snapshot of " + dir + ": " +
+                 to_std(opened_cold.error()));
             return false;
         }
+        cold = std::move(*opened_cold);
     }
     const auto open_started = std::chrono::steady_clock::now();
     auto opened = Snapshot::open(dir);
@@ -1536,11 +1557,32 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
         return false;
     }
     Snapshot snapshot = std::move(*opened);
-    query_rows.push_back(
-        query_row(engine_name, "open", 1, open_nanos, cold_rss,
-                  "warm ms reported, cold=" + format_ms(cold_nanos) +
-                      " ms, rss_growth of the cold open, " +
-                      format_open_stats(snapshot.open_stats())));
+    query_rows.push_back(query_row(
+        engine_name, "open", 1, open_nanos, cold_rss,
+        "warm ms reported, cold=" + format_ms(cold_nanos) +
+            " ms, rss_growth of the cold open, " +
+            format_stats(snapshot.open_stats(), snapshot.read_stats())));
+    // The first get of the cold snapshot: it pays the reads of the commits
+    // that hold the copy, which the open above did not make.
+    if (cold.has_value()) {
+        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
+        const auto started = std::chrono::steady_clock::now();
+        auto first =
+            cold->get(namespace_spec, plan.scopes[plan.hits.front().scope],
+                      ByteView{plan.hits.front().key.data(),
+                               plan.hits.front().key.size()});
+        const std::uint64_t nanos =
+            nanos_between(started, std::chrono::steady_clock::now());
+        if (first.has_value() && first->has_value()) {
+            query_rows.push_back(
+                query_row(engine_name, "first_get", 1, nanos, rss,
+                          format_read_stats(cold->read_stats())));
+        } else {
+            fail("ours: the first get of the cold snapshot of " + dir +
+                 " returned nothing");
+        }
+        cold.reset();
+    }
     // The same open under a one-thread default runtime, so the read calls the
     // runs coalesce and the time of a single worker sit next to the pool's.
     if (!report_single_thread_open(dir, "", false)) return false;
@@ -1571,7 +1613,8 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(
             query_row(engine_name, "get_hit", plan.hits.size(), nanos, rss,
-                      "mismatches=" + std::to_string(mismatches)));
+                      "mismatches=" + std::to_string(mismatches) + " " +
+                          format_read_stats(snapshot.read_stats())));
     }
     if (mismatches > 0) {
         fail("ours: " + std::to_string(mismatches) + " point gets of " + dir +
@@ -1595,7 +1638,8 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(
             query_row(engine_name, "get_miss", plan.misses.size(), nanos, rss,
-                      "mismatches=" + std::to_string(mismatches)));
+                      "mismatches=" + std::to_string(mismatches) + " " +
+                          format_read_stats(snapshot.read_stats())));
     }
     if (mismatches > 0) {
         fail("ours: " + std::to_string(mismatches) + " absent keys of " + dir +
@@ -1615,6 +1659,9 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
                 ++rows;
                 cursor.next();
             }
+            if (cursor.error()) {
+                fail("scan of " + dir + ": " + to_std(*cursor.error()));
+            }
             scanned += rows;
             if (rows != scan.rows) ++wrong_scopes;
         }
@@ -1625,7 +1672,8 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
               << " rows_per_scope=" << std::fixed << std::setprecision(1)
               << (plan.scans.empty()
                       ? 0
-                      : static_cast<double>(scanned) / plan.scans.size());
+                      : static_cast<double>(scanned) / plan.scans.size())
+              << " " << format_read_stats(snapshot.read_stats());
         query_rows.push_back(query_row(engine_name, "scan_scope", scanned,
                                        nanos, rss, extra.str()));
     }
@@ -1643,12 +1691,16 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
             ++rows;
             cursor.next();
         }
+        if (cursor.error()) {
+            fail("scan of " + dir + ": " + to_std(*cursor.error()));
+        }
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(query_row(
             engine_name, "full_scan", rows, nanos, rss,
             "rows_per_s=" + format_rate(rows, nanos) +
-                " rows_expected=" + std::to_string(workload.total_keys)));
+                " rows_expected=" + std::to_string(workload.total_keys) + " " +
+                format_read_stats(snapshot.read_stats())));
         if (rows != workload.total_keys) {
             fail("ours: the full scan of " + dir + " read " +
                  std::to_string(rows) + " rows, not " +
@@ -2085,6 +2137,7 @@ FoldScan Bench::fold_scan_ours(const Snapshot& snapshot,
                         dftracer::utils::read_u64_le(bytes));
                 cursor.next();
             }
+            if (cursor.error()) errors.fetch_add(1, std::memory_order_relaxed);
         });
     }
     for (auto& worker : workers) worker.join();
@@ -2221,7 +2274,8 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
                 print_query_row(query_row(
                     "ours", "open", 1, open_nanos,
                     dftu::bench::peak_heap_bytes(),
-                    scope_column + format_open_stats(snapshot.open_stats())));
+                    scope_column + format_stats(snapshot.open_stats(),
+                                                snapshot.read_stats())));
                 if (!report_single_thread_open(dir, scope_column, true)) {
                     ok = false;
                 }
@@ -2237,6 +2291,7 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
                     row.threads = threads;
                     row.ms_open = ms_open;
                     row.ms_scan = static_cast<double>(scan.nanos) / 1e6;
+                    row.reads = snapshot.read_stats();
                     row.ns_per_key = static_cast<double>(scan.nanos) /
                                      static_cast<double>(keys);
                     row.mismatches = scan.mismatches;

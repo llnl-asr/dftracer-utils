@@ -684,6 +684,87 @@ TEST_SUITE("index store snapshot") {
         }
     }
 
+    TEST_CASE("a batch that commits later wins over one recorded later") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_batch_ordinal");
+        const ScopeKey scope = file_scope("/traces/o.pfw");
+        const NamespaceSpec put = put_spec("dftu.test.put");
+        const NamespaceSpec concat =
+            fold_spec("dftu.test.concat", FoldKind::Concat);
+        const std::string key = "same-key";
+        // Longer than the capacity of a small extent, so its segment goes to a
+        // run of its own and its write completes at once, while the earlier
+        // batch stays in an extent that is sealed only at close.
+        const std::string longer(8000, 'n');
+
+        auto writer = make_writer(dir);
+        auto put_id = writer->add_namespace(put);
+        REQUIRE(put_id.has_value());
+        auto concat_id = writer->add_namespace(concat);
+        REQUIRE(concat_id.has_value());
+
+        const auto put_value = [&](const std::string& value) {
+            Batch batch = writer->batch(*put_id, scope, 0);
+            batch.put(view_of(key), view_of(value));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+        };
+        const auto fold_value = [&](const std::string& value) {
+            Batch batch = writer->batch(*concat_id, scope, 0);
+            batch.fold(view_of(key), view_of(value));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+        };
+        put_value("old");
+        fold_value("a");
+        put_value(longer);
+        fold_value(longer);
+        REQUIRE(close_writer(*writer).has_value());
+
+        // The batch that came first is written last, so neither the records nor
+        // the extents of the file are in the order of the batches.
+        auto reader = DataFileReader::open(to_std(writer->path()));
+        REQUIRE(reader.has_value());
+        const std::vector<store::IndexedExtentRef> refs =
+            extent_refs_of(*reader);
+        const auto ref_of = [&refs](std::uint64_t ordinal) {
+            for (const store::IndexedExtentRef& ref : refs) {
+                if (!ref.ref.segments.empty() &&
+                    ref.ref.segments.front().ordinal == ordinal) {
+                    return ref;
+                }
+            }
+            FAIL("no extent of the batch with ordinal " << ordinal);
+            return store::IndexedExtentRef{};
+        };
+        const std::pair<std::uint64_t, std::uint64_t> ordinals[] = {{1, 3},
+                                                                    {2, 4}};
+        for (const std::pair<std::uint64_t, std::uint64_t>& pair : ordinals) {
+            const store::IndexedExtentRef older = ref_of(pair.first);
+            const store::IndexedExtentRef newer = ref_of(pair.second);
+            REQUIRE(older.sequence >= newer.sequence);
+            REQUIRE(older.ref.offset > newer.ref.offset);
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        const auto newest = [&](const NamespaceSpec& spec) {
+            auto found = snapshot->get(spec, scope, view_of(key));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+            return to_std((*found)->bytes());
+        };
+        CHECK(newest(put) == longer);
+        CHECK(newest(concat) == "a" + longer);
+
+        const auto scanned = [&](const NamespaceSpec& spec) {
+            auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+            const auto rows = collect(cursor);
+            REQUIRE(rows.size() == 1);
+            CHECK(rows[0].first == key);
+            return rows[0].second;
+        };
+        CHECK(scanned(put) == longer);
+        CHECK(scanned(concat) == "a" + longer);
+    }
+
     TEST_CASE("every fold kind folds across a batch and across copies") {
         dftu_utils_test::ScopedTestDir dir("snapshot_folds");
         const ScopeKey scope = file_scope("/traces/f.pfw");

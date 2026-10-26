@@ -722,6 +722,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
             append_u32_le(run_bytes, entry.segment->offset_in_extent);
             append_u32_le(run_bytes, entry.segment->length);
             append_u64_le(run_bytes, entry.segment->entry_count);
+            append_u64_le(run_bytes, entry.segment->ordinal);
             for (const auto* key :
                  {&entry.segment->first_key, &entry.segment->last_key}) {
                 encode_varint(run_bytes, key->size());

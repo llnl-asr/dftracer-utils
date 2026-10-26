@@ -17,7 +17,7 @@ namespace dstd = dftracer::utils::dstd;
 constexpr std::string_view RECORD_MAGIC = "DFTUREC0";
 constexpr std::size_t RECORD_HEADER_BYTES = 40;
 constexpr std::size_t MIN_SCOPE_PATH_BYTES = 25;
-constexpr std::size_t MIN_EXTENT_SEGMENT_BYTES = 22;
+constexpr std::size_t MIN_EXTENT_SEGMENT_BYTES = 30;
 constexpr std::size_t MIN_COMMIT_COPY_BYTES = 6;
 
 dstd::Unexpected<dstd::Error> parse_error() {
@@ -194,6 +194,7 @@ dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(ByteView bytes) {
             !read_u32(bytes, at, segment.offset_in_extent) ||
             !read_u32(bytes, at, segment.length) ||
             !read_u64(bytes, at, segment.entry_count) ||
+            !read_u64(bytes, at, segment.ordinal) ||
             !read_bytes(bytes, at, segment.first_key) ||
             !read_bytes(bytes, at, segment.last_key)) {
             return parse_error();
@@ -302,6 +303,7 @@ void encode_extent_ref(dstd::Vector<std::uint8_t>& payload,
         append_u32_le(payload, segment.offset_in_extent);
         append_u32_le(payload, segment.length);
         append_u64_le(payload, segment.entry_count);
+        append_u64_le(payload, segment.ordinal);
         append_byte_vector(payload, segment.first_key);
         append_byte_vector(payload, segment.last_key);
     }

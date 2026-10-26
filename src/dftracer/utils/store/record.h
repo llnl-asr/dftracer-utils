@@ -68,6 +68,9 @@ struct ExtentSegment {
     std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
+    /// The batch ordinal the writer gave this segment: a larger ordinal is a
+    /// later batch of the file, whatever the record order.
+    std::uint64_t ordinal = 0;
     dstd::Vector<std::uint8_t> first_key;
     dstd::Vector<std::uint8_t> last_key;
 };

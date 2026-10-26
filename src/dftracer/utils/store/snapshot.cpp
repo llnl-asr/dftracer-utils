@@ -196,6 +196,7 @@ void fill_segment_blocks(detail::Commit& commit) {
             slot.offset_in_extent = listed[i].segment->offset_in_extent;
             slot.length = listed[i].segment->length;
             slot.entry_count = listed[i].segment->entry_count;
+            slot.ordinal = listed[i].segment->ordinal;
             slot.first_key = bytes_of(listed[i].segment->first_key);
             slot.last_key = bytes_of(listed[i].segment->last_key);
         }
@@ -1495,6 +1496,7 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     std::uint32_t offset_in_extent = 0;
                     std::uint32_t length = 0;
                     std::uint64_t entry_count = 0;
+                    std::uint64_t ordinal = 0;
                     std::size_t first_at = 0;
                     std::size_t first_length = 0;
                     std::size_t last_at = 0;
@@ -1509,14 +1511,14 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                 std::size_t at = 4;
                 const std::uint8_t* data =
                     reinterpret_cast<const std::uint8_t*>(body.data());
-                if (count > (body.size() - 4) / 44) {
+                if (count > (body.size() - 4) / 52) {
                     state = detail::LoadState::Bad;
                     break;
                 }
                 dstd::Vector<Raw> raws;
                 raws.reserve(static_cast<std::size_t>(count));
                 for (std::uint64_t i = 0; i < count; ++i) {
-                    if (at + 44 > body.size()) {
+                    if (at + 52 > body.size()) {
                         state = detail::LoadState::Bad;
                         break;
                     }
@@ -1529,7 +1531,8 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     raw.offset_in_extent = read_u32_le(data + at + 28);
                     raw.length = read_u32_le(data + at + 32);
                     raw.entry_count = read_u64_le(data + at + 36);
-                    at += 44;
+                    raw.ordinal = read_u64_le(data + at + 44);
+                    at += 52;
                     for (std::size_t k = 0; k < 2; ++k) {
                         auto length = decode_varint(body, at);
                         if (!length || *length > body.size() - at) {
@@ -1571,6 +1574,7 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     slot.offset_in_extent = raws[i].offset_in_extent;
                     slot.length = raws[i].length;
                     slot.entry_count = raws[i].entry_count;
+                    slot.ordinal = raws[i].ordinal;
                     slot.first_key =
                         body.subspan(raws[i].first_at, raws[i].first_length);
                     slot.last_key =
@@ -2091,11 +2095,19 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
                 return dstd::Unexpected<dstd::Error>(found_entry.error());
             }
             if (found_entry->has_value()) {
-                sources.push_back({copy.file_index, **found_entry});
+                sources.push_back(
+                    {copy.file_index, slot.ordinal, **found_entry});
             }
         }
     }
     if (sources.empty()) return dstd::Optional<Value>{};
+    // The batch ordinal, not the record, tells the versions of a key apart:
+    // extent writes complete in any order, so a record mixes batches.
+    std::stable_sort(
+        sources.begin(), sources.end(),
+        [](const detail::ValueSource& a, const detail::ValueSource& b) {
+            return a.ordinal < b.ordinal;
+        });
 
     Value value;
     ByteView view;
@@ -2124,16 +2136,18 @@ dstd::Expected<ByteView, dstd::Error> ScanCursor::value() {
             const ScopeCursor& cursor = arms_[arm_index].cursor;
             const std::size_t file_index = cursor.copy()->file_index;
             for (const std::size_t segment_index : cursor.matching()) {
-                sources_.push_back(
-                    {file_index, cursor.cursors_[segment_index].entry()});
+                sources_.push_back({file_index, cursor.ordinals_[segment_index],
+                                    cursor.cursors_[segment_index].entry()});
             }
         }
     } else {
         const ScopeCursor& cursor = arms_[arm_].cursor;
         const auto& matching = cursor.matching();
         if (!matching.empty()) {
+            const std::size_t newest = matching.back();
             sources_.push_back({cursor.copy()->file_index,
-                                cursor.cursors_[matching.back()].entry()});
+                                cursor.ordinals_[newest],
+                                cursor.cursors_[newest].entry()});
         }
     }
     if (sources_.empty()) return ByteView{};
@@ -2243,12 +2257,17 @@ void ScanCursor::settle() {
 
 namespace {
 
-/// The heap order: the smaller key first, and on a tie the older segment.
+/// The heap order: the smaller key first, on a tie the smaller batch ordinal,
+/// and only then the lower segment index.
 struct HeapAfter {
     const dstd::Vector<ByteView>* keys;
+    const dstd::Vector<std::uint64_t>* ordinals;
     bool operator()(std::size_t a, std::size_t b) const {
         const int by_key = compare_bytes((*keys)[a], (*keys)[b]);
         if (by_key != 0) return by_key > 0;
+        if ((*ordinals)[a] != (*ordinals)[b]) {
+            return (*ordinals)[a] > (*ordinals)[b];
+        }
         return a > b;
     }
 };
@@ -2265,6 +2284,7 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
     end_ = end;
     error_.reset();
     segments_.clear();
+    ordinals_.clear();
     heap_.clear();
     // A range wholly before begin or at or past end yields nothing.
     const auto outside = [&](ByteView first, ByteView last) {
@@ -2288,6 +2308,7 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
              ++i) {
             if (outside(slots[i].first_key, slots[i].last_key)) continue;
             segments_.push_back({held_segments->block, i});
+            ordinals_.push_back(slots[i].ordinal);
         }
     }
     cursors_.assign(segments_.size(), SegmentView::Cursor{});
@@ -2303,7 +2324,7 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
                        : segment.first_key;
         heap_.push_back(i);
     }
-    std::make_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
+    std::make_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_, &ordinals_});
     settle();
 }
 
@@ -2328,7 +2349,7 @@ void ScopeCursor::push(std::size_t index) {
     if (cursors_[index].at_end()) return;
     keys_[index] = cursors_[index].entry().key();
     heap_.push_back(index);
-    std::push_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
+    std::push_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_, &ordinals_});
 }
 
 void ScopeCursor::advance_matching() {
@@ -2355,7 +2376,8 @@ void ScopeCursor::settle() {
         if (loaded_[top] == 0) {
             // The bound from the record is the smallest key on the heap, so
             // the extent of this segment is the next one to read.
-            std::pop_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
+            std::pop_heap(heap_.begin(), heap_.end(),
+                          HeapAfter{&keys_, &ordinals_});
             heap_.pop_back();
             if (!load(top)) return;
             continue;
@@ -2369,7 +2391,8 @@ void ScopeCursor::settle() {
         bool reload = false;
         while (!heap_.empty() &&
                compare_bytes(keys_[heap_.front()], best) == 0) {
-            std::pop_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
+            std::pop_heap(heap_.begin(), heap_.end(),
+                          HeapAfter{&keys_, &ordinals_});
             const std::size_t index = heap_.back();
             heap_.pop_back();
             if (loaded_[index] == 0) {
@@ -2379,7 +2402,7 @@ void ScopeCursor::settle() {
                 for (const std::size_t taken : matching_) {
                     heap_.push_back(taken);
                     std::push_heap(heap_.begin(), heap_.end(),
-                                   HeapAfter{&keys_});
+                                   HeapAfter{&keys_, &ordinals_});
                 }
                 reload = true;
                 break;
@@ -2387,7 +2410,8 @@ void ScopeCursor::settle() {
             matching_.push_back(index);
         }
         if (reload) continue;
-        // The heap pops a tie oldest first, so matching_ is in commit order.
+        // The heap pops a tie by batch ordinal, so matching_ runs from the
+        // oldest batch to the newest.
         if (hidden_ != nullptr && key_hidden(best, *hidden_)) {
             advance_matching();
             continue;

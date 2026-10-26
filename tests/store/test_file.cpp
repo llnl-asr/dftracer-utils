@@ -320,6 +320,7 @@ struct SegmentBlockEntry {
     std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
+    std::uint64_t ordinal = 0;
     std::string first_key;
     std::string last_key;
 };
@@ -377,7 +378,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
     const std::uint32_t count = read_u32_le_at(raw, 0);
     std::size_t at = 4;
     for (std::uint32_t i = 0; i < count; ++i) {
-        REQUIRE(at + 44 <= raw.size());
+        REQUIRE(at + 52 <= raw.size());
         SegmentBlockEntry entry;
         entry.extent_index = read_u32_le_at(raw, at);
         entry.sequence = read_u64_le_at(raw, at + 4U);
@@ -387,7 +388,8 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
         entry.offset_in_extent = read_u32_le_at(raw, at + 28U);
         entry.length = read_u32_le_at(raw, at + 32U);
         entry.entry_count = read_u64_le_at(raw, at + 36U);
-        at += 44;
+        entry.ordinal = read_u64_le_at(raw, at + 44U);
+        at += 52;
         for (std::string* key : {&entry.first_key, &entry.last_key}) {
             ByteView body = view_of(raw);
             auto length = store::decode_varint(body, at);
@@ -1652,9 +1654,9 @@ TEST_SUITE("index store file") {
         REQUIRE(reader.has_value());
         const std::vector<ClosedRun> runs = closed_runs(*reader);
 
-        // A run entry is 44 fixed bytes and two keys, so this run alone passes
+        // A run entry is 52 fixed bytes and two keys, so this run alone passes
         // one block.
-        const std::size_t wide_entry_bytes = 44 + 2 * (2 + WIDE_KEY_BYTES);
+        const std::size_t wide_entry_bytes = 52 + 2 * (2 + WIDE_KEY_BYTES);
         REQUIRE(WIDE_SEGMENTS * wide_entry_bytes > store::SEGMENT_BLOCK_BYTES);
 
         // Every run of a copy is in one block, and no block holds a run of two

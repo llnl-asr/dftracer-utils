@@ -327,6 +327,9 @@ class Writer {
     dstd::HashMap<ScopeKey, dstd::UniquePtr<ScopeEntry>, ScopeKeyHash> scopes_;
     dstd::HashMap<std::uint64_t, dstd::UniquePtr<CopyEntry>> copies_;
     dstd::Vector<ScopeGeneration> generations_;
+    /// The batch ordinal of the next commit, so a reader orders the versions of
+    /// a key by commit order and not by record order.
+    std::atomic<std::uint64_t> next_ordinal_{1};
     dstd::Optional<dstd::Error> latched_error_;
     std::atomic<bool> closed_{false};
 };

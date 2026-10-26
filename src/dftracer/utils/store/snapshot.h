@@ -199,6 +199,9 @@ struct SegmentSlot {
     std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
+    /// The batch ordinal of the segment: a larger ordinal is a later batch of
+    /// the file.
+    std::uint64_t ordinal = 0;
     /// Both views point into the file index the snapshot keeps, so a lookup
     /// skips a segment that cannot hold the key without reading it.
     ByteView first_key;
@@ -492,6 +495,7 @@ class ReadCounters {
 
 struct ValueSource {
     std::size_t file_index = 0;
+    std::uint64_t ordinal = 0;
     SegmentView::Entry entry;
 };
 
@@ -514,7 +518,8 @@ struct SegmentRun {
 }  // namespace detail
 
 /// The keys of one copy of one scope, in key order, with the segments holding
-/// each key in commit order. A cursor is used by one thread.
+/// each key in the order of their batch ordinals, oldest first. A cursor is
+/// used by one thread.
 class ScopeCursor {
    public:
     ScopeCursor() = default;
@@ -525,7 +530,7 @@ class ScopeCursor {
 
     bool at_end() const { return at_end_; }
     ByteView key() const { return key_; }
-    /// Segment indices of the copy holding the current key, oldest first.
+    /// Segment indices of the copy holding the current key, oldest batch first.
     const dstd::Vector<std::size_t>& matching() const { return matching_; }
     const detail::CopyData* copy() const { return copy_; }
 
@@ -557,11 +562,15 @@ class ScopeCursor {
     /// oldest commit first.
     dstd::Vector<detail::SegmentLocation> segments_;
     dstd::Vector<SegmentView::Cursor> cursors_;
+    /// The batch ordinal of each segment of `segments_`, so the heap orders
+    /// the versions of one key by batch and not by record.
+    dstd::Vector<std::uint64_t> ordinals_;
     /// The current key of each cursor, so the heap compares without parsing.
     /// For a segment not loaded yet, the lower bound its record gives.
     dstd::Vector<ByteView> keys_;
     dstd::Vector<std::uint8_t> loaded_;
-    /// Min-heap of the cursors not at their end, by key then segment index.
+    /// Min-heap of the cursors not at their end, by key, then ordinal, then
+    /// segment index.
     dstd::Vector<std::size_t> heap_;
     dstd::Vector<std::size_t> matching_;
     const dstd::Vector<detail::HiddenRange>* hidden_ = nullptr;

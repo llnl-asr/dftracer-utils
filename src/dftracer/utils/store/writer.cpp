@@ -694,6 +694,7 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     ExtentSegment info;
     info.copy_id = pending->copy_item.local_id;
     info.entry_count = segment->entry_count;
+    info.ordinal = next_ordinal_.fetch_add(1, std::memory_order_relaxed);
     info.first_key = std::move(segment->first_key);
     info.last_key = std::move(segment->last_key);
 

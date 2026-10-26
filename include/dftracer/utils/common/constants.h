@@ -56,9 +56,9 @@ inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
 }  // namespace io_settings
 
 namespace store {
-/// The extent size P of a new index store data file: the unit every data extent
-/// and every read region is aligned to. A Lustre file takes the largest stripe
-/// size of its layout, capped at MAX_EXTENT_BYTES; anything else takes
+/// The extent size P of a new index store data file: the most raw bytes one
+/// data extent holds before it is compressed. A Lustre file takes the largest
+/// stripe size of its layout, capped at MAX_EXTENT_BYTES; anything else takes
 /// STORE_DEFAULT_EXTENT_BYTES. STORE_EXTENT_BYTES_ENV overrides both, and must
 /// be a multiple of 4096 in [STORE_MIN_EXTENT_BYTES, STORE_MAX_EXTENT_BYTES].
 inline constexpr const char* STORE_EXTENT_BYTES_ENV =

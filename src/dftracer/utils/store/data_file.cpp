@@ -540,11 +540,11 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
     const SegmentSpan span{0, static_cast<std::uint32_t>(bytes.size())};
     const dstd::Vector<std::uint32_t> starts =
         page_starts(dstd::Span<const SegmentSpan>(&span, 1), span.length);
-    auto stored = encode_extent(bytes, starts, 1);
+    auto stored = encode_extent(bytes, starts, EXTENT_ALIGN_BYTES);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     // The reservation records the extent range; the write below is its bytes.
-    const std::uint64_t offset = reserve_range(stored->size(), extent_size_,
-                                               io_fault::WriteKind::Extent);
+    const std::uint64_t offset = reserve_range(
+        stored->size(), EXTENT_ALIGN_BYTES, io_fault::WriteKind::Extent);
     ExtentRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
     ref.crc = crc32(0, stored->data(), stored->size());
     auto written = pwrite_all(fd_, stored->data(), stored->size(), offset);

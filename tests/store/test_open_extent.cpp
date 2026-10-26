@@ -288,7 +288,7 @@ void check_extent_layout(std::vector<WrittenExtent>& extents,
                   return a.offset < b.offset;
               });
     for (std::size_t i = 0; i < extents.size(); ++i) {
-        CHECK(extents[i].offset % extent_size == 0);
+        CHECK(extents[i].offset % store::EXTENT_ALIGN_BYTES == 0);
         CHECK(extents[i].length % FOUR_KIB == 0);
         CHECK(extents[i].length <= extent_size);
         CHECK(!extents[i].segments.empty());
@@ -475,7 +475,7 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
     std::vector<WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
     const WrittenExtent& extent = extents.front();
-    CHECK(extent.offset % EIGHT_KIB == 0);
+    CHECK(extent.offset % store::EXTENT_ALIGN_BYTES == 0);
     CHECK(extent.length % FOUR_KIB == 0);
     REQUIRE(extent.segments.size() == 1);
     CHECK(extent.segments.front().offset_in_extent == 0);
@@ -657,13 +657,13 @@ TEST_CASE(
     const std::vector<std::uint8_t> payload = make_payload(4, 512);
     auto extent = file->append_extent(ByteView(payload.data(), payload.size()));
     REQUIRE(extent.has_value());
-    CHECK(extent->offset == 2 * SIXTY_FOUR_KIB);
-    CHECK(extent->length <= store::EXTENT_HEADER_BYTES +
-                                store::EXTENT_TABLE_ENTRY_BYTES +
-                                payload.size());
+    // An extent starts at the next 4 KiB after the file end, not at the next
+    // extent size, and its stored form fills whole 4 KiB blocks.
+    CHECK(extent->offset == SIXTY_FOUR_KIB + 2 * FOUR_KIB);
+    CHECK(extent->length == FOUR_KIB);
     auto big = file->append_big(ByteView(payload.data(), payload.size()));
     REQUIRE(big.has_value());
-    CHECK(big->offset == 2 * SIXTY_FOUR_KIB + FOUR_KIB);
+    CHECK(big->offset == SIXTY_FOUR_KIB + 3 * FOUR_KIB);
 }
 
 TEST_CASE("store open extent: stress a small extent from many threads") {
@@ -879,7 +879,7 @@ TEST_CASE(
     std::vector<WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
     const WrittenExtent& extent = extents.front();
-    CHECK(extent.offset % EIGHT_KIB == 0);
+    CHECK(extent.offset % store::EXTENT_ALIGN_BYTES == 0);
     CHECK(extent.length % FOUR_KIB == 0);
     REQUIRE(extent.segments.size() == 1);
     CHECK(extent.segments.front().offset_in_extent == 0);

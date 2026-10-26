@@ -29,6 +29,9 @@ inline constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
 /// preadv instead of one pread per extent. A ref longer than this is a run of
 /// its own.
 inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
+/// Every extent starts at a multiple of this many bytes and its stored form is
+/// padded to one, so extents lie end to end whatever their compressed length.
+inline constexpr std::size_t EXTENT_ALIGN_BYTES = 4096;
 /// The most bytes the top table of a scope directory may use; above it the
 /// directory gains a level of middle blocks.
 inline constexpr std::size_t DIRECTORY_TOP_BYTES = 32768;
@@ -113,8 +116,8 @@ class DataFileWriter {
     ~DataFileWriter();
 
     /// Writes the stored form of one extent of raw bytes (extent_codec.h) at
-    /// an extent-aligned offset and returns its ref. Segment offsets inside the
-    /// extent count from the raw bytes.
+    /// an offset aligned to EXTENT_ALIGN_BYTES and returns its ref. Segment
+    /// offsets inside the extent count from the raw bytes.
     dstd::Expected<ExtentRef, dstd::Error> append_extent(ByteView bytes);
     dstd::Expected<ExtentRef, dstd::Error> append_big(ByteView bytes);
 

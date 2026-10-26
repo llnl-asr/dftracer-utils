@@ -24,7 +24,6 @@ constexpr std::uint64_t OPEN_EXTENT_WRITER_MASK = 0xFFFFULL << 32U;
 constexpr std::uint64_t OPEN_EXTENT_MAX_WRITERS = 0xFFFFULL;
 /// Bit 63: no appender may reserve space in the extent any more.
 constexpr std::uint64_t OPEN_EXTENT_SEALED = 1ULL << 63U;
-constexpr std::uint32_t OPEN_EXTENT_WRITE_ALIGN = 4096;
 
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
@@ -316,7 +315,7 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
     auto stored = encode_extent(
         ByteView(reinterpret_cast<const std::byte*>(extent->buffer.data()),
                  used),
-        starts, OPEN_EXTENT_WRITE_ALIGN, extent->codec);
+        starts, EXTENT_ALIGN_BYTES, extent->codec);
     if (!stored) {
         reject();
         return;
@@ -326,7 +325,7 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
-    pending->written.offset = file_.reserve_range(length, extent_size_);
+    pending->written.offset = file_.reserve_range(length, EXTENT_ALIGN_BYTES);
     pending->written.length = length;
     pending->buffer = std::move(*stored);
     pending->written.crc = crc32(0, pending->buffer.data(), length);
@@ -349,13 +348,13 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
     const dstd::Vector<std::uint32_t> starts =
         page_starts(spans, static_cast<std::uint32_t>(segment_bytes.size()));
     auto stored =
-        encode_extent(segment_bytes, starts, OPEN_EXTENT_WRITE_ALIGN, codec);
+        encode_extent(segment_bytes, starts, EXTENT_ALIGN_BYTES, codec);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
     pending->buffer = std::move(*stored);
-    pending->written.offset = file_.reserve_range(length, extent_size_);
+    pending->written.offset = file_.reserve_range(length, EXTENT_ALIGN_BYTES);
     pending->written.length = length;
     pending->written.crc = crc32(0, pending->buffer.data(), length);
     info.offset_in_extent = 0;

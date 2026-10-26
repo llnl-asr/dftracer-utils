@@ -435,7 +435,11 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
 
     struct io_uring_sqe* sqe = backend->ring_.get_sqe();
     if (!sqe) {
-        // SQ full -- fall back to synchronous execution
+        // SQ full -- fall back to synchronous execution. Neither the syscall
+        // nor the completion touches ring state, and a completion may submit
+        // again or call flush(), which takes submit_mutex_, so the lock goes
+        // before both.
+        lock.unlock();
         ssize_t result = 0;
         switch (uring_ctx->op) {
             case IoOp::Read:
@@ -498,15 +502,17 @@ void IoUringBackend::submit_fn(SubmitContext* ctx, IoAwaitable* awaitable) {
                 break;
         }
         if (result < 0) result = -errno;
-        if (awaitable != nullptr) {
-            awaitable->result_ = result;
-        } else if (uring_ctx->completion != nullptr) {
-            uring_ctx->completion(uring_ctx->completion_ctx, result);
-        }
-        delete req;
+        IoCompletionFn completion = uring_ctx->completion;
+        void* completion_ctx = uring_ctx->completion_ctx;
         delete uring_ctx;
         if (awaitable != nullptr) {
+            awaitable->result_ = result;
+        }
+        delete req;
+        if (awaitable != nullptr) {
             backend->executor_.enqueue(awaitable->handle_);
+        } else if (completion != nullptr) {
+            completion(completion_ctx, result);
         }
         return;
     }
@@ -645,6 +651,19 @@ IoAwaitable IoUringBackend::submit_pwrite(int fd, const void* buf,
                                           std::size_t len, off_t offset) {
     return make_uring_request(IoOp::Pwrite, fd, const_cast<void*>(buf), len,
                               offset, nullptr, 0, 0, this);
+}
+
+void IoUringBackend::submit_pwrite_callback(int fd, const void* buf,
+                                            std::size_t len, off_t offset,
+                                            IoCompletionFn completion,
+                                            void* context) {
+    auto awaitable =
+        make_uring_request(IoOp::Pwrite, fd, const_cast<void*>(buf), len,
+                           offset, nullptr, 0, 0, this);
+    auto* uring_ctx = static_cast<IoUringSubmitCtx*>(awaitable.submit_ctx_);
+    uring_ctx->completion = completion;
+    uring_ctx->completion_ctx = context;
+    submit_fn(uring_ctx, nullptr);
 }
 
 IoAwaitable IoUringBackend::submit_open(const char* path, int flags,

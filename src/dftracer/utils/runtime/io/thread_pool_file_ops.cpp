@@ -153,6 +153,23 @@ IoAwaitable ThreadPoolFileOps::submit_pwrite(int fd, const void* buf,
                         nullptr, 0, 0, &executor_, &pool_);
 }
 
+void ThreadPoolFileOps::submit_pwrite_callback(int fd, const void* buf,
+                                               std::size_t len, off_t offset,
+                                               IoCompletionFn completion,
+                                               void* context) {
+    auto* req = new IoRequest{};
+    req->op = IoOp::Pwrite;
+    req->fd = fd;
+    req->buf = const_cast<void*>(buf);
+    req->len = len;
+    req->offset = offset;
+    req->completion = completion;
+    req->completion_ctx = context;
+    req->pool = &pool_;
+    if (is_file_op(req->op)) pool_.begin_tracked();
+    pool_.submit([req] { execute_request(req); });
+}
+
 IoAwaitable ThreadPoolFileOps::submit_open(const char* path, int flags,
                                            mode_t mode) {
     return make_request(IoOp::Open, -1, nullptr, 0, 0, path, flags, mode,

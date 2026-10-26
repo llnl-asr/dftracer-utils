@@ -212,6 +212,7 @@ class DataFileReader {
     ~DataFileReader();
 
     const FileIndex& index() const noexcept { return index_; }
+    std::uint64_t file_size() const noexcept { return file_size_; }
     std::size_t records_read() const noexcept { return records_read_; }
 
     /// Reads one extent whole and checks its crc: the stored bytes, as an
@@ -219,6 +220,20 @@ class DataFileReader {
     /// fails, Io when the read fails.
     dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_extent(
         const ExtentRef& ref) const;
+    /// Reads `length` bytes at `offset` into `out`, which it resizes, with no
+    /// crc: the caller checks what it reads, such as the pages of an extent.
+    /// Parse when the range lies outside the file, Io when the read fails.
+    /// `reads` counts the call and its bytes.
+    dstd::Expected<void, dstd::Error> read_range(
+        std::uint64_t offset, std::size_t length,
+        dstd::Vector<std::uint8_t>& out, BlockReads* reads) const;
+    /// Reads `length` bytes at `offset` in VERIFY_CHUNK_BYTES chunks and keeps
+    /// none of them, so the operating system caches the range for the reads
+    /// that follow. A range past the end of the file stops at the end. Io when
+    /// a read fails. `reads` counts the calls and their bytes.
+    dstd::Expected<void, dstd::Error> warm_range(std::uint64_t offset,
+                                                 std::uint64_t length,
+                                                 BlockReads* reads) const;
     /// Reads one metadata block whole: one pread, then the crc of its bytes.
     /// Parse when the block lies outside the file or its crc fails, Io when
     /// the read itself fails. `reads` counts the call and its bytes.

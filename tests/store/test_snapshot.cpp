@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/memory/manager.h>
@@ -379,6 +380,8 @@ struct OpenDump {
     std::size_t commits = 0;
     std::uint64_t indexes_read = 0;
     std::uint64_t metadata_blocks_read = 0;
+    std::uint64_t page_reads = 0;
+    std::uint64_t windows_warmed = 0;
 };
 
 OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
@@ -406,6 +409,8 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     dump.extents_read = snapshot->read_stats().extents_read;
     dump.indexes_read = snapshot->read_stats().indexes_read;
     dump.metadata_blocks_read = snapshot->read_stats().metadata_blocks_read;
+    dump.page_reads = snapshot->read_stats().page_reads;
+    dump.windows_warmed = snapshot->read_stats().windows_warmed;
     auto report = snapshot->check();
     REQUIRE(report.has_value());
     dump.commits = report->commits;
@@ -2193,8 +2198,13 @@ TEST_SUITE("index store snapshot") {
         CHECK(eight.indexes_read == 0);
         CHECK(eight.metadata_blocks_read == one.metadata_blocks_read);
         CHECK(eight.metadata_blocks_read >= 2U * WRITERS);
-        CHECK(eight.read_calls ==
-              eight.extents_read + eight.metadata_blocks_read);
+        // Each file holds several extents in one window, which the second
+        // extent loaded there reads whole, in one call: a file is smaller than
+        // one chunk of the read.
+        CHECK(eight.windows_warmed == WRITERS);
+        CHECK(eight.read_calls == eight.extents_read +
+                                      eight.metadata_blocks_read +
+                                      eight.page_reads + eight.windows_warmed);
     }
 
     TEST_CASE("a corrupt extent in a middle run marks only its commit bad") {
@@ -2252,9 +2262,11 @@ TEST_SUITE("index store snapshot") {
             CHECK(snapshot->open_stats().files == 1);
             CHECK(snapshot->open_stats().extents == 3);
             // The three commits of the file, each read once at its first touch:
-            // the queries of one dump touch each of them exactly once.
+            // the queries of one dump touch each of them exactly once, and
+            // read the pages they need besides.
             CHECK(snapshot->read_stats().commits_verified == 3);
-            CHECK(snapshot->read_stats().read_calls == 3);
+            CHECK(snapshot->read_stats().read_calls ==
+                  3 + snapshot->read_stats().page_reads);
         };
         check(1);
         check(8);
@@ -2359,10 +2371,15 @@ TEST_SUITE("index store snapshot") {
             }
         }
         REQUIRE(late_extent != nullptr);
+        // A byte of the first page of the extent of `late`, which holds its
+        // first key and which the page crc covers.
         std::vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(late_extent->offset + late_extent->length <= bytes.size());
-        bytes[static_cast<std::size_t>(late_extent->offset) +
-              late_extent->length - 1U] ^= 0xFFU;
+        const auto late_at = static_cast<std::size_t>(late_extent->offset);
+        auto late_pages = store::ExtentPages::open(
+            ByteView{bytes.data() + late_at, late_extent->length});
+        REQUIRE(late_pages.has_value());
+        bytes[late_at + late_pages->entry(0).stored_offset] ^= 0xFFU;
         const std::string copy_path = copy_dir.file("w-synced-bad.dfs");
         write_file(copy_path, bytes);
 
@@ -2780,7 +2797,8 @@ TEST_SUITE("index store snapshot") {
             CHECK(snapshot->open_stats().extents == 1);
             // One commit, read once, by the state and the query that need it.
             CHECK(snapshot->read_stats().commits_verified == 1);
-            CHECK(snapshot->read_stats().read_calls == 1);
+            CHECK(snapshot->read_stats().read_calls ==
+                  1 + snapshot->read_stats().page_reads);
         };
         check(1);
         check(8);
@@ -2817,6 +2835,37 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
     }
 
+    TEST_CASE("the page cache size comes from its variable") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_page_cache_env");
+        const ScopeKey scope = file_scope("/traces/a.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        write_scoped_file(dir, spec, scope, 3, 500, true);
+        const char* name =
+            dftracer::utils::constants::store::STORE_PAGE_CACHE_BYTES_ENV;
+
+        ::setenv(name, "many", 1);
+        auto refused = Snapshot::open(dir.str());
+        ::unsetenv(name);
+        REQUIRE_FALSE(refused.has_value());
+        CHECK(refused.error().is(dstd::Condition::InvalidArgument));
+
+        // A cache of no bytes still keeps the page a query reads, and every
+        // value reads right.
+        ::setenv(name, "0", 1);
+        auto tiny = Snapshot::open(dir.str());
+        ::unsetenv(name);
+        REQUIRE(tiny.has_value());
+        for (int k = 0; k < 500; k += 37) {
+            const std::string key = "b2-" + key_of(k);
+            auto found = tiny->get(spec, scope, view_of(key));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+            CHECK(to_std((*found)->bytes()) == value_of(k));
+        }
+        auto cursor = tiny->scan(spec, scope, ByteView{}, ByteView{});
+        CHECK(collect(cursor).size() == 1500);
+    }
+
     TEST_CASE(
         "an open reads no block and a query reads only the extent it needs") {
         dftu_utils_test::ScopedTestDir dir("snapshot_lazy_open");
@@ -2843,14 +2892,15 @@ TEST_SUITE("index store snapshot") {
         CHECK(to_std((*found)->bytes()) == value_of(0));
         // The files closed, so their commits are synced: the get reads the
         // directory block of each file to find the scope, the segment block of
-        // the one commit whose range holds the key, then the one extent that
-        // holds it.
+        // the one commit whose range holds the key, then the page table of the
+        // one extent that holds it and the page that holds the key.
         const store::ReadStats touched = snapshot->read_stats();
         CHECK(touched.commits_verified == 0);
         CHECK(touched.indexes_read == 0);
         CHECK(touched.metadata_blocks_read == 3);
         CHECK(touched.extents_read == 1);
-        CHECK(touched.read_calls == 4);
+        CHECK(touched.page_reads == 1);
+        CHECK(touched.read_calls == 5);
         CHECK(touched.bytes_read > 0);
 
         auto other =
@@ -2863,7 +2913,8 @@ TEST_SUITE("index store snapshot") {
         CHECK(both.indexes_read == 0);
         CHECK(both.metadata_blocks_read == 4);
         CHECK(both.extents_read == 2);
-        CHECK(both.read_calls == 6);
+        CHECK(both.page_reads == 2);
+        CHECK(both.read_calls == 8);
         // A closed file holds no commit object and lists no extent ref.
         CHECK(snapshot->open_stats().commits == 0);
         CHECK(snapshot->open_stats().extents == 0);
@@ -3180,8 +3231,9 @@ TEST_SUITE("index store snapshot") {
         CHECK(to_std(report->bad_segments[0].file) == "w-check.dfs");
         CHECK(report->bad_segments[0].extent_offset == listed.offset);
         CHECK(report->bad_segments[0].offset_in_extent == offset_in_extent);
-        // The extent the get read is not read again.
-        CHECK(snapshot->read_stats().extents_read == before.extents_read);
+        // The check reads the extent whole against its crc, and not the page
+        // table the get read.
+        CHECK(snapshot->read_stats().extents_read == before.extents_read + 1);
         // The walk does not change what the commit already read.
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
     }
@@ -3550,7 +3602,9 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(head.has_value());
         REQUIRE(head->has_value());
         CHECK(to_std((*head)->bytes()) == "small");
-        CHECK(snapshot->read_stats().pages_decoded == 1);
+        // The head of the segment has a page of its own, then the page of the
+        // first granule.
+        CHECK(snapshot->read_stats().pages_decoded == 2);
 
         auto wide = snapshot->get(spec, scope, view_of(std::string("m")));
         REQUIRE(wide.has_value());

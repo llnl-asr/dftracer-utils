@@ -39,6 +39,7 @@
 // keys, and 1, 4 and 16 parts show how one fold scan scales.
 
 #include <bench_counters.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -403,6 +404,9 @@ std::string format_read_stats(const store::ReadStats& reads) {
     out << "commits_read=" << reads.commits_verified
         << " extents_read=" << reads.extents_read
         << " pages_decoded=" << reads.pages_decoded
+        << " page_hits=" << reads.page_hits
+        << " page_reads=" << reads.page_reads
+        << " windows_warmed=" << reads.windows_warmed
         << " metadata_blocks_read=" << reads.metadata_blocks_read
         << " read_calls=" << reads.read_calls << " mib_read=" << std::fixed
         << std::setprecision(1)
@@ -902,8 +906,13 @@ struct Bench {
                       " eighth)"
                     : "none")
             << "; Snapshot::open reads only the metadata, and a query reads"
-               " and checks each extent on its first read and decodes only"
-               " the pages it needs\n"
+               " an extent whole once for its page table, a 16 MiB window"
+               " of the file once it loads a second extent there, and the"
+               " pages it needs through a page cache of "
+            << (dftracer::utils::constants::store::
+                    STORE_DEFAULT_PAGE_CACHE_BYTES >>
+                20)
+            << " MiB unless DFTRACER_UTILS_STORE_PAGE_CACHE_BYTES sets it\n"
             << "# rocksdb compression=" << compression_name(cf.compression)
             << " bottommost=" << compression_name(cf.bottommost_compression)
             << " wal=off block_cache_mib="

@@ -1277,6 +1277,57 @@ DataFileReader::read_extent(const ExtentRef& ref) const {
     return bytes;
 }
 
+dstd::Expected<void, dstd::Error> DataFileReader::read_range(
+    std::uint64_t offset, std::size_t length, dstd::Vector<std::uint8_t>& out,
+    BlockReads* reads) const {
+    if (offset > file_size_ || length > file_size_ - offset) {
+        return parse_error();
+    }
+    out.resize(length);
+    std::size_t done = 0;
+    while (done < length) {
+        const ssize_t got = ::pread(fd_, out.data() + done, length - done,
+                                    static_cast<off_t>(offset + done));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return io_error();
+        }
+        if (got == 0) return parse_error();
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += static_cast<std::uint64_t>(got);
+        }
+        done += static_cast<std::size_t>(got);
+    }
+    return {};
+}
+
+dstd::Expected<void, dstd::Error> DataFileReader::warm_range(
+    std::uint64_t offset, std::uint64_t length, BlockReads* reads) const {
+    if (offset >= file_size_) return {};
+    const std::uint64_t end = offset + std::min(length, file_size_ - offset);
+    dstd::Vector<std::uint8_t> chunk(static_cast<std::size_t>(
+        std::min<std::uint64_t>(VERIFY_CHUNK_BYTES, end - offset)));
+    std::uint64_t at = offset;
+    while (at < end) {
+        const std::size_t want = static_cast<std::size_t>(
+            std::min<std::uint64_t>(chunk.size(), end - at));
+        const ssize_t got =
+            ::pread(fd_, chunk.data(), want, static_cast<off_t>(at));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return io_error();
+        }
+        if (got == 0) break;
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += static_cast<std::uint64_t>(got);
+        }
+        at += static_cast<std::uint64_t>(got);
+    }
+    return {};
+}
+
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
 DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
     if (handle.length == 0 && handle.offset == 0 && handle.crc == 0) {

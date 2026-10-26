@@ -587,7 +587,7 @@ bool append_segment_spans(ByteView segment, std::uint32_t offset,
         out.push_back({offset, length});
         return true;
     }
-    out.push_back({offset, view.granule(0).offset});
+    out.push_back({offset, view.granule(0).offset, true});
     for (std::size_t i = 0; i < view.granule_count(); ++i) {
         const SegmentView::GranuleSpan held = view.granule(i);
         const std::uint32_t granule_length =

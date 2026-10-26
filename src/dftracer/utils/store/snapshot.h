@@ -12,6 +12,7 @@
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/fold.h>
+#include <dftracer/utils/store/page_cache.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
@@ -73,19 +74,28 @@ struct ScopeGeneration {
 };
 
 /// Every block read the snapshot has done, cumulative and readable at any time
-/// from any thread. An extent is read once, the first time a query needs it, so
-/// an open leaves these at zero.
+/// from any thread. The page table of an extent is read once, the first time a
+/// query needs it, and its pages each time a query needs them, so an open
+/// leaves these at zero.
 struct ReadStats {
     /// The commits that are not synced and were read and checked whole.
     std::uint64_t commits_verified = 0;
     /// The commit records read for the extent refs a summary leaves out.
     std::uint64_t indexes_read = 0;
-    /// The blocks read, one per extent ref: the extents of synced commits one
-    /// at a time, and every block of a commit checked whole.
+    /// The blocks read, one per extent ref: the page tables of the extents of
+    /// synced commits, and every block of a commit checked whole.
     std::uint64_t extents_read = 0;
-    /// The pages decoded into frames: one per page a query had to decode to
-    /// reach the segments it read, each decoded once.
+    /// The pages read and decoded: one per page a query needed and did not
+    /// find in the page cache.
     std::uint64_t pages_decoded = 0;
+    /// The pages a query found decoded in the page cache.
+    std::uint64_t page_hits = 0;
+    /// The read calls of pages: one per range of pages read together.
+    std::uint64_t page_reads = 0;
+    /// The windows of READ_RUN_BYTES of a file read whole so the operating
+    /// system caches them: a window is read once a query loads the second
+    /// extent in it.
+    std::uint64_t windows_warmed = 0;
     /// The blocks of metadata read on first use: the directory blocks and the
     /// segment blocks of a closed file.
     std::uint64_t metadata_blocks_read = 0;
@@ -99,9 +109,8 @@ struct SkippedFile {
     dstd::Error error;
 };
 
-/// A value the snapshot returned: a view into an extent, or a buffer it owns
-/// for a big value or a folded value. Move-only: a copy would leave the view
-/// pointing at the first value's buffer.
+/// A value the snapshot returned, in a buffer it owns. Move-only: a copy would
+/// leave the view pointing at the first value's buffer.
 class Value {
    public:
     Value() = default;
@@ -145,47 +154,28 @@ struct CommitExtent {
     const ExtentRefItem* listed = nullptr;
 };
 
-/// The raw bytes of one page of an extent, decoded once: acquire load, lock,
-/// recheck, decode, release store. Every member is written under `mutex` by a
-/// const query, which fills the cache it reads through.
-struct Frame {
-    mutable std::atomic<std::uint8_t> state{
-        static_cast<std::uint8_t>(LoadState::Unknown)};
-    mutable std::mutex mutex;
-    /// The raw bytes of one page, decoded before the release store that
-    /// publishes Good, and read only by a thread whose acquire load saw Good.
-    mutable dstd::Vector<std::uint8_t> bytes;
-    /// The error of a Failed frame, written before the release store.
-    mutable dstd::Error error;
-};
-
-/// The stored bytes of one extent, read once, with its pages and one frame per
-/// page, both created under `mutex` before the release store that publishes
-/// Good. A closed file holds one extent slot per extent its segment blocks
-/// name; a file that is not closed holds one per block of its commits.
+/// The page table of one extent, read once: acquire load, lock, recheck, read,
+/// release store. A query reads and decodes the pages it needs itself, so the
+/// snapshot keeps no bytes of an extent.
 struct ExtentSlot {
     std::atomic<std::uint8_t> state{
         static_cast<std::uint8_t>(LoadState::Unknown)};
     std::mutex mutex;
-    /// The stored bytes, which `pages` reads in place: written before the
-    /// release store that publishes Good.
-    dstd::Vector<std::uint8_t> stored;
-    /// The pages of `stored`, empty until the slot is Good.
+    /// Where the extent lies in its file, written before the release store
+    /// that publishes Good.
+    ExtentRef ref;
+    /// The page table, empty until the slot is Good.
     dstd::Optional<ExtentPages> pages;
-    /// One frame per page of `pages`.
-    dstd::Vector<Frame> frames;
     /// The error of a Failed extent, written before the release store.
     dstd::Error error;
 };
 
 struct Commit;
 struct LazyBlock;
-struct SegmentBody;
 class GroupSlots;
 
 /// One segment of the segments of one copy of one commit: the extent holding
-/// it, its place in that extent, its key range, and the view opened from it
-/// once.
+/// it, its place in that extent and its key range.
 struct SegmentSlot {
     /// The extent holding the segment, for a closed file.
     ExtentRef extent;
@@ -206,18 +196,22 @@ struct SegmentSlot {
     /// skips a segment that cannot hold the key without reading it.
     ByteView first_key;
     ByteView last_key;
-    /// Opened by the first query that reads the segment, owned by the block.
-    std::atomic<SegmentBody*> view{nullptr};
 };
 
-/// The view of one segment and, for a segment that spans several pages, the
-/// bytes of those pages joined into one buffer the view reads. Allocated as one
-/// object so the compare-and-swap that publishes the view publishes both.
-struct SegmentBody {
-    SegmentBody(dstd::Vector<std::uint8_t> joined_bytes, SegmentView opened)
-        : joined(std::move(joined_bytes)), view(std::move(opened)) {}
-
+/// What a query read of an extent: the one cached page a range lies in, or the
+/// pages it spans joined into a buffer of its own.
+struct PageHold {
+    CachedPage page;
     dstd::Vector<std::uint8_t> joined;
+};
+
+/// The pages one segment spans and the view of the segment over them, owned by
+/// the cursor that reads the segment.
+struct SegmentBody {
+    SegmentBody(PageHold held, SegmentView opened)
+        : hold(std::move(held)), view(std::move(opened)) {}
+
+    PageHold hold;
     SegmentView view;
 };
 
@@ -258,8 +252,6 @@ struct LazyBlock {
     /// extents.
     Commit* owner = nullptr;
     dstd::Vector<SegmentSlot> segments;
-
-    ~LazyBlock();
 };
 
 /// One commit of one file: every extent ref of one sequence, deduplicated by
@@ -445,6 +437,8 @@ struct FileData {
     std::uint32_t directory_levels = 0;
     /// The extent slots of a closed file.
     ExtentSlots extent_slots;
+    /// Per window of READ_RUN_BYTES of the file, the extents loaded in it.
+    mutable dstd::Vector<std::atomic<std::uint32_t>> windows;
 };
 
 /// The counters of Snapshot::read_stats, shared by every thread that loads.
@@ -465,6 +459,24 @@ class ReadCounters {
         bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
     }
 
+    /// The pages of one range a query needed: those it decoded after `reads`
+    /// read them, and those the page cache held.
+    void add_pages(std::uint64_t decoded, std::uint64_t hits,
+                   const BlockReads& reads) {
+        pages_decoded_.fetch_add(decoded, std::memory_order_relaxed);
+        page_hits_.fetch_add(hits, std::memory_order_relaxed);
+        page_reads_.fetch_add(reads.calls, std::memory_order_relaxed);
+        read_calls_.fetch_add(reads.calls, std::memory_order_relaxed);
+        bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
+    }
+
+    /// One window of a file read so the operating system caches it.
+    void add_window(const BlockReads& reads) {
+        windows_warmed_.fetch_add(1, std::memory_order_relaxed);
+        read_calls_.fetch_add(reads.calls, std::memory_order_relaxed);
+        bytes_read_.fetch_add(reads.bytes, std::memory_order_relaxed);
+    }
+
     /// One block of metadata, read whole: the directory blocks and the
     /// segment blocks of a closed file.
     void add_metadata(const BlockReads& reads) {
@@ -478,6 +490,9 @@ class ReadCounters {
                          indexes_read_.load(std::memory_order_relaxed),
                          extents_read_.load(std::memory_order_relaxed),
                          pages_decoded_.load(std::memory_order_relaxed),
+                         page_hits_.load(std::memory_order_relaxed),
+                         page_reads_.load(std::memory_order_relaxed),
+                         windows_warmed_.load(std::memory_order_relaxed),
                          metadata_blocks_read_.load(std::memory_order_relaxed),
                          read_calls_.load(std::memory_order_relaxed),
                          bytes_read_.load(std::memory_order_relaxed)};
@@ -488,6 +503,9 @@ class ReadCounters {
     std::atomic<std::uint64_t> indexes_read_{0};
     std::atomic<std::uint64_t> extents_read_{0};
     std::atomic<std::uint64_t> pages_decoded_{0};
+    std::atomic<std::uint64_t> page_hits_{0};
+    std::atomic<std::uint64_t> page_reads_{0};
+    std::atomic<std::uint64_t> windows_warmed_{0};
     std::atomic<std::uint64_t> metadata_blocks_read_{0};
     std::atomic<std::uint64_t> read_calls_{0};
     std::atomic<std::uint64_t> bytes_read_{0};
@@ -550,7 +568,7 @@ class ScopeCursor {
               ByteView end);
     void settle();
     void advance_matching();
-    /// Loads the extent of one segment, stands its cursor at `begin_` and puts
+    /// Reads the pages of one segment, stands its cursor at `begin_` and puts
     /// it back on the heap. False, with `error_` set, when the extent cannot be
     /// used.
     bool load(std::size_t index);
@@ -562,6 +580,9 @@ class ScopeCursor {
     /// oldest commit first.
     dstd::Vector<detail::SegmentLocation> segments_;
     dstd::Vector<SegmentView::Cursor> cursors_;
+    /// The pages of each segment of `segments_` from its load until its cursor
+    /// ends, which its cursor reads.
+    dstd::Vector<dstd::UniquePtr<detail::SegmentBody>> bodies_;
     /// The batch ordinal of each segment of `segments_`, so the heap orders
     /// the versions of one key by batch and not by record.
     dstd::Vector<std::uint64_t> ordinals_;
@@ -583,7 +604,8 @@ class ScopeCursor {
 };
 
 /// A forward-only scan. It reads the snapshot it was made from, so it stays
-/// valid only while that snapshot is alive and unmoved.
+/// valid only while that snapshot is alive and unmoved. The views key() and
+/// value() return stay valid until the next call of next().
 class ScanCursor {
    public:
     ScanCursor() = default;
@@ -697,7 +719,8 @@ struct CheckReport {
 /// Immutable to callers after open, so the const methods are safe from many
 /// threads: the metadata never changes, and each block a query needs is read
 /// and checked once behind the state of its block, extent or commit. A cursor
-/// and the views it returns stay valid while the snapshot is alive and unmoved.
+/// and the views it returns stay valid while the snapshot is alive and unmoved,
+/// and the views of a cursor until it moves on.
 class Snapshot {
    public:
     /// Opens every data file of `dir`. A closed file costs one read of its
@@ -789,11 +812,11 @@ class Snapshot {
     /// acquire load. A block built in memory at open is Good already.
     detail::LoadStatus load_block(const detail::FileData& file,
                                   detail::LazyBlock& block) const;
-    /// Reads one extent of a closed file once, under the slot's mutex, then
-    /// opens its pages. An index at or past the extent count is Bad.
-    detail::LoadStatus load_frame(const detail::FileData& file,
-                                  std::size_t extent_index,
-                                  const ExtentRef& ref) const;
+    /// Reads the page table of one extent of a closed file once, under the
+    /// slot's mutex. An index at or past the extent count is Bad.
+    detail::LoadStatus load_extent(const detail::FileData& file,
+                                   std::size_t extent_index,
+                                   const ExtentRef& ref) const;
     /// Reads and checks every block of one commit that is not synced once,
     /// under its mutex, and stores Good, Bad or Failed with a release store.
     /// The fast path of a commit a query already read is one acquire load.
@@ -803,33 +826,32 @@ class Snapshot {
     /// since a copy whose data does not verify is unreadable whatever else
     /// could not be read.
     detail::LoadStatus ensure_copy(const detail::CopyData& copy) const;
-    /// Loads the extent of one block of a synced commit once, under the slot's
-    /// mutex, then opens its pages.
-    detail::LoadStatus load_frame(detail::Commit& commit,
-                                  std::size_t block) const;
-    /// Decodes one page of a loaded extent into its frame once, under the
-    /// frame's mutex. Only a Good extent slot has frames to decode.
-    detail::LoadStatus load_page(const detail::ExtentSlot& extent,
-                                 std::size_t page) const;
-    /// The raw bytes of one segment of a loaded extent: a view into the frame
-    /// of the one page it lies in, or the frames of the pages it spans joined
-    /// into `owned`.
-    dstd::Expected<ByteView, dstd::Error> segment_bytes(
-        const detail::ExtentSlot& extent, std::uint32_t offset_in_extent,
-        std::uint32_t length, dstd::Vector<std::uint8_t>& owned) const;
-    /// The view of one segment over the pages of its loaded extent, opened and
-    /// published once.
-    dstd::Expected<const SegmentView*, dstd::Error> segment_pages(
-        detail::SegmentSlot& slot, const detail::ExtentSlot& extent) const;
+    /// Reads the page table of the extent of one block of a synced commit
+    /// once, under the slot's mutex.
+    detail::LoadStatus load_extent(detail::Commit& commit,
+                                   std::size_t block) const;
+    /// Counts one more extent loaded at `offset` of `file`, and reads its
+    /// window whole when that extent is the second of the window, so the pages
+    /// the next queries of a dense workload read come from the cache of the
+    /// operating system and not from the device.
+    void warm_window(const detail::FileData& file, std::uint64_t offset) const;
+    /// The raw bytes [offset_in_extent, offset_in_extent + length) of one
+    /// extent whose page table is loaded, and a view into `hold`: the pages
+    /// they span from the page cache, and those it lacks read from the file in
+    /// one call, checked, decoded and added to it.
+    dstd::Expected<ByteView, dstd::Error> read_raw(
+        const detail::FileData& file, const detail::ExtentSlot& extent,
+        std::uint32_t offset_in_extent, std::uint32_t length,
+        detail::PageHold& hold) const;
     /// Reads the extent refs of a summary commit once, under its index mutex,
     /// and builds its blocks, extents and segments. The fast path is one
     /// acquire load.
     detail::LoadStatus load_index(detail::Commit& commit) const;
-    /// The view of one segment: its extent loaded, or the error of the extent.
-    /// A extent that failed its crc is a Parse error.
-    dstd::Expected<const SegmentView*, dstd::Error> segment_view(
-        const detail::FileData& file, detail::LazyBlock& block,
-        std::size_t index) const;
+    /// The pages of one segment and its view over them, for a cursor to own.
+    /// An extent that failed its crc is a Parse error.
+    dstd::Expected<dstd::UniquePtr<detail::SegmentBody>, dstd::Error>
+    open_segment(const detail::FileData& file, detail::LazyBlock& block,
+                 std::size_t index) const;
     /// The extent holding one segment, loaded once: the extent of a closed file
     /// or the block of the commit that holds it. An extent that failed its crc
     /// is a Parse error.
@@ -839,10 +861,11 @@ class Snapshot {
     /// The entry of `key` in one segment, read through the page of the header
     /// and the index and the page of the granule that holds it when those are
     /// two pages of the extent, so a point read decodes those two and no more.
-    /// The entry points into bytes the snapshot keeps.
+    /// The entry points into `holder`.
     dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
     find_in_segment(const detail::FileData& file, detail::LazyBlock& block,
-                    std::size_t index, ByteView key) const;
+                    std::size_t index, ByteView key,
+                    detail::PageHold& holder) const;
     /// The run of one commit of one copy inside its segment block, with what it
     /// needs read first: the commit index of a file that is not closed, or the
     /// segment block of a closed one. `block` is null when the commit holds no
@@ -864,6 +887,8 @@ class Snapshot {
     /// Behind a pointer: the counters move once as a Snapshot is returned, and
     /// the commits of the snapshot add to counters any thread can read.
     dstd::UniquePtr<detail::ReadCounters> reads_;
+    /// Behind a pointer for the same reason, and shared by every query.
+    dstd::UniquePtr<PageCache> pages_;
 };
 
 }  // namespace dftracer::utils::store

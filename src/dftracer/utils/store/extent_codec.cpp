@@ -42,6 +42,12 @@ const std::uint8_t* bytes_of(ByteView view) {
     return reinterpret_cast<const std::uint8_t*>(view.data());
 }
 
+std::uint32_t table_crc(const std::uint8_t* head, std::size_t count) {
+    const std::uint32_t crc = crc32(0, head, 8);
+    return crc32(crc, head + EXTENT_HEADER_BYTES,
+                 count * EXTENT_TABLE_ENTRY_BYTES);
+}
+
 bool cuts_pages(dstd::Span<const std::uint32_t> starts,
                 std::size_t raw_length) {
     if (starts.empty() || starts.front() != 0) return false;
@@ -64,13 +70,17 @@ dstd::Vector<std::uint32_t> page_starts(dstd::Span<const SegmentSpan> segments,
     for (const SegmentSpan& segment : segments) {
         if (segment.length == 0) continue;
         const std::uint32_t end = segment.offset + segment.length;
-        if (end - page <= PAGE_BYTES) continue;
+        if (!segment.alone && end - page <= PAGE_BYTES) continue;
         if (segment.offset > page) {
             page = segment.offset;
             starts.push_back(page);
         }
         while (end - page > PAGE_BYTES) {
             page += static_cast<std::uint32_t>(PAGE_BYTES);
+            starts.push_back(page);
+        }
+        if (segment.alone && end < raw_length) {
+            page = end;
             starts.push_back(page);
         }
     }
@@ -136,20 +146,47 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
     out.resize(align_up(out.size(), align));
     write_u32_le(out.data(), static_cast<std::uint32_t>(count));
     write_u32_le(out.data() + 4, static_cast<std::uint32_t>(raw_length));
+    write_u32_le(out.data() + 8, table_crc(out.data(), count));
     return out;
 }
 
+std::size_t ExtentPages::table_length(ByteView header) {
+    if (header.size() < EXTENT_HEADER_BYTES) return 0;
+    const std::uint32_t count = read_u32_le(bytes_of(header));
+    if (count == 0) return 0;
+    return EXTENT_HEADER_BYTES +
+           static_cast<std::size_t>(count) * EXTENT_TABLE_ENTRY_BYTES;
+}
+
 dstd::Expected<ExtentPages, dstd::Error> ExtentPages::open(ByteView stored) {
-    if (stored.size() < EXTENT_HEADER_BYTES) return parse_error();
-    const std::uint8_t* header = bytes_of(stored);
+    auto pages = parse(stored, stored.size());
+    if (!pages) return pages;
+    pages->stored_ = stored;
+    return pages;
+}
+
+dstd::Expected<ExtentPages, dstd::Error> ExtentPages::open_table(
+    ByteView head, std::uint64_t stored_length) {
+    return parse(head, stored_length);
+}
+
+dstd::Expected<ExtentPages, dstd::Error> ExtentPages::parse(
+    ByteView head, std::uint64_t stored_length) {
+    if (head.size() < EXTENT_HEADER_BYTES || head.size() > stored_length) {
+        return parse_error();
+    }
+    const std::uint8_t* header = bytes_of(head);
     const std::uint32_t count = read_u32_le(header);
     const std::uint32_t raw_length = read_u32_le(header + 4);
-    if (read_u32_le(header + 8) != 0 || read_u32_le(header + 12) != 0 ||
-        count == 0 || raw_length == 0 || raw_length > EXTENT_MAX_RAW_BYTES) {
+    if (read_u32_le(header + 12) != 0 || count == 0 || raw_length == 0 ||
+        raw_length > EXTENT_MAX_RAW_BYTES) {
         return parse_error();
     }
     if (count >
-        (stored.size() - EXTENT_HEADER_BYTES) / EXTENT_TABLE_ENTRY_BYTES) {
+        (head.size() - EXTENT_HEADER_BYTES) / EXTENT_TABLE_ENTRY_BYTES) {
+        return parse_error();
+    }
+    if (read_u32_le(header + 8) != table_crc(header, count)) {
         return parse_error();
     }
     const std::size_t table_end =
@@ -178,15 +215,15 @@ dstd::Expected<ExtentPages, dstd::Error> ExtentPages::open(ByteView stored) {
             return parse_error();
         }
         if (page.stored_offset < table_end ||
-            page.stored_offset > stored.size() ||
-            page.stored_length > stored.size() - page.stored_offset) {
+            page.stored_offset > stored_length ||
+            page.stored_length > stored_length - page.stored_offset) {
             return parse_error();
         }
         next_raw += page.raw_length;
         entries.push_back(page);
     }
     if (next_raw != raw_length) return parse_error();
-    return ExtentPages(stored, std::move(entries), raw_length);
+    return ExtentPages(ByteView{}, std::move(entries), raw_length);
 }
 
 std::pair<std::size_t, std::size_t> ExtentPages::covering(
@@ -213,22 +250,30 @@ std::pair<std::size_t, std::size_t> ExtentPages::covering(
 
 dstd::Expected<void, dstd::Error> ExtentPages::decode(
     std::size_t i, dstd::Vector<std::uint8_t>& out) const {
-    if (i >= entries_.size()) return parse_error();
+    if (i >= entries_.size() || stored_.empty()) return parse_error();
     const PageEntry& page = entries_[i];
-    const std::uint8_t* src = bytes_of(stored_) + page.stored_offset;
-    if (crc32(0, src, page.stored_length) != page.crc) return parse_error();
     out.resize(page.raw_length);
+    return decode_page(
+        page, ByteView{stored_.data() + page.stored_offset, page.stored_length},
+        out.data());
+}
+
+dstd::Expected<void, dstd::Error> ExtentPages::decode_page(
+    const PageEntry& page, ByteView stored, std::uint8_t* out) {
+    if (stored.size() != page.stored_length) return parse_error();
+    const std::uint8_t* src = bytes_of(stored);
+    if (crc32(0, src, page.stored_length) != page.crc) return parse_error();
     switch (page.codec) {
         case PageCodec::None: {
             if (page.stored_length != page.raw_length) return parse_error();
-            std::memcpy(out.data(), src, page.raw_length);
+            std::memcpy(out, src, page.raw_length);
             return {};
         }
         case PageCodec::Zstd: {
             thread_local DecompressContext context;
             if (context.ctx == nullptr) return parse_error();
             const std::size_t got = ZSTD_decompressDCtx(
-                context.ctx, out.data(), out.size(), src, page.stored_length);
+                context.ctx, out, page.raw_length, src, page.stored_length);
             if (ZSTD_isError(got) != 0 || got != page.raw_length) {
                 return parse_error();
             }

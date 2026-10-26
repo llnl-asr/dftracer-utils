@@ -2,6 +2,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <doctest/doctest.h>
 
@@ -58,6 +59,16 @@ std::size_t entry_at(std::size_t i) {
     return store::EXTENT_HEADER_BYTES + i * store::EXTENT_TABLE_ENTRY_BYTES;
 }
 
+/// Writes the header crc of a stored extent again after a change to its
+/// table, so the check under test is the one that refuses it.
+void reseal(dstd::Vector<std::uint8_t>& stored) {
+    const std::uint32_t count = read_u32_le(stored.data());
+    const std::uint32_t crc = store::crc32(0, stored.data(), 8);
+    write_u32_le(stored.data() + 8,
+                 store::crc32(crc, stored.data() + entry_at(0),
+                              count * store::EXTENT_TABLE_ENTRY_BYTES));
+}
+
 }  // namespace
 
 TEST_SUITE("store extent codec") {
@@ -85,6 +96,31 @@ TEST_SUITE("store extent codec") {
         CHECK(starts[0] == 0);
         CHECK(starts[1] == 100);
         CHECK(starts[2] == 100 + PAGE);
+    }
+
+    TEST_CASE("a span marked alone takes a page no other span shares") {
+        // A small segment, then the head of a segment over pages and its two
+        // granules: the head starts a page and the first granule another.
+        const std::uint32_t head = 200;
+        const std::uint32_t granule = PAGE - 64;
+        const std::uint32_t at = 100;
+        const auto starts = starts_of({{0, at},
+                                       {at, head, true},
+                                       {at + head, granule},
+                                       {at + head + granule, granule}},
+                                      at + head + 2 * granule);
+        REQUIRE(starts.size() == 4);
+        CHECK(starts[0] == 0);
+        CHECK(starts[1] == at);
+        CHECK(starts[2] == at + head);
+        CHECK(starts[3] == at + head + granule);
+    }
+
+    TEST_CASE("a span marked alone at the end of the extent ends no page") {
+        const auto starts = starts_of({{0, 10}, {10, 20, true}}, 30);
+        REQUIRE(starts.size() == 2);
+        CHECK(starts[0] == 0);
+        CHECK(starts[1] == 10);
     }
 
     TEST_CASE("a gap moves the page to the segment after it") {
@@ -213,34 +249,46 @@ TEST_SUITE("store extent codec") {
         SUBCASE("unknown codec") {
             dstd::Vector<std::uint8_t> bad = stored;
             bad[entry_at(1) + 20] = 7;
+            reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a reserved byte of the header set") {
             dstd::Vector<std::uint8_t> bad = stored;
-            bad[9] = 1;
+            bad[13] = 1;
             CHECK(refuses(bad));
         }
         SUBCASE("a reserved byte of an entry set") {
             dstd::Vector<std::uint8_t> bad = stored;
             bad[entry_at(0) + 22] = 1;
+            reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a table entry out of bounds") {
             dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(0) + 8,
                          static_cast<std::uint32_t>(bad.size()));
+            reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("raw ranges that are not contiguous") {
             dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(1), PAGE + 1);
+            reseal(bad);
             CHECK(refuses(bad));
         }
         SUBCASE("a page crc that does not match") {
             dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(0) + 16,
                          read_u32_le(bad.data() + entry_at(0) + 16) ^ 1U);
+            reseal(bad);
             CHECK(refuses(bad));
+        }
+        SUBCASE("a table that does not match its header crc") {
+            dstd::Vector<std::uint8_t> bad = stored;
+            bad[entry_at(1) + 2] ^= 0x01U;
+            CHECK(refuses(bad));
+            CHECK_FALSE(store::ExtentPages::open_table(view_of(bad), bad.size())
+                            .has_value());
         }
         SUBCASE("a damaged payload") {
             dstd::Vector<std::uint8_t> bad = stored;
@@ -254,8 +302,60 @@ TEST_SUITE("store extent codec") {
         SUBCASE("a page longer than a page") {
             dstd::Vector<std::uint8_t> bad = stored;
             write_u32_le(bad.data() + entry_at(0) + 4, PAGE + 1);
+            reseal(bad);
             CHECK(refuses(bad));
         }
+    }
+
+    TEST_CASE("a page table opens alone and its pages decode one at a time") {
+        const dstd::Vector<std::uint8_t> raw = text_bytes(3 * PAGE - 100);
+        const std::uint32_t starts[] = {0, PAGE, 2 * PAGE};
+        auto encoded = store::encode_extent(
+            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN);
+        REQUIRE(encoded.has_value());
+        const dstd::Vector<std::uint8_t>& stored = *encoded;
+
+        const std::size_t head = store::ExtentPages::table_length(
+            ByteView{stored.data(), store::EXTENT_HEADER_BYTES});
+        CHECK(head == entry_at(3));
+        CHECK(store::ExtentPages::table_length(ByteView{
+                  stored.data(), store::EXTENT_HEADER_BYTES - 1}) == 0);
+
+        auto table = store::ExtentPages::open_table(
+            ByteView{stored.data(), head}, stored.size());
+        REQUIRE(table.has_value());
+        REQUIRE(table->size() == 3);
+        CHECK(table->raw_length() == raw.size());
+        // The pages live outside the table, so it decodes none of them.
+        dstd::Vector<std::uint8_t> out;
+        CHECK_FALSE(table->decode(0, out).has_value());
+
+        for (std::size_t i = 0; i < table->size(); ++i) {
+            const store::PageEntry& entry = table->entry(i);
+            dstd::Vector<std::uint8_t> page(entry.raw_length);
+            REQUIRE(store::ExtentPages::decode_page(
+                        entry,
+                        ByteView{stored.data() + entry.stored_offset,
+                                 entry.stored_length},
+                        page.data())
+                        .has_value());
+            CHECK(std::equal(page.begin(), page.end(),
+                             raw.begin() + entry.raw_offset));
+            // A page read short of its stored length is refused.
+            CHECK_FALSE(store::ExtentPages::decode_page(
+                            entry,
+                            ByteView{stored.data() + entry.stored_offset,
+                                     entry.stored_length - 1U},
+                            page.data())
+                            .has_value());
+        }
+
+        // Every page must lie inside the stored extent the caller names.
+        const store::PageEntry& last = table->entry(2);
+        CHECK_FALSE(store::ExtentPages::open_table(
+                        ByteView{stored.data(), head},
+                        last.stored_offset + last.stored_length - 1U)
+                        .has_value());
     }
 
     TEST_CASE("encode refuses starts that do not cut the extent into pages") {

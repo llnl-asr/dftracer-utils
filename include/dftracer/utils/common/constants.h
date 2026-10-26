@@ -67,6 +67,14 @@ inline constexpr std::uint32_t STORE_DEFAULT_EXTENT_BYTES = std::uint32_t{1}
                                                             << 20;
 inline constexpr std::uint32_t STORE_MIN_EXTENT_BYTES = 4096;
 inline constexpr std::uint32_t STORE_MAX_EXTENT_BYTES = std::uint32_t{16} << 20;
+/// The most bytes of decoded pages one snapshot of the store keeps for its
+/// queries to share. STORE_PAGE_CACHE_BYTES_ENV overrides it with a plain
+/// number of bytes: more memory makes a scan over many scopes and repeated
+/// point reads decode fewer pages again.
+inline constexpr const char* STORE_PAGE_CACHE_BYTES_ENV =
+    "DFTRACER_UTILS_STORE_PAGE_CACHE_BYTES";
+inline constexpr std::size_t STORE_DEFAULT_PAGE_CACHE_BYTES = std::size_t{64}
+                                                              << 20;
 }  // namespace store
 
 /// What a file in flight and each piece parsed at once reserve from the memory

@@ -13,9 +13,12 @@
 
 namespace dftracer::utils::store {
 
-/// A stored extent starts with this header: u32 page count, u32 raw length, and
-/// eight zero bytes. The page table follows, then the stored pages, then zero
-/// padding. Segment offsets count from the start of the raw bytes.
+/// A stored extent starts with this header: u32 page count, u32 raw length, u32
+/// crc of the page count, the raw length and the page table, and four zero
+/// bytes. The page table follows, then the stored pages, then zero padding.
+/// Segment offsets count from the start of the raw bytes. The header crc and
+/// the page crcs let a reader check the pages it reads without the whole
+/// extent.
 inline constexpr std::size_t EXTENT_HEADER_BYTES = 16;
 
 /// One page table entry: u32 raw offset, u32 raw length, u32 stored offset from
@@ -43,16 +46,21 @@ struct PageEntry {
     PageCodec codec = PageCodec::None;
 };
 
-/// One segment's bytes inside an extent holding several.
+/// One segment's bytes inside an extent holding several, or one part of a
+/// segment: its head or one of its granules.
 struct SegmentSpan {
     std::uint32_t offset = 0;
     std::uint32_t length = 0;
+    /// The span takes pages of its own, which no other span shares: the head
+    /// of a segment over several pages, so a point read decodes the head
+    /// without the granules after it.
+    bool alone = false;
 };
 
 /// The ascending raw offsets the pages of an extent holding `segments` start
 /// at, over its first `raw_length` bytes, the first of them 0. A segment of at
-/// most PAGE_BYTES never spans two pages, and every page of a larger segment
-/// starts inside it.
+/// most PAGE_BYTES never spans two pages, every page of a larger segment
+/// starts inside it, and a span marked alone starts a page and ends one.
 dstd::Vector<std::uint32_t> page_starts(dstd::Span<const SegmentSpan> segments,
                                         std::uint32_t raw_length);
 
@@ -67,15 +75,35 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
     ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align,
     PageCodec codec = PageCodec::Zstd);
 
-/// The pages of one stored extent, read in place over bytes that outlive it.
+/// The pages of one stored extent, read in place over bytes that outlive it,
+/// or its page table alone, whose pages are read one range at a time.
 class ExtentPages {
    public:
+    /// The bytes of the header and the page table of the extent whose stored
+    /// bytes start with `header`, or 0 when `header` is shorter than
+    /// EXTENT_HEADER_BYTES or names no page.
+    static std::size_t table_length(ByteView header);
+
     /// Opens the extent over `stored`, checking the header and every entry of
     /// its page table, and freeing nothing. A Parse error when `stored` cannot
     /// hold what the header claims, when the pages do not cover [0, raw_length)
     /// without gaps, when an entry leaves `stored`, or when a reserved byte is
     /// set.
     static dstd::Expected<ExtentPages, dstd::Error> open(ByteView stored);
+    /// Opens the page table alone: `head` starts with the header and holds the
+    /// whole table, and every page must lie inside the `stored_length` bytes of
+    /// the stored extent. The same Parse errors as open, and a Parse error when
+    /// the header crc fails. decode() needs the stored bytes and fails on the
+    /// result; read the pages with decode_page.
+    static dstd::Expected<ExtentPages, dstd::Error> open_table(
+        ByteView head, std::uint64_t stored_length);
+    /// The raw bytes of `page` from its `stored` bytes into `out`, which has
+    /// room for its raw length, checked against the page crc. A Parse error
+    /// when `stored` is not the page's length or the crc, the codec or the
+    /// decoded length disagrees.
+    static dstd::Expected<void, dstd::Error> decode_page(const PageEntry& page,
+                                                         ByteView stored,
+                                                         std::uint8_t* out);
 
     std::size_t size() const { return entries_.size(); }
     std::uint32_t raw_length() const { return raw_length_; }
@@ -94,6 +122,9 @@ class ExtentPages {
         std::size_t i, dstd::Vector<std::uint8_t>& out) const;
 
    private:
+    static dstd::Expected<ExtentPages, dstd::Error> parse(
+        ByteView head, std::uint64_t stored_length);
+
     ExtentPages(ByteView stored, dstd::Vector<PageEntry> entries,
                 std::uint32_t raw_length)
         : stored_(stored),

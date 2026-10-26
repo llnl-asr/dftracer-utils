@@ -179,10 +179,10 @@ class SegmentView {
 };
 
 /// Appends the spans of one sealed segment that starts at `offset` in an
-/// extent, for `page_starts`: the header and the index as one span, then one
-/// span per granule with the last one ending at the segment end, so the padding
-/// goes with it. A segment of at most PAGE_BYTES gives one span. False when the
-/// segment does not open.
+/// extent, for `page_starts`: the header and the index as one span marked
+/// alone, then one span per granule with the last one ending at the segment
+/// end, so the padding goes with it. A segment of at most PAGE_BYTES gives one
+/// span. False when the segment does not open.
 bool append_segment_spans(ByteView segment, std::uint32_t offset,
                           dstd::Vector<SegmentSpan>& out);
 

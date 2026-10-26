@@ -191,6 +191,7 @@ void fill_segment_blocks(detail::Commit& commit) {
         block->segments = dstd::Vector<detail::SegmentSlot>(end - at);
         for (std::size_t i = at; i < end; ++i) {
             detail::SegmentSlot& slot = block->segments[i - at];
+            slot.sequence = commit.sequence;
             slot.block = listed[i].block;
             slot.offset_in_extent = listed[i].segment->offset_in_extent;
             slot.length = listed[i].segment->length;
@@ -861,12 +862,12 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                 }
                 if (extent.state != detail::LoadState::Good) {
                     // Its bytes are not there to walk.
-                    bad_commit(pending[i].sequence);
+                    bad_commit(slot.sequence);
                     continue;
                 }
                 ++segments[index];
                 if (walkable(file.extent_slots.slot(slot.extent_index), slot,
-                             pending[i].sequence, &bigs)) {
+                             slot.sequence, &bigs)) {
                     continue;
                 }
                 bad_segments[index].push_back(
@@ -1138,6 +1139,27 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             copy.fold = static_cast<FoldKind>(listed.fold_kind);
             copy.state = listed.state;
             copy.local_id = listed.local_id;
+            // The block of one copy of a closed file holds the runs of many of
+            // its commits, so the commits that name its offset share one.
+            dstd::Vector<std::pair<std::uint64_t, detail::LazyBlock*>> blocks;
+            const auto shared_block = [group = group.get(),
+                                       &blocks](const BlockHandle& handle) {
+                const auto at = std::lower_bound(
+                    blocks.begin(), blocks.end(), handle.offset,
+                    [](const std::pair<std::uint64_t, detail::LazyBlock*>&
+                           known,
+                       std::uint64_t offset) { return known.first < offset; });
+                if (at != blocks.end() && at->first == handle.offset) {
+                    return at->second;
+                }
+                auto block = dstd::make_unique<detail::LazyBlock>();
+                block->kind = detail::BlockKind::Segments;
+                block->handle = handle;
+                detail::LazyBlock* shared = block.get();
+                group->segments.push_back(std::move(block));
+                blocks.insert(at, {handle.offset, shared});
+                return shared;
+            };
             for (const DirectoryCommit& range : listed.commits) {
                 detail::Commit* commit =
                     closed_file ? nullptr : commit_of(held, range.sequence);
@@ -1146,11 +1168,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                 // is found through copy_segments, once its index is loaded.
                 detail::LazyBlock* segments = nullptr;
                 if (closed_file && !range.segments.empty()) {
-                    auto block = dstd::make_unique<detail::LazyBlock>();
-                    block->kind = detail::BlockKind::Segments;
-                    block->handle = range.segments;
-                    segments = block.get();
-                    group->segments.push_back(std::move(block));
+                    segments = shared_block(range.segments);
                 }
                 copy.commits.push_back({range.sequence, range.first_key,
                                         range.last_key, segments, commit});
@@ -1472,6 +1490,7 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
             case detail::BlockKind::Segments: {
                 struct Raw {
                     ExtentRef extent;
+                    std::uint64_t sequence = 0;
                     std::uint32_t extent_index = 0;
                     std::uint32_t offset_in_extent = 0;
                     std::uint32_t length = 0;
@@ -1490,26 +1509,27 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                 std::size_t at = 4;
                 const std::uint8_t* data =
                     reinterpret_cast<const std::uint8_t*>(body.data());
-                if (count > (body.size() - 4) / 36) {
+                if (count > (body.size() - 4) / 44) {
                     state = detail::LoadState::Bad;
                     break;
                 }
                 dstd::Vector<Raw> raws;
                 raws.reserve(static_cast<std::size_t>(count));
                 for (std::uint64_t i = 0; i < count; ++i) {
-                    if (at + 36 > body.size()) {
+                    if (at + 44 > body.size()) {
                         state = detail::LoadState::Bad;
                         break;
                     }
                     Raw raw;
                     raw.extent_index = read_u32_le(data + at);
-                    raw.extent.offset = read_u64_le(data + at + 4);
-                    raw.extent.length = read_u32_le(data + at + 12);
-                    raw.extent.crc = read_u32_le(data + at + 16);
-                    raw.offset_in_extent = read_u32_le(data + at + 20);
-                    raw.length = read_u32_le(data + at + 24);
-                    raw.entry_count = read_u64_le(data + at + 28);
-                    at += 36;
+                    raw.sequence = read_u64_le(data + at + 4);
+                    raw.extent.offset = read_u64_le(data + at + 12);
+                    raw.extent.length = read_u32_le(data + at + 20);
+                    raw.extent.crc = read_u32_le(data + at + 24);
+                    raw.offset_in_extent = read_u32_le(data + at + 28);
+                    raw.length = read_u32_le(data + at + 32);
+                    raw.entry_count = read_u64_le(data + at + 36);
+                    at += 44;
                     for (std::size_t k = 0; k < 2; ++k) {
                         auto length = decode_varint(body, at);
                         if (!length || *length > body.size() - at) {
@@ -1533,10 +1553,20 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     state = detail::LoadState::Bad;
                     break;
                 }
+                // A run is found by its commit sequence, so the sequences of a
+                // block are sorted.
+                for (std::size_t i = 1; i < raws.size(); ++i) {
+                    if (raws[i].sequence < raws[i - 1U].sequence) {
+                        state = detail::LoadState::Bad;
+                        break;
+                    }
+                }
+                if (state != detail::LoadState::Good) break;
                 block.segments = dstd::Vector<detail::SegmentSlot>(raws.size());
                 for (std::size_t i = 0; i < raws.size(); ++i) {
                     detail::SegmentSlot& slot = block.segments[i];
                     slot.extent = raws[i].extent;
+                    slot.sequence = raws[i].sequence;
                     slot.extent_index = raws[i].extent_index;
                     slot.offset_in_extent = raws[i].offset_in_extent;
                     slot.length = raws[i].length;
@@ -1853,7 +1883,7 @@ Snapshot::find_in_segment(const detail::FileData& file,
     return *found;
 }
 
-dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_segments(
+dstd::Expected<detail::SegmentRun, dstd::Error> Snapshot::copy_segments(
     const detail::CopyData& copy, const detail::CopyCommit& held) const {
     const auto block_result = [](const detail::LoadStatus& status)
         -> dstd::Expected<void, dstd::Error> {
@@ -1866,15 +1896,31 @@ dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_segments(
     if (held.commit != nullptr) {
         auto indexed = index_result(load_index(*held.commit));
         if (!indexed) return dstd::Unexpected<dstd::Error>(indexed.error());
-        return segment_block_of(*held.commit, copy.local_id);
+        detail::LazyBlock* block =
+            segment_block_of(*held.commit, copy.local_id);
+        if (block == nullptr) return detail::SegmentRun{};
+        return detail::SegmentRun{block, 0, block->segments.size()};
     }
-    if (held.segments == nullptr) {
-        return static_cast<detail::LazyBlock*>(nullptr);
-    }
+    if (held.segments == nullptr) return detail::SegmentRun{};
     const detail::FileData& file = files_[copy.file_index];
     auto segments = block_result(load_block(file, *held.segments));
     if (!segments) return dstd::Unexpected<dstd::Error>(segments.error());
-    return held.segments;
+    // The runs of the block are sorted by commit sequence, so the run of this
+    // commit is a binary search away.
+    const dstd::Vector<detail::SegmentSlot>& slots = held.segments->segments;
+    const auto begin = std::lower_bound(
+        slots.begin(), slots.end(), held.sequence,
+        [](const detail::SegmentSlot& slot, std::uint64_t sequence) {
+            return slot.sequence < sequence;
+        });
+    const auto finish = std::upper_bound(
+        begin, slots.end(), held.sequence,
+        [](std::uint64_t sequence, const detail::SegmentSlot& slot) {
+            return sequence < slot.sequence;
+        });
+    return detail::SegmentRun{held.segments,
+                              static_cast<std::size_t>(begin - slots.begin()),
+                              static_cast<std::size_t>(finish - slots.begin())};
 }
 
 void detail::ExtentSlots::assign(std::size_t count) {
@@ -2033,9 +2079,10 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
         if (!held_segments) {
             return dstd::Unexpected<dstd::Error>(held_segments.error());
         }
-        if (*held_segments == nullptr) continue;
-        detail::LazyBlock& block = **held_segments;
-        for (std::size_t i = 0; i < block.segments.size(); ++i) {
+        if (held_segments->block == nullptr) continue;
+        detail::LazyBlock& block = *held_segments->block;
+        for (std::size_t i = held_segments->begin; i < held_segments->end;
+             ++i) {
             const detail::SegmentSlot& slot = block.segments[i];
             if (!holds_key(slot.first_key, slot.last_key)) continue;
             auto found_entry =
@@ -2234,12 +2281,13 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
             matching_.clear();
             return;
         }
-        if (*held_segments == nullptr) continue;
+        if (held_segments->block == nullptr) continue;
         const dstd::Vector<detail::SegmentSlot>& slots =
-            (*held_segments)->segments;
-        for (std::size_t i = 0; i < slots.size(); ++i) {
+            held_segments->block->segments;
+        for (std::size_t i = held_segments->begin; i < held_segments->end;
+             ++i) {
             if (outside(slots[i].first_key, slots[i].last_key)) continue;
-            segments_.push_back({*held_segments, i});
+            segments_.push_back({held_segments->block, i});
         }
     }
     cursors_.assign(segments_.size(), SegmentView::Cursor{});

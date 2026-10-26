@@ -6,6 +6,7 @@
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
+#include <dftracer/utils/store/varint.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
 
@@ -293,6 +294,113 @@ ExtentRefItem make_extent_ref(const ExtentRef& extent,
     extent_segment.last_key = segment.last_key;
     item.segments.push_back(std::move(extent_segment));
     return item;
+}
+
+/// A segment of one entry whose key is `key_bytes` long, so a few of them make
+/// a run longer than a segment block.
+SegmentData make_wide_segment(std::uint32_t seed, std::size_t key_bytes) {
+    SegmentBuilder builder;
+    std::string key = std::to_string(seed);
+    key.resize(key_bytes, 'k');
+    const std::string value = "v" + std::to_string(seed);
+    builder.add(view_of(key), view_of(value));
+    auto sealed = builder.seal(nullptr, nullptr, nullptr);
+    if (!sealed) return {};
+    return {std::move(*sealed), builder.entry_count(),
+            bytes_of(builder.first_key()), bytes_of(builder.last_key())};
+}
+
+/// One entry of a segment block of a closed file, as the writer lays it out.
+struct SegmentBlockEntry {
+    std::uint32_t extent_index = 0;
+    std::uint64_t sequence = 0;
+    std::uint64_t extent_offset = 0;
+    std::uint32_t extent_length = 0;
+    std::uint32_t extent_crc = 0;
+    std::uint32_t offset_in_extent = 0;
+    std::uint32_t length = 0;
+    std::uint64_t entry_count = 0;
+    std::string first_key;
+    std::string last_key;
+};
+
+struct SegmentBlockView {
+    store::BlockHandle handle;
+    std::vector<SegmentBlockEntry> entries;
+};
+
+/// One commit of one copy of a closed file, with the block that holds its run.
+struct ClosedRun {
+    std::uint32_t copy_id = 0;
+    std::uint64_t sequence = 0;
+    store::BlockHandle handle;
+};
+
+/// Every run the scope directory of a closed file names, read through the
+/// directory blocks of the file.
+std::vector<ClosedRun> closed_runs(const DataFileReader& reader) {
+    std::vector<ClosedRun> runs;
+    const FileIndex& index = reader.index();
+    REQUIRE(index.tail.has_value());
+    REQUIRE(index.tail->directory_levels == 1);
+    auto top = store::SlotTable::open(view_of(index.tail->top_table));
+    REQUIRE(top.has_value());
+    for (std::size_t i = 0; i < top->size(); ++i) {
+        store::BlockHandle handle;
+        std::size_t at = 0;
+        REQUIRE(store::read_block_handle(top->payload(i), at, handle));
+        auto bytes = reader.read_block(handle, nullptr);
+        REQUIRE(bytes.has_value());
+        auto directory = store::ScopeDirectory::open(view_of(*bytes));
+        REQUIRE(directory.has_value());
+        for (std::size_t entry = 0; entry < directory->size(); ++entry) {
+            auto decoded = directory->entry(entry);
+            REQUIRE(decoded.has_value());
+            for (const store::DirectoryCopy& copy : decoded->copies) {
+                for (const store::DirectoryCommit& commit : copy.commits) {
+                    runs.push_back(
+                        {copy.local_id, commit.sequence, commit.segments});
+                }
+            }
+        }
+    }
+    return runs;
+}
+
+SegmentBlockView read_segment_block(const DataFileReader& reader,
+                                    store::BlockHandle handle) {
+    SegmentBlockView block;
+    block.handle = handle;
+    auto bytes = reader.read_block(handle, nullptr);
+    REQUIRE(bytes.has_value());
+    const std::vector<std::uint8_t> raw = std_bytes(*bytes);
+    const std::uint32_t count = read_u32_le_at(raw, 0);
+    std::size_t at = 4;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        REQUIRE(at + 44 <= raw.size());
+        SegmentBlockEntry entry;
+        entry.extent_index = read_u32_le_at(raw, at);
+        entry.sequence = read_u64_le_at(raw, at + 4U);
+        entry.extent_offset = read_u64_le_at(raw, at + 12U);
+        entry.extent_length = read_u32_le_at(raw, at + 20U);
+        entry.extent_crc = read_u32_le_at(raw, at + 24U);
+        entry.offset_in_extent = read_u32_le_at(raw, at + 28U);
+        entry.length = read_u32_le_at(raw, at + 32U);
+        entry.entry_count = read_u64_le_at(raw, at + 36U);
+        at += 44;
+        for (std::string* key : {&entry.first_key, &entry.last_key}) {
+            ByteView body = view_of(raw);
+            auto length = store::decode_varint(body, at);
+            REQUIRE(length.has_value());
+            REQUIRE(at + *length <= raw.size());
+            key->assign(reinterpret_cast<const char*>(raw.data() + at),
+                        static_cast<std::size_t>(*length));
+            at += static_cast<std::size_t>(*length);
+        }
+        block.entries.push_back(std::move(entry));
+    }
+    CHECK(at == raw.size());
+    return block;
 }
 
 void check_namespace(const NamespaceItem& actual,
@@ -1463,5 +1571,147 @@ TEST_SUITE("index store file") {
         dftracer::utils::write_u32_le(broken.data() + 4 + 12, 1U << 20);
         CHECK_FALSE(store::ScopeDirectory::open(view_of(broken)).has_value());
         CHECK(store::ScopeDirectory::open(ByteView{}).has_value());
+    }
+
+    TEST_CASE("segment runs pack into blocks of one copy") {
+        TempDir temp;
+        const std::string path = temp.file("segment_blocks.dfs");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host.example", "rank-0");
+        REQUIRE(created.has_value());
+        auto& writer = *created;
+
+        const NamespaceItem ns = make_namespace(1);
+        const ScopeItem scope = make_scope(1, 1);
+        const std::uint32_t small_copy = 10;
+        const std::uint32_t other_copy = 12;
+        writer.add(ns);
+        writer.add(scope);
+        writer.add(make_copy(small_copy, 1, 1));
+        writer.add(make_copy(other_copy, 1, 1));
+
+        // Two commits of one copy of one segment each, then a commit of that
+        // copy whose run alone passes the block limit, then a commit of another
+        // copy.
+        const SegmentData first = make_segment(1, 4);
+        REQUIRE_FALSE(first.bytes.empty());
+        auto first_extent = writer.append_extent(view_of(first.bytes));
+        REQUIRE(first_extent.has_value());
+        ExtentRefItem first_item =
+            make_extent_ref(*first_extent, first, small_copy);
+        first_item.sequence = 1;
+        writer.add(std::move(first_item));
+        REQUIRE(writer.commit().has_value());
+
+        const SegmentData second = make_segment(2, 4);
+        REQUIRE_FALSE(second.bytes.empty());
+        auto second_extent = writer.append_extent(view_of(second.bytes));
+        REQUIRE(second_extent.has_value());
+        ExtentRefItem second_item =
+            make_extent_ref(*second_extent, second, small_copy);
+        second_item.sequence = 2;
+        writer.add(std::move(second_item));
+        REQUIRE(writer.commit().has_value());
+
+        constexpr std::size_t WIDE_SEGMENTS = 640;
+        constexpr std::size_t WIDE_KEY_BYTES = 200;
+        std::vector<SegmentData> wide;
+        std::vector<ExtentRef> wide_extents;
+        wide.reserve(WIDE_SEGMENTS);
+        wide_extents.reserve(WIDE_SEGMENTS);
+        for (std::size_t i = 0; i < WIDE_SEGMENTS; ++i) {
+            wide.push_back(make_wide_segment(static_cast<std::uint32_t>(i),
+                                             WIDE_KEY_BYTES));
+            REQUIRE_FALSE(wide.back().bytes.empty());
+            auto extent = writer.append_extent(view_of(wide.back().bytes));
+            REQUIRE(extent.has_value());
+            wide_extents.push_back(*extent);
+        }
+        const std::uint64_t wide_sequence = 3;
+        for (std::size_t i = 0; i < WIDE_SEGMENTS; ++i) {
+            ExtentRefItem item =
+                make_extent_ref(wide_extents[i], wide[i], small_copy);
+            item.sequence = wide_sequence;
+            writer.add(std::move(item));
+        }
+        REQUIRE(writer.commit().has_value());
+
+        const SegmentData last = make_segment(3, 4);
+        REQUIRE_FALSE(last.bytes.empty());
+        auto last_extent = writer.append_extent(view_of(last.bytes));
+        REQUIRE(last_extent.has_value());
+        ExtentRefItem last_item =
+            make_extent_ref(*last_extent, last, other_copy);
+        last_item.sequence = 4;
+        writer.add(std::move(last_item));
+        REQUIRE(writer.commit().has_value());
+
+        REQUIRE(writer.close().has_value());
+
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const std::vector<ClosedRun> runs = closed_runs(*reader);
+
+        // A run entry is 44 fixed bytes and two keys, so this run alone passes
+        // one block.
+        const std::size_t wide_entry_bytes = 44 + 2 * (2 + WIDE_KEY_BYTES);
+        REQUIRE(WIDE_SEGMENTS * wide_entry_bytes > store::SEGMENT_BLOCK_BYTES);
+
+        // Every run of a copy is in one block, and no block holds a run of two
+        // copies.
+        const auto handle_of = [&runs](std::uint32_t copy_id,
+                                       std::uint64_t sequence) {
+            for (const ClosedRun& run : runs) {
+                if (run.copy_id == copy_id && run.sequence == sequence) {
+                    return run.handle;
+                }
+            }
+            FAIL("no run of copy " << copy_id << " of commit " << sequence);
+            return store::BlockHandle{};
+        };
+        const store::BlockHandle small_first = handle_of(small_copy, 1);
+        const store::BlockHandle small_second = handle_of(small_copy, 2);
+        const store::BlockHandle wide_handle =
+            handle_of(small_copy, wide_sequence);
+        const store::BlockHandle other_handle = handle_of(other_copy, 4);
+        CHECK(small_first.offset == small_second.offset);
+        CHECK(small_first.offset != wide_handle.offset);
+        CHECK(other_handle.offset != small_first.offset);
+        CHECK(other_handle.offset != wide_handle.offset);
+
+        const SegmentBlockView small_block =
+            read_segment_block(*reader, small_first);
+        REQUIRE(small_block.entries.size() == 2);
+        CHECK(small_block.entries[0].sequence == 1);
+        CHECK(small_block.entries[1].sequence == 2);
+        CHECK(small_block.entries[0].extent_offset == first_extent->offset);
+        CHECK(small_block.entries[0].extent_length == first_extent->length);
+        CHECK(small_block.entries[0].extent_crc == first_extent->crc);
+        CHECK(small_block.entries[0].offset_in_extent == 0);
+        CHECK(small_block.entries[0].length == first.bytes.size());
+        CHECK(small_block.entries[0].entry_count == first.entry_count);
+        CHECK(small_block.entries[0].first_key ==
+              std::string(reinterpret_cast<const char*>(first.first_key.data()),
+                          first.first_key.size()));
+
+        // A run larger than the block limit gets a block of its own, and its
+        // segments are not split over two.
+        const SegmentBlockView wide_block =
+            read_segment_block(*reader, wide_handle);
+        REQUIRE(wide_block.entries.size() == WIDE_SEGMENTS);
+        CHECK(wide_block.handle.length > store::SEGMENT_BLOCK_BYTES);
+        for (std::size_t i = 0; i < wide_block.entries.size(); ++i) {
+            CHECK(wide_block.entries[i].sequence == wide_sequence);
+            CHECK(wide_block.entries[i].extent_offset ==
+                  wide_extents[i].offset);
+            CHECK(wide_block.entries[i].length == wide[i].bytes.size());
+        }
+
+        const SegmentBlockView other_block =
+            read_segment_block(*reader, other_handle);
+        REQUIRE(other_block.entries.size() == 1);
+        CHECK(other_block.entries[0].sequence == 4);
+        CHECK(other_block.entries[0].extent_offset == last_extent->offset);
+        CHECK(other_block.handle.length < store::SEGMENT_BLOCK_BYTES);
     }
 }

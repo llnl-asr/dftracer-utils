@@ -34,6 +34,10 @@ inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
 inline constexpr std::size_t DIRECTORY_TOP_BYTES = 32768;
 /// Entries per directory leaf block and per middle block.
 inline constexpr std::size_t DIRECTORY_BLOCK_ENTRIES = 256;
+/// The most bytes one segment block holds: the runs of one copy of one commit
+/// are packed into blocks up to this size, so a cold read of a scope costs a
+/// few block reads instead of one per commit.
+inline constexpr std::size_t SEGMENT_BLOCK_BYTES = std::size_t{256} << 10;
 /// What a light open reads from the end of the file: the trailer, the footer
 /// and, with them, the whole directory top table.
 inline constexpr std::size_t TAIL_READ_BYTES = 65536;
@@ -144,7 +148,7 @@ class DataFileWriter {
     /// Summarizes the extent refs of the record just written into one commit
     /// ref per sequence, which later checkpoints and the footer list.
     void add_commit_refs();
-    /// Builds the segment block of every copy of every commit, the directory
+    /// Builds the segment blocks of every copy of every commit, the directory
     /// blocks and the items block of a closed file into `out`, as they land
     /// when `out` is written at `base`, and returns the footer item that names
     /// them. Each block is read by one pread, and its crc covers its bytes.

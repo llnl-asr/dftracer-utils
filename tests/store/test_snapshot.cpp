@@ -7,6 +7,7 @@
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/fold.h>
+#include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
@@ -25,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <string>
 #include <thread>
@@ -469,6 +471,80 @@ void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
         if (flushed) REQUIRE(flush_writer(*writer).has_value());
     }
     REQUIRE(close_writer(*writer).has_value());
+}
+
+/// A closed file of `commits` small commits of one namespace, round robin over
+/// `scopes`, each writing a window of keys that overlaps the next commit's of
+/// the same scope, and the map each scope's keys end at.
+std::vector<std::map<std::string, std::string>> write_many_commits(
+    const dftu_utils_test::ScopedTestDir& dir, const NamespaceSpec& spec,
+    const std::vector<ScopeKey>& scopes, int commits) {
+    constexpr int PER_COMMIT = 8;
+    constexpr int KEY_SPAN = 32;
+    std::vector<std::map<std::string, std::string>> model(scopes.size());
+    auto writer = make_writer(dir);
+    auto id = writer->add_namespace(spec);
+    REQUIRE(id.has_value());
+    for (int commit = 0; commit < commits; ++commit) {
+        const std::size_t which =
+            static_cast<std::size_t>(commit) % scopes.size();
+        Batch entries = writer->batch(*id, scopes[which], 0);
+        const int base = (commit / static_cast<int>(scopes.size())) * 3 %
+                         (KEY_SPAN - PER_COMMIT);
+        const std::string tag = "c" + std::to_string(commit) + "-";
+        for (int k = 0; k < PER_COMMIT; ++k) {
+            const std::string key = key_of(base + k);
+            const std::string value = tag + std::to_string(base + k);
+            entries.put(view_of(key), view_of(value));
+            model[which][key] = value;
+        }
+        REQUIRE(writer->commit(std::move(entries)).has_value());
+    }
+    REQUIRE(close_writer(*writer).has_value());
+    return model;
+}
+
+/// The segment blocks the scope directory of a closed file names, each once,
+/// with the commit sequence of every run that names one.
+struct ClosedSegments {
+    std::vector<store::BlockHandle> blocks;
+    std::vector<std::uint64_t> runs;
+};
+
+ClosedSegments closed_segments(const DataFileReader& reader) {
+    ClosedSegments found;
+    const store::FileIndex& index = reader.index();
+    REQUIRE(index.tail.has_value());
+    REQUIRE(index.tail->directory_levels == 1);
+    auto top = store::SlotTable::open(view_of(index.tail->top_table));
+    REQUIRE(top.has_value());
+    for (std::size_t i = 0; i < top->size(); ++i) {
+        store::BlockHandle handle;
+        std::size_t at = 0;
+        REQUIRE(store::read_block_handle(top->payload(i), at, handle));
+        auto bytes = reader.read_block(handle, nullptr);
+        REQUIRE(bytes.has_value());
+        auto directory = store::ScopeDirectory::open(view_of(*bytes));
+        REQUIRE(directory.has_value());
+        for (std::size_t entry = 0; entry < directory->size(); ++entry) {
+            auto decoded = directory->entry(entry);
+            REQUIRE(decoded.has_value());
+            for (const store::DirectoryCopy& copy : decoded->copies) {
+                for (const store::DirectoryCommit& commit : copy.commits) {
+                    found.runs.push_back(commit.sequence);
+                    const auto known = std::find_if(
+                        found.blocks.begin(), found.blocks.end(),
+                        [&commit](const store::BlockHandle& block) {
+                            return block.offset == commit.segments.offset;
+                        });
+                    if (known == found.blocks.end()) {
+                        found.blocks.push_back(commit.segments);
+                    }
+                }
+            }
+        }
+    }
+    return found;
 }
 
 }  // namespace
@@ -3400,5 +3476,105 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(wide->has_value());
         CHECK(to_std((*wide)->bytes()) == value);
         CHECK(snapshot->read_stats().pages_decoded == pages->size());
+    }
+
+    TEST_CASE("a closed file of many commits reads few segment blocks") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_many_commits");
+        const NamespaceSpec spec = put_spec("dftu.test.many-commits");
+        constexpr int COMMITS = 300;
+        constexpr std::size_t SCOPES = 3;
+        std::vector<ScopeKey> scopes;
+        for (std::size_t s = 0; s < SCOPES; ++s) {
+            scopes.push_back(
+                file_scope("/traces/m" + std::to_string(s) + ".pfw"));
+        }
+        const std::vector<std::map<std::string, std::string>> model =
+            write_many_commits(dir, spec, scopes, COMMITS);
+        REQUIRE(model.size() == SCOPES);
+        for (const std::map<std::string, std::string>& scope_model : model) {
+            REQUIRE_FALSE(scope_model.empty());
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->skipped().empty());
+        CHECK(snapshot->read_stats().metadata_blocks_read == 0);
+
+        // The directory of three scopes is one leaf block, and every commit of
+        // one scope fits in one segment block, so a cold get reads two metadata
+        // blocks however many commits the file holds.
+        auto one = snapshot->get(spec, scopes[0], view_of(key_of(0)));
+        REQUIRE(one.has_value());
+        REQUIRE(one->has_value());
+        CHECK(snapshot->read_stats().metadata_blocks_read == 2);
+
+        for (std::size_t s = 0; s < SCOPES; ++s) {
+            for (const auto& row : model[s]) {
+                auto found = snapshot->get(spec, scopes[s], view_of(row.first));
+                REQUIRE(found.has_value());
+                REQUIRE(found->has_value());
+                CHECK(to_std((*found)->bytes()) == row.second);
+            }
+            const std::vector<std::pair<std::string, std::string>> expected(
+                model[s].begin(), model[s].end());
+            auto cursor =
+                snapshot->scan(spec, scopes[s], ByteView{}, ByteView{});
+            CHECK(collect(cursor) == expected);
+        }
+        // The same leaf and one segment block per scope, whatever is asked.
+        CHECK(snapshot->read_stats().metadata_blocks_read == 1 + SCOPES);
+        auto absent = snapshot->get(spec, scopes[0], view_of(key_of(1000)));
+        REQUIRE(absent.has_value());
+        CHECK_FALSE(absent->has_value());
+    }
+
+    TEST_CASE("a shared segment block is checked once and fails all at once") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_shared_block");
+        dftu_utils_test::ScopedTestDir damaged_dir("snapshot_shared_block_bad");
+        const NamespaceSpec spec = put_spec("dftu.test.many-commits");
+        constexpr int COMMITS = 300;
+        const std::vector<ScopeKey> scopes = {file_scope("/traces/one.pfw")};
+        write_many_commits(dir, spec, scopes, COMMITS);
+
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const ClosedSegments closed = closed_segments(*reader);
+        // Every commit of the one copy of the scope names the same block.
+        REQUIRE(closed.blocks.size() == 1);
+        CHECK(closed.blocks[0].length < store::SEGMENT_BLOCK_BYTES);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto report = snapshot->check();
+        REQUIRE(report.has_value());
+        CHECK(report->bad_commits.empty());
+        CHECK(report->bad_segments.empty());
+        // One directory leaf and the one segment block, and every segment of
+        // the file once.
+        CHECK(report->metadata_blocks == 2);
+        CHECK(report->segments == static_cast<std::size_t>(COMMITS));
+
+        // The last byte of the shared block breaks its crc: every commit that
+        // points at it is bad, and no segment is walked.
+        std::vector<std::uint8_t> bytes = read_file(path);
+        const std::size_t last =
+            static_cast<std::size_t>(closed.blocks[0].offset) +
+            closed.blocks[0].length - 1U;
+        REQUIRE(last < bytes.size());
+        bytes[last] ^= 0xFFU;
+        write_file(damaged_dir.file("shared.dfs"), bytes);
+
+        auto damaged = Snapshot::open(damaged_dir.str());
+        REQUIRE(damaged.has_value());
+        auto broken = damaged->check();
+        REQUIRE(broken.has_value());
+        CHECK(broken->bad_segments.empty());
+        CHECK(broken->segments == 0);
+        CHECK(broken->bad_commits.size() == closed.runs.size());
+        for (const store::BadCommit& bad : broken->bad_commits) {
+            CHECK(to_std(bad.file) == "shared.dfs");
+        }
     }
 }

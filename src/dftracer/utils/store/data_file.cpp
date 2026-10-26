@@ -654,15 +654,18 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     if (extents.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    // One segment block per copy of one commit, in extent order: every segment
-    // sorted once by commit, copy, extent and place in the extent, cut in runs.
+    // Segment blocks, packed copy by copy: every segment sorted once by copy,
+    // commit, extent and place in the extent, then the runs of one copy of one
+    // commit packed into blocks of at most SEGMENT_BLOCK_BYTES. A block never
+    // spans copies and never splits a run, so a run larger than the limit has a
+    // block of its own.
     struct SegmentKey {
-        std::uint64_t sequence = 0;
         std::uint32_t copy_id = 0;
+        std::uint64_t sequence = 0;
     };
     const auto less = [](const SegmentKey& a, const SegmentKey& b) {
-        if (a.sequence != b.sequence) return a.sequence < b.sequence;
-        return a.copy_id < b.copy_id;
+        if (a.copy_id != b.copy_id) return a.copy_id < b.copy_id;
+        return a.sequence < b.sequence;
     };
     struct Placed {
         SegmentKey key;
@@ -673,7 +676,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     dstd::Vector<Placed> placed;
     for (std::size_t extent = 0; extent < extents.size(); ++extent) {
         for (const ExtentSegment& segment : extents[extent]->segments) {
-            placed.push_back({{extents[extent]->sequence, segment.copy_id},
+            placed.push_back({{segment.copy_id, extents[extent]->sequence},
                               static_cast<std::uint32_t>(extent),
                               extents[extent],
                               &segment});
@@ -687,36 +690,65 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
                   return a.segment->offset_in_extent <
                          b.segment->offset_in_extent;
               });
-    dstd::Vector<std::pair<SegmentKey, BlockHandle>> handles;
+    dstd::Vector<BlockHandle> block_handles;
+    // The runs in the order their blocks were placed, by copy then commit.
+    dstd::Vector<std::pair<SegmentKey, std::uint32_t>> runs;
+    dstd::Vector<std::uint8_t> block;
+    dstd::Vector<std::uint8_t> run_bytes;
+    std::uint32_t block_entries = 0;
+    std::uint32_t block_copy = 0;
+    const auto flush = [&block, &block_handles, &block_entries, &place]() {
+        dstd::Vector<std::uint8_t> bytes;
+        append_u32_le(bytes, block_entries);
+        bytes.insert(bytes.end(), block.begin(), block.end());
+        block_handles.push_back(place(bytes));
+        block.clear();
+        block_entries = 0;
+    };
     for (std::size_t first = 0; first < placed.size();) {
         std::size_t end = first + 1;
         while (end < placed.size() &&
                !less(placed[first].key, placed[end].key)) {
             ++end;
         }
-        dstd::Vector<std::uint8_t> bytes;
-        append_u32_le(bytes, static_cast<std::uint32_t>(end - first));
+        run_bytes.clear();
         for (std::size_t at = first; at < end; ++at) {
             const Placed& entry = placed[at];
-            append_u32_le(bytes, entry.extent);
-            append_u64_le(bytes, entry.ref->offset);
-            append_u32_le(bytes, entry.ref->length);
-            append_u32_le(bytes, entry.ref->crc);
-            append_u32_le(bytes, entry.segment->offset_in_extent);
-            append_u32_le(bytes, entry.segment->length);
-            append_u64_le(bytes, entry.segment->entry_count);
+            append_u32_le(run_bytes, entry.extent);
+            append_u64_le(run_bytes, entry.key.sequence);
+            append_u64_le(run_bytes, entry.ref->offset);
+            append_u32_le(run_bytes, entry.ref->length);
+            append_u32_le(run_bytes, entry.ref->crc);
+            append_u32_le(run_bytes, entry.segment->offset_in_extent);
+            append_u32_le(run_bytes, entry.segment->length);
+            append_u64_le(run_bytes, entry.segment->entry_count);
             for (const auto* key :
                  {&entry.segment->first_key, &entry.segment->last_key}) {
-                encode_varint(bytes, key->size());
-                bytes.insert(bytes.end(), key->begin(), key->end());
+                encode_varint(run_bytes, key->size());
+                run_bytes.insert(run_bytes.end(), key->begin(), key->end());
             }
         }
-        handles.push_back({placed[first].key, place(bytes)});
+        if (block_entries > 0 &&
+            (block_copy != placed[first].key.copy_id ||
+             4 + block.size() + run_bytes.size() > SEGMENT_BLOCK_BYTES)) {
+            flush();
+        }
+        runs.push_back({placed[first].key,
+                        static_cast<std::uint32_t>(block_handles.size())});
+        block.insert(block.end(), run_bytes.begin(), run_bytes.end());
+        block_entries += static_cast<std::uint32_t>(end - first);
+        block_copy = placed[first].key.copy_id;
         first = end;
+    }
+    if (block_entries > 0) flush();
+    dstd::Vector<std::pair<SegmentKey, BlockHandle>> handles;
+    handles.reserve(runs.size());
+    for (const std::pair<SegmentKey, std::uint32_t>& run : runs) {
+        handles.push_back({run.first, block_handles[run.second]});
     }
     const auto segment_handle = [&handles, &less](std::uint64_t sequence,
                                                   std::uint32_t copy_id) {
-        const SegmentKey wanted{sequence, copy_id};
+        const SegmentKey wanted{copy_id, sequence};
         const auto at = std::lower_bound(
             handles.begin(), handles.end(), wanted,
             [&less](const std::pair<SegmentKey, BlockHandle>& entry,

@@ -189,6 +189,9 @@ class GroupSlots;
 struct SegmentSlot {
     /// The extent holding the segment, for a closed file.
     ExtentRef extent;
+    /// The commit whose copy holds the segment. A block of a closed file holds
+    /// the runs of one copy of many commits, in this order.
+    std::uint64_t sequence = 0;
     /// The block of `owner` holding the extent, for a file that is not closed.
     std::uint32_t block = 0;
     /// The index of the extent among the extents of a closed file.
@@ -221,7 +224,7 @@ enum class BlockKind : std::uint8_t {
     Leaf = 0,
     /// A middle of the directory: one separator per child block.
     Middle = 1,
-    /// The segments of one copy of one commit.
+    /// The segments of the runs of one copy of many commits, in commit order.
     Segments = 2
 };
 
@@ -306,8 +309,9 @@ struct CopyCommit {
     ByteView first_key;
     ByteView last_key;
     /// The segment block of this copy in this commit of a closed file, owned
-    /// by the group. Null for a file that is not closed, whose commit holds
-    /// the block (Snapshot::copy_segments finds it).
+    /// by the group. Many commits of one copy share one block, and the run of
+    /// this commit in it is what Snapshot::copy_segments returns. Null for a
+    /// file that is not closed, whose commit holds the block.
     LazyBlock* segments = nullptr;
     /// The commit object, null for a closed file, every commit of which is
     /// synced.
@@ -495,6 +499,16 @@ struct ValueSource {
 struct SegmentLocation {
     LazyBlock* block = nullptr;
     std::size_t index = 0;
+};
+
+/// The segments of one commit of one copy: the entries [begin, end) of the
+/// block, which holds the runs of that copy of many commits, sorted by commit
+/// sequence. A block of a file that is not closed holds one commit, so its run
+/// is the whole block.
+struct SegmentRun {
+    LazyBlock* block = nullptr;
+    std::size_t begin = 0;
+    std::size_t end = 0;
 };
 
 }  // namespace detail
@@ -820,11 +834,11 @@ class Snapshot {
     dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
     find_in_segment(const detail::FileData& file, detail::LazyBlock& block,
                     std::size_t index, ByteView key) const;
-    /// The segment block of one copy in one commit, with what it needs read
-    /// first: the commit index of a file that is not closed, or the segment
-    /// block of a closed one. Null when the commit holds no
+    /// The run of one commit of one copy inside its segment block, with what it
+    /// needs read first: the commit index of a file that is not closed, or the
+    /// segment block of a closed one. `block` is null when the commit holds no
     /// segment of the copy; a block that does not verify is a Parse error.
-    dstd::Expected<detail::LazyBlock*, dstd::Error> copy_segments(
+    dstd::Expected<detail::SegmentRun, dstd::Error> copy_segments(
         const detail::CopyData& copy, const detail::CopyCommit& held) const;
     dstd::Expected<void, dstd::Error> materialize(
         FoldKind fold, dstd::Span<const detail::ValueSource> sources,

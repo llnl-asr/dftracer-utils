@@ -1,4 +1,7 @@
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/index/store/engine/page_size.h>
 #include <dftracer/utils/index/store/engine/writer.h>
+#include <dftracer/utils/runtime/executor/executor.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -8,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <string>
 #include <utility>
@@ -25,6 +29,18 @@ const std::array<std::uint8_t, 8> COUNT_VALUE = {1, 0, 0, 0, 0, 0, 0, 0};
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::InvalidArgument));
+}
+
+/// The bytes one writer may hold in pages when the caller names no quota: the
+/// commits of four executor threads, counted in pages of the store's default
+/// page size at least, so a page size the caller shrank for a test does not
+/// shrink the bound to a few kilobytes.
+std::uint64_t default_page_quota(Executor& executor, std::uint32_t page_size) {
+    const std::uint64_t threads =
+        std::max<std::uint64_t>(executor.get_num_threads(), 1);
+    const std::uint64_t unit = std::max<std::uint64_t>(
+        page_size, constants::store::STORE_DEFAULT_PAGE_BYTES);
+    return std::max<std::uint64_t>(16, 4 * threads) * unit;
 }
 
 int compare_bytes(ByteView a, ByteView b) {
@@ -127,6 +143,63 @@ struct KeyGroup {
     std::uint64_t value_length = 0;
 };
 
+/// Frees a batch whose page no write carried, including the one a failed page
+/// write left behind, and releases the bytes it charged so no wait for them
+/// outlives the failure. A discard means a failed write or a writer going
+/// away, so the count latches too.
+void discard_batch(void* context) {
+    auto* pending = static_cast<PendingBatch*>(context);
+    if (pending->pages != nullptr) {
+        pending->pages->release(pending->charged_bytes);
+        pending->pages->latch();
+    }
+    delete pending;
+}
+
+NamespaceItem namespace_item(const NamespaceSpec& spec, NamespaceId id) {
+    NamespaceItem item;
+    item.local_id = id.value;
+    item.name = spec.name;
+    item.format_version = spec.format_version;
+    item.fold_kind = static_cast<std::uint8_t>(spec.fold);
+    item.codec = 0;
+    item.durable = spec.durable ? 1 : 0;
+    return item;
+}
+
+ScopeItem scope_item(const ScopeKey& key, std::uint32_t id,
+                     const dstd::Vector<ScopePath>* signature) {
+    ScopeItem item;
+    item.local_id = id;
+    item.kind = key.kind;
+    item.paths.reserve(key.paths.size());
+    for (std::size_t i = 0; i < key.paths.size(); ++i) {
+        ScopePath path;
+        if (signature != nullptr) path = (*signature)[i];
+        path.logical_path = key.paths[i];
+        item.paths.push_back(std::move(path));
+    }
+    return item;
+}
+
+CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
+                   std::uint32_t scope_id, std::uint64_t params_hash,
+                   std::uint64_t generation, CopyState state) {
+    CopyItem item;
+    item.local_id = copy_id;
+    item.namespace_id = namespace_id;
+    item.scope_id = scope_id;
+    item.params_hash = params_hash;
+    item.generation = generation;
+    item.state = state;
+    return item;
+}
+
+std::atomic<WriterTestHook::SpaceSealedFn>& space_sealed_hook() {
+    static std::atomic<WriterTestHook::SpaceSealedFn> hook{nullptr};
+    return hook;
+}
+
 }  // namespace
 
 ByteView Batch::view_at(std::size_t offset, std::size_t length) const {
@@ -183,11 +256,55 @@ void Batch::fold(ByteView key, ByteView value) {
 }
 
 void Writer::latch(const dstd::Error& error) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!latched_error_) latched_error_ = error;
 }
 
-dstd::Expected<Writer, dstd::Error> Writer::create(
-    dstd::StringView dir, const WriterOptions& options) {
+dstd::Optional<dstd::Error> Writer::latched() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return latched_error_;
+}
+
+dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
+    dstd::StringView dir, Executor& executor, const WriterOptions& options) {
+    if (!executor.has_io_backend()) {
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error(dstd::Condition::InvalidArgument,
+                        "store writer needs an executor with an I/O backend"));
+    }
+
+    std::uint32_t page_size = 0;
+    if (options.page_size) {
+        auto chosen = choose_page_size(0, options.page_size);
+        if (!chosen) return dstd::Unexpected<dstd::Error>(chosen.error());
+        page_size = *chosen;
+    } else {
+        auto chosen = page_size_for(dir);
+        if (!chosen) return dstd::Unexpected<dstd::Error>(chosen.error());
+        page_size = *chosen;
+    }
+
+    std::uint64_t page_quota = 0;
+    if (options.page_quota_bytes) {
+        page_quota = *options.page_quota_bytes;
+        if (page_quota == 0) {
+            return dstd::Unexpected<dstd::Error>(dstd::Error(
+                dstd::Condition::InvalidArgument, "page quota is zero"));
+        }
+    } else {
+        page_quota = default_page_quota(executor, page_size);
+    }
+
+    // The bytes of the pages in flight are charged here, so a caller that
+    // builds one writer inside its own pool bounds this writer's page memory
+    // with that pool's limit.
+    auto page_pool = memory::current_pool().child(
+        "index store writer", memory::PoolKind::Scratch, memory::Limits{});
+    if (!page_pool) {
+        return dstd::Unexpected<dstd::Error>(dstd::Error(
+            dstd::Condition::Internal, "no pool for the writer's page bytes"));
+    }
+
     auto snapshot = Snapshot::open(dir);
     if (!snapshot) return dstd::Unexpected<dstd::Error>(snapshot.error());
 
@@ -207,20 +324,49 @@ dstd::Expected<Writer, dstd::Error> Writer::create(
         data_file_name(options.host, static_cast<std::uint32_t>(::getpid()),
                        random_bits(), options.label);
     dstd::String path(path_of(dir, name));
-    auto file = DataFileWriter::create(path, options.page_size, options.host,
-                                       options.label);
+    auto file =
+        DataFileWriter::create(path, page_size, options.host, options.label);
     if (!file) return dstd::Unexpected<dstd::Error>(file.error());
-    return Writer(std::move(name), std::move(path), options.page_size,
-                  std::move(generations), std::move(*file));
+
+    std::unique_ptr<Writer> writer(new Writer(
+        std::move(name), std::move(path), page_size, std::move(generations),
+        std::move(*file), std::move(page_pool), page_quota, executor, options));
+    writer->committer_.start();
+    return writer;
 }
 
 Writer::Writer(dstd::String name, dstd::String path, std::uint32_t page_size,
-               dstd::Vector<ScopeGeneration> generations, DataFileWriter file)
+               dstd::Vector<ScopeGeneration> generations, DataFileWriter file,
+               memory::PoolHandle page_pool, std::uint64_t page_quota,
+               Executor& executor, const WriterOptions& options)
     : file_(std::move(file)),
+      committer_(file_, executor, options.commit_bytes,
+                 options.commit_interval),
+      page_pool_(std::move(page_pool)),
+      page_bytes_(page_quota, *page_pool_.get()),
+      pages_(file_, executor.io_backend(), executor, page_size,
+             &Writer::wrote_page, this, &discard_batch, &Writer::pages_idle),
       name_(std::move(name)),
       path_(std::move(path)),
       page_size_(page_size),
       generations_(std::move(generations)) {}
+
+Writer::~Writer() {
+    if (!closed_.load(std::memory_order_acquire)) {
+        pages_.seal_all();
+        pages_.wait_idle();
+    }
+}
+
+DataFileWriter& WriterTestHook::file(Writer& writer) { return writer.file_; }
+
+void WriterTestHook::set_space_sealed(SpaceSealedFn fn) {
+    space_sealed_hook().store(fn, std::memory_order_release);
+}
+
+WriterPagesCounters WriterTestHook::pages(const Writer& writer) {
+    return writer.page_bytes_.counters();
+}
 
 Writer::NamespaceEntry* Writer::find_namespace(std::uint32_t id) {
     for (NamespaceEntry& entry : namespaces_) {
@@ -237,85 +383,48 @@ Writer::NamespaceEntry* Writer::find_namespace(dstd::StringView name) {
 }
 
 Writer::ScopeEntry* Writer::find_scope(const ScopeKey& scope) {
-    const auto at =
-        std::lower_bound(scopes_.begin(), scopes_.end(), scope,
-                         [](const ScopeEntry& entry, const ScopeKey& wanted) {
-                             return compare_scopes(entry.key, wanted) < 0;
-                         });
-    if (at == scopes_.end() || compare_scopes(at->key, scope) != 0) {
-        return nullptr;
-    }
-    return &*at;
+    const auto at = scopes_.find(scope);
+    return at == scopes_.end() ? nullptr : at->second.get();
 }
 
 Writer::ScopeEntry* Writer::add_scope(const ScopeKey& scope) {
-    ScopeEntry entry;
-    entry.id = next_scope_id_++;
-    entry.key = scope;
-    const auto at = std::lower_bound(
-        scopes_.begin(), scopes_.end(), scope,
-        [](const ScopeEntry& existing, const ScopeKey& wanted) {
-            return compare_scopes(existing.key, wanted) < 0;
-        });
-    return &*scopes_.insert(at, std::move(entry));
+    auto entry = dstd::make_unique<ScopeEntry>();
+    entry->id = next_scope_id_++;
+    return scopes_.emplace(scope, std::move(entry)).first->second.get();
 }
 
 Writer::CopyEntry* Writer::find_copy(std::uint32_t namespace_id,
-                                     const ScopeKey& scope) {
-    const auto at = std::lower_bound(
-        copies_.begin(), copies_.end(), scope,
-        [namespace_id](const CopyEntry& entry, const ScopeKey& wanted) {
-            if (entry.namespace_id != namespace_id) {
-                return entry.namespace_id < namespace_id;
-            }
-            return compare_scopes(entry.scope, wanted) < 0;
-        });
-    if (at == copies_.end() || at->namespace_id != namespace_id ||
-        compare_scopes(at->scope, scope) != 0) {
-        return nullptr;
-    }
-    return &*at;
+                                     std::uint32_t scope_id) {
+    const auto at = copies_.find(copy_key(namespace_id, scope_id));
+    return at == copies_.end() ? nullptr : at->second.get();
 }
 
-Writer::CopyEntry* Writer::add_copy(NamespaceId id, const ScopeKey& scope,
-                                    std::uint32_t scope_id,
+Writer::CopyEntry* Writer::add_copy(NamespaceId id, std::uint32_t scope_id,
                                     std::uint64_t generation, bool live) {
-    CopyEntry entry;
-    entry.namespace_id = id.value;
-    entry.scope = scope;
-    entry.scope_id = scope_id;
-    entry.copy_id = next_copy_id_++;
-    entry.generation = generation;
-    entry.highest_generation = generation;
-    entry.live = live;
-    const auto at = std::lower_bound(
-        copies_.begin(), copies_.end(), scope,
-        [id](const CopyEntry& existing, const ScopeKey& wanted) {
-            if (existing.namespace_id != id.value) {
-                return existing.namespace_id < id.value;
-            }
-            return compare_scopes(existing.scope, wanted) < 0;
-        });
-    return &*copies_.insert(at, std::move(entry));
+    auto entry = dstd::make_unique<CopyEntry>();
+    entry->copy_id = next_copy_id_++;
+    entry->generation = generation;
+    entry->highest_generation = generation;
+    entry->live = live;
+    return copies_.emplace(copy_key(id.value, scope_id), std::move(entry))
+        .first->second.get();
 }
 
 Writer::CopyEntry* Writer::find_or_add_copy(const NamespaceSpec& spec,
                                             NamespaceId id,
                                             const ScopeKey& scope,
                                             std::uint32_t scope_id) {
-    CopyEntry* entry = find_copy(id.value, scope);
+    CopyEntry* entry = find_copy(id.value, scope_id);
     if (entry != nullptr && entry->live) return entry;
     if (entry != nullptr) {
         const std::uint64_t generation = entry->highest_generation + 1U;
-        entry->scope_id = scope_id;
         entry->copy_id = next_copy_id_++;
         entry->generation = generation;
         entry->highest_generation = generation;
         entry->live = true;
-        entry->announced = false;
         return entry;
     }
-    return add_copy(id, scope, scope_id, generation_of(spec, scope) + 1U, true);
+    return add_copy(id, scope_id, generation_of(spec, scope) + 1U, true);
 }
 
 std::uint64_t Writer::generation_of(const NamespaceSpec& spec,
@@ -340,10 +449,14 @@ std::uint64_t Writer::generation_of(const NamespaceSpec& spec,
 
 dstd::Expected<NamespaceId, dstd::Error> Writer::add_namespace(
     const NamespaceSpec& spec) {
-    if (closed_) return invalid_error();
-    if (latched_error_) return dstd::Unexpected<dstd::Error>(*latched_error_);
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (committer_.failed()) {
+        return dstd::Unexpected<dstd::Error>(committer_.error());
+    }
     if (spec.name.empty()) return invalid_error();
 
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (latched_error_) return dstd::Unexpected<dstd::Error>(*latched_error_);
     const dstd::StringView name(spec.name.data(), spec.name.size());
     NamespaceEntry* existing = find_namespace(name);
     if (existing != nullptr) {
@@ -365,64 +478,50 @@ Batch Writer::batch(NamespaceId namespace_id, const ScopeKey& scope,
     batch.namespace_id_ = namespace_id;
     batch.scope_ = scope;
     batch.params_hash_ = params_hash;
-
-    const NamespaceEntry* entry = find_namespace(namespace_id.value);
-    if (entry == nullptr) {
-        batch.record_error(dstd::Condition::InvalidArgument);
-        return batch;
-    }
-    batch.fold_ = entry->spec.fold;
     if (scope_paths != nullptr) {
         batch.signature_ = *scope_paths;
         if (batch.signature_.size() != scope.paths.size()) {
             batch.record_error(dstd::Condition::InvalidArgument);
         }
     }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const NamespaceEntry* entry = find_namespace(namespace_id.value);
+    if (entry == nullptr) {
+        batch.record_error(dstd::Condition::InvalidArgument);
+        return batch;
+    }
+    batch.fold_ = entry->spec.fold;
     return batch;
 }
 
-void Writer::add_namespace_item(const NamespaceSpec& spec, NamespaceId id,
-                                dstd::Vector<RecordItem>& items) {
-    NamespaceItem item;
-    item.local_id = id.value;
-    item.name = spec.name;
-    item.format_version = spec.format_version;
-    item.fold_kind = static_cast<std::uint8_t>(spec.fold);
-    item.codec = 0;
-    item.durable = spec.durable ? 1 : 0;
-    items.push_back(std::move(item));
-}
-
-void Writer::add_scope_item(const ScopeEntry& entry,
-                            const dstd::Vector<ScopePath>* signature,
-                            dstd::Vector<RecordItem>& items) {
-    ScopeItem item;
-    item.local_id = entry.id;
-    item.kind = entry.key.kind;
-    item.paths.reserve(entry.key.paths.size());
-    for (std::size_t i = 0; i < entry.key.paths.size(); ++i) {
-        ScopePath path;
-        if (signature != nullptr) path = (*signature)[i];
-        path.logical_path = entry.key.paths[i];
-        item.paths.push_back(std::move(path));
-    }
-    items.push_back(std::move(item));
-}
-
 BigRef Writer::place_big(void* context, ByteView value) {
-    auto* writer = static_cast<Writer*>(context);
-    auto placed = writer->file_.append_big(value);
+    auto* placement = static_cast<BigPlacement*>(context);
+    auto placed = placement->writer->file_.append_big(value);
     if (!placed) {
-        writer->latch(placed.error());
+        placement->writer->latch(placed.error());
         return BigRef{};
     }
+    placement->runs->push_back(*placed);
     return BigRef{placed->offset, placed->length, placed->crc};
 }
 
-dstd::Expected<dstd::Vector<Writer::SectionBytes>, dstd::Error>
-Writer::build_sections(const Batch& batch) {
-    dstd::Vector<SectionBytes> out;
-    if (batch.entries_.empty()) return out;
+void Writer::pages_idle(void* context) {
+    static_cast<Writer*>(context)->page_bytes_.nudge();
+}
+
+void Writer::wrote_page(void* context, WrittenPage&& page) {
+    auto* writer = static_cast<Writer*>(context);
+    std::uint64_t bytes = 0;
+    for (const PageSection& section : page.sections) bytes += section.length;
+    writer->page_bytes_.release(bytes);
+    writer->committer_.on_page(std::move(page));
+}
+
+dstd::Expected<Writer::SectionBytes, dstd::Error> Writer::build_section(
+    const Batch& batch) {
+    SectionBytes section;
+    if (batch.entries_.empty()) return section;
 
     const auto key_of = [&batch](std::size_t index) {
         const Batch::Entry& entry = batch.entries_[index];
@@ -469,114 +568,56 @@ Writer::build_sections(const Batch& batch) {
         i = end;
     }
 
-    dstd::Vector<std::pair<std::size_t, std::size_t>> runs;
-    std::size_t run_begin = 0;
+    // One batch is one section: a section of a page or more becomes a run of
+    // its own in PageWriter, and a page holds the sections of several batches.
     SectionSizer sizer;
-    for (std::size_t i = 0; i < groups.size(); ++i) {
-        const std::size_t entry_bytes =
-            encoded_entry_size(groups[i].key_length, groups[i].value_length);
-        SectionSizer candidate = sizer;
-        candidate.add(groups[i].key_length, entry_bytes);
-        if (candidate.size() > page_size_) {
-            if (i == run_begin) return invalid_error();
-            runs.push_back({run_begin, i});
-            run_begin = i;
-            candidate = SectionSizer{};
-            candidate.add(groups[i].key_length, entry_bytes);
-            if (candidate.size() > page_size_) return invalid_error();
-        }
-        sizer = candidate;
+    for (const KeyGroup& group : groups) {
+        sizer.add(group.key_length,
+                  encoded_entry_size(group.key_length, group.value_length));
     }
-    runs.push_back({run_begin, groups.size()});
+    if (sizer.size() >
+        static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+        return invalid_error();
+    }
+
+    // Charged before the seal places big values and before any id is
+    // assigned, so a Busy commit writes nothing and changes no writer state.
+    const std::uint64_t charged = static_cast<std::uint64_t>(sizer.size());
+    if (page_bytes_.take(charged) == WriterPages::Take::Busy) {
+        return dstd::Unexpected<dstd::Error>(dstd::Error(WriterErrc::Busy));
+    }
 
     const FoldFn fold = fold_fn(batch.fold_);
-    for (const auto& run : runs) {
-        SectionBuilder builder;
-        const std::size_t begin = groups[run.first].begin;
-        const std::size_t end = groups[run.second - 1U].end;
-        for (std::size_t i = begin; i < end; ++i) {
-            builder.add(key_of(order[i]), value_of(order[i]));
-        }
-        auto sealed = builder.seal(fold, &Writer::place_big, this);
-        if (latched_error_)
-            return dstd::Unexpected<dstd::Error>(*latched_error_);
-        if (!sealed) {
-            return dstd::Unexpected<dstd::Error>(sealed.error());
-        }
-        if (sealed->size() > page_size_) return invalid_error();
-        SectionBytes section;
-        section.bytes = std::move(*sealed);
-        section.entry_count = builder.entry_count();
-        section.first_key = copy_bytes(builder.first_key());
-        section.last_key = copy_bytes(builder.last_key());
-        out.push_back(std::move(section));
+    SectionBuilder builder;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        builder.add(key_of(order[i]), value_of(order[i]));
     }
-    return out;
+    BigPlacement placement{this, &section.big_runs};
+    auto sealed = builder.seal(fold, &Writer::place_big, &placement);
+    if (auto error = latched()) {
+        page_bytes_.release(charged);
+        return dstd::Unexpected<dstd::Error>(*error);
+    }
+    if (!sealed) {
+        page_bytes_.release(charged);
+        return dstd::Unexpected<dstd::Error>(sealed.error());
+    }
+    if (sealed->size() != charged) {
+        page_bytes_.release(charged);
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error(dstd::Condition::Internal,
+                        "store section size differs from its plan"));
+    }
+
+    section.bytes = std::move(*sealed);
+    section.entry_count = builder.entry_count();
+    section.first_key = copy_bytes(builder.first_key());
+    section.last_key = copy_bytes(builder.last_key());
+    return section;
 }
 
-dstd::Expected<void, dstd::Error> Writer::write_pages(
-    std::uint32_t copy_id, const dstd::Vector<SectionBytes>& sections,
-    dstd::Vector<RecordItem>& items) {
-    dstd::Vector<std::uint8_t> page;
-    dstd::Vector<PageSection> page_sections;
-    std::size_t used = 0;
-
-    const auto flush = [&]() -> dstd::Expected<void, dstd::Error> {
-        if (page.empty()) return {};
-        auto reference = file_.append_page(ByteView{page.data(), page.size()});
-        if (!reference) {
-            latch(reference.error());
-            return dstd::Unexpected<dstd::Error>(reference.error());
-        }
-        PageRefItem item;
-        item.offset = reference->offset;
-        item.length = reference->length;
-        item.crc = reference->crc;
-        item.sequence = next_sequence_;
-        item.sections = std::move(page_sections);
-        items.push_back(std::move(item));
-        page.clear();
-        page_sections.clear();
-        used = 0;
-        return {};
-    };
-
-    for (const SectionBytes& section : sections) {
-        if (used != 0 && used + section.bytes.size() > page_size_) {
-            auto flushed = flush();
-            if (!flushed) return flushed;
-        }
-        PageSection page_section;
-        page_section.copy_id = copy_id;
-        page_section.offset_in_page = static_cast<std::uint32_t>(used);
-        page_section.length = static_cast<std::uint32_t>(section.bytes.size());
-        page_section.entry_count = section.entry_count;
-        page_section.first_key = section.first_key;
-        page_section.last_key = section.last_key;
-        page.insert(page.end(), section.bytes.begin(), section.bytes.end());
-        used += section.bytes.size();
-        page_sections.push_back(std::move(page_section));
-    }
-    return flush();
-}
-
-dstd::Expected<void, dstd::Error> Writer::write_commit(
-    dstd::Vector<RecordItem>& items) {
-    for (RecordItem& item : items) file_.add(std::move(item));
-    auto committed = file_.commit();
-    if (!committed) {
-        latch(committed.error());
-        return dstd::Unexpected<dstd::Error>(committed.error());
-    }
-    return {};
-}
-
-dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
-    if (closed_) return invalid_error();
-    if (latched_error_) return dstd::Unexpected<dstd::Error>(*latched_error_);
-    if (batch.writer_ != this) return invalid_error();
-    if (batch.error_) return dstd::Unexpected<dstd::Error>(*batch.error_);
-
+dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
+                                                  PendingBatch& pending) {
     NamespaceEntry* namespace_entry = find_namespace(batch.namespace_id_.value);
     if (namespace_entry == nullptr) return invalid_error();
     ScopeEntry* scope_entry = find_scope(batch.scope_);
@@ -585,95 +626,189 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     CopyEntry* copy_entry =
         find_or_add_copy(namespace_entry->spec, batch.namespace_id_,
                          batch.scope_, scope_entry->id);
-    const std::uint32_t copy_id = copy_entry->copy_id;
-    const std::uint64_t generation = copy_entry->generation;
-    const bool new_copy = !copy_entry->announced;
 
-    auto sections = build_sections(batch);
-    if (!sections) return dstd::Unexpected<dstd::Error>(sections.error());
-
-    dstd::Vector<RecordItem> items;
-    if (!namespace_entry->announced) {
-        add_namespace_item(namespace_entry->spec, namespace_entry->id, items);
-    }
-    if (!scope_entry->announced) {
-        add_scope_item(*scope_entry,
-                       batch.signature_.empty() ? nullptr : &batch.signature_,
-                       items);
-    }
-    if (new_copy) {
-        CopyItem item;
-        item.local_id = copy_id;
-        item.namespace_id = namespace_entry->id.value;
-        item.scope_id = scope_entry->id;
-        item.params_hash = batch.params_hash_;
-        item.generation = generation;
-        item.state = CopyState::Ready;
-        items.push_back(std::move(item));
-    }
-
-    auto written = write_pages(copy_id, *sections, items);
-    if (!written) return written;
-    if (items.empty()) return {};
-
-    auto committed = write_commit(items);
-    if (!committed) return committed;
-
-    namespace_entry->announced = true;
-    scope_entry->announced = true;
-    copy_entry->announced = true;
-    copy_entry->live = true;
-    copy_entry->highest_generation =
-        std::max(copy_entry->highest_generation, generation);
-    ++next_sequence_;
+    pending.namespace_id = namespace_entry->id.value;
+    pending.namespace_item =
+        namespace_item(namespace_entry->spec, namespace_entry->id);
+    pending.scope_id = scope_entry->id;
+    pending.scope_item =
+        scope_item(batch.scope_, scope_entry->id,
+                   batch.signature_.empty() ? nullptr : &batch.signature_);
+    pending.copy_item = copy_item(
+        copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
+        batch.params_hash_, copy_entry->generation, CopyState::Ready);
+    pending.durable = namespace_entry->spec.durable;
     return {};
+}
+
+dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (committer_.failed()) {
+        return dstd::Unexpected<dstd::Error>(committer_.error());
+    }
+    if (batch.writer_ != this) return invalid_error();
+    if (batch.error_) return dstd::Unexpected<dstd::Error>(*batch.error_);
+
+    auto section = build_section(batch);
+    if (!section) {
+        if (section.error().is_code(WriterErrc::Busy)) return busy_error();
+        return dstd::Unexpected<dstd::Error>(section.error());
+    }
+    const std::uint64_t section_bytes =
+        static_cast<std::uint64_t>(section->bytes.size());
+    const bool charged = section_bytes != 0;
+
+    auto* pending = new PendingBatch;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (latched_error_) {
+            if (charged) page_bytes_.release(section_bytes);
+            delete pending;
+            return dstd::Unexpected<dstd::Error>(*latched_error_);
+        }
+        auto prepared = prepare(batch, *pending);
+        if (!prepared) {
+            if (charged) page_bytes_.release(section_bytes);
+            delete pending;
+            return prepared;
+        }
+    }
+
+    if (!charged) {
+        delete pending;
+        return {};
+    }
+
+    pending->pages = &page_bytes_;
+    pending->charged_bytes = section_bytes;
+    pending->big_runs = std::move(section->big_runs);
+
+    PageSection info;
+    info.copy_id = pending->copy_item.local_id;
+    info.entry_count = section->entry_count;
+    info.first_key = std::move(section->first_key);
+    info.last_key = std::move(section->last_key);
+
+    auto appended =
+        pages_.append(pending->namespace_id,
+                      ByteView{section->bytes.data(), section->bytes.size()},
+                      std::move(info), pending);
+    if (!appended) {
+        page_bytes_.release(section_bytes);
+        // The page writer reports this error from every later append, so a
+        // wait for bytes it will never release has to end here.
+        page_bytes_.latch();
+        delete pending;
+        return appended;
+    }
+    // A waiter needs a release. A write in flight brings one; with none in
+    // flight, this append's page must be sealed or the waiter waits forever.
+    // Sealing only then keeps pages full under steady back pressure.
+    if (page_bytes_.waiting() && !pages_.writing()) {
+        auto sealed = pages_.seal_all();
+        if (!sealed) {
+            committer_.latch(sealed.error());
+            page_bytes_.latch();
+        }
+    }
+    return {};
+}
+
+dstd::Unexpected<dstd::Error> Writer::busy_error() {
+    // With no write in flight, the held bytes sit in open pages nobody writes:
+    // seal them, so threads that all hold a partial batch cannot deadlock.
+    // With a write in flight its completion frees bytes, and a seal would only
+    // write a partial page.
+    if (!pages_.writing()) {
+        auto sealed = pages_.seal_all();
+        if (!sealed) {
+            committer_.latch(sealed.error());
+            page_bytes_.latch();
+            return dstd::Unexpected<dstd::Error>(sealed.error());
+        }
+    }
+    return dstd::Unexpected<dstd::Error>(dstd::Error(WriterErrc::Busy));
+}
+
+coro::CoroTask<void> Writer::space() {
+    dstd::Optional<dstd::Error> latched_error = latched();
+    if (latched_error) {
+        page_bytes_.latch();
+        co_return;
+    }
+    if (closed_.load(std::memory_order_acquire) || committer_.failed() ||
+        page_bytes_.latched()) {
+        co_return;
+    }
+    // Announced before the check: a write in flight at the check releases
+    // bytes after the announce, and with none in flight the seal here, or the
+    // seal of an append the seal misses, starts one. Either way the release
+    // this waits for comes.
+    WriterPages::WaitAnnounce announce(page_bytes_);
+    if (!pages_.writing()) {
+        auto sealed = pages_.seal_all();
+        if (!sealed) {
+            committer_.latch(sealed.error());
+            page_bytes_.latch();
+            co_return;
+        }
+    }
+    if (auto* hook = space_sealed_hook().load(std::memory_order_acquire)) {
+        hook(*this);
+    }
+    auto wait = page_bytes_.wait_release(announce.epoch());
+    co_await wait;
+    co_return;
 }
 
 dstd::Expected<void, dstd::Error> Writer::fail(NamespaceId namespace_id,
                                                const ScopeKey& scope,
                                                std::uint64_t params_hash) {
-    if (closed_) return invalid_error();
-    if (latched_error_) return dstd::Unexpected<dstd::Error>(*latched_error_);
-
-    NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
-    if (namespace_entry == nullptr) return invalid_error();
-    ScopeEntry* scope_entry = find_scope(scope);
-    if (scope_entry == nullptr) scope_entry = add_scope(scope);
-
-    CopyEntry* existing = find_copy(namespace_id.value, scope);
-    const std::uint64_t highest =
-        existing != nullptr ? existing->highest_generation
-                            : generation_of(namespace_entry->spec, scope);
-    const std::uint64_t generation = highest + 1U;
-    const std::uint32_t copy_id = next_copy_id_++;
-
-    dstd::Vector<RecordItem> items;
-    if (!namespace_entry->announced) {
-        add_namespace_item(namespace_entry->spec, namespace_entry->id, items);
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (committer_.failed()) {
+        return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    if (!scope_entry->announced) add_scope_item(*scope_entry, nullptr, items);
-    CopyItem item;
-    item.local_id = copy_id;
-    item.namespace_id = namespace_entry->id.value;
-    item.scope_id = scope_entry->id;
-    item.params_hash = params_hash;
-    item.generation = generation;
-    item.state = CopyState::Failed;
-    items.push_back(std::move(item));
+    auto* pending = new PendingBatch;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (latched_error_) {
+            delete pending;
+            return dstd::Unexpected<dstd::Error>(*latched_error_);
+        }
+        NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
+        if (namespace_entry == nullptr) {
+            delete pending;
+            return invalid_error();
+        }
+        ScopeEntry* scope_entry = find_scope(scope);
+        if (scope_entry == nullptr) scope_entry = add_scope(scope);
 
-    auto committed = write_commit(items);
-    if (!committed) return committed;
+        CopyEntry* existing = find_copy(namespace_id.value, scope_entry->id);
+        const std::uint64_t highest =
+            existing != nullptr ? existing->highest_generation
+                                : generation_of(namespace_entry->spec, scope);
+        const std::uint64_t generation = highest + 1U;
+        if (existing == nullptr) {
+            existing =
+                add_copy(namespace_id, scope_entry->id, generation, false);
+        } else {
+            existing->live = false;
+            existing->generation = generation;
+            existing->highest_generation = generation;
+        }
 
-    namespace_entry->announced = true;
-    scope_entry->announced = true;
-    if (existing == nullptr) {
-        existing =
-            add_copy(namespace_id, scope, scope_entry->id, generation, false);
+        pending->namespace_id = namespace_entry->id.value;
+        pending->namespace_item =
+            namespace_item(namespace_entry->spec, namespace_entry->id);
+        pending->scope_id = scope_entry->id;
+        pending->scope_item = scope_item(scope, scope_entry->id, nullptr);
+        // A failed copy is a new copy id, so it is announced on its own.
+        pending->copy_item = copy_item(
+            next_copy_id_++, namespace_entry->id.value, scope_entry->id,
+            params_hash, generation, CopyState::Failed);
+        pending->durable = namespace_entry->spec.durable;
     }
-    existing->live = false;
-    existing->generation = generation;
-    existing->highest_generation = generation;
-    ++next_sequence_;
+    committer_.on_fail(pending);
     return {};
 }
 
@@ -685,63 +820,109 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
 dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
                                                const ScopeKey& scope,
                                                ByteView begin, ByteView end) {
-    if (closed_) return invalid_error();
-    if (latched_error_) return dstd::Unexpected<dstd::Error>(*latched_error_);
-
-    NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
-    if (namespace_entry == nullptr) return invalid_error();
-    ScopeEntry* scope_entry = find_scope(scope);
-    if (scope_entry == nullptr) scope_entry = add_scope(scope);
-
-    CopyEntry* existing = find_copy(namespace_id.value, scope);
-    const std::uint64_t highest =
-        existing != nullptr ? existing->highest_generation
-                            : generation_of(namespace_entry->spec, scope);
-    const std::uint64_t generation = highest + 1U;
-
-    dstd::Vector<RecordItem> items;
-    if (!namespace_entry->announced) {
-        add_namespace_item(namespace_entry->spec, namespace_entry->id, items);
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (committer_.failed()) {
+        return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    if (!scope_entry->announced) add_scope_item(*scope_entry, nullptr, items);
-    DropItem item;
-    item.namespace_id = namespace_entry->id.value;
-    item.scope_id = scope_entry->id;
-    item.generation = generation;
-    item.begin_key = copy_bytes(begin);
-    item.end_key = copy_bytes(end);
-    items.push_back(std::move(item));
+    auto* pending = new PendingBatch;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (latched_error_) {
+            delete pending;
+            return dstd::Unexpected<dstd::Error>(*latched_error_);
+        }
+        NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
+        if (namespace_entry == nullptr) {
+            delete pending;
+            return invalid_error();
+        }
+        ScopeEntry* scope_entry = find_scope(scope);
+        if (scope_entry == nullptr) scope_entry = add_scope(scope);
 
-    auto committed = write_commit(items);
-    if (!committed) return committed;
+        CopyEntry* existing = find_copy(namespace_id.value, scope_entry->id);
+        const std::uint64_t highest =
+            existing != nullptr ? existing->highest_generation
+                                : generation_of(namespace_entry->spec, scope);
+        const std::uint64_t generation = highest + 1U;
+        if (existing == nullptr) {
+            existing =
+                add_copy(namespace_id, scope_entry->id, generation, false);
+        } else {
+            existing->live = false;
+            existing->generation = generation;
+            existing->highest_generation = generation;
+        }
 
-    namespace_entry->announced = true;
-    scope_entry->announced = true;
-    if (existing == nullptr) {
-        existing =
-            add_copy(namespace_id, scope, scope_entry->id, generation, false);
+        pending->namespace_id = namespace_entry->id.value;
+        pending->namespace_item =
+            namespace_item(namespace_entry->spec, namespace_entry->id);
+        pending->scope_id = scope_entry->id;
+        pending->scope_item = scope_item(scope, scope_entry->id, nullptr);
+        // A drop announces no copy: its generation is all the committer needs.
+        pending->copy_item.local_id = 0;
+        pending->copy_item.generation = generation;
+        pending->durable = namespace_entry->spec.durable;
     }
-    existing->live = false;
-    existing->generation = generation;
-    existing->highest_generation = generation;
-    ++next_sequence_;
+    committer_.on_drop(pending, copy_bytes(begin), copy_bytes(end));
     return {};
 }
 
-dstd::Expected<void, dstd::Error> Writer::close() {
-    if (closed_) {
-        if (latched_error_) {
-            return dstd::Unexpected<dstd::Error>(*latched_error_);
+coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::flush() {
+    if (closed_.load(std::memory_order_acquire)) {
+        if (committer_.failed()) {
+            co_return dstd::Unexpected<dstd::Error>(committer_.error());
         }
-        return {};
+        co_return dstd::Unexpected<dstd::Error>(
+            dstd::Error(dstd::Condition::InvalidArgument));
     }
-    auto closed = file_.close();
-    closed_ = true;
-    if (!closed) {
-        latch(closed.error());
-        return dstd::Unexpected<dstd::Error>(closed.error());
+    auto sealed = pages_.seal_all();
+    if (!sealed) {
+        committer_.latch(sealed.error());
+        page_bytes_.latch();
+        co_return sealed;
     }
-    return {};
+    auto idle = co_await pages_.wait_idle_async();
+    if (!idle) {
+        committer_.latch(idle.error());
+        page_bytes_.latch();
+        co_return idle;
+    }
+    co_return committer_.commit_pending();
+}
+
+coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::close() {
+    if (closed_.load(std::memory_order_acquire)) {
+        if (committer_.failed()) {
+            co_return dstd::Unexpected<dstd::Error>(committer_.error());
+        }
+        co_return dstd::Expected<void, dstd::Error>{};
+    }
+    closed_.store(true, std::memory_order_release);
+
+    dstd::Optional<dstd::Error> first;
+    auto sealed = pages_.seal_all();
+    if (!sealed) {
+        committer_.latch(sealed.error());
+        page_bytes_.latch();
+        first = sealed.error();
+    }
+    auto idle = co_await pages_.wait_idle_async();
+    if (!idle) {
+        committer_.latch(idle.error());
+        page_bytes_.latch();
+        if (!first) first = idle.error();
+    }
+    auto committed = committer_.commit_pending();
+    if (!committed && !first) first = committed.error();
+
+    auto stopped = co_await committer_.stop();
+    if (!stopped && !first) first = stopped.error();
+
+    auto file_closed = file_.close();
+    if (!file_closed && !first) first = file_closed.error();
+
+    if (first) co_return dstd::Unexpected<dstd::Error>(*first);
+    co_return dstd::Expected<void, dstd::Error>{};
 }
 
 }  // namespace dftracer::utils::index::store::engine

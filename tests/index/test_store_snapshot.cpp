@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/store/engine/data_file.h>
 #include <dftracer/utils/index/store/engine/fold.h>
@@ -6,6 +7,7 @@
 #include <dftracer/utils/index/store/engine/snapshot.h>
 #include <dftracer/utils/index/store/engine/writer.h>
 #include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -16,8 +18,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +32,7 @@ namespace dstd = dftracer::utils::dstd;
 namespace engine = dftracer::utils::index::store::engine;
 
 using dftracer::utils::ByteView;
+using dftracer::utils::Runtime;
 using dftracer::utils::dstd::Condition;
 using engine::Batch;
 using engine::DataFileReader;
@@ -44,6 +49,7 @@ constexpr std::uint32_t SMALL_PAGE = 4096;
 constexpr std::size_t HEADER_WRITER_RANDOM_AT = 32;
 constexpr std::size_t HEADER_CRC_AT = 12;
 constexpr std::size_t KEY_COUNT = 1000;
+constexpr int RUNTIME_THREADS = 8;
 
 ByteView view_of(const std::string& bytes) {
     return {bytes.data(), bytes.size()};
@@ -125,10 +131,28 @@ WriterOptions small_pages() {
     return options;
 }
 
-Writer make_writer(const dftu_utils_test::ScopedTestDir& dir) {
-    auto created = Writer::create(dir.str(), small_pages());
+/// The one executor of this suite: every writer coroutine runs on it, so a
+/// test submits flush and close there and waits for the result.
+Runtime& store_runtime() {
+    static Runtime runtime(RUNTIME_THREADS);
+    return runtime;
+}
+
+std::unique_ptr<Writer> make_writer(
+    const dftu_utils_test::ScopedTestDir& dir,
+    const WriterOptions& options = small_pages()) {
+    auto created =
+        Writer::create(dir.str(), *store_runtime().executor(), options);
     REQUIRE(created.has_value());
     return std::move(*created);
+}
+
+dstd::Expected<void, dstd::Error> flush_writer(Writer& writer) {
+    return store_runtime().submit(writer.flush()).get();
+}
+
+dstd::Expected<void, dstd::Error> close_writer(Writer& writer) {
+    return store_runtime().submit(writer.close()).get();
 }
 
 std::vector<std::pair<std::string, std::string>> collect(
@@ -257,6 +281,106 @@ std::string concat_value(int index) {
     return "concat-" + std::string(10 - digits.size(), '0') + digits;
 }
 
+/// Installs a runtime with `threads` threads as the process-wide default, so an
+/// open under it reads its files in parallel, and puts the runtime it found
+/// back at the end of the scope.
+class ScopedDefaultRuntime {
+   public:
+    explicit ScopedDefaultRuntime(std::size_t threads)
+        : previous_(dftracer::utils::peek_default_runtime()) {
+        dftracer::utils::set_default_runtime(
+            std::make_shared<Runtime>(threads));
+    }
+
+    ~ScopedDefaultRuntime() {
+        dftracer::utils::set_default_runtime(std::move(previous_));
+    }
+
+    ScopedDefaultRuntime(const ScopedDefaultRuntime&) = delete;
+    ScopedDefaultRuntime& operator=(const ScopedDefaultRuntime&) = delete;
+
+   private:
+    std::shared_ptr<Runtime> previous_;
+};
+
+/// What one open of a root read, and a text of every scope state and every row,
+/// so two opens under different runtimes compare with one string.
+struct OpenDump {
+    std::string text;
+    std::size_t files = 0;
+    std::size_t pages = 0;
+    std::uint64_t read_calls = 0;
+};
+
+OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
+                   const NamespaceSpec& spec,
+                   const std::vector<ScopeKey>& scopes) {
+    auto snapshot = Snapshot::open(root.str());
+    REQUIRE(snapshot.has_value());
+    CHECK(snapshot->skipped().empty());
+    OpenDump dump;
+    dump.files = snapshot->open_stats().files;
+    dump.pages = snapshot->open_stats().pages;
+    dump.read_calls = snapshot->open_stats().read_calls;
+    for (const ScopeKey& scope : scopes) {
+        dump.text +=
+            "state " + to_std(scope.paths[0]) + " " +
+            std::to_string(static_cast<int>(snapshot->state(spec, scope))) +
+            "\n";
+        auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+        for (const ScopedRow& row : collect_scoped(cursor)) {
+            dump.text += row.key + "=" + row.value + "\n";
+        }
+    }
+    return dump;
+}
+
+/// One data file of one writer of the open tests: one commit of `keys` entries
+/// per scope, with a group commit after each one when `flushed`.
+void write_scopes_file(const dftu_utils_test::ScopedTestDir& dir,
+                       const NamespaceSpec& spec,
+                       const std::vector<ScopeKey>& scopes, int keys,
+                       bool flushed) {
+    auto writer = make_writer(dir);
+    auto id = writer->add_namespace(spec);
+    REQUIRE(id.has_value());
+    for (const ScopeKey& scope : scopes) {
+        Batch entries = writer->batch(*id, scope, 0);
+        for (int k = 0; k < keys; ++k) {
+            const std::string key = "b0-" + key_of(k);
+            const std::string value = value_of(k);
+            entries.put(view_of(key), view_of(value));
+        }
+        REQUIRE(writer->commit(std::move(entries)).has_value());
+        if (flushed) REQUIRE(flush_writer(*writer).has_value());
+    }
+    REQUIRE(close_writer(*writer).has_value());
+}
+
+/// One data file of one writer of the open tests: `batches` commits of `keys`
+/// entries each, in one scope, with a group commit after each one when
+/// `flushed`.
+void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
+                       const NamespaceSpec& spec, const ScopeKey& scope,
+                       int batches, int keys, bool flushed) {
+    auto writer = make_writer(dir);
+    auto id = writer->add_namespace(spec);
+    REQUIRE(id.has_value());
+    const std::string prefix = to_std(scope.paths[0]);
+    for (int batch = 0; batch < batches; ++batch) {
+        Batch entries = writer->batch(*id, scope, 0);
+        for (int k = 0; k < keys; ++k) {
+            const std::string key =
+                "b" + std::to_string(batch) + "-" + key_of(k);
+            const std::string value = value_of(k);
+            entries.put(view_of(key), view_of(value));
+        }
+        REQUIRE(writer->commit(std::move(entries)).has_value());
+        if (flushed) REQUIRE(flush_writer(*writer).has_value());
+    }
+    REQUIRE(close_writer(*writer).has_value());
+}
+
 }  // namespace
 
 TEST_SUITE("index store snapshot") {
@@ -287,19 +411,19 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/a.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         for (int part = 0; part < 2; ++part) {
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             for (int i = part * 500; i < (part + 1) * 500; ++i) {
                 const std::string key = key_of(i);
                 const std::string value = value_of(i);
                 batch.put(view_of(key), view_of(value));
             }
-            REQUIRE(writer.commit(std::move(batch)).has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
         }
-        REQUIRE(writer.close().has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -357,21 +481,21 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/b.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
 
-        Batch first = writer.batch(*id, scope, 0);
+        Batch first = writer->batch(*id, scope, 0);
         first.put(view_of(std::string("key-b")), view_of(std::string("b1")));
         first.put(view_of(std::string("key-a")), view_of(std::string("a1")));
         first.put(view_of(std::string("key-b")), view_of(std::string("b2")));
-        REQUIRE(writer.commit(std::move(first)).has_value());
+        REQUIRE(writer->commit(std::move(first)).has_value());
 
-        Batch second = writer.batch(*id, scope, 0);
+        Batch second = writer->batch(*id, scope, 0);
         second.put(view_of(std::string("key-b")), view_of(std::string("b3")));
         second.put(view_of(std::string("key-c")), view_of(std::string("c1")));
-        REQUIRE(writer.commit(std::move(second)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(second)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -445,27 +569,27 @@ TEST_SUITE("index store snapshot") {
             {FoldKind::Concat, "concat", {"a", "bc"}, {"d"}, "abcd"},
         };
 
-        Writer writer = make_writer(dir);
+        auto writer = make_writer(dir);
         for (const FoldCase& fold_case : cases) {
             const NamespaceSpec spec =
                 fold_spec("dftu.test." + fold_case.name, fold_case.kind);
-            auto id = writer.add_namespace(spec);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             const std::string key = "folded";
 
-            Batch first = writer.batch(*id, scope, 0);
+            Batch first = writer->batch(*id, scope, 0);
             for (const std::string& value : fold_case.first) {
                 first.fold(view_of(key), view_of(value));
             }
-            REQUIRE(writer.commit(std::move(first)).has_value());
+            REQUIRE(writer->commit(std::move(first)).has_value());
 
-            Batch second = writer.batch(*id, scope, 0);
+            Batch second = writer->batch(*id, scope, 0);
             for (const std::string& value : fold_case.second) {
                 second.fold(view_of(key), view_of(value));
             }
-            REQUIRE(writer.commit(std::move(second)).has_value());
+            REQUIRE(writer->commit(std::move(second)).has_value());
         }
-        REQUIRE(writer.close().has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -499,30 +623,30 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/bad.pfw");
         const NamespaceSpec spec = fold_spec("dftu.test.sum", FoldKind::SumI64);
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
 
-        Batch batch = writer.batch(*id, scope, 0);
+        Batch batch = writer->batch(*id, scope, 0);
         batch.fold(view_of(std::string("good")), view_of(i64_bytes(1)));
         batch.fold(view_of(std::string("short")), view_of(std::string("abcd")));
-        auto rejected = writer.commit(std::move(batch));
+        auto rejected = writer->commit(std::move(batch));
         REQUIRE_FALSE(rejected.has_value());
         CHECK(rejected.error().is(Condition::InvalidArgument));
 
-        auto put_id = writer.add_namespace(put_spec("dftu.test.put"));
+        auto put_id = writer->add_namespace(put_spec("dftu.test.put"));
         REQUIRE(put_id.has_value());
-        Batch wrong_fold = writer.batch(*put_id, scope, 0);
+        Batch wrong_fold = writer->batch(*put_id, scope, 0);
         wrong_fold.fold(view_of(std::string("key")), view_of(i64_bytes(1)));
-        auto folded = writer.commit(std::move(wrong_fold));
+        auto folded = writer->commit(std::move(wrong_fold));
         REQUIRE_FALSE(folded.has_value());
         CHECK(folded.error().is(Condition::InvalidArgument));
-        Batch wrong_put = writer.batch(*id, scope, 0);
+        Batch wrong_put = writer->batch(*id, scope, 0);
         wrong_put.put(view_of(std::string("key")), view_of(i64_bytes(1)));
-        auto put = writer.commit(std::move(wrong_put));
+        auto put = writer->commit(std::move(wrong_put));
         REQUIRE_FALSE(put.has_value());
         CHECK(put.error().is(Condition::InvalidArgument));
-        REQUIRE(writer.close().has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -547,14 +671,14 @@ TEST_SUITE("index store snapshot") {
             big[i] = static_cast<char>('a' + static_cast<int>((i / 4096) % 26));
         }
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        Batch batch = writer.batch(*id, scope, 0);
+        Batch batch = writer->batch(*id, scope, 0);
         batch.put(view_of(std::string("big")), view_of(big));
         batch.put(view_of(std::string("small")), view_of(std::string("small")));
-        REQUIRE(writer.commit(std::move(batch)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -563,7 +687,7 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == big);
 
-        auto reader = DataFileReader::open(to_std(writer.path()));
+        auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
         engine::BigRef ref{};
         bool found_ref = false;
@@ -591,50 +715,53 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found_ref);
         CHECK(ref.length == big.size());
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer.path()));
+        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         REQUIRE(ref.offset + ref.length <= bytes.size());
         bytes[static_cast<std::size_t>(ref.offset) + 4096U] ^= 0xFFU;
         const std::string corrupt_path = corrupt_dir.file("w-corrupt.dfs");
         write_file(corrupt_path, bytes);
 
+        // The big value run is a block of its commit: when it does not
+        // verify, the whole commit reads as bad, so neither key is returned.
         auto corrupt = Snapshot::open(corrupt_dir.str());
         REQUIRE(corrupt.has_value());
-        CHECK(corrupt->state(spec, scope) == ScopeState::Ready);
+        CHECK(corrupt->state(spec, scope) == ScopeState::Bad);
         auto bad = corrupt->get(spec, scope, view_of(std::string("big")));
-        REQUIRE_FALSE(bad.has_value());
-        CHECK(bad.error().is(Condition::Parse));
+        REQUIRE(bad.has_value());
+        CHECK_FALSE(bad->has_value());
         auto other = corrupt->get(spec, scope, view_of(std::string("small")));
         REQUIRE(other.has_value());
-        REQUIRE(other->has_value());
-        CHECK(to_std((*other)->bytes()) == "small");
+        CHECK_FALSE(other->has_value());
     }
 
-    TEST_CASE("a batch larger than a page splits into sections") {
+    TEST_CASE("a batch larger than a page is one section in a run of its own") {
         dftu_utils_test::ScopedTestDir dir("snapshot_split");
         const ScopeKey scope = file_scope("/traces/many.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         constexpr int COUNT = 5000;
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        Batch batch = writer.batch(*id, scope, 0);
+        Batch batch = writer->batch(*id, scope, 0);
         for (int i = 0; i < COUNT; ++i) {
             const std::string key = key_of(i);
             const std::string value = value_of(i);
             batch.put(view_of(key), view_of(value));
         }
-        REQUIRE(writer.commit(std::move(batch)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer.path()));
+        auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
-        std::size_t section_count = 0;
-        for (const engine::IndexedPageRef& page : reader->index().page_refs) {
-            CHECK(page.ref.length <= SMALL_PAGE);
-            section_count += page.ref.sections.size();
-        }
-        CHECK(section_count > 1);
+        // The batch is one section now instead of a run of page-sized ones:
+        // it is longer than a page and is written as a run of its own.
+        REQUIRE(reader->index().page_refs.size() == 1);
+        const engine::PageRefItem& run = reader->index().page_refs[0].ref;
+        REQUIRE(run.sections.size() == 1);
+        CHECK(run.sections[0].entry_count == static_cast<std::uint64_t>(COUNT));
+        CHECK(run.length > SMALL_PAGE);
+        CHECK(run.length % SMALL_PAGE == 0);
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -664,23 +791,23 @@ TEST_SUITE("index store snapshot") {
         const std::string key = "shared";
 
         {
-            Writer first = make_writer(dir);
-            auto id = first.add_namespace(spec);
+            auto first = make_writer(dir);
+            auto id = first->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = first.batch(*id, scope, 0);
+            Batch batch = first->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("from-first")));
-            REQUIRE(first.commit(std::move(batch)).has_value());
-            REQUIRE(first.close().has_value());
+            REQUIRE(first->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*first).has_value());
         }
 
         {
-            Writer second = make_writer(dir);
-            auto id = second.add_namespace(spec);
+            auto second = make_writer(dir);
+            auto id = second->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = second.batch(*id, scope, 0);
+            Batch batch = second->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("from-second")));
-            REQUIRE(second.commit(std::move(batch)).has_value());
-            REQUIRE(second.close().has_value());
+            REQUIRE(second->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*second).has_value());
         }
 
         auto newest = Snapshot::open(dir.str());
@@ -694,25 +821,25 @@ TEST_SUITE("index store snapshot") {
         // the two files below hold the same generation and tie.
         std::string left_path;
         {
-            Writer writer = make_writer(left);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(left);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("from-left")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-            left_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            left_path = to_std(writer->path());
         }
         std::string right_path;
         {
-            Writer writer = make_writer(right);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(right);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("from-right")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-            right_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            right_path = to_std(writer->path());
         }
         CHECK(only_copy_generation(left_path) == 1);
         CHECK(only_copy_generation(right_path) == 1);
@@ -756,22 +883,22 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
         {
-            Writer writer = make_writer(dir);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
             batch.put(view_of(std::string("key-b")), view_of(std::string("b")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
 
         {
-            Writer writer = make_writer(dir);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            REQUIRE(writer.drop(*id, scope).has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(writer->drop(*id, scope).has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
 
         {
@@ -787,13 +914,13 @@ TEST_SUITE("index store snapshot") {
         }
 
         {
-            Writer writer = make_writer(dir);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(std::string("key-z")), view_of(std::string("z")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
 
         auto rewritten = Snapshot::open(dir.str());
@@ -816,26 +943,26 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
         {
-            Writer writer = make_writer(dir);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             for (const std::string key : {"key-a", "key-b", "key-c", "key-d"}) {
                 batch.put(view_of(key), view_of("v-" + key));
             }
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
 
         {
-            Writer writer = make_writer(dir);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             const std::string begin = "key-b";
             const std::string end = "key-d";
-            REQUIRE(writer.drop(*id, scope, view_of(begin), view_of(end))
+            REQUIRE(writer->drop(*id, scope, view_of(begin), view_of(end))
                         .has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
 
         auto snapshot = Snapshot::open(dir.str());
@@ -866,11 +993,11 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/x.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        REQUIRE(writer.fail(*id, scope, 17).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->fail(*id, scope, 17).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -889,42 +1016,40 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey sound = file_scope("/traces/sound.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         for (int batch = 1; batch <= 3; ++batch) {
-            Batch entries = writer.batch(*id, broken, 0);
+            Batch entries = writer->batch(*id, broken, 0);
             const std::string key = "broken-" + std::to_string(batch);
             const std::string value = "broken-value-" + std::to_string(batch);
             entries.put(view_of(key), view_of(value));
-            REQUIRE(writer.commit(std::move(entries)).has_value());
+            REQUIRE(writer->commit(std::move(entries)).has_value());
         }
+        // One page mixes the sections of every scope of a namespace, so the
+        // broken scope is sealed into a page of its own here, and the sound
+        // scope writes into the next one.
+        REQUIRE(flush_writer(*writer).has_value());
         for (int batch = 1; batch <= 2; ++batch) {
-            Batch entries = writer.batch(*id, sound, 0);
+            Batch entries = writer->batch(*id, sound, 0);
             const std::string key = "sound-" + std::to_string(batch);
             const std::string value = "sound-value-" + std::to_string(batch);
             entries.put(view_of(key), view_of(value));
-            REQUIRE(writer.commit(std::move(entries)).has_value());
+            REQUIRE(writer->commit(std::move(entries)).has_value());
         }
-        REQUIRE(writer.close().has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer.path()));
+        auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
-        engine::PageRef second{};
-        bool found_second = false;
-        for (const engine::IndexedPageRef& page : reader->index().page_refs) {
-            if (page.sequence == 2) {
-                second.offset = page.ref.offset;
-                second.length = page.ref.length;
-                second.crc = page.ref.crc;
-                found_second = true;
-            }
-        }
-        REQUIRE(found_second);
+        REQUIRE(reader->index().page_refs.size() == 2);
+        engine::PageRef broken_page{};
+        broken_page.offset = reader->index().page_refs[0].ref.offset;
+        broken_page.length = reader->index().page_refs[0].ref.length;
+        broken_page.crc = reader->index().page_refs[0].ref.crc;
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer.path()));
-        REQUIRE(second.offset + second.length <= bytes.size());
-        bytes[static_cast<std::size_t>(second.offset) + 4U] ^= 0xFFU;
+        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
+        REQUIRE(broken_page.offset + broken_page.length <= bytes.size());
+        bytes[static_cast<std::size_t>(broken_page.offset) + 4U] ^= 0xFFU;
         const std::string copy_path = copy_dir.file("w-bad.dfs");
         write_file(copy_path, bytes);
 
@@ -958,18 +1083,22 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/c.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
         for (int batch = 1; batch <= 5; ++batch) {
-            Batch entries = writer.batch(*id, scope, 0);
+            Batch entries = writer->batch(*id, scope, 0);
             const std::string key = "commit-" + std::to_string(batch);
             const std::string value = "value-" + std::to_string(batch);
             entries.put(view_of(key), view_of(value));
-            REQUIRE(writer.commit(std::move(entries)).has_value());
+            REQUIRE(writer->commit(std::move(entries)).has_value());
             if (batch == 3) {
+                // A group commit is what makes a commit visible, so the copy
+                // holds the three commits flushed here and neither of the two
+                // after.
+                REQUIRE(flush_writer(*writer).has_value());
                 write_file(copy_dir.file("w-crash.dfs"),
-                           read_file(to_std(writer.path())));
+                           read_file(to_std(writer->path())));
             }
         }
 
@@ -992,7 +1121,7 @@ TEST_SUITE("index store snapshot") {
         }
         auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
         CHECK(collect(cursor).size() == 3);
-        REQUIRE(writer.close().has_value());
+        REQUIRE(close_writer(*writer).has_value());
     }
 
     TEST_CASE("a file of another format version is skipped and listed") {
@@ -1000,15 +1129,15 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/u.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        Batch batch = writer.batch(*id, scope, 0);
+        Batch batch = writer->batch(*id, scope, 0);
         batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
-        REQUIRE(writer.commit(std::move(batch)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
-        std::vector<std::uint8_t> bytes = read_file(to_std(writer.path()));
+        std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         dftracer::utils::write_u32_le(bytes.data() + 8, 1);
         rewrite_header_crc(bytes);
         write_file(dir.file("w-version-one.dfs"), bytes);
@@ -1031,28 +1160,28 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec put = put_spec("dftu.test.put");
         const NamespaceSpec sum = fold_spec("dftu.test.sum", FoldKind::SumI64);
 
-        Writer writer = make_writer(dir);
-        auto put_id = writer.add_namespace(put);
+        auto writer = make_writer(dir);
+        auto put_id = writer->add_namespace(put);
         REQUIRE(put_id.has_value());
-        auto sum_id = writer.add_namespace(sum);
+        auto sum_id = writer->add_namespace(sum);
         REQUIRE(sum_id.has_value());
 
-        Batch first_batch = writer.batch(*put_id, first, 0);
+        Batch first_batch = writer->batch(*put_id, first, 0);
         first_batch.put(view_of(std::string("a-key")),
                         view_of(std::string("a")));
-        REQUIRE(writer.commit(std::move(first_batch)).has_value());
-        Batch second_batch = writer.batch(*put_id, second, 0);
+        REQUIRE(writer->commit(std::move(first_batch)).has_value());
+        Batch second_batch = writer->batch(*put_id, second, 0);
         second_batch.put(view_of(std::string("b-key")),
                          view_of(std::string("b")));
-        REQUIRE(writer.commit(std::move(second_batch)).has_value());
+        REQUIRE(writer->commit(std::move(second_batch)).has_value());
 
-        Batch first_sum = writer.batch(*sum_id, first, 0);
+        Batch first_sum = writer->batch(*sum_id, first, 0);
         first_sum.fold(view_of(std::string("total")), view_of(i64_bytes(1)));
-        REQUIRE(writer.commit(std::move(first_sum)).has_value());
-        Batch second_sum = writer.batch(*sum_id, second, 0);
+        REQUIRE(writer->commit(std::move(first_sum)).has_value());
+        Batch second_sum = writer->batch(*sum_id, second, 0);
         second_sum.fold(view_of(std::string("total")), view_of(i64_bytes(3)));
-        REQUIRE(writer.commit(std::move(second_sum)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(second_sum)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1104,13 +1233,13 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec writer_spec = put_spec("dftu.test.versioned", 1);
         const NamespaceSpec other_spec = put_spec("dftu.test.versioned", 2);
 
-        Writer writer = make_writer(dir);
-        auto id = writer.add_namespace(writer_spec);
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(writer_spec);
         REQUIRE(id.has_value());
-        Batch batch = writer.batch(*id, scope, 0);
+        Batch batch = writer->batch(*id, scope, 0);
         batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
-        REQUIRE(writer.commit(std::move(batch)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1138,20 +1267,20 @@ TEST_SUITE("index store snapshot") {
 
         std::string replaced_path;
         {
-            Writer writer = make_writer(replaced);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(replaced);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch first = writer.batch(*id, scope, 0);
+            Batch first = writer->batch(*id, scope, 0);
             first.put(view_of(std::string("key-one")),
                       view_of(std::string("one")));
-            REQUIRE(writer.commit(std::move(first)).has_value());
-            REQUIRE(writer.drop(*id, scope).has_value());
-            Batch second = writer.batch(*id, scope, 0);
+            REQUIRE(writer->commit(std::move(first)).has_value());
+            REQUIRE(writer->drop(*id, scope).has_value());
+            Batch second = writer->batch(*id, scope, 0);
             second.put(view_of(std::string("key-two")),
                        view_of(std::string("two")));
-            REQUIRE(writer.commit(std::move(second)).has_value());
-            REQUIRE(writer.close().has_value());
-            replaced_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(second)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            replaced_path = to_std(writer->path());
         }
         CHECK((copy_generations(replaced_path) ==
                std::vector<std::uint64_t>{1, 3}));
@@ -1180,15 +1309,15 @@ TEST_SUITE("index store snapshot") {
 
         std::string failed_path;
         {
-            Writer writer = make_writer(failed);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(failed);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            REQUIRE(writer.fail(*id, scope, 7).has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            REQUIRE(writer->fail(*id, scope, 7).has_value());
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(std::string("key")), view_of(std::string("v")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-            failed_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            failed_path = to_std(writer->path());
         }
         CHECK((copy_generations(failed_path) ==
                std::vector<std::uint64_t>{1, 2}));
@@ -1206,31 +1335,31 @@ TEST_SUITE("index store snapshot") {
         }
 
         {
-            Writer writer = make_writer(next);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(next);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch first = writer.batch(*id, scope, 0);
+            Batch first = writer->batch(*id, scope, 0);
             first.put(view_of(std::string("key-one")),
                       view_of(std::string("one")));
-            REQUIRE(writer.commit(std::move(first)).has_value());
-            REQUIRE(writer.drop(*id, scope).has_value());
-            Batch second = writer.batch(*id, scope, 0);
+            REQUIRE(writer->commit(std::move(first)).has_value());
+            REQUIRE(writer->drop(*id, scope).has_value());
+            Batch second = writer->batch(*id, scope, 0);
             second.put(view_of(std::string("key-two")),
                        view_of(std::string("two")));
-            REQUIRE(writer.commit(std::move(second)).has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(writer->commit(std::move(second)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
         std::string next_path;
         {
-            Writer writer = make_writer(next);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(next);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(std::string("key-three")),
                       view_of(std::string("three")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-            next_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            next_path = to_std(writer->path());
         }
         CHECK((copy_generations(next_path) == std::vector<std::uint64_t>{4}));
         {
@@ -1259,23 +1388,23 @@ TEST_SUITE("index store snapshot") {
             fold_spec("dftu.test.concat", FoldKind::Concat);
         const std::string key = "same-key";
 
-        Writer writer = make_writer(dir);
-        auto last_id = writer.add_namespace(last);
+        auto writer = make_writer(dir);
+        auto last_id = writer->add_namespace(last);
         REQUIRE(last_id.has_value());
-        auto concat_id = writer.add_namespace(concat);
+        auto concat_id = writer->add_namespace(concat);
         REQUIRE(concat_id.has_value());
 
         const auto fold_last = [&](const ScopeKey& scope,
                                    const std::string& value) {
-            Batch batch = writer.batch(*last_id, scope, 0);
+            Batch batch = writer->batch(*last_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
         };
         const auto fold_concat = [&](const ScopeKey& scope,
                                      const std::string& value) {
-            Batch batch = writer.batch(*concat_id, scope, 0);
+            Batch batch = writer->batch(*concat_id, scope, 0);
             batch.fold(view_of(key), view_of(value));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
         };
         fold_last(first, "a1");
         fold_concat(first, "a1");
@@ -1285,7 +1414,7 @@ TEST_SUITE("index store snapshot") {
         fold_concat(second, "b1");
         fold_last(second, "b2");
         fold_concat(second, "b2");
-        REQUIRE(writer.close().has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1353,39 +1482,39 @@ TEST_SUITE("index store snapshot") {
 
         std::string drop_path;
         {
-            Writer writer = make_writer(dropped);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dropped);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("dropped")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.drop(*id, scope).has_value());
-            REQUIRE(writer.close().has_value());
-            drop_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(writer->drop(*id, scope).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            drop_path = to_std(writer->path());
         }
         CHECK((drop_generations(drop_path) == std::vector<std::uint64_t>{2}));
 
         std::string first_path;
         {
-            Writer writer = make_writer(copied);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(copied);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("old")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-            first_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            first_path = to_std(writer->path());
         }
         std::string second_path;
         {
-            Writer writer = make_writer(copied);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(copied);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             batch.put(view_of(key), view_of(std::string("kept")));
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-            second_path = to_std(writer.path());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+            second_path = to_std(writer->path());
         }
         CHECK(only_copy_generation(second_path) == 2);
 
@@ -1562,7 +1691,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(rows[0].second == "c-value-1");
     }
 
-    TEST_CASE("an entry larger than a page fails its commit") {
+    TEST_CASE("an entry larger than a page commits as a run of its own") {
         const std::size_t lengths[] = {3900, 3925, 3950, 3975,
                                        4000, 4025, 4050};
         const auto large_key = [&lengths](std::size_t index) {
@@ -1573,48 +1702,34 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/large.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        dftu_utils_test::ScopedTestDir small("snapshot_page_entry_small");
+        dftu_utils_test::ScopedTestDir dir("snapshot_page_entry_large");
         {
-            Writer writer = make_writer(small);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
             for (std::size_t index = 0; index < std::size(lengths); ++index) {
-                Batch batch = writer.batch(*id, scope, 0);
+                Batch batch = writer->batch(*id, scope, 0);
                 batch.put(view_of(large_key(index)),
                           view_of(std::string("value")));
-                auto committed = writer.commit(std::move(batch));
-                REQUIRE_FALSE(committed.has_value());
-                CHECK(committed.error().is(Condition::InvalidArgument));
+                REQUIRE(writer->commit(std::move(batch)).has_value());
             }
-            REQUIRE(writer.close().has_value());
-        }
-        {
-            auto snapshot = Snapshot::open(small.str());
-            REQUIRE(snapshot.has_value());
-            CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
-            auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
-            CHECK(cursor.at_end());
+            REQUIRE(flush_writer(*writer).has_value());
+
+            // One batch is one section, so a section of a page or more is a
+            // run of its own: it is no longer a failed commit.
+            auto reader = DataFileReader::open(to_std(writer->path()));
+            REQUIRE(reader.has_value());
+            REQUIRE(reader->index().page_refs.size() == std::size(lengths));
+            for (const engine::IndexedPageRef& page :
+                 reader->index().page_refs) {
+                REQUIRE(page.ref.sections.size() == 1);
+                CHECK(page.ref.length > SMALL_PAGE);
+                CHECK(page.ref.length % SMALL_PAGE == 0);
+            }
+            REQUIRE(close_writer(*writer).has_value());
         }
 
-        dftu_utils_test::ScopedTestDir large("snapshot_page_entry_large");
-        WriterOptions options;
-        options.host = dstring("host");
-        options.label = dstring("label");
-        {
-            auto created = Writer::create(large.str(), options);
-            REQUIRE(created.has_value());
-            Writer writer = std::move(*created);
-            auto id = writer.add_namespace(spec);
-            REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
-            for (std::size_t index = 0; index < std::size(lengths); ++index) {
-                batch.put(view_of(large_key(index)),
-                          view_of(std::string("value")));
-            }
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
-        }
-        auto snapshot = Snapshot::open(large.str());
+        auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
         for (std::size_t index = 0; index < std::size(lengths); ++index) {
@@ -1624,7 +1739,12 @@ TEST_SUITE("index store snapshot") {
             CHECK(to_std((*found)->bytes()) == "value");
         }
         auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
-        CHECK(collect(cursor).size() == std::size(lengths));
+        const auto rows = collect(cursor);
+        REQUIRE(rows.size() == std::size(lengths));
+        for (std::size_t index = 0; index < std::size(lengths); ++index) {
+            CHECK(rows[index].first == large_key(index));
+            CHECK(rows[index].second == "value");
+        }
     }
 
     TEST_CASE("a concat batch is sized by its folded length") {
@@ -1642,18 +1762,18 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(expected.size() == VALUE_COUNT * 17);
 
         {
-            Writer writer = make_writer(dir);
-            auto id = writer.add_namespace(spec);
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            Batch batch = writer.batch(*id, scope, 0);
+            Batch batch = writer->batch(*id, scope, 0);
             for (const std::string& key : keys) {
                 for (std::size_t index = 0; index < VALUE_COUNT; ++index) {
                     batch.fold(view_of(key),
                                view_of(concat_value(static_cast<int>(index))));
                 }
             }
-            REQUIRE(writer.commit(std::move(batch)).has_value());
-            REQUIRE(writer.close().has_value());
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
         }
 
         auto snapshot = Snapshot::open(dir.str());
@@ -1679,36 +1799,36 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey scope = file_scope("/traces/exact.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         // 64 entries of 512 bytes and one of 451 bytes per sub-page make the
-        // section 131072 bytes, i.e. exactly one 128 KiB page.
+        // section 131072 bytes, i.e. exactly one page of the size named here.
+        constexpr std::uint32_t PAGE = 128U * 1024U;
         constexpr std::size_t SMALL_VALUE = 446;
         constexpr std::size_t BIG_COUNT = 255;
         constexpr std::size_t BIG_VALUE = 508;
 
         WriterOptions options;
+        options.page_size = PAGE;
         options.host = dstring("host");
         options.label = dstring("label");
-        auto created = Writer::create(dir.str(), options);
-        REQUIRE(created.has_value());
-        Writer writer = std::move(*created);
-        auto id = writer.add_namespace(spec);
+        auto writer = make_writer(dir, options);
+        auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
-        Batch batch = writer.batch(*id, scope, 0);
+        Batch batch = writer->batch(*id, scope, 0);
         const std::string small_key("\0\x01", 2);
         batch.put(view_of(small_key), view_of(std::string(SMALL_VALUE, 's')));
         for (std::size_t index = 0; index < BIG_COUNT; ++index) {
             const std::string key(1, static_cast<char>(index + 1));
             batch.put(view_of(key), view_of(std::string(BIG_VALUE, 'v')));
         }
-        REQUIRE(writer.commit(std::move(batch)).has_value());
-        REQUIRE(writer.close().has_value());
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
 
-        auto reader = DataFileReader::open(to_std(writer.path()));
+        auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
         REQUIRE(reader->index().page_refs.size() == 1);
         REQUIRE(reader->index().page_refs[0].ref.sections.size() == 1);
         CHECK(reader->index().page_refs[0].ref.sections[0].entry_count ==
               BIG_COUNT + 1);
-        CHECK(reader->index().page_refs[0].ref.length == options.page_size);
+        CHECK(reader->index().page_refs[0].ref.length == PAGE);
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -1727,5 +1847,181 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == std::string(BIG_VALUE, 'v'));
+    }
+
+    TEST_CASE(
+        "a root of four writers opens the same with one and eight threads") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_open_threads");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        constexpr int WRITERS = 4;
+        constexpr int BATCHES = 8;
+        constexpr int KEYS = 1000;
+        std::vector<ScopeKey> scopes;
+        for (int w = 0; w < WRITERS; ++w) {
+            scopes.push_back(
+                file_scope("/traces/w" + std::to_string(w) + ".pfw"));
+        }
+        for (int w = 0; w < WRITERS; ++w) {
+            write_scoped_file(dir, spec, scopes[static_cast<std::size_t>(w)],
+                              BATCHES, KEYS, false);
+        }
+
+        const OpenDump one = [&] {
+            ScopedDefaultRuntime runtime(1);
+            return dump_open(dir, spec, scopes);
+        }();
+        const OpenDump eight = [&] {
+            ScopedDefaultRuntime runtime(8);
+            return dump_open(dir, spec, scopes);
+        }();
+
+        // Every namespace, scope state and row is the same either way.
+        CHECK(one.text == eight.text);
+        CHECK(one.files == WRITERS);
+        CHECK(eight.files == WRITERS);
+        CHECK(one.pages == eight.pages);
+        for (int w = 0; w < WRITERS; ++w) {
+            CHECK(one.text.find("state /traces/w" + std::to_string(w) +
+                                ".pfw 1") != std::string::npos);
+        }
+        CHECK(one.text.find("b0-key-0000=value-0") != std::string::npos);
+        // A file written without a group commit per batch holds adjacent page
+        // refs, one run per batch, so the read calls of the whole root stay
+        // well under its page count.
+        CHECK(one.pages >= WRITERS * BATCHES);
+        CHECK(one.pages == eight.pages);
+        CHECK(eight.read_calls == one.read_calls);
+        CHECK(eight.read_calls < eight.pages);
+        CHECK(eight.read_calls * 4 <= eight.pages);
+    }
+
+    TEST_CASE("a corrupt page in a middle run marks only its commit bad") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_open_corrupt");
+        dftu_utils_test::ScopedTestDir copy_dir("snapshot_open_corrupt_copy");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
+                                              file_scope("/traces/b.pfw"),
+                                              file_scope("/traces/c.pfw")};
+        write_scopes_file(dir, spec, scopes, 1000, true);
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        REQUIRE(reader->index().page_refs.size() == 3);
+        // One group commit per scope, so the middle reference is one commit's
+        // pages, read in one preadv and crc-checked as one block.
+        const engine::PageRefItem middle = reader->index().page_refs[1].ref;
+        CHECK(middle.length > SMALL_PAGE);
+        CHECK(middle.length % SMALL_PAGE == 0);
+
+        std::vector<std::uint8_t> bytes = read_file(path);
+        REQUIRE(middle.offset + middle.length <= bytes.size());
+        // The last byte of the reference is padding no section covers, so only
+        // the block crc sees it.
+        bytes[static_cast<std::size_t>(middle.offset) + middle.length - 1U] ^=
+            0xFFU;
+        write_file(copy_dir.file("w-corrupt.dfs"), bytes);
+
+        const auto check = [&](std::size_t threads) {
+            ScopedDefaultRuntime runtime(threads);
+            auto snapshot = Snapshot::open(copy_dir.str());
+            REQUIRE(snapshot.has_value());
+            CHECK(snapshot->skipped().empty());
+            CHECK(snapshot->state(spec, scopes[1]) == ScopeState::Bad);
+            CHECK(snapshot->state(spec, scopes[0]) == ScopeState::Ready);
+            CHECK(snapshot->state(spec, scopes[2]) == ScopeState::Ready);
+            auto hidden = snapshot->get(spec, scopes[1],
+                                        view_of(std::string("b0-key-0000")));
+            REQUIRE(hidden.has_value());
+            CHECK_FALSE(hidden->has_value());
+            auto visible = snapshot->get(spec, scopes[2],
+                                         view_of(std::string("b0-key-0000")));
+            REQUIRE(visible.has_value());
+            REQUIRE(visible->has_value());
+            CHECK(to_std((*visible)->bytes()) == "value-0");
+            auto cursor =
+                snapshot->scan(spec, scopes[0], ByteView{}, ByteView{});
+            CHECK(collect(cursor).size() == 1000);
+            CHECK(snapshot->open_stats().files == 1);
+            CHECK(snapshot->open_stats().pages == 3);
+            CHECK(snapshot->open_stats().read_calls == 3);
+        };
+        check(1);
+        check(8);
+    }
+
+    TEST_CASE("a cut past a run drops the pages it leaves behind") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_open_cut");
+        dftu_utils_test::ScopedTestDir cut_dir("snapshot_open_cut_copy");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const std::vector<ScopeKey> scopes = {file_scope("/traces/a.pfw"),
+                                              file_scope("/traces/b.pfw"),
+                                              file_scope("/traces/c.pfw")};
+        write_scopes_file(dir, spec, scopes, 1000, true);
+        const std::string path =
+            std::filesystem::directory_iterator(dir.str())->path().string();
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        REQUIRE(reader->index().page_refs.size() == 3);
+        const engine::PageRefItem middle = reader->index().page_refs[1].ref;
+
+        std::vector<std::uint8_t> bytes = read_file(path);
+        const std::size_t cut =
+            static_cast<std::size_t>(middle.offset) + SMALL_PAGE;
+        REQUIRE(cut < bytes.size());
+        write_file(cut_dir.file("w-cut.dfs"),
+                   std::vector<std::uint8_t>(
+                       bytes.begin(),
+                       bytes.begin() + static_cast<std::ptrdiff_t>(cut)));
+
+        const auto check = [&](std::size_t threads) {
+            ScopedDefaultRuntime runtime(threads);
+            auto snapshot = Snapshot::open(cut_dir.str());
+            REQUIRE(snapshot.has_value());
+            // A page cut in two and the records after it are gone, so the
+            // scopes they name are absent rather than bad, and the copy the
+            // file still names is whole.
+            CHECK(snapshot->skipped().empty());
+            CHECK(snapshot->state(spec, scopes[0]) == ScopeState::Ready);
+            CHECK(snapshot->state(spec, scopes[1]) == ScopeState::Absent);
+            CHECK(snapshot->state(spec, scopes[2]) == ScopeState::Absent);
+            auto found = snapshot->get(spec, scopes[0],
+                                       view_of(std::string("b0-key-0999")));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+            CHECK(to_std((*found)->bytes()) == "value-999");
+            CHECK(snapshot->open_stats().files == 1);
+            CHECK(snapshot->open_stats().pages == 1);
+            CHECK(snapshot->open_stats().read_calls == 1);
+        };
+        check(1);
+        check(8);
+    }
+
+    TEST_CASE("a cut that loses every record skips the whole file") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_open_cut_records");
+        dftu_utils_test::ScopedTestDir cut_dir(
+            "snapshot_open_cut_records_copy");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey scope = file_scope("/traces/a.pfw");
+        write_scopes_file(cut_dir, spec, {scope}, 4000, false);
+        const std::string copied =
+            std::filesystem::directory_iterator(cut_dir.str())->path().string();
+        std::vector<std::uint8_t> bytes = read_file(copied);
+        REQUIRE(bytes.size() > 2 * SMALL_PAGE);
+        // Without a group commit per batch every record sits after the pages,
+        // so a cut in the pages leaves no index to recover.
+        write_file(dir.file("w-cut.dfs"),
+                   std::vector<std::uint8_t>(
+                       bytes.begin(), bytes.end() - static_cast<std::ptrdiff_t>(
+                                                        bytes.size() / 3U)));
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        REQUIRE(snapshot->skipped().size() == 1);
+        CHECK(to_std(snapshot->skipped()[0].name) == "w-cut.dfs");
+        CHECK(snapshot->open_stats().files == 0);
+        CHECK(snapshot->open_stats().pages == 0);
+        CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
     }
 }

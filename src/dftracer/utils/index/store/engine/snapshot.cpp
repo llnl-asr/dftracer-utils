@@ -1,11 +1,17 @@
 #include <dftracer/utils/index/store/engine/snapshot.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <pthread.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <memory>
+#include <numeric>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -15,6 +21,8 @@ namespace dftracer::utils::index::store::engine {
 namespace {
 
 using dftracer::utils::ByteView;
+using dftracer::utils::Executor;
+using dftracer::utils::Runtime;
 
 dstd::Unexpected<dstd::Error> io_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
@@ -71,6 +79,43 @@ bool holds(const dstd::Vector<std::uint32_t>& values, std::uint32_t value) {
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
+double ms_since(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+}
+
+/// Set by the fork handler in the child of a fork: the pools of the parent do
+/// not exist there, so a fork-join on a runtime this process inherited would
+/// wait for workers that are gone.
+std::atomic<bool> INHERITED_POOLS{false};
+
+void mark_forked_child() noexcept {
+    INHERITED_POOLS.store(true, std::memory_order_relaxed);
+}
+
+/// Registered when this code loads, before main, so the child of any later fork
+/// knows that the pools it inherits are empty.
+[[maybe_unused]] const bool FORK_HANDLER_REGISTERED =
+    ::pthread_atfork(nullptr, nullptr, mark_forked_child) == 0;
+
+/// One block read of the read phase: the refs of a run of adjacent pages, or
+/// one section-less big value run.
+struct ReadJob {
+    std::size_t file = 0;
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    bool verify = false;
+};
+
+/// Every block read of every file, so the runs of all files are the items of
+/// one parallel loop and one big file still spreads across the threads.
+struct ReadPlan {
+    std::vector<PageRef> refs;
+    std::vector<PageTarget> targets;
+    std::vector<ReadJob> jobs;
+};
+
 template <class T>
 const T* find_by_id(const std::vector<const T*>& items, std::uint32_t id) {
     for (const T* item : items) {
@@ -116,6 +161,8 @@ struct LocalSection {
     std::uint64_t page_offset = 0;
     std::uint32_t offset_in_page = 0;
     SectionView view;
+    ByteView first_key;
+    ByteView last_key;
 };
 
 struct CopySeed {
@@ -214,7 +261,9 @@ void build_tables(dstd::Vector<detail::FileData>& files,
                 }
                 sections.push_back(
                     {page_section.copy_id, page.sequence, page.ref.offset,
-                     page_section.offset_in_page, std::move(*view)});
+                     page_section.offset_in_page, std::move(*view),
+                     bytes_of(page_section.first_key),
+                     bytes_of(page_section.last_key)});
             }
             if (!page_ok) {
                 sections.erase(
@@ -270,7 +319,8 @@ void build_tables(dstd::Vector<detail::FileData>& files,
             for (auto at = begin; at != sections.end(); ++at) {
                 if (at->copy_id != copy.local_id) break;
                 seed.sections.push_back({std::move(at->view), at->sequence,
-                                         at->page_offset, at->offset_in_page});
+                                         at->page_offset, at->offset_in_page,
+                                         at->first_key, at->last_key});
             }
             copy_seeds.push_back(std::move(seed));
         }
@@ -471,6 +521,7 @@ dstd::Expected<Snapshot, dstd::Error> Snapshot::open(dstd::StringView dir) {
 }
 
 dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
+    const auto start = std::chrono::steady_clock::now();
     const std::string dir_string(dir.data(), dir.size());
     std::vector<std::string> names;
     std::error_code error;
@@ -484,44 +535,218 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         if (error) return io_error();
     }
     std::sort(names.begin(), names.end());
+    const auto listed = std::chrono::steady_clock::now();
 
-    for (const std::string& name : names) {
-        const std::string path = path_string(dir, name);
-        auto reader = DataFileReader::open(path);
+    // The phases run on the process-wide default runtime, one item per file and
+    // then one per block read. They run serially on this thread when a
+    // fork-join could not finish: on a worker of that runtime itself, inside
+    // one of its parallel regions, or in the child of a fork, whose copy of the
+    // runtime has no workers - an open that creates the runtime makes it this
+    // process's own again, since a runtime made here has live workers.
+    const std::shared_ptr<Runtime> known = peek_default_runtime();
+    Runtime& runtime = default_runtime();
+    if (known == nullptr) {
+        INHERITED_POOLS.store(false, std::memory_order_relaxed);
+    }
+    const bool parallel = !INHERITED_POOLS.load(std::memory_order_relaxed) &&
+                          Executor::current() != runtime.executor() &&
+                          !dftracer::utils::detail::in_parallel_region();
+
+    std::vector<dstd::Optional<detail::FileData>> opened(names.size());
+    std::vector<dstd::Optional<dstd::Error>> open_errors(names.size());
+    const auto open_one = [&](std::size_t index) {
+        auto reader = DataFileReader::open(path_string(dir, names[index]));
         if (!reader) {
-            skipped_.push_back({dstring(name), reader.error()});
-            continue;
+            open_errors[index] = reader.error();
+            return;
         }
+        const std::size_t pages = reader->index().page_refs.size();
         const std::uint64_t writer_random = reader->index().writer_random;
-        detail::FileData file{
-            dstring(name), writer_random, std::move(*reader), {}};
-        // A page that does not verify is kept and marks its commit bad; a read
-        // error makes the whole file unusable, so it is skipped like a file
-        // that fails to open.
-        dstd::Optional<dstd::Error> read_failure;
-        for (const IndexedPageRef& page : file.reader.index().page_refs) {
-            const PageRef ref{page.ref.offset, page.ref.length, page.ref.crc};
-            auto bytes = file.reader.read_page(ref);
-            detail::LoadedPage loaded;
-            if (!bytes) {
-                if (!bytes.error().is(dstd::Condition::Parse)) {
-                    read_failure = bytes.error();
-                    break;
-                }
-                loaded.bad = true;
-            } else {
-                loaded.bytes = std::move(*bytes);
-            }
-            file.pages.push_back(std::move(loaded));
+        opened[index].emplace(detail::FileData{
+            dstring(names[index]), writer_random, std::move(*reader), {}});
+        // One entry per page ref, in page ref order, so a read job writes its
+        // page in place.
+        opened[index]->pages.resize(pages);
+    };
+    if (parallel) {
+        runtime.parallel_for(static_cast<std::int64_t>(names.size()), 1,
+                             [&](std::int64_t begin, std::int64_t limit) {
+                                 for (std::int64_t i = begin; i < limit; ++i) {
+                                     open_one(static_cast<std::size_t>(i));
+                                 }
+                             });
+    } else {
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            open_one(index);
         }
-        if (read_failure) {
-            skipped_.push_back({dstring(name), *read_failure});
-            continue;
-        }
-        files_.push_back(std::move(file));
+    }
+    const auto open_done = std::chrono::steady_clock::now();
+
+    std::vector<std::size_t> name_of_file;
+    name_of_file.reserve(names.size());
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (open_errors[index]) continue;
+        name_of_file.push_back(index);
+        files_.push_back(std::move(*opened[index]));
     }
 
+    // Plan: the page refs of each file by offset, so the refs that are adjacent
+    // in the file become one run of at most READ_RUN_BYTES, plus one item per
+    // section-less big value run. The bad flag of a page is handed out as a
+    // byte pointer, which may alias it, so a read job marks its own pages.
+    ReadPlan plan;
+    std::vector<std::size_t> order;
+    for (std::size_t file_index = 0; file_index < files_.size(); ++file_index) {
+        detail::FileData& file = files_[file_index];
+        const dstd::Vector<IndexedPageRef>& page_refs =
+            file.reader.index().page_refs;
+        order.resize(page_refs.size());
+        std::iota(order.begin(), order.end(), std::size_t{0});
+        std::stable_sort(order.begin(), order.end(),
+                         [&page_refs](std::size_t a, std::size_t b) {
+                             return page_refs[a].ref.offset <
+                                    page_refs[b].ref.offset;
+                         });
+        for (std::size_t at = 0; at < order.size();) {
+            const IndexedPageRef& first = page_refs[order[at]];
+            if (first.ref.sections.empty()) {
+                // A big value run has no sections: only its crc matters here,
+                // and its bytes are read again when a value is.
+                plan.refs.push_back(
+                    {first.ref.offset, first.ref.length, first.ref.crc});
+                plan.targets.push_back({&file.pages[order[at]].bytes,
+                                        reinterpret_cast<std::uint8_t*>(
+                                            &file.pages[order[at]].bad)});
+                plan.jobs.push_back({file_index, plan.refs.size() - 1U,
+                                     plan.refs.size(), true});
+                ++at;
+                continue;
+            }
+            std::size_t limit = at + 1;
+            std::uint64_t run_bytes = first.ref.length;
+            while (limit < order.size() &&
+                   page_refs[order[limit]].ref.sections.size() != 0) {
+                const PageRefItem& next = page_refs[order[limit]].ref;
+                const PageRefItem& previous = page_refs[order[limit - 1U]].ref;
+                if (next.offset != previous.offset + previous.length) break;
+                if (run_bytes + next.length > READ_RUN_BYTES) break;
+                run_bytes += next.length;
+                ++limit;
+            }
+            const std::size_t begin = plan.refs.size();
+            for (std::size_t i = at; i < limit; ++i) {
+                const IndexedPageRef& page = page_refs[order[i]];
+                plan.refs.push_back(
+                    {page.ref.offset, page.ref.length, page.ref.crc});
+                plan.targets.push_back({&file.pages[order[i]].bytes,
+                                        reinterpret_cast<std::uint8_t*>(
+                                            &file.pages[order[i]].bad)});
+            }
+            plan.jobs.push_back({file_index, begin, plan.refs.size(), false});
+            at = limit;
+        }
+    }
+
+    // A page that does not verify is kept and marks its commit bad; a read
+    // error makes the whole file unusable, so it is skipped like a file that
+    // fails to open. Only the first error of a file is kept: several runs of
+    // one file read at once may fail together.
+    std::vector<std::atomic<bool>> failed(files_.size());
+    for (std::atomic<bool>& flag : failed) {
+        flag.store(false, std::memory_order_relaxed);
+    }
+    std::vector<dstd::Optional<dstd::Error>> read_errors(names.size());
+    std::vector<BlockReads> counts(plan.jobs.size());
+    const auto mark_failed = [&](std::size_t file_index,
+                                 const dstd::Error& read_error) {
+        bool expected = false;
+        if (failed[file_index].compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel)) {
+            read_errors[name_of_file[file_index]] = read_error;
+        }
+    };
+    const auto run_jobs = [&](std::size_t begin, std::size_t limit) {
+        for (std::size_t job_index = begin; job_index < limit; ++job_index) {
+            const ReadJob& job = plan.jobs[job_index];
+            const DataFileReader& reader = files_[job.file].reader;
+            const dstd::Span<const PageRef> job_refs(
+                plan.refs.data() + job.begin, job.end - job.begin);
+            const dstd::Span<const PageTarget> job_targets(
+                plan.targets.data() + job.begin, job.end - job.begin);
+            if (job.verify) {
+                BlockReads reads;
+                auto verified = reader.verify_block(job_refs[0], &reads);
+                counts[job_index] = reads;
+                if (verified) continue;
+                if (verified.error().is(dstd::Condition::Parse)) {
+                    *job_targets[0].bad = 1;
+                    continue;
+                }
+                mark_failed(job.file, verified.error());
+                continue;
+            }
+            auto read = reader.read_pages(job_refs, job_targets);
+            if (!read) {
+                mark_failed(job.file, read.error());
+                continue;
+            }
+            counts[job_index] = *read;
+        }
+    };
+    if (parallel) {
+        runtime.parallel_for(static_cast<std::int64_t>(plan.jobs.size()), 1,
+                             [&](std::int64_t begin, std::int64_t limit) {
+                                 run_jobs(static_cast<std::size_t>(begin),
+                                          static_cast<std::size_t>(limit));
+                             });
+    } else {
+        run_jobs(0, plan.jobs.size());
+    }
+    const auto read_done = std::chrono::steady_clock::now();
+
+    // The skipped files are recorded in name order, and the readable ones keep
+    // the order the serial path put them in.
+    BlockReads total;
+    for (const BlockReads& reads : counts) {
+        total.calls += reads.calls;
+        total.bytes += reads.bytes;
+    }
+    dstd::Vector<detail::FileData> kept;
+    kept.reserve(files_.size());
+    std::size_t file_at = 0;
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (open_errors[index]) {
+            skipped_.push_back({dstring(names[index]), *open_errors[index]});
+            continue;
+        }
+        detail::FileData& file = files_[file_at];
+        ++file_at;
+        if (read_errors[index]) {
+            skipped_.push_back({dstring(names[index]), *read_errors[index]});
+            continue;
+        }
+        kept.push_back(std::move(file));
+    }
+    files_ = std::move(kept);
+
     build_tables(files_, groups_, namespaces_);
+    const auto built = std::chrono::steady_clock::now();
+
+    open_stats_ = OpenStats{};
+    open_stats_.files = files_.size();
+    open_stats_.pages = plan.refs.size();
+    open_stats_.read_calls = total.calls;
+    open_stats_.bytes_read = total.bytes;
+    open_stats_.ms_list =
+        std::chrono::duration<double, std::milli>(listed - start).count();
+    open_stats_.ms_open_files =
+        std::chrono::duration<double, std::milli>(open_done - listed).count();
+    open_stats_.ms_read =
+        std::chrono::duration<double, std::milli>(read_done - open_done)
+            .count();
+    open_stats_.ms_tables =
+        std::chrono::duration<double, std::milli>(built - read_done).count();
+    open_stats_.ms_total = ms_since(start);
     return {};
 }
 
@@ -673,6 +898,10 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
 
     dstd::Vector<detail::ValueSource> sources;
     for (const detail::SectionRef& section : copy.sections) {
+        if (compare_bytes(key, section.first_key) < 0 ||
+            compare_bytes(key, section.last_key) > 0) {
+            continue;
+        }
         const auto entry = section.view.find(key);
         if (entry) sources.push_back({copy.file_index, *entry});
     }
@@ -700,23 +929,21 @@ dstd::Expected<ByteView, dstd::Error> ScanCursor::value() {
     sources_.clear();
     if (at_end_) return ByteView{};
     if (fold_ != FoldKind::None) {
+        // Each matching section's cursor already stands on the key.
         for (const std::size_t arm_index : at_key_) {
             const ScopeCursor& cursor = arms_[arm_index].cursor;
-            const detail::CopyData& copy = *cursor.copy();
+            const std::size_t file_index = cursor.copy()->file_index;
             for (const std::size_t section_index : cursor.matching()) {
-                const auto entry =
-                    copy.sections[section_index].view.find(cursor.key());
-                if (entry) sources_.push_back({copy.file_index, *entry});
+                sources_.push_back(
+                    {file_index, cursor.cursors_[section_index].entry()});
             }
         }
     } else {
         const ScopeCursor& cursor = arms_[arm_].cursor;
-        const detail::CopyData& copy = *cursor.copy();
         const auto& matching = cursor.matching();
         if (!matching.empty()) {
-            const auto entry =
-                copy.sections[matching.back()].view.find(cursor.key());
-            if (entry) sources_.push_back({copy.file_index, *entry});
+            sources_.push_back({cursor.copy()->file_index,
+                                cursor.cursors_[matching.back()].entry()});
         }
     }
     if (sources_.empty()) return ByteView{};
@@ -733,9 +960,27 @@ void ScanCursor::next() {
     } else {
         for (const std::size_t arm_index : at_key_) {
             arms_[arm_index].cursor.next();
+            push_arm(arm_index);
         }
     }
     settle();
+}
+
+/// The fold heap order: the smaller key first, and on a tie the earlier arm.
+struct ScanCursor::ArmAfter {
+    const dstd::Vector<Arm>* arms;
+    bool operator()(std::size_t a, std::size_t b) const {
+        const int by_key =
+            compare_bytes((*arms)[a].cursor.key(), (*arms)[b].cursor.key());
+        if (by_key != 0) return by_key > 0;
+        return a > b;
+    }
+};
+
+void ScanCursor::push_arm(std::size_t index) {
+    if (arms_[index].cursor.at_end()) return;
+    arm_heap_.push_back(index);
+    std::push_heap(arm_heap_.begin(), arm_heap_.end(), ArmAfter{&arms_});
 }
 
 void ScanCursor::settle() {
@@ -752,26 +997,17 @@ void ScanCursor::settle() {
         return;
     }
 
-    bool found = false;
-    ByteView best;
-    for (const Arm& arm : arms_) {
-        if (arm.cursor.at_end()) continue;
-        const ByteView candidate = arm.cursor.key();
-        if (!found || compare_bytes(candidate, best) < 0) {
-            best = candidate;
-            found = true;
-        }
-    }
-    if (!found) {
+    if (arm_heap_.empty()) {
         at_end_ = true;
         key_ = {};
         return;
     }
-    for (std::size_t i = 0; i < arms_.size(); ++i) {
-        if (arms_[i].cursor.at_end()) continue;
-        if (compare_bytes(arms_[i].cursor.key(), best) == 0) {
-            at_key_.push_back(i);
-        }
+    const ByteView best = arms_[arm_heap_.front()].cursor.key();
+    while (!arm_heap_.empty() &&
+           compare_bytes(arms_[arm_heap_.front()].cursor.key(), best) == 0) {
+        std::pop_heap(arm_heap_.begin(), arm_heap_.end(), ArmAfter{&arms_});
+        at_key_.push_back(arm_heap_.back());
+        arm_heap_.pop_back();
     }
     key_ = best;
     at_end_ = false;
@@ -784,46 +1020,72 @@ void ScopeCursor::open(const detail::CopyData& copy,
     hidden_ = &hidden;
     end_ = end;
     cursors_.clear();
+    keys_.clear();
+    heap_.clear();
     cursors_.reserve(copy.sections.size());
+    keys_.reserve(copy.sections.size());
     for (const detail::SectionRef& section : copy.sections) {
-        cursors_.push_back(section.view.lower_bound(begin));
+        // A section wholly before begin or at or past end yields nothing.
+        const bool outside =
+            compare_bytes(section.last_key, begin) < 0 ||
+            (!end.empty() && compare_bytes(section.first_key, end) >= 0);
+        cursors_.push_back(outside ? section.view.end()
+                                   : section.view.lower_bound(begin));
+        keys_.emplace_back();
+        push(cursors_.size() - 1U);
     }
     settle();
 }
 
+namespace {
+
+/// The heap order: the smaller key first, and on a tie the older section.
+struct HeapAfter {
+    const dstd::Vector<ByteView>* keys;
+    bool operator()(std::size_t a, std::size_t b) const {
+        const int by_key = compare_bytes((*keys)[a], (*keys)[b]);
+        if (by_key != 0) return by_key > 0;
+        return a > b;
+    }
+};
+
+}  // namespace
+
+void ScopeCursor::push(std::size_t index) {
+    if (cursors_[index].at_end()) return;
+    keys_[index] = cursors_[index].entry().key();
+    heap_.push_back(index);
+    std::push_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
+}
+
 void ScopeCursor::advance_matching() {
-    for (const std::size_t index : matching_) cursors_[index].next();
+    for (const std::size_t index : matching_) {
+        cursors_[index].next();
+        push(index);
+    }
 }
 
 void ScopeCursor::settle() {
     while (true) {
         matching_.clear();
-        bool found = false;
-        ByteView best;
-        for (const SectionView::Cursor& cursor : cursors_) {
-            if (cursor.at_end()) continue;
-            const ByteView candidate = cursor.entry().key();
-            if (!found || compare_bytes(candidate, best) < 0) {
-                best = candidate;
-                found = true;
-            }
-        }
-        if (!found) {
+        if (heap_.empty()) {
             at_end_ = true;
             key_ = {};
             return;
         }
+        const ByteView best = keys_[heap_.front()];
         if (!end_.empty() && compare_bytes(best, end_) >= 0) {
             at_end_ = true;
             key_ = {};
             return;
         }
-        for (std::size_t i = 0; i < cursors_.size(); ++i) {
-            if (cursors_[i].at_end()) continue;
-            if (compare_bytes(cursors_[i].entry().key(), best) == 0) {
-                matching_.push_back(i);
-            }
+        while (!heap_.empty() &&
+               compare_bytes(keys_[heap_.front()], best) == 0) {
+            std::pop_heap(heap_.begin(), heap_.end(), HeapAfter{&keys_});
+            matching_.push_back(heap_.back());
+            heap_.pop_back();
         }
+        // The heap pops a tie oldest first, so matching_ is in commit order.
         if (hidden_ != nullptr && key_hidden(best, *hidden_)) {
             advance_matching();
             continue;
@@ -868,6 +1130,11 @@ ScanCursor Snapshot::scan(const NamespaceSpec& spec,
         cursor.arms_.push_back(std::move(arm));
     }
     cursor.fold_ = fold;
+    if (fold != FoldKind::None) {
+        for (std::size_t i = 0; i < cursor.arms_.size(); ++i) {
+            cursor.push_arm(i);
+        }
+    }
     cursor.settle();
     return cursor;
 }

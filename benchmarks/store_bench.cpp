@@ -17,6 +17,15 @@
 //   store_bench --dir /private/tmp --case fold --fold-scopes 1000,8404
 //   --fold-keys 1024
 //
+//   store_bench --dir /p/a --keep /p/kept --threads 96 --payload-mib 4096
+//   store_bench --dir /p/b --reuse /p/kept --threads 96 --payload-mib 4096
+//
+// --keep writes the data of the query case under its path and keeps it, with
+// no reads; --reuse reads that data with no writes, so the reads can run on
+// another node, with nothing of the data in its page cache. Both runs take the
+// same --threads, --payload-mib, --value-bytes, --value-kind, --keys-per-batch
+// and --engine.
+//
 // Output: comment lines naming the extent size, the I/O backend, the file
 // system kind and the options both engines run under, then TSV rows. A write
 // row is one mode, engine and thread count; its I/O counts come from io_fault's
@@ -194,6 +203,8 @@ struct Options {
     std::vector<std::uint64_t> fold_scopes{1000, 8404};
     std::uint64_t fold_keys = 1024;
     std::string which = "all";
+    std::string keep;
+    std::string reuse;
 };
 
 void apply_smoke(Options& opt) {
@@ -322,6 +333,12 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 return false;
             }
             opt.fold_keys = parsed[0];
+        } else if (arg == "--keep") {
+            opt.keep = value();
+            if (opt.keep.empty()) return false;
+        } else if (arg == "--reuse") {
+            opt.reuse = value();
+            if (opt.reuse.empty()) return false;
         } else if (arg == "--case") {
             const std::string which = value();
             if (which != "write" && which != "query" && which != "scopes" &&
@@ -333,7 +350,7 @@ bool parse_args(int argc, char** argv, Options& opt) {
             return false;
         }
     }
-    return true;
+    return opt.keep.empty() || opt.reuse.empty();
 }
 
 void usage() {
@@ -346,7 +363,8 @@ void usage() {
            "                   [--keys-per-batch N] [--scopes 10,1000,100000]\n"
            "                   [--commits N] [--gets N]\n"
            "                   [--fold-scopes 1000,8404] [--fold-keys N]\n"
-           "                   [--case write|query|scopes|fold|all]\n";
+           "                   [--case write|query|scopes|fold|all]\n"
+           "                   [--keep PATH | --reuse PATH]\n";
 }
 
 dstd::String dstring(std::string_view text) {
@@ -939,6 +957,7 @@ struct Bench {
                                     const std::string& dir, bool per_thread,
                                     bool keep_dir);
     QueryPlan make_query_plan(const Workload& workload) const;
+    bool run_kept();
     bool run_query_case(const Workload& workload, const std::string& ours_dir,
                         const std::string& rocksdb_dir);
     bool query_ours(const Workload& workload, const std::string& dir,
@@ -2364,7 +2383,53 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
     return ok;
 }
 
+bool Bench::run_kept() {
+    const bool keep = !opt.keep.empty();
+    const std::string& base = keep ? opt.keep : opt.reuse;
+    const bool ours_on = has_engine(opt.engines, "ours");
+    const bool rocksdb_on = has_engine(opt.engines, "rocksdb");
+    for (int threads : opt.threads) {
+        Runtime runtime(static_cast<std::size_t>(threads));
+        note_backend(runtime);
+        const Workload workload =
+            workload_of(opt, static_cast<std::uint64_t>(threads));
+        const std::string name = "shared-" + std::to_string(threads) + "-" +
+                                 std::to_string(opt.payload_mib);
+        const std::string ours_dir = ours_on ? base + "/ours-" + name : "";
+        const std::string rocksdb_dir =
+            rocksdb_on ? base + "/rocksdb-" + name : "";
+        for (const std::string& dir : {ours_dir, rocksdb_dir}) {
+            if (dir.empty()) continue;
+            std::error_code error;
+            const bool exists = std::filesystem::exists(dir, error);
+            if (keep && exists) {
+                fail(dir + " exists; --keep writes only a new directory");
+                return false;
+            }
+            if (!keep && !exists) {
+                fail(dir + " does not exist; write it first with --keep");
+                return false;
+            }
+        }
+        if (keep) {
+            if (ours_on) {
+                print_write_row(run_ours_write_case(runtime, workload, ours_dir,
+                                                    false, true));
+            }
+            if (rocksdb_on) {
+                print_write_row(
+                    run_rocksdb_write_case(workload, rocksdb_dir, false, true));
+            }
+        } else {
+            run_query_case(workload, ours_dir, rocksdb_dir);
+        }
+    }
+    for (const QueryRow& row : query_rows) print_query_row(row);
+    return !failed;
+}
+
 bool Bench::run() {
+    if (!opt.keep.empty() || !opt.reuse.empty()) return run_kept();
     const bool print_writes = opt.which == "write" || opt.which == "all";
     const bool do_query = opt.which == "query" || opt.which == "all";
     const bool do_scopes = opt.which == "scopes" || opt.which == "all";

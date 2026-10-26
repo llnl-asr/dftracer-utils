@@ -35,13 +35,13 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/engine/io_fault.h>
-#include <dftracer/utils/index/store/engine/page_size.h>
-#include <dftracer/utils/index/store/engine/snapshot.h>
-#include <dftracer/utils/index/store/engine/writer.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/io_fault.h>
+#include <dftracer/utils/store/page_size.h>
+#include <dftracer/utils/store/snapshot.h>
+#include <dftracer/utils/store/writer.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
 #include <rocksdb/options.h>
@@ -74,22 +74,22 @@ namespace {
 
 namespace coro = dftracer::utils::coro;
 namespace dstd = dftracer::utils::dstd;
-namespace engine = dftracer::utils::index::store::engine;
-namespace io_fault = dftracer::utils::index::store::engine::io_fault;
+namespace store = dftracer::utils::store;
+namespace io_fault = dftracer::utils::store::io_fault;
 
 using dftracer::utils::ByteView;
 using dftracer::utils::CoroScope;
 using dftracer::utils::FilesystemKind;
 using dftracer::utils::Runtime;
-using engine::Batch;
-using engine::NamespaceId;
-using engine::NamespaceSpec;
-using engine::ScopeKey;
-using engine::Snapshot;
-using engine::Writer;
-using engine::WriterErrc;
-using engine::WriterOptions;
-using engine::WriterTestHook;
+using store::Batch;
+using store::NamespaceId;
+using store::NamespaceSpec;
+using store::ScopeKey;
+using store::Snapshot;
+using store::Writer;
+using store::WriterErrc;
+using store::WriterOptions;
+using store::WriterTestHook;
 
 constexpr std::uint64_t MIB_BYTES = 1U << 20;
 constexpr std::uint64_t GIB_BYTES = 1U << 30;
@@ -369,7 +369,7 @@ std::string format_ms(std::uint64_t nanos) {
 /// Every block the snapshot has read so far: the commits it verified, the
 /// blocks of them, the read calls that covered them and the bytes. An open
 /// leaves these at zero, and the first query for a copy pays its commits.
-std::string format_read_stats(const engine::ReadStats& reads) {
+std::string format_read_stats(const store::ReadStats& reads) {
     std::ostringstream out;
     out << "commits_read=" << reads.commits_verified
         << " blocks_read=" << reads.blocks_read
@@ -383,8 +383,8 @@ std::string format_read_stats(const engine::ReadStats& reads) {
 
 /// What one open did, and what the snapshot has read so far, as one extra
 /// column.
-std::string format_stats(const engine::OpenStats& stats,
-                         const engine::ReadStats& reads) {
+std::string format_stats(const store::OpenStats& stats,
+                         const store::ReadStats& reads) {
     std::ostringstream out;
     out << "files=" << stats.files << " pages=" << stats.pages << " "
         << format_read_stats(reads) << " ms list=" << std::setprecision(3)
@@ -737,7 +737,7 @@ struct FoldRow {
     double ns_per_key = 0;
     std::uint64_t mismatches = 0;
     /// What the snapshot had read when the scan of this row finished.
-    engine::ReadStats reads;
+    store::ReadStats reads;
 };
 
 /// One timed fold scan: its parts added, against the sums written.
@@ -786,7 +786,7 @@ struct Bench {
         NamespaceSpec namespace_spec;
         namespace_spec.name = dstring("bench");
         namespace_spec.format_version = 0;
-        namespace_spec.fold = engine::FoldKind::None;
+        namespace_spec.fold = store::FoldKind::None;
         namespace_spec.durable = false;
         return namespace_spec;
     }
@@ -830,7 +830,7 @@ struct Bench {
             fail("cannot create a directory under " + base.string());
             return false;
         }
-        auto chosen = engine::page_size_for(root);
+        auto chosen = store::page_size_for(root);
         if (!chosen) {
             fail("page size of " + root + ": " + to_std(chosen.error()));
             return false;
@@ -1966,7 +1966,7 @@ NamespaceSpec Bench::fold_spec() const {
     NamespaceSpec namespace_spec;
     namespace_spec.name = dstring("bench-fold");
     namespace_spec.format_version = 0;
-    namespace_spec.fold = engine::FoldKind::SumI64;
+    namespace_spec.fold = store::FoldKind::SumI64;
     namespace_spec.durable = false;
     return namespace_spec;
 }

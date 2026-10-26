@@ -184,18 +184,6 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/key_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/shard_manifest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/section.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/record.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/data_file.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/scope_directory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/fold.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/writer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/snapshot.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/page_size.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/open_page.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/committer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/writer_pages.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/io_fault.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/gzip_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_indexer_factory.cpp
@@ -691,6 +679,84 @@ foreach(variant objects shared static)
 endforeach()
 
 use_precompiled_header(dftracer_utils_runtime_objects)
+
+# +++++++++++++++++++++++++++++++++++++++++
+# Store Library (key-value store engine: data files, writer, snapshot)
+# +++++++++++++++++++++++++++++++++++++++++
+
+set(DFTRACER_UTILS_STORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/committer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/crc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/data_file.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/fold.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/io_fault.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/open_page.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/page_size.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/record.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/scope_directory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/section.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/snapshot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer_pages.cpp)
+
+create_library(
+  NAME
+  dftracer_utils_store
+  NAMESPACE
+  dftracer_utils_store
+  SOURCES
+  ${DFTRACER_UTILS_STORE_SOURCES}
+  VERSION
+  ${PROJECT_VERSION}
+  DESCRIPTION
+  "DFTracer utils store library (key-value store engine)"
+  URL
+  "https://github.com/llnl-asr/dftracer-utils"
+  BUILD_SHARED
+  ${DFTRACER_UTILS_BUILD_SHARED}
+  BUILD_STATIC
+  ${DFTRACER_UTILS_BUILD_STATIC}
+  SHARED_LINK_LIBRARIES
+  dftracer_utils_memory::shared
+  dftracer_utils_dstd::shared
+  dftracer_utils_common::shared
+  dftracer_utils_runtime::shared
+  STATIC_LINK_LIBRARIES
+  dftracer_utils_memory::static
+  dftracer_utils_dstd::static
+  dftracer_utils_common::static
+  dftracer_utils_runtime::static
+  PUBLIC_INCLUDE_DIRS
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE_COMPILE_OPTIONS
+  ${COVERAGE_COMPILE_OPTIONS}
+  PKG_CONFIG_REQUIRES
+  "dftracer_utils_runtime"
+  FIND_DEPENDENCIES
+  dftracer_utils_runtime)
+
+foreach(variant objects shared static)
+  dftu_variant_target(VARIANT_TARGET dftracer_utils_store ${variant})
+  set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
+  if(TARGET ${VARIANT_TARGET})
+    link_tl_expected(${VARIANT_TARGET})
+    # The crc of every page, record and block (crc.cpp).
+    link_libdeflate(${VARIANT_TARGET})
+    link_zstd(${VARIANT_TARGET})
+    add_stdfs_if_needed(${VARIANT_TARGET})
+    if(variant STREQUAL "objects")
+      target_set_warnings(dftracer_utils_store_objects)
+    elseif(COVERAGE_LINK_OPTIONS)
+      target_link_libraries(${VARIANT_TARGET}
+                            PRIVATE ${COVERAGE_LINK_OPTIONS})
+    endif()
+  endif()
+endforeach()
+
+use_precompiled_header(dftracer_utils_store_objects MIN_COUNT 1)
 
 # +++++++++++++++++++++++++++++++++++++++++
 # Vec Library (native vectorized columnar engine)
@@ -1280,6 +1346,24 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
 
   create_unified_library_config(
     NAME
+    dftracer_utils_store
+    VERSION
+    ${PROJECT_VERSION}
+    DESCRIPTION
+    "DFTracer utils store library (key-value store engine)"
+    URL
+    "https://github.com/llnl-asr/dftracer-utils"
+    PKG_CONFIG_REQUIRES
+    "dftracer_utils_runtime"
+    FIND_DEPENDENCIES
+    dftracer_utils_runtime
+    BUILD_SHARED
+    ${DFTRACER_UTILS_BUILD_SHARED}
+    BUILD_STATIC
+    ${DFTRACER_UTILS_BUILD_STATIC})
+
+  create_unified_library_config(
+    NAME
     dftracer_utils_utilities
     VERSION
     ${PROJECT_VERSION}
@@ -1322,8 +1406,8 @@ else()
     add_library(dftracer_utils_shared INTERFACE)
     target_link_libraries(
       dftracer_utils_shared
-      INTERFACE dftracer_utils_runtime::shared dftracer_utils_utilities::shared
-                dftracer_utils_dataframe::shared)
+      INTERFACE dftracer_utils_runtime::shared dftracer_utils_store::shared
+                dftracer_utils_utilities::shared dftracer_utils_dataframe::shared)
 
     # Create aliases
     add_library(dftracer_utils::shared ALIAS dftracer_utils_shared)
@@ -1339,8 +1423,8 @@ else()
     add_library(dftracer_utils_static INTERFACE)
     target_link_libraries(
       dftracer_utils_static
-      INTERFACE dftracer_utils_runtime::static dftracer_utils_utilities::static
-                dftracer_utils_dataframe::static)
+      INTERFACE dftracer_utils_runtime::static dftracer_utils_store::static
+                dftracer_utils_utilities::static dftracer_utils_dataframe::static)
 
     # Create aliases
     add_library(dftracer_utils::static ALIAS dftracer_utils_static)
@@ -1370,11 +1454,12 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
   string(APPEND UNIFIED_CONFIG_CONTENT "@PACKAGE_INIT@\n\n")
   string(APPEND UNIFIED_CONFIG_CONTENT "include(CMakeFindDependencyMacro)\n\n")
   if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
-    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, runtime and utilities libraries\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "# Find memory, dstd, common, runtime, store and utilities libraries\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_memory)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_dstd)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_common)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_runtime)\n")
+    string(APPEND UNIFIED_CONFIG_CONTENT "find_dependency(dftracer_utils_store)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
            "find_dependency(dftracer_utils_utilities)\n")
     string(APPEND UNIFIED_CONFIG_CONTENT
@@ -1478,7 +1563,7 @@ if(DFTRACER_UTILS_PREFERRED_TYPE)
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "-lpthread")
   else()
     set(DFTRACER_UTILS_PKG_CONFIG_REQUIRES
-        "dftracer_utils_runtime dftracer_utils_utilities")
+        "dftracer_utils_runtime dftracer_utils_store dftracer_utils_utilities")
     set(DFTRACER_UTILS_PKG_CONFIG_LIBS_PRIVATE "")
   endif()
   create_pkgconfig_file(

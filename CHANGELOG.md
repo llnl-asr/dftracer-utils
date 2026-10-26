@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Build the index store engine as its own library, `libdftracer_utils_store`, which links only the runtime libraries, libdeflate and zstd.
+  The `dftracer_utils` target links it, so a program that links `dftracer_utils` needs no change.
 - Bundle zlib-ng inside the utilities library with its symbols hidden, so a program that also loads the system zlib no longer has its zlib calls bound to ours.
   No public header includes a zlib header, and the gzip classes in `include/` hold their zlib-ng stream in a private part.
 - Size how many stat batches a directory scan runs at once from the stat time it measures, where it ran at most 12 at once on any file system.

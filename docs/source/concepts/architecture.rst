@@ -7,10 +7,10 @@ What this explains: how the codebase is layered, and the path a query takes
 from a ``.pfw.gz`` trace file on disk to a result the caller can use, in C++,
 C, or Python.
 
-Five libraries, one dependency direction
--------------------------------------------
+Six libraries, one dependency direction
+------------------------------------------
 
-The C++ build produces five layered libraries, each as both a shared and a
+The C++ build produces six layered libraries, each as both a shared and a
 static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
@@ -18,6 +18,9 @@ static variant (``src/CMakeLists.txt``), aggregated behind
   executor and scheduler, the io backend, the pipeline machinery, RocksDB
   wrappers, and shared primitives (string interning, sharded maps, the
   error type). It knows nothing about traces.
+- ``dftracer_utils_store`` is the key-value store engine: data files, the
+  writer and its committer, and the snapshot that reads them. It links only
+  the runtime and knows nothing about traces.
 - ``dftracer_utils_json`` is the simdjson-backed JSON layer: parsing and
   the JSON value type.
 - ``dftracer_utils_duql`` is the duql filter language: the predicate IR, the string
@@ -41,10 +44,12 @@ active.
 
    graph TB
        Runtime["dftracer_utils_runtime<br/>runtime, coro, io, pipeline"]
+       Store["dftracer_utils_store<br/>key-value store engine"]
        Json["dftracer_utils_json<br/>simdjson-backed parsing"]
        Query["dftracer_utils_duql<br/>predicate IR, evaluator"]
        DF["dftracer_utils_dataframe<br/>Series/DataFrame, SIMD kernels"]
        Util["dftracer_utils_utilities<br/>trace, indexer, plugins"]
+       Store --> Runtime
        Json --> Runtime
        Query --> Runtime
        Query --> Json

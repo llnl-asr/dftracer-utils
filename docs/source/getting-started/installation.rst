@@ -47,10 +47,11 @@ build dirs land under ``build/build-<preset>/``).
    cmake --preset dev            # RelWithDebInfo, shared + static, no Python
    cmake --build --preset dev
 
-The build produces five layered component libraries, each as shared and static:
+The build produces six layered component libraries, each as shared and static:
 
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, RocksDB wrappers, common primitives).
+- ``dftracer_utils_store``, the key-value store engine (data files, writer, snapshot).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
 - ``dftracer_utils_dataframe``, the columnar SIMD engine (``Series`` /

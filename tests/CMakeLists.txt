@@ -109,7 +109,7 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
   set(ZLIB_EXPORT_LIBS)
-  foreach(lib memory dstd common runtime json duql dataframe utilities)
+  foreach(lib memory dstd common runtime store json duql dataframe utilities)
     dftu_variant_target(_target dftracer_utils_${lib} shared)
     if(TARGET ${_target})
       list(APPEND ZLIB_EXPORT_LIBS $<TARGET_FILE:${_target}>)
@@ -154,6 +154,12 @@ add_test(
   COMMAND
     sh -c
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*\"' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"quoted include; use <dftracer/utils/...> or the path from tests/ or benchmarks/:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
+  NAME store_no_upward
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*<dftracer/utils/' \"$0/src/dftracer/utils/store\" | grep -vE '<dftracer/utils/(store|runtime|common|dstd|memory)/'); if [ -n \"$bad\" ]; then echo \"include from store/ into a module above it:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
   NAME memory_no_upward
@@ -291,15 +297,15 @@ set(TEST_CPP_SOURCES
     trace/genesis/test_genesis.cpp
     index/test_indexer.cpp
     index/test_store_key.cpp
-    index/test_store_section.cpp
-    index/test_store_file.cpp
-    index/test_store_snapshot.cpp
-    index/test_store_page_size.cpp
-    index/test_store_open_page.cpp
-    index/test_store_concurrent.cpp
-    index/test_store_backpressure.cpp
-    index/test_store_crash.cpp
-    index/test_store_processes.cpp
+    store/test_section.cpp
+    store/test_file.cpp
+    store/test_snapshot.cpp
+    store/test_page_size.cpp
+    store/test_open_page.cpp
+    store/test_concurrent.cpp
+    store/test_backpressure.cpp
+    store/test_crash.cpp
+    store/test_processes.cpp
     index/test_agg_extension.cpp
     index/test_prune_oracle.cpp
     index/test_layout.cpp
@@ -414,6 +420,14 @@ foreach(test_file ${TEST_CPP_SOURCES})
   if(bin_exec STREQUAL "index/test_build_memory"
      OR bin_exec STREQUAL "index/test_indexer"
      OR bin_exec STREQUAL "reader/test_reader")
+    set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
+  endif()
+
+  # The crash test writes a few thousand file images of about 2.4 MB each, and
+  # the concurrency test commits durable batches that fsync: 8 s and 3 s alone
+  # on macOS, past 120 s and 14 s when the suite starts them beside the rest.
+  if(bin_exec STREQUAL "store/test_crash"
+     OR bin_exec STREQUAL "store/test_concurrent")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
@@ -776,6 +790,16 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=pkgconfig -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test store library
+    add_test(
+      NAME test_pkgconfig_discovery_store
+      COMMAND
+        ${CMAKE_COMMAND}
+        -DPKG_CONFIG_PATH=${TEST_INSTALL_PREFIX}/lib/pkgconfig:${TEST_INSTALL_PREFIX}/lib64/pkgconfig:${TEST_INSTALL_PREFIX}/lib/${CMAKE_LIBRARY_ARCHITECTURE}/pkgconfig
+        -DLIBRARY_NAME=dftracer_utils_store
+        -DTEST_TYPE=pkgconfig -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test utilities library
     add_test(
       NAME test_pkgconfig_discovery_utilities
@@ -838,6 +862,15 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
         -DTEST_TYPE=cmake -P
         ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
 
+    # Test store library
+    add_test(
+      NAME test_cmake_discovery_store
+      COMMAND
+        ${CMAKE_COMMAND} -DCMAKE_PREFIX_PATH=${TEST_INSTALL_PREFIX}
+        -DLIBRARY_NAME=dftracer_utils_store
+        -DTEST_TYPE=cmake -P
+        ${CMAKE_CURRENT_SOURCE_DIR}/test_package_discovery.cmake)
+
     # Test utilities library
     add_test(
       NAME test_cmake_discovery_utilities
@@ -881,9 +914,11 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
       test_cmake_discovery_dstd
       test_pkgconfig_discovery_common
       test_pkgconfig_discovery_runtime
+      test_pkgconfig_discovery_store
       test_pkgconfig_discovery_utilities
       test_cmake_discovery_common
       test_cmake_discovery_runtime
+      test_cmake_discovery_store
       test_cmake_discovery_utilities)
   endif()
 
@@ -902,7 +937,7 @@ if(DFTRACER_UTILS_PACKAGE_TESTS)
   foreach(VARIANT IN LISTS PACKAGE_TEST_VARIANTS)
     if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
       foreach(LIBRARY dftracer_utils_memory dftracer_utils_dstd dftracer_utils_common dftracer_utils_runtime
-                      dftracer_utils_utilities)
+                      dftracer_utils_store dftracer_utils_utilities)
         add_target_alias_test(test_target_${LIBRARY}_${VARIANT}
                               "${LIBRARY}::${VARIANT}")
         list(APPEND PACKAGE_DISCOVERY_TESTS test_target_${LIBRARY}_${VARIANT})

@@ -39,10 +39,14 @@ struct ExtentWriter::OpenSegment {
 };
 
 struct ExtentWriter::OpenExtent {
-    OpenExtent(std::uint32_t open_namespace_id, std::uint32_t bytes)
-        : namespace_id(open_namespace_id), buffer(bytes, 0) {}
+    OpenExtent(std::uint32_t open_namespace_id, PageCodec open_codec,
+               std::uint32_t bytes)
+        : namespace_id(open_namespace_id),
+          codec(open_codec),
+          buffer(bytes, 0) {}
 
     std::uint32_t namespace_id = 0;
+    PageCodec codec = PageCodec::Zstd;
     std::atomic<std::uint64_t> state{0};
     std::atomic_flag segments_lock = ATOMIC_FLAG_INIT;
     dstd::Vector<std::uint8_t> buffer;
@@ -51,6 +55,7 @@ struct ExtentWriter::OpenExtent {
 
 struct ExtentWriter::NamespaceSlot {
     std::uint32_t id = 0;
+    PageCodec codec = PageCodec::Zstd;
     std::atomic<OpenExtent*> extent{nullptr};
     NamespaceSlot* next = nullptr;
 };
@@ -93,8 +98,8 @@ void ExtentWriter::discard(OpenExtent* extent) {
     extent->segments.clear();
 }
 
-ExtentWriter::NamespaceSlot* ExtentWriter::find_slot(
-    std::uint32_t namespace_id) {
+ExtentWriter::NamespaceSlot* ExtentWriter::find_slot(std::uint32_t namespace_id,
+                                                     PageCodec codec) {
     for (NamespaceSlot* slot = namespaces_.load(std::memory_order_acquire);
          slot != nullptr; slot = slot->next) {
         if (slot->id == namespace_id) return slot;
@@ -107,6 +112,7 @@ ExtentWriter::NamespaceSlot* ExtentWriter::find_slot(
     }
     auto* slot = new NamespaceSlot;
     slot->id = namespace_id;
+    slot->codec = codec;
     slot->next = namespaces_.load(std::memory_order_relaxed);
     namespaces_.store(slot, std::memory_order_release);
     slots_.push_back(slot);
@@ -117,7 +123,7 @@ ExtentWriter::OpenExtent* ExtentWriter::publish_extent(NamespaceSlot& slot,
                                                        OpenExtent* expected) {
     OpenExtent* current = slot.extent.load(std::memory_order_acquire);
     if (current != expected) return current;
-    auto* fresh = new OpenExtent(slot.id, extent_size_);
+    auto* fresh = new OpenExtent(slot.id, slot.codec, extent_size_);
     if (slot.extent.compare_exchange_strong(expected, fresh,
                                             std::memory_order_acq_rel,
                                             std::memory_order_acquire)) {
@@ -310,7 +316,7 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
     auto stored = encode_extent(
         ByteView(reinterpret_cast<const std::byte*>(extent->buffer.data()),
                  used),
-        starts, OPEN_EXTENT_WRITE_ALIGN);
+        starts, OPEN_EXTENT_WRITE_ALIGN, extent->codec);
     if (!stored) {
         reject();
         return;
@@ -336,12 +342,14 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
 }
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
-    ByteView segment_bytes, ExtentSegment info, void* context) {
+    ByteView segment_bytes, ExtentSegment info, void* context,
+    PageCodec codec) {
     dstd::Vector<SegmentSpan> spans;
     if (!append_segment_spans(segment_bytes, 0, spans)) return invalid_error();
     const dstd::Vector<std::uint32_t> starts =
         page_starts(spans, static_cast<std::uint32_t>(segment_bytes.size()));
-    auto stored = encode_extent(segment_bytes, starts, OPEN_EXTENT_WRITE_ALIGN);
+    auto stored =
+        encode_extent(segment_bytes, starts, OPEN_EXTENT_WRITE_ALIGN, codec);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
@@ -361,7 +369,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append(
     std::uint32_t namespace_id, ByteView segment_bytes, ExtentSegment info,
-    void* context) {
+    void* context, PageCodec codec) {
     const int latched = latched_errno_.load(std::memory_order_acquire);
     if (latched != 0) return dstd::Unexpected<dstd::Error>(latched_error());
     if (segment_bytes.empty() ||
@@ -371,10 +379,10 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append(
     // An extent's raw bytes keep room for the fixed header of its stored form.
     const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
     if (segment_bytes.size() >= capacity) {
-        return append_run(segment_bytes, std::move(info), context);
+        return append_run(segment_bytes, std::move(info), context, codec);
     }
 
-    NamespaceSlot* slot = find_slot(namespace_id);
+    NamespaceSlot* slot = find_slot(namespace_id, codec);
     const std::uint32_t length =
         static_cast<std::uint32_t>(segment_bytes.size());
     for (;;) {
@@ -479,7 +487,8 @@ ExtentWriter::wait_idle_async() {
 
 bool ExtentWriterTestHook::seal_in_place(ExtentWriter& writer,
                                          std::uint32_t namespace_id) {
-    ExtentWriter::NamespaceSlot* slot = writer.find_slot(namespace_id);
+    ExtentWriter::NamespaceSlot* slot =
+        writer.find_slot(namespace_id, PageCodec::Zstd);
     ExtentWriter::OpenExtent* extent =
         slot->extent.load(std::memory_order_acquire);
     if (extent == nullptr) return false;

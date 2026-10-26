@@ -82,9 +82,11 @@ dstd::Vector<std::uint32_t> page_starts(dstd::Span<const SegmentSpan> segments,
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
-    ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align) {
+    ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align,
+    PageCodec codec_wanted) {
     const std::size_t raw_length = raw.size();
     if (raw_length == 0 || raw_length > EXTENT_MAX_RAW_BYTES || align == 0 ||
+        (codec_wanted != PageCodec::None && codec_wanted != PageCodec::Zstd) ||
         !cuts_pages(starts, raw_length)) {
         return invalid_error();
     }
@@ -103,7 +105,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
         const std::uint32_t length = end - begin;
         PageCodec codec = PageCodec::None;
         std::uint32_t page_bytes = length;
-        if (context.ctx != nullptr) {
+        if (codec_wanted == PageCodec::Zstd && context.ctx != nullptr) {
             const std::size_t bound = ZSTD_compressBound(length);
             if (context.scratch.size() < bound) context.scratch.resize(bound);
             const std::size_t compressed = ZSTD_compressCCtx(

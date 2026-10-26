@@ -31,6 +31,9 @@ struct NamespaceSpec {
     std::uint32_t format_version = 0;
     FoldKind fold = FoldKind::None;
     bool durable = false;
+    /// How a writer stores the pages of this namespace. Reads ignore it, since
+    /// each page names its own codec, and so does namespace matching.
+    PageCodec codec = PageCodec::Zstd;
 };
 
 bool operator==(const NamespaceSpec& a, const NamespaceSpec& b);

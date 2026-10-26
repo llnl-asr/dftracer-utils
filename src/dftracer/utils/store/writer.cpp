@@ -163,7 +163,7 @@ NamespaceItem namespace_item(const NamespaceSpec& spec, NamespaceId id) {
     item.name = spec.name;
     item.format_version = spec.format_version;
     item.fold_kind = static_cast<std::uint8_t>(spec.fold);
-    item.codec = 0;
+    item.codec = static_cast<std::uint8_t>(spec.codec);
     item.durable = spec.durable ? 1 : 0;
     return item;
 }
@@ -697,10 +697,10 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     info.first_key = std::move(segment->first_key);
     info.last_key = std::move(segment->last_key);
 
-    auto appended =
-        extents_.append(pending->namespace_id,
-                        ByteView{segment->bytes.data(), segment->bytes.size()},
-                        std::move(info), pending);
+    auto appended = extents_.append(
+        pending->namespace_id,
+        ByteView{segment->bytes.data(), segment->bytes.size()}, std::move(info),
+        pending, static_cast<PageCodec>(pending->namespace_item.codec));
     if (!appended) {
         extent_bytes_.release(segment_bytes);
         // The extent writer reports this error from every later append, so a

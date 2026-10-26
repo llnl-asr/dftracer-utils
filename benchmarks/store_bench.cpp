@@ -205,6 +205,7 @@ struct Options {
     std::string which = "all";
     std::string keep;
     std::string reuse;
+    store::PageCodec codec = store::PageCodec::Zstd;
 };
 
 void apply_smoke(Options& opt) {
@@ -289,6 +290,15 @@ bool parse_args(int argc, char** argv, Options& opt) {
             const std::vector<std::uint64_t> parsed = parse_u64_list(value());
             if (parsed.size() != 1 || parsed[0] == 0) return false;
             opt.payload_mib = parsed[0];
+        } else if (arg == "--codec") {
+            const std::string codec = value();
+            if (codec == "zstd") {
+                opt.codec = store::PageCodec::Zstd;
+            } else if (codec == "none") {
+                opt.codec = store::PageCodec::None;
+            } else {
+                return false;
+            }
         } else if (arg == "--value-kind") {
             const std::string kind = value();
             if (kind == "trace") {
@@ -364,7 +374,8 @@ void usage() {
            "                   [--commits N] [--gets N]\n"
            "                   [--fold-scopes 1000,8404] [--fold-keys N]\n"
            "                   [--case write|query|scopes|fold|all]\n"
-           "                   [--keep PATH | --reuse PATH]\n";
+           "                   [--keep PATH | --reuse PATH] [--codec "
+           "zstd|none]\n";
 }
 
 dstd::String dstring(std::string_view text) {
@@ -807,6 +818,7 @@ struct Bench {
         namespace_spec.format_version = 0;
         namespace_spec.fold = store::FoldKind::None;
         namespace_spec.durable = false;
+        namespace_spec.codec = opt.codec;
         return namespace_spec;
     }
 
@@ -884,10 +896,14 @@ struct Bench {
             << "# extent_size=" << extent_size << " backend=" << backend
             << " fs=" << filesystem_name(dftracer::utils::filesystem_kind(root))
             << " dir=" << root << "\n"
-            << "# ours codec=zstd level 1 per extent (raw when it saves under "
-               "an"
-               " eighth); Snapshot::open reads only the metadata, and a query"
-               " reads, checks and decodes each extent on its first read\n"
+            << "# ours codec="
+            << (opt.codec == store::PageCodec::Zstd
+                    ? "zstd level 1 per 32 KiB page (raw when it saves under an"
+                      " eighth)"
+                    : "none")
+            << "; Snapshot::open reads only the metadata, and a query reads"
+               " and checks each extent on its first read and decodes only"
+               " the pages it needs\n"
             << "# rocksdb compression=" << compression_name(cf.compression)
             << " bottommost=" << compression_name(cf.bottommost_compression)
             << " wal=off block_cache_mib="

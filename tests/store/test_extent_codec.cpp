@@ -102,6 +102,30 @@ TEST_SUITE("store extent codec") {
         CHECK(starts[2] == 2 * PAGE);
     }
 
+    TEST_CASE("the none codec stores every page raw") {
+        const dstd::Vector<std::uint8_t> raw = text_bytes(2 * PAGE);
+        const std::uint32_t starts[] = {0, PAGE};
+        auto stored = store::encode_extent(
+            view_of(raw), dstd::Span<const std::uint32_t>(starts), ALIGN,
+            store::PageCodec::None);
+        REQUIRE(stored.has_value());
+        auto pages = store::ExtentPages::open(view_of(*stored));
+        REQUIRE(pages.has_value());
+        REQUIRE(pages->size() == 2);
+        for (std::size_t i = 0; i < pages->size(); ++i) {
+            CHECK(pages->entry(i).codec == store::PageCodec::None);
+            CHECK(pages->entry(i).stored_length == PAGE);
+        }
+        dstd::Vector<std::uint8_t> decoded = *stored;
+        REQUIRE(store::decode_extent(decoded).has_value());
+        CHECK(decoded == raw);
+
+        CHECK_FALSE(store::encode_extent(
+                        view_of(raw), dstd::Span<const std::uint32_t>(starts),
+                        ALIGN, static_cast<store::PageCodec>(7))
+                        .has_value());
+    }
+
     TEST_CASE("a compressible page is zstd and an incompressible one is raw") {
         dstd::Vector<std::uint8_t> raw = text_bytes(PAGE);
         const dstd::Vector<std::uint8_t> tail = random_bytes(5000);

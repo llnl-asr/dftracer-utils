@@ -3217,6 +3217,70 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().pages_decoded == pages->size());
     }
 
+    TEST_CASE("a namespace codec decides how its pages are stored") {
+        const ScopeKey scope = file_scope("/traces/codec.pfw");
+        constexpr std::size_t KEY_COUNT = 200;
+        const std::string value(512, 'v');
+        const auto key_at = [](std::size_t index) {
+            return "key-" + std::to_string(1000 + index);
+        };
+        const auto codecs_written = [&](store::PageCodec codec) {
+            NamespaceSpec spec = put_spec("dftu.test.codec");
+            spec.codec = codec;
+            dftu_utils_test::ScopedTestDir dir("snapshot_namespace_codec");
+            WriterOptions options = small_extents();
+            options.extent_size = 8U * 1024U * 1024U;
+            std::string path;
+            {
+                auto writer = make_writer(dir, options);
+                auto id = writer->add_namespace(spec);
+                REQUIRE(id.has_value());
+                for (std::size_t index = 0; index < KEY_COUNT; ++index) {
+                    Batch batch = writer->batch(*id, scope, 0);
+                    batch.put(view_of(key_at(index)), view_of(value));
+                    REQUIRE(writer->commit(std::move(batch)).has_value());
+                }
+                REQUIRE(flush_writer(*writer).has_value());
+                path = to_std(writer->path());
+                REQUIRE(close_writer(*writer).has_value());
+            }
+
+            std::vector<store::PageCodec> seen;
+            auto reader = DataFileReader::open(path);
+            REQUIRE(reader.has_value());
+            for (const auto& indexed : extent_refs_of(*reader)) {
+                auto stored = reader->read_extent(
+                    {indexed.ref.offset, indexed.ref.length, indexed.ref.crc});
+                REQUIRE(stored.has_value());
+                auto pages = store::ExtentPages::open(view_of(*stored));
+                REQUIRE(pages.has_value());
+                for (std::size_t i = 0; i < pages->size(); ++i) {
+                    seen.push_back(pages->entry(i).codec);
+                }
+            }
+
+            // The reader names the namespace without its codec.
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            auto found = snapshot->get(put_spec("dftu.test.codec"), scope,
+                                       view_of(key_at(KEY_COUNT / 2)));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+            CHECK(to_std((*found)->bytes()) == value);
+            return seen;
+        };
+
+        const auto raw = codecs_written(store::PageCodec::None);
+        REQUIRE_FALSE(raw.empty());
+        for (const store::PageCodec codec : raw) {
+            CHECK(codec == store::PageCodec::None);
+        }
+        const auto packed = codecs_written(store::PageCodec::Zstd);
+        REQUIRE_FALSE(packed.empty());
+        CHECK(std::count(packed.begin(), packed.end(), store::PageCodec::Zstd) >
+              0);
+    }
+
     TEST_CASE("a point read of a segment over pages decodes two of them") {
         const ScopeKey scope = file_scope("/traces/granules.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.granules");

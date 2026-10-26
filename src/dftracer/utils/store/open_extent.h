@@ -89,10 +89,12 @@ class ExtentWriter {
     /// copied before this returns, so the caller's buffer may go away, and
     /// `context` comes back with the segment in WrittenExtent::contexts. An
     /// empty segment is InvalidArgument, and every call returns the first
-    /// write error once an extent write failed.
+    /// write error once an extent write failed. The extents of a namespace
+    /// store their pages with the `codec` of its first append.
     dstd::Expected<void, dstd::Error> append(std::uint32_t namespace_id,
                                              ByteView segment_bytes,
-                                             ExtentSegment info, void* context);
+                                             ExtentSegment info, void* context,
+                                             PageCodec codec = PageCodec::Zstd);
 
     /// Seals every open extent that holds bytes and starts its write, leaving a
     /// fresh open extent per namespace for later appends. An open extent with
@@ -124,7 +126,7 @@ class ExtentWriter {
     struct OpenSegment;
     struct IdleWait;
 
-    NamespaceSlot* find_slot(std::uint32_t namespace_id);
+    NamespaceSlot* find_slot(std::uint32_t namespace_id, PageCodec codec);
     OpenExtent* publish_extent(NamespaceSlot& slot, OpenExtent* expected);
     static void push_segment(OpenExtent* extent, OpenSegment segment);
     void leave_extent(OpenExtent* extent);
@@ -136,7 +138,8 @@ class ExtentWriter {
     void retire(OpenExtent* extent);
     dstd::Expected<void, dstd::Error> append_run(ByteView segment_bytes,
                                                  ExtentSegment info,
-                                                 void* context);
+                                                 void* context,
+                                                 PageCodec codec);
     void submit(PendingWrite* pending);
     void resubmit(PendingWrite* pending);
     /// Counts one write in flight. Called before a seal becomes visible, and

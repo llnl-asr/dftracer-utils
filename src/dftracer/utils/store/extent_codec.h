@@ -57,13 +57,15 @@ dstd::Vector<std::uint32_t> page_starts(dstd::Span<const SegmentSpan> segments,
                                         std::uint32_t raw_length);
 
 /// The stored form of `raw` cut into pages at `starts`: the header, the page
-/// table, then each page compressed with zstd when that saves at least an
-/// eighth of it and the page itself otherwise, padded with zeros to a multiple
-/// of `align`. An InvalidArgument error for empty `raw`, `raw` past
-/// EXTENT_MAX_RAW_BYTES, a zero `align`, or starts that do not cut `raw` into
-/// pages of 1 to PAGE_BYTES bytes from offset 0.
+/// table, then each page, padded with zeros to a multiple of `align`. With
+/// PageCodec::Zstd a page is compressed when that saves at least an eighth of
+/// it and stored raw otherwise; with PageCodec::None every page is raw. An
+/// InvalidArgument error for empty `raw`, `raw` past EXTENT_MAX_RAW_BYTES, a
+/// zero `align`, or starts that do not cut `raw` into pages of 1 to PAGE_BYTES
+/// bytes from offset 0.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
-    ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align);
+    ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align,
+    PageCodec codec = PageCodec::Zstd);
 
 /// The pages of one stored extent, read in place over bytes that outlive it.
 class ExtentPages {

@@ -98,6 +98,11 @@ struct SectionRef {
     std::uint64_t sequence = 0;
     std::uint64_t page_offset = 0;
     std::uint32_t offset_in_page = 0;
+    /// The section's key range from its commit record. Both views point into
+    /// the file index the snapshot keeps, so a lookup skips a section that
+    /// cannot hold the key without reading it.
+    ByteView first_key;
+    ByteView last_key;
 };
 
 struct CopyData {
@@ -178,7 +183,13 @@ class ScopeCursor {
     void settle();
     void advance_matching();
 
+    void push(std::size_t index);
+
     dstd::Vector<SectionView::Cursor> cursors_;
+    /// The current key of each cursor, so the heap compares without parsing.
+    dstd::Vector<ByteView> keys_;
+    /// Min-heap of the cursors not at their end, by key then section index.
+    dstd::Vector<std::size_t> heap_;
     dstd::Vector<std::size_t> matching_;
     const dstd::Vector<detail::HiddenRange>* hidden_ = nullptr;
     const detail::CopyData* copy_ = nullptr;
@@ -208,11 +219,17 @@ class ScanCursor {
         ScopeCursor cursor;
     };
 
+    struct ArmAfter;
+
     void settle();
+    void push_arm(std::size_t index);
 
     const Snapshot* snapshot_ = nullptr;
     dstd::Vector<Arm> arms_;
     std::size_t arm_ = 0;
+    /// Fold scans only: min-heap of the arms not at their end, by key then
+    /// arm index, so a key costs O(log scopes) and not one step per scope.
+    dstd::Vector<std::size_t> arm_heap_;
     dstd::Vector<std::size_t> at_key_;
     FoldKind fold_ = FoldKind::None;
     ByteView key_;
@@ -222,6 +239,24 @@ class ScanCursor {
     dstd::Vector<std::uint8_t> buffer_;
 };
 
+/// What one open read, and how long each of its phases took. The phases after
+/// the listing run on the process-wide default runtime's threads, unless open
+/// itself runs on one of them. `read_calls` counts the preadv and pread calls
+/// the block phase made, which is the work coalescing the reads cuts.
+struct OpenStats {
+    /// The data files of the directory that were readable.
+    std::size_t files = 0;
+    /// The page refs of those files, each read or crc-checked at open.
+    std::size_t pages = 0;
+    std::uint64_t read_calls = 0;
+    std::uint64_t bytes_read = 0;
+    double ms_list = 0;        ///< Listing the directory.
+    double ms_open_files = 0;  ///< Opening and indexing every data file.
+    double ms_read = 0;        ///< Reading and verifying every block.
+    double ms_tables = 0;      ///< Opening sections and building the tables.
+    double ms_total = 0;
+};
+
 /// The state of every data file in one directory, as of the moment it opened.
 ///
 /// Immutable after open, so the const methods are safe from many threads: no
@@ -229,6 +264,14 @@ class ScanCursor {
 /// while the snapshot is alive and unmoved.
 class Snapshot {
    public:
+    /// Reads every data file of `dir`, then every block of each one: opening
+    /// and reading run in parallel on the process-wide default runtime, which
+    /// is created if none is installed; a caller wanting thread control
+    /// installs its own runtime with set_default_runtime. The phases run
+    /// serially on the calling thread when a fork-join on that runtime could
+    /// not finish: on a worker of the runtime itself, inside one of its
+    /// parallel regions, and in the child of a fork, whose copy of an inherited
+    /// runtime has no workers.
     static dstd::Expected<Snapshot, dstd::Error> open(dstd::StringView dir);
 
     Snapshot(const Snapshot&) = delete;
@@ -238,6 +281,9 @@ class Snapshot {
     ~Snapshot() = default;
 
     dstd::Span<const SkippedFile> skipped() const { return skipped_; }
+
+    /// What the open of this snapshot read, its phases and their durations.
+    const OpenStats& open_stats() const { return open_stats_; }
 
     /// The highest generation of every (namespace, scope) a writer has to add
     /// one to, over copies and drops.
@@ -286,6 +332,7 @@ class Snapshot {
     dstd::Vector<SkippedFile> skipped_;
     dstd::Vector<detail::ScopeGroup> groups_;
     dstd::Vector<detail::NamespaceGroup> namespaces_;
+    OpenStats open_stats_;
 };
 
 }  // namespace dftracer::utils::index::store::engine

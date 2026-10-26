@@ -195,6 +195,11 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/snapshot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/page_size.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/open_page.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/committer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/writer_pages.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/engine/io_fault.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/gzip_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_indexer_factory.cpp

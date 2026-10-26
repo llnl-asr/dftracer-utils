@@ -294,6 +294,12 @@ set(TEST_CPP_SOURCES
     index/test_store_section.cpp
     index/test_store_file.cpp
     index/test_store_snapshot.cpp
+    index/test_store_page_size.cpp
+    index/test_store_open_page.cpp
+    index/test_store_concurrent.cpp
+    index/test_store_backpressure.cpp
+    index/test_store_crash.cpp
+    index/test_store_processes.cpp
     index/test_agg_extension.cpp
     index/test_prune_oracle.cpp
     index/test_layout.cpp

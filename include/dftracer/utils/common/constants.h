@@ -55,6 +55,20 @@ namespace io_settings {
 inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
 }  // namespace io_settings
 
+namespace store {
+/// The page size P of a new index store data file: the unit every data page and
+/// every read region is aligned to. A Lustre file takes the largest stripe size
+/// of its layout, capped at MAX_PAGE_BYTES; anything else takes
+/// STORE_DEFAULT_PAGE_BYTES. STORE_PAGE_BYTES_ENV overrides both, and must be a
+/// multiple of 4096 in [STORE_MIN_PAGE_BYTES, STORE_MAX_PAGE_BYTES].
+inline constexpr const char* STORE_PAGE_BYTES_ENV =
+    "DFTRACER_UTILS_STORE_PAGE_BYTES";
+inline constexpr std::uint32_t STORE_DEFAULT_PAGE_BYTES = std::uint32_t{1}
+                                                          << 20;
+inline constexpr std::uint32_t STORE_MIN_PAGE_BYTES = 4096;
+inline constexpr std::uint32_t STORE_MAX_PAGE_BYTES = std::uint32_t{16} << 20;
+}  // namespace store
+
 /// What a file in flight and each piece parsed at once reserve from the memory
 /// budget. The values are bytes held per byte of plaintext, set from the
 /// manager's peak on traces of 1 to 30 MiB compressed.

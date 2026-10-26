@@ -1,8 +1,11 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/store/engine/data_file.h>
+#include <dftracer/utils/index/store/engine/io_fault.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -60,6 +63,11 @@ dstd::Unexpected<dstd::Error> io_error() {
 dstd::Unexpected<dstd::Error> unsupported_error() {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::Unsupported));
+}
+
+io_fault::WriteKind fault_kind_of(RecordKind kind) {
+    return kind == RecordKind::Footer ? io_fault::WriteKind::Footer
+                                      : io_fault::WriteKind::Record;
 }
 
 std::string path_string(dstd::StringView path) {
@@ -419,7 +427,7 @@ dstd::Expected<DataFileWriter, dstd::Error> DataFileWriter::create(
 DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
     : fd_(other.fd_),
       page_size_(other.page_size_),
-      next_offset_(other.next_offset_),
+      next_offset_(other.next_offset_.load(std::memory_order_relaxed)),
       last_sequence_(other.last_sequence_),
       tail_offset_(other.tail_offset_),
       tail_kind_(other.tail_kind_),
@@ -431,8 +439,8 @@ DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
       label_(std::move(other.label_)),
       pending_items_(std::move(other.pending_items_)),
       all_items_(std::move(other.all_items_)),
-      closed_(other.closed_),
-      latched_(other.latched_),
+      closed_(other.closed_.load(std::memory_order_relaxed)),
+      latched_(other.latched_.load(std::memory_order_relaxed)),
       latched_error_(std::move(other.latched_error_)) {
     other.fd_ = -1;
 }
@@ -442,7 +450,8 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     if (fd_ >= 0) ::close(fd_);
     fd_ = other.fd_;
     page_size_ = other.page_size_;
-    next_offset_ = other.next_offset_;
+    next_offset_.store(other.next_offset_.load(std::memory_order_relaxed),
+                       std::memory_order_relaxed);
     last_sequence_ = other.last_sequence_;
     tail_offset_ = other.tail_offset_;
     tail_kind_ = other.tail_kind_;
@@ -454,8 +463,10 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     label_ = std::move(other.label_);
     pending_items_ = std::move(other.pending_items_);
     all_items_ = std::move(other.all_items_);
-    closed_ = other.closed_;
-    latched_ = other.latched_;
+    closed_.store(other.closed_.load(std::memory_order_relaxed),
+                  std::memory_order_relaxed);
+    latched_.store(other.latched_.load(std::memory_order_relaxed),
+                   std::memory_order_relaxed);
     latched_error_ = std::move(other.latched_error_);
     other.fd_ = -1;
     return *this;
@@ -466,14 +477,19 @@ DataFileWriter::~DataFileWriter() {
 }
 
 void DataFileWriter::latch(const dstd::Error& error) {
-    if (!latched_) {
-        latched_ = true;
-        latched_error_ = error;
-    }
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    if (latched_.load(std::memory_order_relaxed)) return;
+    latched_error_ = error;
+    latched_.store(true, std::memory_order_release);
+}
+
+dstd::Error DataFileWriter::latched_result() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return latched_error_;
 }
 
 dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
-    if (latched_) return dstd::Unexpected<dstd::Error>(latched_error_);
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     dstd::Vector<std::uint8_t> header(FILE_HEADER_BYTES, 0);
     std::memcpy(header.data(), FILE_MAGIC.data(), FILE_MAGIC.size());
     write_u32_le(header.data() + 8, FORMAT_VERSION);
@@ -496,19 +512,26 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
         compress::gzip_crc32(0, header.data(), header.size());
     write_u32_le(header.data() + 12, crc);
     auto written = pwrite_all(fd_, header.data(), header.size(), 0);
-    if (!written) latch(written.error());
+    if (written) {
+        io_fault::on_write(fd_, io_fault::WriteKind::Header, 0, header.data(),
+                           header.size());
+    } else {
+        latch(written.error());
+    }
     return written;
 }
 
 dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_page(
     ByteView bytes) {
-    if (latched_) return dstd::Unexpected<dstd::Error>(latched_error_);
-    if (closed_) return invalid_error();
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() || bytes.size() > page_size_ ||
         bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    const std::uint64_t offset = align_up(next_offset_, page_size_);
+    // The reservation records the page range; the write below is its bytes.
+    const std::uint64_t offset =
+        reserve_range(bytes.size(), page_size_, io_fault::WriteKind::Page);
     PageRef ref{offset, static_cast<std::uint32_t>(bytes.size()), 0};
     ref.crc = compress::gzip_crc32(0, bytes.data(), bytes.size());
     auto written =
@@ -518,19 +541,19 @@ dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_page(
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
     }
-    next_offset_ = offset + bytes.size();
     return ref;
 }
 
 dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_big(
     ByteView bytes) {
-    if (latched_) return dstd::Unexpected<dstd::Error>(latched_error_);
-    if (closed_) return invalid_error();
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() ||
         bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    const std::uint64_t offset = align_up(next_offset_, FILE_HEADER_BYTES);
+    const std::uint64_t offset = reserve_range(bytes.size(), FILE_HEADER_BYTES,
+                                               io_fault::WriteKind::Big);
     PageRef ref{offset, static_cast<std::uint32_t>(bytes.size()), 0};
     ref.crc = compress::gzip_crc32(0, bytes.data(), bytes.size());
     auto written =
@@ -540,19 +563,38 @@ dstd::Expected<PageRef, dstd::Error> DataFileWriter::append_big(
         latch(written.error());
         return dstd::Unexpected<dstd::Error>(written.error());
     }
-    next_offset_ = offset + bytes.size();
+    io_fault::on_write(fd_, io_fault::WriteKind::Big, offset,
+                       reinterpret_cast<const std::uint8_t*>(bytes.data()),
+                       bytes.size());
     return ref;
 }
 
+std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
+                                            std::uint64_t align,
+                                            io_fault::WriteKind kind) {
+    std::uint64_t current = next_offset_.load(std::memory_order_relaxed);
+    for (;;) {
+        const std::uint64_t start = align_up(current, align);
+        if (next_offset_.compare_exchange_weak(current, start + length,
+                                               std::memory_order_acq_rel,
+                                               std::memory_order_relaxed)) {
+            if (kind == io_fault::WriteKind::Page) {
+                io_fault::on_write(fd_, kind, start, nullptr, length);
+            }
+            return start;
+        }
+    }
+}
+
 void DataFileWriter::add(RecordItem item) {
-    if (latched_ || closed_) return;
+    if (latched() || closed_.load(std::memory_order_acquire)) return;
     all_items_.push_back(item);
     pending_items_.push_back(std::move(item));
 }
 
 dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
     RecordKind kind, const RecordItems& items) {
-    if (latched_) return dstd::Unexpected<dstd::Error>(latched_error_);
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     const std::uint64_t sequence = last_sequence_ + 1;
     if (sequence == 0) return invalid_error();
     const bool checkpoint = sequence % CHECKPOINT_INTERVAL == 0;
@@ -560,30 +602,43 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
                                        ? RecordKind::Checkpoint
                                        : kind;
 
-    const std::uint64_t offset = align_up(next_offset_, FILE_HEADER_BYTES);
-    auto encoded =
-        encode_record(actual_kind, sequence, tail_offset_, offset, items);
-    if (!encoded) return dstd::Unexpected<dstd::Error>(encoded.error());
+    // A record names its own offset, so its size is measured at a fixed
+    // placeholder offset and the range is reserved before the real bytes are
+    // built. The item encoding, and so the size, does not depend on it.
+    auto probe = encode_record(actual_kind, sequence, tail_offset_,
+                               FILE_HEADER_BYTES, items);
+    if (!probe) return dstd::Unexpected<dstd::Error>(probe.error());
+    const std::uint64_t offset = reserve_range(probe->size(), FILE_HEADER_BYTES,
+                                               fault_kind_of(actual_kind));
+    dstd::Vector<std::uint8_t> encoded;
+    if (offset == FILE_HEADER_BYTES) {
+        encoded = std::move(*probe);
+    } else {
+        auto rebuilt =
+            encode_record(actual_kind, sequence, tail_offset_, offset, items);
+        if (!rebuilt) return dstd::Unexpected<dstd::Error>(rebuilt.error());
+        encoded = std::move(*rebuilt);
+    }
 
-    auto written = pwrite_all(fd_, encoded->data(), encoded->size(), offset);
+    auto written = pwrite_all(fd_, encoded.data(), encoded.size(), offset);
     if (!written) {
         latch(written.error());
         return written;
     }
+    io_fault::on_write(fd_, fault_kind_of(actual_kind), offset, encoded.data(),
+                       encoded.size());
 
-    const std::uint32_t body_length = read_u32_le(encoded->data() + 12);
+    const std::uint32_t body_length = read_u32_le(encoded.data() + 12);
     tail_offset_ = offset;
     tail_kind_ = static_cast<std::uint32_t>(actual_kind);
-    tail_crc_ =
-        read_u32_le(encoded->data() + RECORD_HEADER_BYTES + body_length);
+    tail_crc_ = read_u32_le(encoded.data() + RECORD_HEADER_BYTES + body_length);
     last_sequence_ = sequence;
-    next_offset_ = offset + encoded->size();
     return {};
 }
 
 dstd::Expected<void, dstd::Error> DataFileWriter::commit() {
-    if (latched_) return dstd::Unexpected<dstd::Error>(latched_error_);
-    if (closed_) return invalid_error();
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
     const bool checkpoint = (last_sequence_ + 1) % CHECKPOINT_INTERVAL == 0;
     auto record = write_record(RecordKind::Commit,
                                checkpoint ? all_items_ : pending_items_);
@@ -595,12 +650,13 @@ dstd::Expected<void, dstd::Error> DataFileWriter::commit() {
 }
 
 dstd::Expected<void, dstd::Error> DataFileWriter::close() {
-    if (latched_) return dstd::Unexpected<dstd::Error>(latched_error_);
-    if (closed_) return {};
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
+    if (closed_.load(std::memory_order_acquire)) return {};
     auto record = write_record(RecordKind::Footer, all_items_);
     if (!record) return record;
 
-    const std::uint64_t trailer_offset = next_offset_;
+    const std::uint64_t trailer_offset =
+        reserve_range(FILE_TRAILER_BYTES, 1, io_fault::WriteKind::Trailer);
     const std::uint32_t footer_length =
         static_cast<std::uint32_t>(trailer_offset - tail_offset_);
     dstd::Vector<std::uint8_t> trailer(FILE_TRAILER_BYTES, 0);
@@ -616,6 +672,8 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         latch(written.error());
         return written;
     }
+    io_fault::on_write(fd_, io_fault::WriteKind::Trailer, trailer_offset,
+                       trailer.data(), trailer.size());
 
     auto header = write_header();
     if (!header) return header;
@@ -628,10 +686,11 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         sync_result = ::fdatasync(fd_);
 #endif
     } while (sync_result != 0 && errno == EINTR);
+    io_fault::on_sync(fd_);
     const bool synced = sync_result == 0;
     ::close(fd_);
     fd_ = -1;
-    closed_ = true;
+    closed_.store(true, std::memory_order_release);
     if (!synced) {
         const dstd::Error error(dstd::Condition::Io);
         latch(error);
@@ -759,6 +818,124 @@ DataFileReader::read_page(const PageRef& ref) const {
         compress::gzip_crc32(0, bytes->data(), bytes->size());
     if (crc != ref.crc) return parse_error();
     return bytes;
+}
+
+dstd::Expected<void, dstd::Error> DataFileReader::verify_block(
+    const PageRef& ref, BlockReads* reads) const {
+    if (ref.length == 0 || ref.offset > file_size_ ||
+        ref.length > file_size_ - ref.offset) {
+        return parse_error();
+    }
+    dstd::Vector<std::uint8_t> chunk(
+        std::min<std::size_t>(VERIFY_CHUNK_BYTES, ref.length));
+    std::uint32_t crc = 0;
+    std::uint64_t done = 0;
+    while (done < ref.length) {
+        const std::size_t want = static_cast<std::size_t>(
+            std::min<std::uint64_t>(chunk.size(), ref.length - done));
+        const ssize_t got = ::pread(fd_, chunk.data(), want,
+                                    static_cast<off_t>(ref.offset + done));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return io_error();
+        }
+        if (got == 0) return parse_error();
+        if (reads != nullptr) {
+            ++reads->calls;
+            reads->bytes += static_cast<std::uint64_t>(got);
+        }
+        crc = compress::gzip_crc32(crc, chunk.data(),
+                                   static_cast<std::size_t>(got));
+        done += static_cast<std::uint64_t>(got);
+    }
+    if (crc != ref.crc) return parse_error();
+    return {};
+}
+
+dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_pages(
+    dstd::Span<const PageRef> refs,
+    dstd::Span<const PageTarget> targets) const {
+    const auto in_file = [this](const PageRef& ref) {
+        return ref.length != 0 && ref.offset <= file_size_ &&
+               ref.length <= file_size_ - ref.offset;
+    };
+    const auto adjacent = [](const PageRef& previous, const PageRef& next) {
+        return next.offset == previous.offset + previous.length;
+    };
+
+    BlockReads counts;
+    std::vector<struct iovec> vecs;
+    std::size_t at = 0;
+    while (at < refs.size()) {
+        if (!in_file(refs[at])) {
+            *targets[at].bad = 1;
+            ++at;
+            continue;
+        }
+        // One group is a head ref and every ref after it that is readable and
+        // starts where that ref leaves off, up to what one preadv takes.
+        std::size_t end = at + 1;
+        while (end < refs.size() && end - at < IOV_MAX && in_file(refs[end]) &&
+               adjacent(refs[end - 1U], refs[end])) {
+            ++end;
+        }
+
+        vecs.resize(end - at);
+        std::uint64_t group_bytes = 0;
+        for (std::size_t i = at; i < end; ++i) {
+            const PageRef& ref = refs[i];
+            *targets[i].bytes =
+                dstd::Vector<std::uint8_t>(ref.length, std::uint8_t{0});
+            vecs[i - at].iov_base = targets[i].bytes->data();
+            vecs[i - at].iov_len = targets[i].bytes->size();
+            group_bytes += ref.length;
+        }
+
+        std::size_t served = 0;
+        std::uint64_t done = 0;
+        while (done < group_bytes) {
+            struct iovec* cur = &vecs[served];
+            const ssize_t got =
+                ::preadv(fd_, cur, static_cast<int>(vecs.size() - served),
+                         static_cast<off_t>(refs[at].offset + done));
+            if (got < 0) {
+                if (errno == EINTR) continue;
+                return io_error();
+            }
+            if (got == 0) break;
+            ++counts.calls;
+            counts.bytes += static_cast<std::uint64_t>(got);
+            done += static_cast<std::uint64_t>(got);
+            std::size_t left = static_cast<std::size_t>(got);
+            while (left > 0) {
+                struct iovec* page = &vecs[served];
+                if (left < page->iov_len) {
+                    page->iov_base = static_cast<char*>(page->iov_base) + left;
+                    page->iov_len -= left;
+                    left = 0;
+                } else {
+                    left -= page->iov_len;
+                    ++served;
+                }
+            }
+        }
+
+        for (std::size_t i = at; i < end; ++i) {
+            const PageRef& ref = refs[i];
+            dstd::Vector<std::uint8_t>& bytes = *targets[i].bytes;
+            const bool complete = i < at + served;
+            if (complete && compress::gzip_crc32(0, bytes.data(),
+                                                 bytes.size()) == ref.crc) {
+                continue;
+            }
+            // A page past the end of the file, or one whose crc fails, keeps no
+            // bytes: the codes of a copy reach the caller through its state.
+            *targets[i].bad = 1;
+            dstd::Vector<std::uint8_t>().swap(bytes);
+        }
+        at = end;
+    }
+    return counts;
 }
 
 }  // namespace dftracer::utils::index::store::engine

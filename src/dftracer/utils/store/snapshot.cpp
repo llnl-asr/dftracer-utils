@@ -127,29 +127,30 @@ dstd::Unexpected<dstd::Error> bad_extent_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
 }
 
+/// The state an extent slot takes once its stored bytes are there: Good with
+/// its page table and one frame per page, Bad when the bytes do not open.
+detail::LoadStatus open_pages(detail::ExtentSlot& slot) {
+    auto pages = ExtentPages::open(bytes_of(slot.stored));
+    if (!pages) return {detail::LoadState::Bad, dstd::Error{}};
+    slot.frames = dstd::Vector<detail::Frame>(pages->size());
+    slot.pages = std::move(*pages);
+    return {detail::LoadState::Good, dstd::Error{}};
+}
+
 /// Opens the view of one segment over the bytes of its extent and publishes it
-/// in the slot, unless another thread did first.
+/// in the slot, unless another thread did first, whose view it returns instead.
+/// `fresh` is owned here: the loser of the race frees its own copy.
 dstd::Expected<const SegmentView*, dstd::Error> publish_view(
-    detail::SegmentSlot& slot, const dstd::Vector<std::uint8_t>& bytes) {
-    if (SegmentView* known = slot.view.load(std::memory_order_acquire)) {
-        return known;
-    }
-    if (slot.offset_in_extent > bytes.size() ||
-        slot.length > bytes.size() - slot.offset_in_extent) {
-        return bad_extent_error();
-    }
-    auto opened = SegmentView::open_index(
-        ByteView{bytes.data() + slot.offset_in_extent, slot.length});
-    if (!opened) return bad_extent_error();
-    SegmentView* fresh = new SegmentView(std::move(*opened));
-    SegmentView* expected = nullptr;
-    if (slot.view.compare_exchange_strong(expected, fresh,
+    detail::SegmentSlot& slot, dstd::UniquePtr<detail::SegmentBody> fresh) {
+    detail::SegmentBody* body = fresh.get();
+    detail::SegmentBody* expected = nullptr;
+    if (slot.view.compare_exchange_strong(expected, body,
                                           std::memory_order_acq_rel,
                                           std::memory_order_acquire)) {
-        return fresh;
+        fresh.release();
+        return &body->view;
     }
-    delete fresh;
-    return expected;
+    return &expected->view;
 }
 
 /// One in-memory segment block per copy of a commit the chain lists: the
@@ -271,7 +272,7 @@ void fill_commit(detail::Commit& commit,
                 {ExtentRef{ref->offset, ref->length, ref->crc}, ref});
         }
     }
-    commit.frames = dstd::Vector<detail::Frame>(blocks.size());
+    commit.extent_slots = dstd::Vector<detail::ExtentSlot>(blocks.size());
     commit.blocks = std::move(blocks);
     fill_segment_blocks(commit);
 }
@@ -410,7 +411,7 @@ dstd::Expected<void, dstd::Error> build_file_directory(detail::FileData& file) {
                                                  : detail::BlockKind::Middle;
         file.roots.push_back(std::move(block));
     }
-    file.frames.assign(tail.extent_count);
+    file.extent_slots.assign(tail.extent_count);
     return {};
 }
 
@@ -653,18 +654,18 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
             BigRef ref;
             std::uint64_t sequence = 0;
         };
-        // Every entry of the segment decodes, not only its index. The big
-        // value runs it names are added to `bigs` when given.
-        const auto walkable = [](const dstd::Vector<std::uint8_t>& bytes,
-                                 const detail::SegmentSlot& slot,
-                                 std::uint64_t sequence,
-                                 dstd::Vector<BigRun>* bigs) {
-            if (slot.offset_in_extent > bytes.size() ||
-                slot.length > bytes.size() - slot.offset_in_extent) {
-                return false;
-            }
-            auto view = SegmentView::open(
-                ByteView{bytes.data() + slot.offset_in_extent, slot.length});
+        // Every entry of the segment decodes, not only its index. Its pages
+        // decode through the frames a query reads them through. The big value
+        // runs it names are added to `bigs` when given.
+        const auto walkable = [&](const detail::ExtentSlot& extent,
+                                  const detail::SegmentSlot& slot,
+                                  std::uint64_t sequence,
+                                  dstd::Vector<BigRun>* bigs) {
+            dstd::Vector<std::uint8_t> owned;
+            auto bytes = segment_bytes(extent, slot.offset_in_extent,
+                                       slot.length, owned);
+            if (!bytes) return false;
+            auto view = SegmentView::open(*bytes);
             if (!view) return false;
             if (bigs != nullptr) {
                 for (SegmentView::Cursor at = view->lower_bound(ByteView{});
@@ -722,7 +723,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                         BlockReads reads;
                         auto verified =
                             file.reader.verify_block(held.ref, &reads);
-                        reads_->add(0, 1, reads);
+                        reads_->add(0, 1, 0, reads);
                         if (verified) continue;
                         if (verified.error().is(dstd::Condition::Parse)) {
                             bad_commit(commit.sequence);
@@ -743,9 +744,9 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                             continue;
                         }
                         ++segments[index];
-                        const dstd::Vector<std::uint8_t>& bytes =
-                            commit.frames[slot.block].bytes;
-                        if (walkable(bytes, slot, commit.sequence, nullptr)) {
+                        const detail::ExtentSlot& extent =
+                            commit.extent_slots[slot.block];
+                        if (walkable(extent, slot, commit.sequence, nullptr)) {
                             continue;
                         }
                         bad_segments[index].push_back(
@@ -812,7 +813,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
         sequences.erase(std::unique(sequences.begin(), sequences.end()),
                         sequences.end());
         commits[index] = sequences.size();
-        std::vector<std::uint8_t> seen(file.frames.size(), 0);
+        std::vector<std::uint8_t> seen(file.extent_slots.size(), 0);
         dstd::Vector<BigRun> bigs;
 
         std::sort(pending.begin(), pending.end(),
@@ -864,7 +865,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                     continue;
                 }
                 ++segments[index];
-                if (walkable(file.frames.slot(slot.extent_index).bytes, slot,
+                if (walkable(file.extent_slots.slot(slot.extent_index), slot,
                              pending[i].sequence, &bigs)) {
                     continue;
                 }
@@ -896,7 +897,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                     ExtentRef{big.offset,
                               static_cast<std::uint32_t>(big.length), big.crc},
                     &reads);
-                reads_->add(0, 1, reads);
+                reads_->add(0, 1, 0, reads);
                 if (!verified) {
                     if (!verified.error().is(dstd::Condition::Parse)) {
                         fail(verified.error());
@@ -1250,7 +1251,7 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
     std::vector<std::uint8_t> bad(commit.blocks.size(), 0);
     for (const std::size_t block : extent_blocks) {
         refs.push_back(commit.blocks[block].ref);
-        targets.push_back({&commit.frames[block].bytes, &bad[block]});
+        targets.push_back({&commit.extent_slots[block].stored, &bad[block]});
     }
     BlockReads reads;
     bool any_bad = false;
@@ -1266,13 +1267,24 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
             }
         }
     }
-    // Every segment of the commit must open, so a segment that cannot be read
-    // makes the whole commit Bad, as the views of its extents once did.
+    // The page table of every extent, then every segment of the commit over
+    // the pages it names, so a segment that cannot be read makes the whole
+    // commit Bad, as the views of its extents once did.
+    if (!failure && !any_bad) {
+        for (const std::size_t block : extent_blocks) {
+            if (open_pages(commit.extent_slots[block]).state !=
+                detail::LoadState::Good) {
+                any_bad = true;
+                break;
+            }
+        }
+    }
     if (!failure && !any_bad) {
         for (const dstd::UniquePtr<detail::LazyBlock>& block :
              commit.segment_blocks) {
             for (detail::SegmentSlot& slot : block->segments) {
-                auto view = publish_view(slot, commit.frames[slot.block].bytes);
+                auto view =
+                    segment_pages(slot, commit.extent_slots[slot.block]);
                 if (!view) {
                     any_bad = true;
                     break;
@@ -1308,7 +1320,7 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
         commit.error = *failure;
     }
     reads_->add(state == detail::LoadState::Failed ? 0 : 1,
-                commit.blocks.size(), reads);
+                commit.blocks.size(), 0, reads);
     commit.state.store(static_cast<std::uint8_t>(state),
                        std::memory_order_release);
     return state_of(state);
@@ -1545,7 +1557,7 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
 
 detail::LoadStatus Snapshot::load_frame(detail::Commit& commit,
                                         std::size_t block) const {
-    detail::Frame& slot = commit.frames[block];
+    detail::ExtentSlot& slot = commit.extent_slots[block];
     const auto state_of = [&](detail::LoadState known) {
         return detail::LoadStatus{known, known == detail::LoadState::Failed
                                              ? slot.error
@@ -1562,7 +1574,7 @@ detail::LoadStatus Snapshot::load_frame(detail::Commit& commit,
 
     const detail::CommitExtent& held = commit.blocks[block];
     std::uint8_t bad = 0;
-    const ExtentTarget target{&slot.bytes, &bad};
+    const ExtentTarget target{&slot.stored, &bad};
     auto read = files_[commit.file_index].reader.read_extents(
         dstd::Span<const ExtentRef>(&held.ref, 1),
         dstd::Span<const ExtentTarget>(&target, 1));
@@ -1570,10 +1582,15 @@ detail::LoadStatus Snapshot::load_frame(detail::Commit& commit,
     if (!read) {
         slot.error = read.error();
         state = detail::LoadState::Failed;
-        reads_->add(0, 1, BlockReads{});
+        reads_->add(0, 1, 0, BlockReads{});
     } else {
-        reads_->add(0, 1, *read);
-        if (bad != 0) state = detail::LoadState::Bad;
+        reads_->add(0, 1, 0, *read);
+        if (bad != 0) {
+            state = detail::LoadState::Bad;
+        } else {
+            const detail::LoadStatus opened = open_pages(slot);
+            state = opened.state;
+        }
     }
     slot.state.store(static_cast<std::uint8_t>(state),
                      std::memory_order_release);
@@ -1583,10 +1600,10 @@ detail::LoadStatus Snapshot::load_frame(detail::Commit& commit,
 detail::LoadStatus Snapshot::load_frame(const detail::FileData& file,
                                         std::size_t extent_index,
                                         const ExtentRef& ref) const {
-    if (extent_index >= file.frames.size()) {
+    if (extent_index >= file.extent_slots.size()) {
         return detail::LoadStatus{detail::LoadState::Bad, dstd::Error{}};
     }
-    detail::Frame& slot = file.frames.slot(extent_index);
+    detail::ExtentSlot& slot = file.extent_slots.slot(extent_index);
     const auto state_of = [&](detail::LoadState known) {
         return detail::LoadStatus{known, known == detail::LoadState::Failed
                                              ? slot.error
@@ -1601,7 +1618,7 @@ detail::LoadStatus Snapshot::load_frame(const detail::FileData& file,
         slot.state.load(std::memory_order_acquire));
     if (again != detail::LoadState::Unknown) return state_of(again);
 
-    auto bytes = file.reader.read_data_extent(ref);
+    auto bytes = file.reader.read_extent(ref);
     detail::LoadState state = detail::LoadState::Good;
     BlockReads reads;
     if (!bytes) {
@@ -1612,12 +1629,109 @@ detail::LoadStatus Snapshot::load_frame(const detail::FileData& file,
     } else {
         reads.calls = 1;
         reads.bytes = ref.length;
-        slot.bytes = std::move(*bytes);
+        slot.stored = std::move(*bytes);
+        const detail::LoadStatus opened = open_pages(slot);
+        state = opened.state;
     }
-    reads_->add(0, 1, reads);
+    reads_->add(0, 1, 0, reads);
     slot.state.store(static_cast<std::uint8_t>(state),
                      std::memory_order_release);
     return state_of(state);
+}
+
+detail::LoadStatus Snapshot::load_page(const detail::ExtentSlot& extent,
+                                       std::size_t page) const {
+    if (!extent.pages.has_value() || page >= extent.frames.size()) {
+        return detail::LoadStatus{detail::LoadState::Bad, dstd::Error{}};
+    }
+    const detail::Frame& slot = extent.frames[page];
+    const auto state_of = [&](detail::LoadState known) {
+        return detail::LoadStatus{known, known == detail::LoadState::Failed
+                                             ? slot.error
+                                             : dstd::Error{}};
+    };
+    const auto known = static_cast<detail::LoadState>(
+        slot.state.load(std::memory_order_acquire));
+    if (known != detail::LoadState::Unknown) return state_of(known);
+
+    std::lock_guard<std::mutex> locked(slot.mutex);
+    const auto again = static_cast<detail::LoadState>(
+        slot.state.load(std::memory_order_acquire));
+    if (again != detail::LoadState::Unknown) return state_of(again);
+
+    auto decoded = extent.pages->decode(page, slot.bytes);
+    detail::LoadState state = detail::LoadState::Good;
+    if (!decoded) {
+        slot.error = decoded.error();
+        slot.bytes = dstd::Vector<std::uint8_t>();
+        state = detail::LoadState::Bad;
+    }
+    reads_->add(0, 0, state == detail::LoadState::Good ? 1 : 0, BlockReads{});
+    slot.state.store(static_cast<std::uint8_t>(state),
+                     std::memory_order_release);
+    return state_of(state);
+}
+
+dstd::Expected<ByteView, dstd::Error> Snapshot::segment_bytes(
+    const detail::ExtentSlot& extent, std::uint32_t offset_in_extent,
+    std::uint32_t length, dstd::Vector<std::uint8_t>& owned) const {
+    owned.clear();
+    if (!extent.pages.has_value()) return bad_extent_error();
+    const ExtentPages& pages = *extent.pages;
+    if (offset_in_extent > pages.raw_length() ||
+        length > pages.raw_length() - offset_in_extent) {
+        return bad_extent_error();
+    }
+    const auto covered = pages.covering(offset_in_extent, length);
+    if (covered.first >= covered.second) return bad_extent_error();
+    if (covered.second - covered.first == 1) {
+        const detail::LoadStatus status = load_page(extent, covered.first);
+        if (status.state == detail::LoadState::Failed) {
+            return dstd::Unexpected<dstd::Error>(status.error);
+        }
+        if (status.state != detail::LoadState::Good) return bad_extent_error();
+        const std::size_t page = covered.first;
+        return ByteView{extent.frames[page].bytes.data() +
+                            (offset_in_extent - pages.entry(page).raw_offset),
+                        length};
+    }
+    // A segment that spans pages reads them joined: one buffer, allocated once
+    // by the query that first reads the segment.
+    owned.reserve(length);
+    for (std::size_t page = covered.first; page < covered.second; ++page) {
+        const detail::LoadStatus status = load_page(extent, page);
+        if (status.state == detail::LoadState::Failed) {
+            return dstd::Unexpected<dstd::Error>(status.error);
+        }
+        if (status.state != detail::LoadState::Good) return bad_extent_error();
+        const PageEntry& entry = pages.entry(page);
+        const std::uint32_t begin =
+            std::max(offset_in_extent, entry.raw_offset);
+        const std::uint32_t end = static_cast<std::uint32_t>(std::min(
+            static_cast<std::uint64_t>(offset_in_extent) + length,
+            static_cast<std::uint64_t>(entry.raw_offset) + entry.raw_length));
+        const auto& bytes = extent.frames[page].bytes;
+        owned.insert(owned.end(), bytes.begin() + (begin - entry.raw_offset),
+                     bytes.begin() + (end - entry.raw_offset));
+    }
+    return ByteView{owned.data(), owned.size()};
+}
+
+dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_pages(
+    detail::SegmentSlot& slot, const detail::ExtentSlot& extent) const {
+    if (detail::SegmentBody* known =
+            slot.view.load(std::memory_order_acquire)) {
+        return &known->view;
+    }
+    auto joined = dstd::Vector<std::uint8_t>();
+    auto bytes =
+        segment_bytes(extent, slot.offset_in_extent, slot.length, joined);
+    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+    auto opened = SegmentView::open_index(*bytes);
+    if (!opened) return bad_extent_error();
+    auto owned = dstd::make_unique<detail::SegmentBody>(std::move(joined),
+                                                        std::move(*opened));
+    return publish_view(slot, std::move(owned));
 }
 
 dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
@@ -1625,10 +1739,10 @@ dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
     std::size_t index) const {
     if (index >= block.segments.size()) return bad_extent_error();
     detail::SegmentSlot& slot = block.segments[index];
-    if (SegmentView* known = slot.view.load(std::memory_order_acquire)) {
-        return known;
+    if (detail::SegmentBody* known =
+            slot.view.load(std::memory_order_acquire)) {
+        return &known->view;
     }
-    const dstd::Vector<std::uint8_t>* bytes = nullptr;
     if (block.owner == nullptr) {
         const detail::LoadStatus status =
             load_frame(file, slot.extent_index, slot.extent);
@@ -1636,23 +1750,20 @@ dstd::Expected<const SegmentView*, dstd::Error> Snapshot::segment_view(
             return dstd::Unexpected<dstd::Error>(status.error);
         }
         if (status.state != detail::LoadState::Good) return bad_extent_error();
-        bytes = &file.frames.slot(slot.extent_index).bytes;
-    } else {
-        detail::Commit& commit = *block.owner;
-        if (commit.synced) {
-            const detail::LoadStatus status = load_frame(commit, slot.block);
-            if (status.state == detail::LoadState::Failed) {
-                return dstd::Unexpected<dstd::Error>(status.error);
-            }
-            if (status.state != detail::LoadState::Good)
-                return bad_extent_error();
-        } else if (static_cast<detail::LoadState>(commit.state.load(
-                       std::memory_order_acquire)) != detail::LoadState::Good) {
-            return bad_extent_error();
-        }
-        bytes = &commit.frames[slot.block].bytes;
+        return segment_pages(slot, file.extent_slots.slot(slot.extent_index));
     }
-    return publish_view(slot, *bytes);
+    detail::Commit& commit = *block.owner;
+    if (commit.synced) {
+        const detail::LoadStatus status = load_frame(commit, slot.block);
+        if (status.state == detail::LoadState::Failed) {
+            return dstd::Unexpected<dstd::Error>(status.error);
+        }
+        if (status.state != detail::LoadState::Good) return bad_extent_error();
+    } else if (static_cast<detail::LoadState>(commit.state.load(
+                   std::memory_order_acquire)) != detail::LoadState::Good) {
+        return bad_extent_error();
+    }
+    return segment_pages(slot, commit.extent_slots[slot.block]);
 }
 
 dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_segments(
@@ -1679,14 +1790,14 @@ dstd::Expected<detail::LazyBlock*, dstd::Error> Snapshot::copy_segments(
     return held.segments;
 }
 
-void detail::Frames::assign(std::size_t count) {
+void detail::ExtentSlots::assign(std::size_t count) {
     count_ = count;
-    chunks_ = dstd::Vector<std::atomic<Chunk*>>((count + CHUNK_FRAMES - 1) /
-                                                CHUNK_FRAMES);
+    chunks_ = dstd::Vector<std::atomic<Chunk*>>((count + CHUNK_SLOTS - 1) /
+                                                CHUNK_SLOTS);
 }
 
-detail::Frame& detail::Frames::slot(std::size_t index) const {
-    std::atomic<Chunk*>& held = chunks_[index / CHUNK_FRAMES];
+detail::ExtentSlot& detail::ExtentSlots::slot(std::size_t index) const {
+    std::atomic<Chunk*>& held = chunks_[index / CHUNK_SLOTS];
     Chunk* chunk = held.load(std::memory_order_acquire);
     if (chunk == nullptr) {
         auto fresh = dstd::make_unique<Chunk>();
@@ -1699,10 +1810,10 @@ detail::Frame& detail::Frames::slot(std::size_t index) const {
             chunk = expected;
         }
     }
-    return chunk->slots[index % CHUNK_FRAMES];
+    return chunk->slots[index % CHUNK_SLOTS];
 }
 
-detail::Frames::~Frames() {
+detail::ExtentSlots::~ExtentSlots() {
     // Each chunk came from dstd::make_unique, so its own deleter frees it.
     for (std::atomic<Chunk*>& held : chunks_) {
         dstd::UniquePtr<Chunk> owned(held.load(std::memory_order_relaxed));
@@ -1710,8 +1821,10 @@ detail::Frames::~Frames() {
 }
 
 detail::LazyBlock::~LazyBlock() {
+    // Each body came from dstd::make_unique, so its own deleter frees it.
     for (SegmentSlot& slot : segments) {
-        delete slot.view.load(std::memory_order_relaxed);
+        dstd::UniquePtr<SegmentBody> owned(
+            slot.view.load(std::memory_order_relaxed));
     }
 }
 

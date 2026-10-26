@@ -537,7 +537,10 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
     if (bytes.empty() || bytes.size() > extent_size_ - EXTENT_HEADER_BYTES) {
         return invalid_error();
     }
-    auto stored = encode_extent(bytes, 1);
+    const SegmentSpan span{0, static_cast<std::uint32_t>(bytes.size())};
+    const dstd::Vector<std::uint32_t> starts =
+        page_starts(dstd::Span<const SegmentSpan>(&span, 1), span.length);
+    auto stored = encode_extent(bytes, starts, 1);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     // The reservation records the extent range; the write below is its bytes.
     const std::uint64_t offset = reserve_range(stored->size(), extent_size_,
@@ -1242,15 +1245,6 @@ DataFileReader::read_extent(const ExtentRef& ref) const {
 }
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
-DataFileReader::read_data_extent(const ExtentRef& ref) const {
-    auto bytes = read_extent(ref);
-    if (!bytes) return bytes;
-    auto decoded = decode_extent(*bytes);
-    if (!decoded) return dstd::Unexpected<dstd::Error>(decoded.error());
-    return bytes;
-}
-
-dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error>
 DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
     if (handle.length == 0 && handle.offset == 0 && handle.crc == 0) {
         return dstd::Vector<std::uint8_t>{};
@@ -1375,8 +1369,7 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
             const ExtentRef& ref = refs[i];
             dstd::Vector<std::uint8_t>& bytes = *targets[i].bytes;
             const bool complete = i < at + served;
-            if (complete && crc32(0, bytes.data(), bytes.size()) == ref.crc &&
-                decode_extent(bytes)) {
+            if (complete && crc32(0, bytes.data(), bytes.size()) == ref.crc) {
                 continue;
             }
             // An extent past the end of the file, or one whose crc fails, keeps

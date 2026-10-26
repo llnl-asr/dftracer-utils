@@ -283,10 +283,21 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
         return;
     }
 
+    std::sort(extent->segments.begin(), extent->segments.end(),
+              [](const OpenSegment& a, const OpenSegment& b) {
+                  return a.segment.offset_in_extent <
+                         b.segment.offset_in_extent;
+              });
+    dstd::Vector<SegmentSpan> spans;
+    spans.reserve(extent->segments.size());
+    for (const OpenSegment& open : extent->segments) {
+        spans.push_back({open.segment.offset_in_extent, open.segment.length});
+    }
+    const dstd::Vector<std::uint32_t> starts = page_starts(spans, used);
     auto stored = encode_extent(
         ByteView(reinterpret_cast<const std::byte*>(extent->buffer.data()),
                  used),
-        OPEN_EXTENT_WRITE_ALIGN);
+        starts, OPEN_EXTENT_WRITE_ALIGN);
     if (!stored) {
         latch_error(EINVAL);
         discard(extent);
@@ -305,11 +316,6 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
     pending->written.crc = crc32(0, pending->buffer.data(), length);
     pending->written.segments.reserve(extent->segments.size());
     pending->written.contexts.reserve(extent->segments.size());
-    std::sort(extent->segments.begin(), extent->segments.end(),
-              [](const OpenSegment& a, const OpenSegment& b) {
-                  return a.segment.offset_in_extent <
-                         b.segment.offset_in_extent;
-              });
     for (OpenSegment& open : extent->segments) {
         pending->written.segments.push_back(std::move(open.segment));
         pending->written.contexts.push_back(open.context);
@@ -321,7 +327,10 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
     ByteView segment_bytes, ExtentSegment info, void* context) {
-    auto stored = encode_extent(segment_bytes, OPEN_EXTENT_WRITE_ALIGN);
+    const SegmentSpan span{0, static_cast<std::uint32_t>(segment_bytes.size())};
+    const dstd::Vector<std::uint32_t> starts =
+        page_starts(dstd::Span<const SegmentSpan>(&span, 1), span.length);
+    auto stored = encode_extent(segment_bytes, starts, OPEN_EXTENT_WRITE_ALIGN);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
@@ -348,7 +357,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append(
         segment_bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    // An extent keeps room for the header of its stored form.
+    // An extent's raw bytes keep room for the fixed header of its stored form.
     const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
     if (segment_bytes.size() >= capacity) {
         return append_run(segment_bytes, std::move(info), context);

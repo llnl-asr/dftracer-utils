@@ -3,6 +3,7 @@
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
+#include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
 #include <doctest/doctest.h>
@@ -572,8 +573,9 @@ TEST_SUITE("index store file") {
         check_index_equal(*opened, expected);
 
         for (std::size_t i = 0; i < extents.size(); ++i) {
-            auto read = opened->read_data_extent(extents[i]);
+            auto read = opened->read_extent(extents[i]);
             REQUIRE(read.has_value());
+            REQUIRE(store::decode_extent(*read).has_value());
             CHECK(same_bytes(
                 view_of(*read),
                 view_of(
@@ -981,9 +983,9 @@ TEST_SUITE("index store file") {
         REQUIRE(opened.has_value());
         REQUIRE(opened->index().extent_refs.size() == 1);
         auto read =
-            opened->read_data_extent({opened->index().extent_refs[0].ref.offset,
-                                      opened->index().extent_refs[0].ref.length,
-                                      opened->index().extent_refs[0].ref.crc});
+            opened->read_extent({opened->index().extent_refs[0].ref.offset,
+                                 opened->index().extent_refs[0].ref.length,
+                                 opened->index().extent_refs[0].ref.crc});
         REQUIRE_FALSE(read.has_value());
         CHECK(read.error().is(dstd::Condition::Parse));
     }

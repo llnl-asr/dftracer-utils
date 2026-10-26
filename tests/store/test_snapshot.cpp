@@ -785,8 +785,9 @@ TEST_SUITE("index store snapshot") {
             if (extent.ref.segments.empty()) continue;
             const store::ExtentRef extent_ref{
                 extent.ref.offset, extent.ref.length, extent.ref.crc};
-            auto bytes = reader->read_data_extent(extent_ref);
+            auto bytes = reader->read_extent(extent_ref);
             REQUIRE(bytes.has_value());
+            REQUIRE(store::decode_extent(*bytes).has_value());
             for (const store::ExtentSegment& segment : extent.ref.segments) {
                 auto view = SegmentView::open(view_of(*bytes).subspan(
                     segment.offset_in_extent, segment.length));
@@ -3152,5 +3153,67 @@ TEST_SUITE("index store snapshot") {
         CHECK(all.front().generation == 1);
         CHECK(to_std(all.back().scope.paths[0]) == scope_path(SCOPES - 1));
         CHECK(all.back().generation == SCOPES);
+    }
+
+    TEST_CASE("a point read decodes only the pages of its segment") {
+        const ScopeKey scopes[] = {file_scope("/traces/pages-a.pfw"),
+                                   file_scope("/traces/pages-b.pfw"),
+                                   file_scope("/traces/pages-c.pfw")};
+        const NamespaceSpec spec = put_spec("dftu.test.pages");
+        constexpr std::size_t KEYS_PER_SCOPE = 300;
+        const std::string value(512, 'v');
+        const auto key_at = [](std::size_t scope, std::size_t index) {
+            return "key-" + std::to_string(scope) + "-" + std::to_string(index);
+        };
+
+        dftu_utils_test::ScopedTestDir dir("snapshot_extent_pages");
+        WriterOptions options = small_extents();
+        options.extent_size = 8U * 1024U * 1024U;
+        std::string path;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            for (std::size_t scope = 0; scope < std::size(scopes); ++scope) {
+                for (std::size_t index = 0; index < KEYS_PER_SCOPE; ++index) {
+                    Batch batch = writer->batch(*id, scopes[scope], 0);
+                    batch.put(view_of(key_at(scope, index)), view_of(value));
+                    REQUIRE(writer->commit(std::move(batch)).has_value());
+                }
+            }
+            REQUIRE(flush_writer(*writer).has_value());
+            path = to_std(writer->path());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        // The whole file fits one extent: how many pages it holds comes from
+        // the stored bytes themselves.
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const auto refs = extent_refs_of(*reader);
+        REQUIRE(refs.size() == 1);
+        CHECK(refs[0].ref.segments.size() == 3 * KEYS_PER_SCOPE);
+        auto stored = reader->read_extent(
+            {refs[0].ref.offset, refs[0].ref.length, refs[0].ref.crc});
+        REQUIRE(stored.has_value());
+        auto pages = store::ExtentPages::open(view_of(*stored));
+        REQUIRE(pages.has_value());
+        REQUIRE(pages->size() >= 8);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto found = snapshot->get(spec, scopes[1], view_of(key_at(1, 7)));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == value);
+        CHECK(snapshot->read_stats().extents_read == 1);
+        CHECK(snapshot->read_stats().pages_decoded == 1);
+
+        for (const ScopeKey& scope : scopes) {
+            auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+            CHECK(collect(cursor).size() == KEYS_PER_SCOPE);
+        }
+        CHECK(snapshot->read_stats().extents_read == 1);
+        CHECK(snapshot->read_stats().pages_decoded == pages->size());
     }
 }

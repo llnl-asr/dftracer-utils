@@ -646,7 +646,9 @@ TEST_CASE(
     auto extent = file->append_extent(ByteView(payload.data(), payload.size()));
     REQUIRE(extent.has_value());
     CHECK(extent->offset == 2 * SIXTY_FOUR_KIB);
-    CHECK(extent->length <= store::EXTENT_HEADER_BYTES + payload.size());
+    CHECK(extent->length <= store::EXTENT_HEADER_BYTES +
+                                store::EXTENT_TABLE_ENTRY_BYTES +
+                                payload.size());
     auto big = file->append_big(ByteView(payload.data(), payload.size()));
     REQUIRE(big.has_value());
     CHECK(big->offset == 2 * SIXTY_FOUR_KIB + FOUR_KIB);

@@ -210,15 +210,10 @@ class DataFileReader {
     const FileIndex& index() const noexcept { return index_; }
     std::size_t records_read() const noexcept { return records_read_; }
 
-    /// Reads one block whole and checks its crc: the stored bytes, as a big
-    /// value run holds them. Parse when the block is out of the file or its
-    /// crc fails, Io when the read fails.
+    /// Reads one extent whole and checks its crc: the stored bytes, as an
+    /// extent holds them. Parse when the block is out of the file or its crc
+    /// fails, Io when the read fails.
     dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_extent(
-        const ExtentRef& ref) const;
-    /// Reads one extent of segments: read_extent, then its raw bytes decoded
-    /// from the stored form (extent_codec.h). Parse also when it does not
-    /// decode.
-    dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_data_extent(
         const ExtentRef& ref) const;
     /// Reads one metadata block whole: one pread, then the crc of its bytes.
     /// Parse when the block lies outside the file or its crc fails, Io when
@@ -234,17 +229,18 @@ class DataFileReader {
                                                    BlockReads* reads) const;
     /// Reads the extents of one run into their own buffers, one preadv per
     /// group of at most IOV_MAX refs with one iovec per extent pointing
-    /// straight into that extent's buffer, then checks each extent crc and
-    /// decodes it to its raw bytes (extent_codec.h). `refs` and `targets` are
-    /// parallel spans of equal length; `refs` must be in ascending offset order
-    /// with each ref starting where the previous one ends, so one preadv covers
-    /// a group. A ref of zero length or out of the file, and an extent whose
-    /// crc fails, is left empty and marked bad through its target. A short read
-    /// past the end of the file (a truncated file) leaves the extents it did
-    /// not fill empty and bad, as read_extent reports them. An extent that does
-    /// not decode is bad too. The only error is Io, when a read call itself
-    /// fails, and the caller must then treat the whole file as unreadable. The
-    /// bytes of a bad extent are dropped.
+    /// straight into that extent's buffer, then checks each extent crc. The
+    /// buffers keep the stored bytes: the pages of an extent are decoded one at
+    /// a time, from the caller's side (extent_codec.h). `refs` and `targets`
+    /// are parallel spans of equal length; `refs` must be in ascending offset
+    /// order with each ref starting where the previous one ends, so one preadv
+    /// covers a group. A ref of zero length or out of the file, and an extent
+    /// whose crc fails, is left empty and marked bad through its target. A
+    /// short read past the end of the file (a truncated file) leaves the
+    /// extents it did not fill empty and bad, as read_extent reports them. The
+    /// only error is Io, when a read call itself fails, and the caller must
+    /// then treat the whole file as unreadable. The bytes of a bad extent are
+    /// dropped.
     dstd::Expected<BlockReads, dstd::Error> read_extents(
         dstd::Span<const ExtentRef> refs,
         dstd::Span<const ExtentTarget> targets) const;

@@ -373,6 +373,7 @@ std::string format_read_stats(const store::ReadStats& reads) {
     std::ostringstream out;
     out << "commits_read=" << reads.commits_verified
         << " extents_read=" << reads.extents_read
+        << " pages_decoded=" << reads.pages_decoded
         << " metadata_blocks_read=" << reads.metadata_blocks_read
         << " read_calls=" << reads.read_calls << " mib_read=" << std::fixed
         << std::setprecision(1)

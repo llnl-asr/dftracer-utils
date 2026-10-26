@@ -424,11 +424,14 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
-  # The crash test writes a few thousand file images of about 2.4 MB each, and
-  # the concurrency test commits durable batches that fsync: 8 s and 3 s alone
-  # on macOS, past 120 s and 14 s when the suite starts them beside the rest.
+  # The crash test writes a few thousand file images of about 2.4 MB each, the
+  # concurrency test commits durable batches that fsync, and the file test
+  # rewrites a damaged copy of a data file a few hundred times: 8 s, 3 s and
+  # under 1 s alone on macOS, past 120 s, 14 s and 120 s when the suite starts
+  # them beside the rest.
   if(bin_exec STREQUAL "store/test_crash"
-     OR bin_exec STREQUAL "store/test_concurrent")
+     OR bin_exec STREQUAL "store/test_concurrent"
+     OR bin_exec STREQUAL "store/test_file")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 

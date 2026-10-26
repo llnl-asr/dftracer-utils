@@ -809,135 +809,79 @@ function(link_zlib TARGET_NAME)
   target_link_libraries(${TARGET_NAME} PRIVATE dftracer::zlib)
 endfunction()
 
+# zstd 1.5.7 from source for every build, never the system copy: one static
+# PIC archive with hidden visibility. A system zstd can be years older and
+# slower (zstd 1.4.4 on Corona), and with hidden symbols a process that also
+# loads the system libzstd (a system RocksDB, Python) binds no call of its own
+# to ours. The legacy decoders are off: nothing we read predates zstd 1.0.
 function(need_zstd)
-  if(DFTRACER_UTILS_LOCAL_PACKAGES)
-    find_package(zstd QUIET CONFIG)
-    if(NOT zstd_FOUND)
-      find_path(zstd_INCLUDE_DIRS NAMES zstd.h)
-      find_library(zstd_LIBRARIES NAMES zstd)
-      if(zstd_INCLUDE_DIRS AND zstd_LIBRARIES)
-        set(zstd_FOUND TRUE)
-      endif()
-    endif()
+  if(NOT zstd_ADDED)
+    cpmaddpackage(
+      NAME
+      zstd
+      GITHUB_REPOSITORY
+      facebook/zstd
+      VERSION
+      1.5.7
+      GIT_TAG
+      v1.5.7
+      SOURCE_SUBDIR
+      build/cmake
+      OPTIONS
+      "CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET}"
+      "ZSTD_BUILD_PROGRAMS OFF"
+      "ZSTD_BUILD_TESTS OFF"
+      "ZSTD_BUILD_SHARED OFF"
+      "ZSTD_BUILD_STATIC ON"
+      "ZSTD_LEGACY_SUPPORT OFF"
+      FORCE
+      YES)
+  endif()
+  if(NOT TARGET libzstd_static)
+    message(FATAL_ERROR "need_zstd: the zstd build made no libzstd_static")
   endif()
 
-  if(DFTRACER_UTILS_LOCAL_PACKAGES AND zstd_FOUND)
-    dftracer_utils_ok("Found system zstd")
-    if(DEFINED zstd_LIBRARIES)
-      # Provide the same target names as the CPM branch: zstd::libzstd_shared
-      # for consumers (nanoarrow IPC) and zstd::zstd for RocksDB.
-      foreach(_zstd_t zstd::libzstd_shared zstd::zstd)
-        if(NOT TARGET ${_zstd_t})
-          add_library(${_zstd_t} UNKNOWN IMPORTED)
-          set_target_properties(
-            ${_zstd_t}
-            PROPERTIES IMPORTED_LOCATION "${zstd_LIBRARIES}"
-                       INTERFACE_INCLUDE_DIRECTORIES "${zstd_INCLUDE_DIRS}")
-        endif()
-      endforeach()
-    endif()
-    set(zstd_FOUND
-        TRUE
-        PARENT_SCOPE)
-    set(zstd_CPM
-        FALSE
-        PARENT_SCOPE)
-  else()
-    if(NOT zstd_ADDED)
-      cpmaddpackage(
-        NAME
-        zstd
-        GITHUB_REPOSITORY
-        facebook/zstd
-        VERSION
-        1.5.7
-        GIT_TAG
-        v1.5.7
-        SOURCE_SUBDIR
-        build/cmake
-        OPTIONS
-        "CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_OSX_DEPLOYMENT_TARGET}"
-        "ZSTD_BUILD_PROGRAMS OFF"
-        "ZSTD_BUILD_TESTS OFF"
-        "ZSTD_BUILD_SHARED ${DFTRACER_UTILS_BUILD_SHARED}"
-        "ZSTD_BUILD_STATIC ON")
-    endif()
-
-    if(zstd_ADDED)
-      dftracer_utils_ok("Built zstd with CPM")
-
-      set(_zstd_real)
-      foreach(_zstd_t libzstd_shared libzstd_static)
-        if(TARGET ${_zstd_t})
-          set_target_properties(
-            ${_zstd_t}
-            PROPERTIES ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-                       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-                       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
-          # zstd's vendored legacy decoders trip GCC -Wmaybe-uninitialized;
-          # third-party source, so silence it on zstd's own targets only.
-          if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-            target_compile_options(${_zstd_t} PRIVATE -Wno-maybe-uninitialized)
-          endif()
-          if(DEFINED zstd_SOURCE_DIR)
-            set_property(
-              TARGET ${_zstd_t}
-              APPEND
-              PROPERTY INTERFACE_INCLUDE_DIRECTORIES
-                       "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
-          endif()
-          install(
-            TARGETS ${_zstd_t}
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-          # zstd's build tree exposes only libzstd_shared / libzstd_static; the
-          # zstd:: namespaced names exist only post-install. Other consumers
-          # (nanoarrow IPC) link the namespaced names, so alias them.
-          if(NOT TARGET zstd::${_zstd_t})
-            add_library(zstd::${_zstd_t} ALIAS ${_zstd_t})
-          endif()
-          if(NOT _zstd_real)
-            set(_zstd_real ${_zstd_t})
-          endif()
-        endif()
-      endforeach()
-
-      if(_zstd_real)
-        if(_zstd_real STREQUAL libzstd_shared)
-          set(_zstd_output
-              "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}zstd${CMAKE_SHARED_LIBRARY_SUFFIX}"
-          )
-        else()
-          set(_zstd_output
-              "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}zstd${CMAKE_STATIC_LIBRARY_SUFFIX}"
-          )
-        endif()
-
-        if(NOT TARGET zstd::zstd)
-          add_library(zstd::zstd ALIAS ${_zstd_real})
-        endif()
-
-        if(DEFINED zstd_SOURCE_DIR)
-          set(ZSTD_INCLUDE_DIRS
-              "${zstd_SOURCE_DIR}/lib"
-              CACHE PATH "zstd include directory (CPM)" FORCE)
-          install(FILES "${zstd_SOURCE_DIR}/lib/zstd.h"
-                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-        endif()
-        set(ZSTD_LIBRARIES
-            "${_zstd_output}"
-            CACHE FILEPATH "zstd library (CPM)" FORCE)
-      endif()
-
-      set(zstd_FOUND
-          TRUE
-          PARENT_SCOPE)
-      set(zstd_CPM
-          TRUE
-          PARENT_SCOPE)
-    endif()
+  set_target_properties(
+    libzstd_static
+    PROPERTIES POSITION_INDEPENDENT_CODE ON
+               C_VISIBILITY_PRESET hidden
+               ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+  # zstd.h marks its API visible unless these are defined; empty, the hidden
+  # preset holds for every symbol of the archive.
+  target_compile_definitions(
+    libzstd_static PRIVATE "ZSTDLIB_VISIBLE=" "ZSTDERRORLIB_VISIBLE="
+                           "ZDICTLIB_VISIBLE=")
+  # zstd's own sources trip GCC -Wmaybe-uninitialized; third-party source, so
+  # silence it on zstd's target only.
+  if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(libzstd_static PRIVATE -Wno-maybe-uninitialized)
   endif()
+  set_property(
+    TARGET libzstd_static
+    APPEND
+    PROPERTY INTERFACE_INCLUDE_DIRECTORIES
+             "$<BUILD_INTERFACE:${zstd_SOURCE_DIR}/lib>")
+  # A program that links our static libraries also links this archive.
+  install(TARGETS libzstd_static ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+  install(FILES "${zstd_SOURCE_DIR}/lib/zstd.h"
+          DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+  # zstd's build tree names only libzstd_static; nanoarrow links
+  # zstd::libzstd_static and RocksDB zstd::zstd.
+  if(NOT TARGET zstd::libzstd_static)
+    add_library(zstd::libzstd_static ALIAS libzstd_static)
+  endif()
+  if(NOT TARGET zstd::zstd)
+    add_library(zstd::zstd ALIAS libzstd_static)
+  endif()
+  # RocksDB's Findzstd reads these.
+  set(ZSTD_INCLUDE_DIRS
+      "${zstd_SOURCE_DIR}/lib"
+      CACHE PATH "zstd include directory (CPM)" FORCE)
+  set(ZSTD_LIBRARIES
+      "${CMAKE_BINARY_DIR}/lib/${CMAKE_STATIC_LIBRARY_PREFIX}zstd${CMAKE_STATIC_LIBRARY_SUFFIX}"
+      CACHE FILEPATH "zstd library (CPM)" FORCE)
+  dftracer_utils_ok("Built zstd 1.5.7 with CPM (static, hidden)")
 endfunction()
 
 # ==============================================================================
@@ -981,22 +925,16 @@ function(need_libdeflate)
   endif()
 endfunction()
 
-# Link the resolved libdeflate target (name varies: CPM static build vs a system
-# find_package) into `target`.
+# Link the zstd archive need_zstd built into `target`.
 function(link_zstd target)
-  if(TARGET zstd::libzstd_shared)
-    target_link_libraries(${target} PRIVATE zstd::libzstd_shared)
-  elseif(TARGET zstd::libzstd_static)
-    target_link_libraries(${target} PRIVATE zstd::libzstd_static)
-  elseif(TARGET libzstd_shared)
-    target_link_libraries(${target} PRIVATE libzstd_shared)
-  elseif(TARGET libzstd_static)
-    target_link_libraries(${target} PRIVATE libzstd_static)
-  else()
-    message(FATAL_ERROR "link_zstd: no zstd target available")
+  if(NOT TARGET zstd::libzstd_static)
+    message(FATAL_ERROR "link_zstd: call need_zstd() first")
   endif()
+  target_link_libraries(${target} PRIVATE zstd::libzstd_static)
 endfunction()
 
+# Link the resolved libdeflate target (name varies: CPM static build vs a system
+# find_package) into `target`.
 function(link_libdeflate target)
   if(TARGET libdeflate::libdeflate_static)
     target_link_libraries(${target} PRIVATE libdeflate::libdeflate_static)
@@ -1157,11 +1095,7 @@ function(need_nanoarrow)
         # Enable zstd compression for Arrow IPC
         target_compile_definitions(nanoarrow_static
                                    PRIVATE NANOARROW_IPC_WITH_ZSTD)
-        if(TARGET zstd::libzstd_static)
-          target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
-        elseif(TARGET zstd::libzstd_shared)
-          target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_shared)
-        endif()
+        target_link_libraries(nanoarrow_static PRIVATE zstd::libzstd_static)
       endif()
       set_target_properties(
         nanoarrow_static
@@ -1189,11 +1123,7 @@ function(need_nanoarrow)
         # Enable zstd compression for Arrow IPC
         target_compile_definitions(nanoarrow_shared
                                    PRIVATE NANOARROW_IPC_WITH_ZSTD)
-        if(TARGET zstd::libzstd_shared)
-          target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_shared)
-        elseif(TARGET zstd::libzstd_static)
-          target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
-        endif()
+        target_link_libraries(nanoarrow_shared PRIVATE zstd::libzstd_static)
       endif()
       set_target_properties(
         nanoarrow_shared

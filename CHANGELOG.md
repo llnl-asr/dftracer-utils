@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Build zstd 1.5.7 from source for every build, as one static archive with its symbols hidden, where a build found the system zstd first.
+  A system zstd can be much older (1.4.4 on Corona), and a program that also loads the system libzstd no longer has its zstd calls bound to ours.
 - Build the index store engine as its own library, `libdftracer_utils_store`, which links only the runtime libraries, libdeflate and zstd.
   The `dftracer_utils` target links it, so a program that links `dftracer_utils` needs no change.
 - Bundle zlib-ng inside the utilities library with its symbols hidden, so a program that also loads the system zlib no longer has its zlib calls bound to ours.
@@ -232,7 +234,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Removed
 
 - Remove the `DFTRACER_UTILS_ENABLE_ZSTD` and `DFTRACER_UTILS_ENABLE_LZ4` CMake options, and with them LZ4 compression of the RocksDB index.
-  Every build links zstd, and builds it from source when the system has none, so spill files and Arrow IPC files can always compress with zstd.
+  Every build links zstd, so spill files and Arrow IPC files can always compress with zstd.
 - Remove the `DFTRACER_UTILS_USE_ZLIB_NG` option and the fallback to madler/zlib.
 - Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
   Drop them from scripts that call it.

@@ -108,18 +108,18 @@ elseif(DFTRACER_UTILS_BUILD_SHARED)
                    ${CMAKE_SOURCE_DIR}/cmake/scripts/check_library_versions.cmake)
 endif()
 if(DFTRACER_UTILS_BUILD_SHARED)
-  set(ZLIB_EXPORT_LIBS)
+  set(CODEC_EXPORT_LIBS)
   foreach(lib memory dstd common runtime store json duql dataframe utilities)
     dftu_variant_target(_target dftracer_utils_${lib} shared)
     if(TARGET ${_target})
-      list(APPEND ZLIB_EXPORT_LIBS $<TARGET_FILE:${_target}>)
+      list(APPEND CODEC_EXPORT_LIBS $<TARGET_FILE:${_target}>)
     endif()
   endforeach()
-  list(REMOVE_DUPLICATES ZLIB_EXPORT_LIBS)
-  add_test(NAME zlib_exports
-           COMMAND ${CMAKE_COMMAND} "-DLIBS=${ZLIB_EXPORT_LIBS}" -DNM=${CMAKE_NM}
+  list(REMOVE_DUPLICATES CODEC_EXPORT_LIBS)
+  add_test(NAME codec_exports
+           COMMAND ${CMAKE_COMMAND} "-DLIBS=${CODEC_EXPORT_LIBS}" -DNM=${CMAKE_NM}
                    -DSUFFIX=${CMAKE_SHARED_LIBRARY_SUFFIX} -P
-                   ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_zlib_exports.cmake)
+                   ${CMAKE_SOURCE_DIR}/cmake/scripts/check_no_codec_exports.cmake)
 endif()
 add_test(NAME z_defs
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}

@@ -439,7 +439,8 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
     append_u64_le(payload, needed_bytes);
     append_u64_le(payload, sequence);
     const dstd::Vector<std::uint8_t> raw_items = encode_items(footer);
-    const dstd::Vector<std::uint8_t> items = encode_meta(bytes_of(raw_items));
+    const dstd::Vector<std::uint8_t> items =
+        encode_meta(bytes_of(raw_items), META_ZSTD_LEVEL);
     payload.insert(payload.end(), items.begin(), items.end());
     dstd::Vector<std::uint8_t> entry;
     entry.insert(entry.end(), SUMMARY_MAGIC.begin(), SUMMARY_MAGIC.end());
@@ -735,7 +736,8 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     // An empty block takes no bytes and a zero handle.
     const auto place = [base, &out](const dstd::Vector<std::uint8_t>& raw) {
         if (raw.empty()) return BlockHandle{};
-        const dstd::Vector<std::uint8_t> bytes = encode_meta(bytes_of(raw));
+        const dstd::Vector<std::uint8_t> bytes =
+            encode_meta(bytes_of(raw), META_ZSTD_LEVEL);
         BlockHandle handle;
         handle.offset = base + out.size();
         handle.length = static_cast<std::uint32_t>(bytes.size());
@@ -1045,15 +1047,8 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
     if (!probe) return dstd::Unexpected<dstd::Error>(probe.error());
     const std::uint64_t offset = reserve_range(probe->size(), FILE_HEADER_BYTES,
                                                fault_kind_of(actual_kind));
-    dstd::Vector<std::uint8_t> encoded;
-    if (offset == FILE_HEADER_BYTES) {
-        encoded = std::move(*probe);
-    } else {
-        auto rebuilt =
-            encode_record(actual_kind, sequence, tail_offset_, offset, items);
-        if (!rebuilt) return dstd::Unexpected<dstd::Error>(rebuilt.error());
-        encoded = std::move(*rebuilt);
-    }
+    dstd::Vector<std::uint8_t> encoded = std::move(*probe);
+    if (offset != FILE_HEADER_BYTES) set_record_offset(encoded, offset);
 
     auto written = pwrite_all(fd_, encoded.data(), encoded.size(), offset);
     if (!written) {

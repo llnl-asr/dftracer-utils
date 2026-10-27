@@ -13,9 +13,6 @@ namespace {
 
 /// Level 1: extents are written on the appending thread, so speed comes first.
 constexpr int PAGE_ZSTD_LEVEL = 1;
-/// Metadata is written once per commit and once at close, and read back on
-/// every cold open, so it trades a little write time for size.
-constexpr int META_ZSTD_LEVEL = 3;
 constexpr std::size_t META_HEADER_BYTES = 5;
 
 dstd::Unexpected<dstd::Error> parse_error() {
@@ -287,7 +284,7 @@ dstd::Expected<void, dstd::Error> ExtentPages::decode_page(
     return parse_error();
 }
 
-dstd::Vector<std::uint8_t> encode_meta(ByteView raw) {
+dstd::Vector<std::uint8_t> encode_meta(ByteView raw, int level) {
     const std::uint8_t* data = bytes_of(raw);
     const std::size_t length = raw.size();
     dstd::Vector<std::uint8_t> out;
@@ -297,7 +294,7 @@ dstd::Vector<std::uint8_t> encode_meta(ByteView raw) {
         out.resize(META_HEADER_BYTES + ZSTD_compressBound(length));
         const std::size_t compressed = ZSTD_compressCCtx(
             context.ctx, out.data() + META_HEADER_BYTES,
-            out.size() - META_HEADER_BYTES, data, length, META_ZSTD_LEVEL);
+            out.size() - META_HEADER_BYTES, data, length, level);
         if (ZSTD_isError(compressed) == 0 &&
             META_HEADER_BYTES + compressed <= length - length / 8) {
             out[0] = static_cast<std::uint8_t>(PageCodec::Zstd);

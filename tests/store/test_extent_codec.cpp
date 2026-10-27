@@ -419,7 +419,8 @@ TEST_SUITE("store extent codec") {
             for (const char c : std::string_view("/p/lustre/trace/file.pfw.gz"))
                 repeated.push_back(static_cast<std::uint8_t>(c));
         }
-        const auto compressed = store::encode_meta(view_of(repeated));
+        const auto compressed =
+            store::encode_meta(view_of(repeated), store::META_ZSTD_LEVEL);
         CHECK(compressed[0] ==
               static_cast<std::uint8_t>(store::PageCodec::Zstd));
         CHECK(compressed.size() < repeated.size() / 8);
@@ -431,15 +432,16 @@ TEST_SUITE("store extent codec") {
         dstd::Vector<std::uint8_t> noise(4096);
         for (std::uint8_t& byte : noise)
             byte = static_cast<std::uint8_t>(random());
-        const auto raw = store::encode_meta(view_of(noise));
+        const auto raw =
+            store::encode_meta(view_of(noise), store::META_ZSTD_LEVEL);
         CHECK(raw[0] == static_cast<std::uint8_t>(store::PageCodec::None));
         CHECK(raw.size() == noise.size() + 1);
         auto raw_back = store::decode_meta(view_of(raw));
         REQUIRE(raw_back.has_value());
         CHECK(*raw_back == noise);
 
-        const auto empty =
-            store::encode_meta(view_of(dstd::Vector<std::uint8_t>{}));
+        const auto empty = store::encode_meta(
+            view_of(dstd::Vector<std::uint8_t>{}), store::META_ZSTD_LEVEL);
         auto empty_back = store::decode_meta(view_of(empty));
         REQUIRE(empty_back.has_value());
         CHECK(empty_back->empty());
@@ -447,7 +449,8 @@ TEST_SUITE("store extent codec") {
 
     TEST_CASE("metadata with a bad codec, length or frame does not decode") {
         dstd::Vector<std::uint8_t> repeated(65536, std::uint8_t{'a'});
-        const auto stored = store::encode_meta(view_of(repeated));
+        const auto stored =
+            store::encode_meta(view_of(repeated), store::META_ZSTD_LEVEL);
         REQUIRE(stored[0] == static_cast<std::uint8_t>(store::PageCodec::Zstd));
 
         auto unknown = stored;

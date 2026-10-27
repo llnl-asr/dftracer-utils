@@ -1395,8 +1395,14 @@ TEST_SUITE("index store file") {
         item.params_hash = 0x0102030405060708ULL;
         item.generation = 5;
         item.state = CopyState::Failed;
-        item.sources.push_back(SourceStat{11, 12, 13});
-        item.sources.push_back(SourceStat{21, 22, 23});
+        // Values with few repeated bytes keep the body raw, so the cases below
+        // can edit it in place.
+        item.sources.push_back(SourceStat{0x8A3F19C2E4B75D61ULL,
+                                          0x1D7E5B93C04A26F8ULL,
+                                          0xE6912C4FB8037DA5ULL});
+        item.sources.push_back(SourceStat{0x5C08D3A7F1E96B24ULL,
+                                          0xB47A21E5096FC3D8ULL,
+                                          0x37F6E80B5D2A9C41ULL});
 
         {
             auto decoded = decode(encode(item));

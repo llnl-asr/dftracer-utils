@@ -537,8 +537,10 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
     }
 
     const dstd::Vector<std::uint8_t> raw_body = encode_items(items);
-    const dstd::Vector<std::uint8_t> body = encode_meta(ByteView{
-        reinterpret_cast<const std::byte*>(raw_body.data()), raw_body.size()});
+    const dstd::Vector<std::uint8_t> body = encode_meta(
+        ByteView{reinterpret_cast<const std::byte*>(raw_body.data()),
+                 raw_body.size()},
+        RECORD_ZSTD_LEVEL);
     if (body.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
@@ -567,6 +569,14 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
     owned.reserve(items.size());
     for (const RecordItem& item : items) owned.push_back(item);
     return encode_record(kind, sequence, prev_offset, offset, owned);
+}
+
+void set_record_offset(dstd::Vector<std::uint8_t>& encoded,
+                       std::uint64_t offset) {
+    std::uint8_t* data = encoded.data();
+    write_u64_le(data + 32, offset);
+    const std::size_t body_end = RECORD_HEADER_BYTES + read_u32_le(data + 12);
+    write_u32_le(data + body_end, crc32(0, data, body_end));
 }
 
 dstd::Expected<Record, dstd::Error> decode_record(ByteView bytes) {

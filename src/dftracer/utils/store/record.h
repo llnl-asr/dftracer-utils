@@ -203,6 +203,11 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
 
 dstd::Expected<Record, dstd::Error> decode_record(ByteView bytes);
 
+/// Moves a record encode_record built to `offset`: rewrites the offset it
+/// names and its crc, so the body is not encoded again.
+void set_record_offset(dstd::Vector<std::uint8_t>& encoded,
+                       std::uint64_t offset);
+
 }  // namespace dftracer::utils::store
 
 #endif  // DFTRACER_UTILS_STORE_RECORD_H

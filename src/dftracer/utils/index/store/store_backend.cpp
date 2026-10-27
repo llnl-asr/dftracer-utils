@@ -1,3 +1,5 @@
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -238,7 +240,51 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
 std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot() {
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
+    refresh_if_changed_locked();
     return snapshot_locked();
+}
+
+std::vector<std::pair<std::string, std::uint64_t>>
+StoreRoot::foreign_files_locked() const {
+    std::vector<std::pair<std::string, std::uint64_t>> files;
+    std::error_code error;
+    std::filesystem::directory_iterator it(store_dir_, error);
+    if (error) return files;
+    const std::string own =
+        writer_ ? std::filesystem::path(std::string(writer_->path().data(),
+                                                    writer_->path().size()))
+                      .filename()
+                      .string()
+                : std::string();
+    for (; it != std::filesystem::directory_iterator(); it.increment(error)) {
+        if (error) break;
+        const auto& path = it->path();
+        if (path.extension() != ".dfs") continue;
+        std::string name = path.filename().string();
+        if (name == own) continue;
+        std::error_code size_error;
+        const auto size = it->file_size(size_error);
+        files.emplace_back(std::move(name),
+                           size_error ? 0 : static_cast<std::uint64_t>(size));
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+void StoreRoot::refresh_if_changed_locked() {
+    static const std::uint64_t interval_ms =
+        Env::get<std::uint64_t>(constants::indexer::INDEX_STORE_REFRESH_MS_ENV)
+            .value_or(constants::indexer::INDEX_STORE_REFRESH_MS);
+    const auto now = std::chrono::steady_clock::now();
+    if (interval_ms > 0 && foreign_checked_.time_since_epoch().count() != 0 &&
+        now - foreign_checked_ < std::chrono::milliseconds(interval_ms)) {
+        return;
+    }
+    foreign_checked_ = now;
+    auto files = foreign_files_locked();
+    if (files == foreign_seen_) return;
+    foreign_seen_ = std::move(files);
+    refresh_locked();
 }
 
 void StoreRoot::seed_file_ids_locked() {
@@ -279,6 +325,12 @@ void StoreRoot::seed_file_ids_locked() {
 void StoreRoot::refresh() {
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
+    foreign_seen_ = foreign_files_locked();
+    foreign_checked_ = std::chrono::steady_clock::now();
+    refresh_locked();
+}
+
+void StoreRoot::refresh_locked() {
     ++version_;
     // A table never seeded binds every path on its first use anyway.
     if (seeded_) {

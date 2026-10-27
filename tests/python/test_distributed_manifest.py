@@ -301,3 +301,47 @@ class TestDistributedIndexIdempotent:
             self._run(files, index_path, staging)
             forced = self._run(files, index_path, staging, force_rebuild=True)
             assert sum(forced["per_worker"]) == 2
+
+
+@pytest.mark.skipif(index_backend() != "store", reason="the store backend only")
+class TestStoreSeesOtherProcesses:
+    def test_long_lived_process_sees_another_process_write(self):
+        import subprocess
+        import sys
+        import textwrap
+        import time
+
+        with Environment(lines=50) as env:
+            first = env.create_dft_trace_file_with_pid("a.pfw.gz", 1, 100)
+            second = env.create_dft_trace_file_with_pid("b.pfw.gz", 2, 100)
+            index_dir = os.path.join(env.temp_dir, "idx")
+            os.makedirs(index_dir, exist_ok=True)
+
+            def resolve(files):
+                return Indexer(
+                    files=files,
+                    index_dir=index_dir,
+                    require_checkpoint=True,
+                    require_bloom=True,
+                    force_rebuild=False,
+                ).resolve()
+
+            Indexer(
+                files=[first], index_dir=index_dir, require_checkpoint=True, require_bloom=True
+            ).ensure_indexed()
+            # This process now holds the index, and sees the second file as new.
+            assert second in resolve([first, second]).needs_work
+
+            child = textwrap.dedent(
+                f"""
+                from dftracer.utils import Indexer
+                Indexer(files=[{second!r}], index_dir={index_dir!r},
+                        require_checkpoint=True, require_bloom=True).ensure_indexed()
+                """
+            )
+            subprocess.run([sys.executable, "-c", child], check=True)
+
+            # Past the check interval the held index sees the other process's
+            # file without a refresh() call.
+            time.sleep(1.2)
+            assert resolve([first, second]).needs_work == []

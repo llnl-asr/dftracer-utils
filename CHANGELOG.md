@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Build each file of `distributed_index` on one worker, with that worker's threads, where a file larger than its share of the work was cut across workers.
   The `partition` argument keeps its values, and both place whole files.
+- Let a process that holds an index on the store backend see the files other processes wrote to it within 1 s, without a reopen.
+  `DFTRACER_UTILS_INDEX_STORE_REFRESH_MS` sets that interval, and `IndexDatabase.refresh()` makes it see them at once.
 - Build zstd 1.5.7 from source for every build, as one static archive with its symbols hidden, where a build found the system zstd first.
   A system zstd can be much older (1.4.4 on Corona), and a program that also loads the system libzstd no longer has its zstd calls bound to ours.
 - Build the index store engine as its own library, `libdftracer_utils_store`, which links only the runtime libraries, libdeflate and zstd.
@@ -166,6 +168,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Build the index on the store backend (`DFTRACER_UTILS_INDEX_BACKEND=store`) from `dftracer_index` and from `distributed_index`, with no staged SST files and no ingest.
+  Each `distributed_index` worker writes the index directly, and on the 8,404 minife traces `dftracer_index` takes 12 s where it takes 36 s on RocksDB.
+- Add `IndexDatabase.close_writer()`, `IndexDatabase.refresh()` and `index_backend()` to the Python bindings.
 - Add `DFTRACER_UTILS_IO_BACKEND` to force the I/O backend, such as the thread pool for a run traced with DFTracer's preload.
 - Add `DFTRACER_UTILS_MEMORY_REPORT` to print the allocator's live, measured and limit bytes, the page heap's peak mapped bytes and its peak bytes in use at exit.
   The mapped peak counts address space, which reached 705 GiB on a split run that used 100 GB, so read `used_peak` for memory use.

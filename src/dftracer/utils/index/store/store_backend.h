@@ -11,6 +11,7 @@
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -92,6 +93,8 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// Drops the snapshot, so the next read sees the data files other
     /// processes wrote since, and binds an id to each file path they added,
     /// after the ids bound so far. An id this root handed out never changes.
+    /// snapshot() does this on its own when it finds the data files of other
+    /// processes changed.
     void refresh();
 
     /// One write over this root. Nothing it buffers is visible until its
@@ -125,6 +128,14 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::shared_ptr<const kv::Snapshot> snapshot_locked();
     void seed_file_ids_locked();
     void close_locked();
+    void refresh_locked();
+    /// The data files of the store directory but this root's own writer's,
+    /// by name with their sizes, in name order.
+    std::vector<std::pair<std::string, std::uint64_t>> foreign_files_locked()
+        const;
+    /// Refreshes when the data files of other processes changed since the
+    /// last look, which it takes at most once per INDEX_STORE_REFRESH_MS.
+    void refresh_if_changed_locked();
 
     /// Runs one writer coroutine to completion on the runtime of this root.
     dstd::Expected<void, dstd::Error> run(
@@ -172,6 +183,9 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::map<int, std::string> paths_by_id_;
     std::map<std::pair<std::string, kv::ScopeKey>, CommittedCopy> committed_;
     std::shared_ptr<const kv::Snapshot> snapshot_;
+    /// What foreign_files_locked() found at the last look, and when.
+    std::vector<std::pair<std::string, std::uint64_t>> foreign_seen_;
+    std::chrono::steady_clock::time_point foreign_checked_{};
     std::uint64_t version_ = 0;
     std::uint64_t snapshot_version_ = 0;
     int next_file_id_ = 1;

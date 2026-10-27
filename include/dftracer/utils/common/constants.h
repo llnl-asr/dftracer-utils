@@ -130,6 +130,11 @@ namespace indexer {
 inline constexpr const char* INDEX_BACKEND_ENV = "DFTRACER_UTILS_INDEX_BACKEND";
 inline constexpr const char* INDEX_BACKEND_ROCKSDB = "rocksdb";
 inline constexpr const char* INDEX_BACKEND_STORE = "store";
+/// How often, at most, a process that holds a store index checks whether
+/// other processes changed it, in milliseconds. 0 checks on every read.
+inline constexpr const char* INDEX_STORE_REFRESH_MS_ENV =
+    "DFTRACER_UTILS_INDEX_STORE_REFRESH_MS";
+inline constexpr std::uint64_t INDEX_STORE_REFRESH_MS = 1000;
 static constexpr std::size_t ZLIB_WINDOW_SIZE = 32768;
 static constexpr int ZLIB_GZIP_WINDOW_BITS = 31;    ///< 15 + 16 for gzip format
 static constexpr int ZLIB_FORMAT_WINDOW_BITS = 15;  ///< zlib format

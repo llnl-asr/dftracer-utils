@@ -297,6 +297,7 @@ set(TEST_CPP_SOURCES
     trace/genesis/test_genesis.cpp
     index/test_indexer.cpp
     index/test_store_key.cpp
+    index/test_store_index_write.cpp
     store/test_segment.cpp
     store/test_file.cpp
     store/test_snapshot.cpp

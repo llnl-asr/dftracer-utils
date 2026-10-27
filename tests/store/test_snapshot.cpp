@@ -1433,6 +1433,65 @@ TEST_SUITE("index store snapshot") {
         CHECK(info.sources[0].hash == 9);
     }
 
+    TEST_CASE(
+        "scopes lists every scope with a current copy in ScopeKey order") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_scopes");
+        const NamespaceSpec spec = put_spec("dftu.test.scopes");
+        const NamespaceSpec other = put_spec("dftu.test.scopes.other");
+        const ScopeKey root = ScopeKey::root();
+        const ScopeKey a = file_scope("/traces/a.pfw");
+        const ScopeKey b = file_scope("/traces/b.pfw");
+        const ScopeKey dropped = file_scope("/traces/c.pfw");
+        {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            auto other_id = writer->add_namespace(other);
+            REQUIRE(id.has_value());
+            REQUIRE(other_id.has_value());
+            const auto put = [&](store::NamespaceId at, const ScopeKey& scope,
+                                 std::uint64_t params_hash,
+                                 const std::string& value) {
+                Batch batch = writer->batch(at, scope, params_hash);
+                batch.put(view_of(std::string("key")), view_of(value));
+                REQUIRE(writer->commit(std::move(batch)).has_value());
+            };
+            put(*id, root, 10, "root");
+            put(*id, b, 12, "b");
+            put(*id, a, 11, "a");
+            put(*id, dropped, 13, "c");
+            put(*other_id, a, 20, "other-a");
+            REQUIRE(writer->drop(*id, dropped).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+
+        auto listed = snapshot->scopes(spec);
+        REQUIRE(listed.has_value());
+        REQUIRE(listed->size() == 3);
+        CHECK((*listed)[0].scope == root);
+        CHECK((*listed)[0].copy.params_hash == 10);
+        CHECK((*listed)[1].scope == a);
+        CHECK((*listed)[1].copy.params_hash == 11);
+        CHECK((*listed)[1].copy.state == ScopeState::Ready);
+        CHECK((*listed)[2].scope == b);
+        CHECK((*listed)[2].copy.params_hash == 12);
+        for (const store::ScopeEntry& entry : *listed) {
+            CHECK(entry.scope != dropped);
+        }
+
+        auto theirs = snapshot->scopes(other);
+        REQUIRE(theirs.has_value());
+        REQUIRE(theirs->size() == 1);
+        CHECK((*theirs)[0].scope == a);
+        CHECK((*theirs)[0].copy.params_hash == 20);
+
+        auto unknown = snapshot->scopes(put_spec("dftu.test.absent"));
+        REQUIRE(unknown.has_value());
+        CHECK(unknown->empty());
+    }
+
     TEST_CASE("a batch whose sources differ from its copy fails") {
         dftu_utils_test::ScopedTestDir dir("snapshot_copy_sources_differ");
         const NamespaceSpec spec = put_spec("dftu.test.put");

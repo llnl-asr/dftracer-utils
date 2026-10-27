@@ -184,6 +184,8 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/key_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/shard_manifest.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/store_backend.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/store_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/gzip_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_indexer_factory.cpp
@@ -1136,11 +1138,13 @@ create_library(
     dftracer_utils_dataframe::shared
     dftracer_utils_json::shared
     dftracer_utils_duql::shared
+    dftracer_utils_store::shared
   STATIC_LINK_LIBRARIES
     dftracer_utils_runtime::static
     dftracer_utils_dataframe::static
     dftracer_utils_json::static
     dftracer_utils_duql::static
+    dftracer_utils_store::static
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

@@ -2670,6 +2670,35 @@ ScanCursor Snapshot::scan(const NamespaceSpec& spec, const ScopeKey& scope,
 
 ScanCursor Snapshot::scan_all(const NamespaceSpec& spec, ByteView begin,
                               ByteView end) const {
+    auto listed = namespace_scopes(spec);
+    if (!listed) {
+        // The scopes of a block that could not be read are unknown, so the
+        // scan holds no row and reports the error.
+        ScanCursor cursor;
+        cursor.snapshot_ = this;
+        cursor.error_ = listed.error();
+        cursor.at_end_ = true;
+        return cursor;
+    }
+    return scan(spec, *listed, begin, end);
+}
+
+dstd::Expected<dstd::Vector<ScopeEntry>, dstd::Error> Snapshot::scopes(
+    const NamespaceSpec& spec) const {
+    auto listed = namespace_scopes(spec);
+    if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
+    dstd::Vector<ScopeEntry> entries;
+    entries.reserve(listed->size());
+    for (const ScopeKey& scope : *listed) {
+        CopyInfo info = copy_info(spec, scope);
+        if (info.state == ScopeState::Absent) continue;
+        entries.push_back(ScopeEntry{scope, std::move(info)});
+    }
+    return entries;
+}
+
+dstd::Expected<dstd::Vector<ScopeKey>, dstd::Error> Snapshot::namespace_scopes(
+    const NamespaceSpec& spec) const {
     dstd::Vector<ScopeKey> scopes;
     dstd::Optional<dstd::Error> failure;
     for (const detail::FileData& file : files_) {
@@ -2707,21 +2736,13 @@ ScanCursor Snapshot::scan_all(const NamespaceSpec& spec, ByteView begin,
             walk(*root, file.directory_levels, walk);
         }
     }
-    if (failure) {
-        // The scopes of a block that could not be read are unknown, so the
-        // scan holds no row and reports the error.
-        ScanCursor cursor;
-        cursor.snapshot_ = this;
-        cursor.error_ = *failure;
-        cursor.at_end_ = true;
-        return cursor;
-    }
+    if (failure) return dstd::Unexpected<dstd::Error>(*failure);
     std::sort(scopes.begin(), scopes.end(),
               [](const ScopeKey& a, const ScopeKey& b) {
                   return compare_scopes(a, b) < 0;
               });
     scopes.erase(std::unique(scopes.begin(), scopes.end()), scopes.end());
-    return scan(spec, scopes, begin, end);
+    return scopes;
 }
 
 }  // namespace dftracer::utils::store

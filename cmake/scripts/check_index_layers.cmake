@@ -47,6 +47,13 @@ set(ALLOWED
   "index/store/index_database_sst_writer_context.cpp|index/schemas/dft/agg/system_metrics_merge_operator.h"
   "index/store/index_write.h|index/gzip/gzip_member_record.h"
   "index/store/index_write.h|index/schemas/dft/chunk_statistics.h"
+  # the store backend is the write seam of the key-value store
+  "index/store/store_backend.cpp|store/record.h"
+  "index/store/store_backend.cpp|store/snapshot.h"
+  "index/store/store_backend.cpp|store/writer.h"
+  "index/store/store_backend.h|store/record.h"
+  "index/store/store_backend.h|store/snapshot.h"
+  "index/store/store_backend.h|store/writer.h"
   "index/store/internal/index_encoding.h|index/gzip/gzip_member_record.h"
   "index/store/internal/index_encoding.h|index/schemas/dft/chunk_statistics.h"
   "index/store/queries.h|index/extensions/chunk_dimension_stats.h"

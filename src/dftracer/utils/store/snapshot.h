@@ -83,6 +83,12 @@ struct ScopeGeneration {
     std::uint64_t generation = 0;
 };
 
+/// One scope of a namespace that has a current copy, with that copy.
+struct ScopeEntry {
+    ScopeKey scope;
+    CopyInfo copy;
+};
+
 /// Every block read the snapshot has done, cumulative and readable at any time
 /// from any thread. The page table of an extent is read once, the first time a
 /// query needs it, and its pages each time a query needs them, so an open
@@ -850,6 +856,12 @@ class Snapshot {
     ScanCursor scan_all(const NamespaceSpec& spec, ByteView begin,
                         ByteView end) const;
 
+    /// Every scope of the namespace and version that has a current copy, in
+    /// ScopeKey order, read from the scope directories alone. The error is the
+    /// one a directory block failed to read with.
+    dstd::Expected<dstd::Vector<ScopeEntry>, dstd::Error> scopes(
+        const NamespaceSpec& spec) const;
+
    private:
     friend class ScanCursor;
     friend class ScopeCursor;
@@ -936,6 +948,12 @@ class Snapshot {
         dstd::Vector<std::uint8_t>& owned) const;
 
     dstd::Expected<void, dstd::Error> load(dstd::StringView dir);
+
+    /// The scopes of the namespace and version in any file's directory, sorted
+    /// and without duplicates. The error is the one a block failed to read
+    /// with.
+    dstd::Expected<dstd::Vector<ScopeKey>, dstd::Error> namespace_scopes(
+        const NamespaceSpec& spec) const;
 
     dstd::Vector<detail::FileData> files_;
     dstd::Vector<SkippedFile> skipped_;

@@ -23,14 +23,18 @@
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/store_backend.h>
 #include <dftracer/utils/index/store/store_layout.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/snapshot.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <list>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <system_error>
@@ -329,7 +333,14 @@ template <typename Fn>
 void IndexDatabase::Impl::raw_scan(layout::Family family,
                                    std::string_view prefix, Fn&& fn) {
     if (on_store()) {
-        store_scan(prefix, std::forward<Fn>(fn));
+        // The snapshot and the blocks it loads live in the root's pool; the
+        // caller's work on each record stays in the caller's pool.
+        memory::Pool& caller = memory::current_pool();
+        memory::Scope in_store(store_->pool());
+        store_scan(prefix, [&](std::string_view key, std::string_view value) {
+            memory::Scope back(caller);
+            return fn(key, value);
+        });
         return;
     }
     scan_from("Failed to scan index data",
@@ -344,7 +355,10 @@ void IndexDatabase::Impl::raw_scan(layout::Family family,
 
 std::optional<std::string> IndexDatabase::Impl::raw_get(layout::Family family,
                                                         std::string_view key) {
-    if (on_store()) return store_get(key);
+    if (on_store()) {
+        memory::Scope in_store(store_->pool());
+        return store_get(key);
+    }
     std::string value;
     auto status = db_->get(key, &value, layout::family_name(family));
     if (status.IsNotFound()) return std::nullopt;
@@ -896,7 +910,55 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
 
 namespace {
 std::atomic<std::uint64_t> read_write_open_count{0};
-}
+
+/// The store roots of the read-only opens a process made last. A StoreRoot
+/// lives only while something holds it, and building one numbers every file
+/// of its store, so a reader that opens the index once per file would number
+/// them all each time.
+constexpr std::size_t STORE_ROOTS_RETAINED = 64;
+
+class RetainedStoreRoots {
+   public:
+    static RetainedStoreRoots& instance() {
+        static RetainedStoreRoots* roots = [] {
+            auto* made = new RetainedStoreRoots();
+            // Closes the writers of retained roots before the process ends,
+            // so each data file gets its footer and summary entry.
+            std::atexit([] { RetainedStoreRoots::instance().clear(); });
+            return made;
+        }();
+        return *roots;
+    }
+
+    void retain(const std::string& path, std::shared_ptr<StoreRoot> root) {
+        memory::Scope general(memory::Manager::get().general());
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto known =
+            std::find_if(roots_.begin(), roots_.end(),
+                         [&](const auto& held) { return held.first == path; });
+        if (known != roots_.end()) {
+            roots_.splice(roots_.begin(), roots_, known);
+            roots_.front().second = std::move(root);
+            return;
+        }
+        roots_.emplace_front(path, std::move(root));
+        if (roots_.size() > STORE_ROOTS_RETAINED) roots_.pop_back();
+    }
+
+    void clear() {
+        std::list<std::pair<std::string, std::shared_ptr<StoreRoot>>> dropped;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            dropped.swap(roots_);
+        }
+    }
+
+   private:
+    std::mutex mutex_;
+    /// Most recently opened first.
+    std::list<std::pair<std::string, std::shared_ptr<StoreRoot>>> roots_;
+};
+}  // namespace
 
 std::uint64_t IndexDatabase::read_write_opens() noexcept {
     return read_write_open_count.load(std::memory_order_relaxed);
@@ -912,6 +974,10 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
                             : rocks::RocksDatabase::OpenMode::ReadWrite;
     if (impl_->on_store()) {
         impl_->store_ = StoreRoot::get_or_open(impl_->db_path_);
+        if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadOnly) {
+            RetainedStoreRoots::instance().retain(impl_->db_path_,
+                                                  impl_->store_);
+        }
         // An index root opened for writing exists from then on, as it does on
         // the RocksDB backend, which creates its directory at open. Only a
         // write creates the store inside it.

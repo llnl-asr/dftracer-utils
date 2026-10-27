@@ -127,7 +127,12 @@ std::string full_key_of(layout::Ext ext, std::uint32_t file_id,
 }  // namespace
 
 StoreRoot::StoreRoot(std::string index_root)
-    : index_root_(std::move(index_root)) {
+    : pool_(memory::Manager::get().root().child("index.store",
+                                                memory::PoolKind::Results)),
+      index_root_(std::move(index_root)) {
+    if (!pool_) {
+        throw std::runtime_error("store index: the pool table is full");
+    }
     store_dir_ = (std::filesystem::path(index_root_) / "store").string();
 }
 
@@ -140,12 +145,16 @@ std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
     if (found != roots.end()) {
         if (auto live = found->second.lock()) return live;
     }
+    // A root outlives the query that opened it, so neither it nor its entry
+    // here is charged to that query's pool.
+    memory::Scope general(memory::Manager::get().general());
     auto created = std::shared_ptr<StoreRoot>(new StoreRoot(key));
     roots.insert_or_assign(key, created);
     return created;
 }
 
 StoreRoot::~StoreRoot() {
+    memory::Scope in_pool(*pool_);
     // A destructor cannot report the store error close() throws.
     try {
         close();
@@ -207,6 +216,7 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot() {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     return snapshot_locked();
 }
@@ -246,6 +256,7 @@ void StoreRoot::seed_file_ids_locked() {
 }
 
 int StoreRoot::file_id_for(std::string_view logical_path) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     seed_file_ids_locked();
     std::string path(logical_path);
@@ -258,6 +269,7 @@ int StoreRoot::file_id_for(std::string_view logical_path) {
 }
 
 std::optional<int> StoreRoot::find_file_id(std::string_view logical_path) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     seed_file_ids_locked();
     auto at = ids_by_path_.find(std::string(logical_path));
@@ -266,6 +278,7 @@ std::optional<int> StoreRoot::find_file_id(std::string_view logical_path) {
 }
 
 int StoreRoot::reserve_file_id_range(std::size_t count) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     seed_file_ids_locked();
     const int first = next_file_id_;
@@ -274,12 +287,14 @@ int StoreRoot::reserve_file_id_range(std::size_t count) {
 }
 
 int StoreRoot::next_file_id() {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     seed_file_ids_locked();
     return next_file_id_;
 }
 
 std::optional<std::string> StoreRoot::path_of(int file_id) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     seed_file_ids_locked();
     auto at = paths_by_id_.find(file_id);
@@ -288,6 +303,7 @@ std::optional<std::string> StoreRoot::path_of(int file_id) {
 }
 
 void StoreRoot::bind_file_id(std::string_view logical_path, int file_id) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     seed_file_ids_locked();
     std::string path(logical_path);
@@ -310,6 +326,7 @@ void StoreRoot::bind_file_id(std::string_view logical_path, int file_id) {
 }
 
 kv::Writer& StoreRoot::writer() {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     ensure_writer_locked();
     return *writer_;
@@ -317,6 +334,7 @@ kv::Writer& StoreRoot::writer() {
 
 kv::NamespaceId StoreRoot::namespace_id(const std::string& name,
                                         std::uint32_t version) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     ensure_writer_locked();
     auto at = namespaces_.find(name);
@@ -340,6 +358,7 @@ kv::NamespaceId StoreRoot::namespace_id(const std::string& name,
 }
 
 std::uint32_t StoreRoot::resolved_namespace_version(const std::string& name) {
+    memory::Scope in_pool(*pool_);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto at = namespaces_.find(name);
@@ -360,6 +379,7 @@ std::uint32_t StoreRoot::resolved_namespace_version(const std::string& name) {
 bool StoreRoot::sources_of(const kv::ScopeKey& scope,
                            const std::map<std::string, kv::SourceStat>& stats,
                            dstd::Vector<kv::SourceStat>& sources) {
+    memory::Scope in_pool(*pool_);
     if (scope.kind != kv::ScopeKind::File) return false;
     const auto held = snapshot();
     if (!held) return false;
@@ -385,6 +405,7 @@ void StoreRoot::mark_committed(const std::string& name,
                                const kv::ScopeKey& scope,
                                std::uint64_t params_hash,
                                const dstd::Vector<kv::SourceStat>* sources) {
+    memory::Scope in_pool(*pool_);
     CommittedCopy committed;
     committed.params_hash = params_hash;
     if (sources != nullptr) committed.sources = *sources;
@@ -394,6 +415,7 @@ void StoreRoot::mark_committed(const std::string& name,
 
 void StoreRoot::forget_committed(const std::string& name,
                                  const kv::ScopeKey& scope) {
+    memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     committed_.erase({name, scope});
 }
@@ -430,6 +452,7 @@ void StoreRoot::close_locked() {
 }
 
 void StoreRoot::close() {
+    memory::Scope in_pool(*pool_);
     std::unique_lock<std::shared_mutex> gate(gate_);
     std::lock_guard<std::mutex> lock(mutex_);
     close_locked();
@@ -726,6 +749,7 @@ void StoreIndexWrite::commit() {
     if (committed_) return;
     committed_ = true;
     std::shared_lock<std::shared_mutex> gate(root_->gate_);
+    memory::Scope in_pool(root_->pool());
     kv::Writer& writer = root_->writer();
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =

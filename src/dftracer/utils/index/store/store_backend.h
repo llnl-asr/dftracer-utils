@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/store_layout.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -86,6 +87,9 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// commit().
     std::unique_ptr<StoreIndexWrite> begin_write();
 
+    /// The pool the store calls of a reader of this root run in.
+    memory::Pool& pool() const noexcept { return *pool_; }
+
    private:
     friend class StoreIndexWrite;
 
@@ -139,6 +143,11 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
                     dstd::Vector<kv::SourceStat>& sources);
     void bump_version();
 
+    /// The pool of what the root keeps across queries: its snapshot and the
+    /// blocks it loads, the writer, the file id table. Every call that grows
+    /// them runs in it, never in the pool of the query that made the call.
+    /// First, so it closes after every other member is gone.
+    memory::PoolHandle pool_;
     /// Held shared by a commit for its whole run and exclusively by close(),
     /// so close() never frees the writer a commit uses. Taken before mutex_.
     std::shared_mutex gate_;

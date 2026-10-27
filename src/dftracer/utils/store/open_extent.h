@@ -4,10 +4,13 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/store/data_file.h>
+#include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/segment.h>
 
@@ -128,6 +131,13 @@ class ExtentWriter {
 
     NamespaceSlot* find_slot(std::uint32_t namespace_id, PageCodec codec);
     OpenExtent* publish_extent(NamespaceSlot& slot, OpenExtent* expected);
+    /// The dictionary an extent of `slot` with the raw pages `starts` cut
+    /// from `raw` compresses with, or null. Adds the pages to the sample of
+    /// the namespace and trains the next dictionary once it is full; a failed
+    /// training or dictionary write ends the training for the namespace.
+    dstd::SharedPtr<const PageDict> page_dict(
+        NamespaceSlot& slot, const std::uint8_t* raw, std::uint32_t used,
+        dstd::Span<const std::uint32_t> starts);
     static void push_segment(OpenExtent* extent, OpenSegment segment);
     void leave_extent(OpenExtent* extent);
     bool seal_extent(OpenExtent* extent);
@@ -136,7 +146,8 @@ class ExtentWriter {
     /// segment list are already moved out; the extent is deleted with the
     /// writer.
     void retire(OpenExtent* extent);
-    dstd::Expected<void, dstd::Error> append_run(ByteView segment_bytes,
+    dstd::Expected<void, dstd::Error> append_run(std::uint32_t namespace_id,
+                                                 ByteView segment_bytes,
                                                  ExtentSegment info,
                                                  void* context,
                                                  PageCodec codec);

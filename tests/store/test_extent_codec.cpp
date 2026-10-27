@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <iterator>
 #include <random>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -64,7 +65,9 @@ std::size_t entry_at(std::size_t i) {
 /// table, so the check under test is the one that refuses it.
 void reseal(dstd::Vector<std::uint8_t>& stored) {
     const std::uint32_t count = read_u32_le(stored.data());
-    const std::uint32_t crc = store::crc32(0, stored.data(), 8);
+    std::uint32_t crc = store::crc32(0, stored.data(), 8);
+    crc =
+        store::crc32(crc, stored.data() + 12, store::EXTENT_HEADER_BYTES - 12);
     write_u32_le(stored.data() + 8,
                  store::crc32(crc, stored.data() + entry_at(0),
                               count * store::EXTENT_TABLE_ENTRY_BYTES));
@@ -471,5 +474,141 @@ TEST_SUITE("store extent codec") {
         CHECK_FALSE(store::decode_meta(view_of(cut)).has_value());
 
         CHECK_FALSE(store::decode_meta(ByteView{}).has_value());
+    }
+
+    TEST_CASE("an extent compressed with a dictionary names it and needs it") {
+        // Event-like lines that differ per sample, so a dictionary learns the
+        // shared text.
+        dstd::Vector<std::uint8_t> samples;
+        dstd::Vector<std::size_t> sizes;
+        std::mt19937_64 rng(11);
+        const auto line = [&rng]() {
+            return "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":" +
+                   std::to_string(rng() % 4096) + ",\"file\":\"/p/lustre/run/" +
+                   std::to_string(rng() % 97) +
+                   "/data.h5\",\"size\":" + std::to_string(rng() % 65536) +
+                   "}\n";
+        };
+        for (int sample = 0; sample < 256; ++sample) {
+            const std::size_t before = samples.size();
+            while (samples.size() - before < 4096) {
+                for (const char c : line())
+                    samples.push_back(static_cast<std::uint8_t>(c));
+            }
+            sizes.push_back(samples.size() - before);
+        }
+        auto trained = store::train_page_dict(
+            view_of(samples),
+            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+        REQUIRE(trained.has_value());
+        CHECK(trained->size() <= store::PAGE_DICT_BYTES);
+
+        store::DictRef ref;
+        ref.offset = 8192;
+        ref.length = static_cast<std::uint32_t>(trained->size());
+        ref.crc = store::crc32(0, trained->data(), trained->size());
+        auto encoder = store::PageDict::for_encode(view_of(*trained), ref);
+        REQUIRE(encoder.has_value());
+        auto decoder = store::PageDict::for_decode(view_of(*trained), ref);
+        REQUIRE(decoder.has_value());
+
+        // Pages of 1 KiB, where the text a page shares with the others is
+        // most of what the dictionary saves.
+        dstd::Vector<std::uint8_t> raw;
+        while (raw.size() < 16 * 1024) {
+            for (const char c : line())
+                raw.push_back(static_cast<std::uint8_t>(c));
+        }
+        raw.resize(16 * 1024);
+        const std::uint32_t length = static_cast<std::uint32_t>(raw.size());
+        dstd::Vector<std::uint32_t> starts;
+        for (std::uint32_t at = 0; at < length; at += 1024)
+            starts.push_back(at);
+        auto plain = store::encode_extent(view_of(raw), starts, ALIGN);
+        auto stored =
+            store::encode_extent(view_of(raw), starts, ALIGN,
+                                 store::PageCodec::Zstd, encoder->get());
+        REQUIRE(plain.has_value());
+        REQUIRE(stored.has_value());
+
+        auto pages = store::ExtentPages::open(view_of(*stored));
+        REQUIRE(pages.has_value());
+        CHECK(pages->dict().offset == ref.offset);
+        CHECK(pages->dict().length == ref.length);
+        CHECK(pages->dict().crc == ref.crc);
+        std::size_t page_bytes = 0;
+        for (std::size_t i = 0; i < pages->size(); ++i) {
+            CHECK(pages->entry(i).codec == store::PageCodec::ZstdDict);
+            page_bytes += pages->entry(i).stored_length;
+        }
+        auto plain_pages = store::ExtentPages::open(view_of(*plain));
+        REQUIRE(plain_pages.has_value());
+        CHECK(plain_pages->dict().empty());
+        std::size_t plain_bytes = 0;
+        for (std::size_t i = 0; i < plain_pages->size(); ++i) {
+            plain_bytes += plain_pages->entry(i).stored_length;
+        }
+        CHECK(page_bytes < plain_bytes);
+
+        auto with_dict = *stored;
+        REQUIRE(store::decode_extent(with_dict, decoder->get()).has_value());
+        CHECK(with_dict == raw);
+
+        auto without_dict = *stored;
+        CHECK_FALSE(store::decode_extent(without_dict).has_value());
+
+        store::DictRef other = ref;
+        other.offset += 4096;
+        auto elsewhere = store::PageDict::for_decode(view_of(*trained), other);
+        REQUIRE(elsewhere.has_value());
+        auto wrong_dict = *stored;
+        CHECK_FALSE(
+            store::decode_extent(wrong_dict, elsewhere->get()).has_value());
+
+        auto resealed = *stored;
+        reseal(resealed);
+        CHECK(store::ExtentPages::open(view_of(resealed)).has_value());
+    }
+
+    TEST_CASE("a dictionary whose bytes or header fields disagree is refused") {
+        dstd::Vector<std::uint8_t> samples = text_bytes(256 * 4096);
+        dstd::Vector<std::size_t> sizes(256, 4096);
+        auto trained = store::train_page_dict(
+            view_of(samples),
+            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+        REQUIRE(trained.has_value());
+        store::DictRef ref;
+        ref.offset = 4096;
+        ref.length = static_cast<std::uint32_t>(trained->size());
+        ref.crc = store::crc32(0, trained->data(), trained->size());
+
+        store::DictRef bad_crc = ref;
+        bad_crc.crc ^= 1U;
+        CHECK_FALSE(store::PageDict::for_decode(view_of(*trained), bad_crc)
+                        .has_value());
+        store::DictRef bad_length = ref;
+        bad_length.length -= 1U;
+        CHECK_FALSE(store::PageDict::for_decode(view_of(*trained), bad_length)
+                        .has_value());
+        CHECK_FALSE(
+            store::PageDict::for_decode(view_of(*trained), store::DictRef{})
+                .has_value());
+
+        // An extent that names no dictionary keeps its offset and crc zero.
+        const dstd::Vector<std::uint8_t> raw = text_bytes(PAGE);
+        auto stored = store::encode_extent(view_of(raw),
+                                           starts_of({{0, PAGE}}, PAGE), ALIGN);
+        REQUIRE(stored.has_value());
+        auto stray = *stored;
+        write_u32_le(stray.data() + 24, 7U);
+        reseal(stray);
+        CHECK_FALSE(store::ExtentPages::open(view_of(stray)).has_value());
+
+        // A ZstdDict page in an extent that names no dictionary.
+        auto orphan = *stored;
+        orphan[entry_at(0) + 20] =
+            static_cast<std::uint8_t>(store::PageCodec::ZstdDict);
+        reseal(orphan);
+        CHECK_FALSE(store::ExtentPages::open(view_of(orphan)).has_value());
     }
 }

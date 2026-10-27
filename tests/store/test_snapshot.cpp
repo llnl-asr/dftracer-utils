@@ -669,6 +669,129 @@ TEST_SUITE("index store snapshot") {
         }
     }
 
+    TEST_CASE(
+        "a namespace trains two page dictionaries and reads through them") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_page_dict");
+        const ScopeKey scope = file_scope("/traces/dict.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.dict");
+        // About 120 MiB of event-like values: the first dictionary trains on
+        // the first 8 MiB, the second on every eighth page of the 64 MiB
+        // after it.
+        constexpr int KEYS = 120000;
+        // Most batches fill extents; every tenth is a run larger than one.
+        constexpr int PER_BATCH = 200;
+        constexpr int PER_BIG_BATCH = 2000;
+        const auto dict_key = [](int index) {
+            const std::string digits = std::to_string(index);
+            return "key-" + std::string(6 - digits.size(), '0') + digits;
+        };
+        const auto value = [](int index) {
+            std::string out;
+            std::uint64_t state =
+                static_cast<std::uint64_t>(index) * 2654435761U;
+            while (out.size() < 1024) {
+                state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+                out += "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":" +
+                       std::to_string(state >> 52U) +
+                       ",\"file\":\"/p/lustre/run/" +
+                       std::to_string((state >> 20U) % 97U) +
+                       "/data.h5\",\"size\":" +
+                       std::to_string((state >> 8U) % 65536U) + "}\n";
+            }
+            return out;
+        };
+
+        WriterOptions options;
+        options.host = dstring("host");
+        options.label = dstring("label");
+        auto writer = make_writer(dir, options);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        int batches = 0;
+        for (int first = 0; first < KEYS;) {
+            const int count = std::min(
+                KEYS - first, ++batches % 10 == 0 ? PER_BIG_BATCH : PER_BATCH);
+            Batch batch = writer->batch(*id, scope, 0);
+            for (int i = first; i < first + count; ++i) {
+                const std::string key = dict_key(i);
+                const std::string bytes = value(i);
+                batch.put(view_of(key), view_of(bytes));
+            }
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            first += count;
+        }
+        REQUIRE(flush_writer(*writer).has_value());
+
+        // Before the close the reader checks each commit, pages included.
+        {
+            auto open = Snapshot::open(dir.str());
+            REQUIRE(open.has_value());
+            for (int i = 0; i < KEYS; i += 997) {
+                const std::string key = dict_key(i);
+                auto found = open->get(spec, scope, view_of(key));
+                REQUIRE(found.has_value());
+                REQUIRE(found->has_value());
+                CHECK(to_std((*found)->bytes()) == value(i));
+            }
+        }
+        REQUIRE(close_writer(*writer).has_value());
+
+        const std::string path = only_data_file(dir.str());
+        auto report = store::space_report(path);
+        REQUIRE(report.has_value());
+        CHECK(report->dicts == 2);
+        CHECK(report->pages_dict > report->pages / 2);
+        CHECK(report->dict_bytes > 0);
+        CHECK(report->header_bytes + report->extent_bytes +
+                  report->record_bytes + report->gap_bytes +
+                  report->segment_block_bytes + report->items_block_bytes +
+                  report->directory_leaf_bytes +
+                  report->directory_separator_bytes + report->footer_bytes +
+                  report->dict_bytes ==
+              report->file_bytes);
+
+        {
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            CHECK(snapshot->skipped().empty());
+            auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+            const auto rows = collect(cursor);
+            REQUIRE(rows.size() == static_cast<std::size_t>(KEYS));
+            bool all_equal = true;
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].first != dict_key(static_cast<int>(i)) ||
+                    rows[i].second != value(static_cast<int>(i))) {
+                    all_equal = false;
+                }
+            }
+            CHECK(all_equal);
+        }
+
+        // A damaged dictionary fails the reads of the pages that need it.
+        auto opened = DataFileReader::open(path);
+        REQUIRE(opened.has_value());
+        std::vector<std::uint8_t> bytes = read_file(path);
+        std::uint64_t dict_offset = 0;
+        for (const store::IndexedExtentRef& indexed : extent_refs_of(*opened)) {
+            if (indexed.ref.segments.empty()) continue;
+            auto pages = store::ExtentPages::open_table(
+                ByteView{reinterpret_cast<const std::byte*>(bytes.data() +
+                                                            indexed.ref.offset),
+                         indexed.ref.length},
+                indexed.ref.length);
+            REQUIRE(pages.has_value());
+            if (!pages->dict().empty()) dict_offset = pages->dict().offset;
+        }
+        REQUIRE(dict_offset != 0);
+        bytes[static_cast<std::size_t>(dict_offset) + 100U] ^= 0xFFU;
+        write_file(path, bytes);
+        auto damaged = Snapshot::open(dir.str());
+        REQUIRE(damaged.has_value());
+        const std::string last = dict_key(KEYS - 1);
+        auto found = damaged->get(spec, scope, view_of(last));
+        CHECK_FALSE(found.has_value());
+    }
+
     TEST_CASE("the last put wins inside a batch and a later batch wins") {
         dftu_utils_test::ScopedTestDir dir("snapshot_last_wins");
         const ScopeKey scope = file_scope("/traces/b.pfw");

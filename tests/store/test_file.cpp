@@ -2084,7 +2084,8 @@ TEST_SUITE("index store file") {
         CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
                   space.gap_bytes + space.segment_block_bytes +
                   space.items_block_bytes + space.directory_leaf_bytes +
-                  space.directory_separator_bytes + space.footer_bytes ==
+                  space.directory_separator_bytes + space.footer_bytes +
+                  space.dict_bytes ==
               space.file_bytes);
 
         auto opened = DataFileReader::open(path);
@@ -2207,7 +2208,8 @@ TEST_SUITE("index store file") {
         CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
                   space.gap_bytes + space.segment_block_bytes +
                   space.items_block_bytes + space.directory_leaf_bytes +
-                  space.directory_separator_bytes + space.footer_bytes ==
+                  space.directory_separator_bytes + space.footer_bytes +
+                  space.dict_bytes ==
               space.file_bytes);
     }
 

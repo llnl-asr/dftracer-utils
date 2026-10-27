@@ -669,6 +669,27 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
     return ref;
 }
 
+dstd::Expected<DictRef, dstd::Error> DataFileWriter::append_dict(
+    ByteView bytes) {
+    if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (bytes.empty() || bytes.size() > PAGE_DICT_BYTES) return invalid_error();
+    dstd::Vector<std::uint8_t> padded(
+        align_up(bytes.size(), EXTENT_ALIGN_BYTES), std::uint8_t{0});
+    std::memcpy(padded.data(), bytes.data(), bytes.size());
+    DictRef ref;
+    ref.offset = reserve_range(padded.size(), EXTENT_ALIGN_BYTES,
+                               io_fault::WriteKind::Extent);
+    ref.length = static_cast<std::uint32_t>(bytes.size());
+    ref.crc = crc32(0, padded.data(), bytes.size());
+    auto written = pwrite_all(fd_, padded.data(), padded.size(), ref.offset);
+    if (!written) {
+        latch(written.error());
+        return dstd::Unexpected<dstd::Error>(written.error());
+    }
+    return ref;
+}
+
 dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_big(
     ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
@@ -1757,6 +1778,7 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
                      });
     dstd::Vector<std::uint8_t> head;
     dstd::Vector<std::uint8_t> table_bytes;
+    dstd::Vector<DictRef> dicts;
     for (std::size_t at = 0; at < refs->size();) {
         const ExtentRefItem& item = (*refs)[at].ref;
         const ExtentRef ref{item.offset, item.length, item.crc};
@@ -1787,17 +1809,37 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
         auto pages = ExtentPages::open_table(bytes_of(table_bytes), ref.length);
         if (!pages) return dstd::Unexpected<dstd::Error>(pages.error());
         scan.report.extent_page_table_bytes += table - EXTENT_HEADER_BYTES;
+        if (!pages->dict().empty()) dicts.push_back(pages->dict());
         std::uint64_t stored = 0;
         for (std::size_t page = 0; page < pages->size(); ++page) {
             const PageEntry& entry = pages->entry(page);
             ++scan.report.pages;
             scan.report.page_bytes += entry.stored_length;
             scan.report.page_raw_bytes += entry.raw_length;
-            if (entry.codec == PageCodec::Zstd) ++scan.report.pages_compressed;
+            if (entry.codec == PageCodec::Zstd ||
+                entry.codec == PageCodec::ZstdDict) {
+                ++scan.report.pages_compressed;
+            }
+            if (entry.codec == PageCodec::ZstdDict) ++scan.report.pages_dict;
             stored += entry.stored_length;
         }
         if (stored > ref.length - table) return parse_error();
         scan.report.extent_padding_bytes += ref.length - table - stored;
+    }
+    std::sort(
+        dicts.begin(), dicts.end(),
+        [](const DictRef& a, const DictRef& b) { return a.offset < b.offset; });
+    for (std::size_t at = 0; at < dicts.size(); ++at) {
+        if (at > 0 && dicts[at - 1].offset == dicts[at].offset) continue;
+        const std::uint64_t length =
+            align_up(dicts[at].length, EXTENT_ALIGN_BYTES);
+        if (dicts[at].offset > scan.report.file_bytes ||
+            length > scan.report.file_bytes - dicts[at].offset) {
+            return parse_error();
+        }
+        ++scan.report.dicts;
+        scan.report.dict_bytes += length;
+        scan.cover(dicts[at].offset, length);
     }
     return {};
 }

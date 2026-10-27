@@ -8,6 +8,7 @@
 #include <coroutine>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -24,6 +25,14 @@ constexpr std::uint64_t OPEN_EXTENT_WRITER_MASK = 0xFFFFULL << 32U;
 constexpr std::uint64_t OPEN_EXTENT_MAX_WRITERS = 0xFFFFULL;
 /// Bit 63: no appender may reserve space in the extent any more.
 constexpr std::uint64_t OPEN_EXTENT_SEALED = 1ULL << 63U;
+
+/// The raw page bytes a namespace collects before it trains a dictionary.
+constexpr std::size_t DICT_SAMPLE_BYTES = std::size_t{8} << 20;
+/// After the first dictionary, one page in this many goes to the sample of the
+/// second, so it learns from a wider stretch of the data at the same cost.
+constexpr std::uint64_t DICT_RETRAIN_STRIDE = 8;
+/// Dictionaries trained per namespace per data file.
+constexpr std::uint8_t DICT_STAGES = 2;
 
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
@@ -57,6 +66,16 @@ struct ExtentWriter::NamespaceSlot {
     PageCodec codec = PageCodec::Zstd;
     std::atomic<OpenExtent*> extent{nullptr};
     NamespaceSlot* next = nullptr;
+
+    /// The dictionary the extents of the namespace compress with, and the
+    /// sample of raw pages the next one trains on.
+    std::mutex dict_mutex;
+    dstd::SharedPtr<const PageDict> dict;
+    dstd::Vector<std::uint8_t> sample;
+    dstd::Vector<std::size_t> sample_sizes;
+    std::uint64_t pages_seen = 0;
+    std::uint8_t dict_stage = 0;
+    bool training = false;
 };
 
 struct ExtentWriter::PendingWrite {
@@ -116,6 +135,67 @@ ExtentWriter::NamespaceSlot* ExtentWriter::find_slot(std::uint32_t namespace_id,
     namespaces_.store(slot, std::memory_order_release);
     slots_.push_back(slot);
     return slot;
+}
+
+dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
+    NamespaceSlot& slot, const std::uint8_t* raw, std::uint32_t used,
+    dstd::Span<const std::uint32_t> starts) {
+    dstd::Vector<std::uint8_t> sample;
+    dstd::Vector<std::size_t> sizes;
+    {
+        std::lock_guard<std::mutex> lock(slot.dict_mutex);
+        if (slot.dict_stage >= DICT_STAGES || slot.training) return slot.dict;
+        for (std::size_t i = 0;
+             i < starts.size() && slot.sample.size() < DICT_SAMPLE_BYTES; ++i) {
+            const std::uint32_t begin = starts[i];
+            const std::uint32_t end =
+                i + 1 < starts.size() ? starts[i + 1] : used;
+            const bool keep = slot.dict_stage == 0 ||
+                              slot.pages_seen % DICT_RETRAIN_STRIDE == 0;
+            ++slot.pages_seen;
+            if (!keep) continue;
+            // Past its first MiB the sample takes its full size at once, so
+            // it never holds the doubled capacity a growing vector would.
+            if (slot.sample.capacity() < DICT_SAMPLE_BYTES + PAGE_BYTES &&
+                slot.sample.size() + (end - begin) > (std::size_t{1} << 20)) {
+                slot.sample.reserve(DICT_SAMPLE_BYTES + PAGE_BYTES);
+            }
+            slot.sample.insert(slot.sample.end(), raw + begin, raw + end);
+            slot.sample_sizes.push_back(end - begin);
+        }
+        if (slot.sample.size() < DICT_SAMPLE_BYTES) return slot.dict;
+        slot.training = true;
+        sample = std::move(slot.sample);
+        sizes = std::move(slot.sample_sizes);
+        slot.sample = dstd::Vector<std::uint8_t>();
+        slot.sample_sizes = dstd::Vector<std::size_t>();
+    }
+    // Training takes a fraction of a second, so it runs outside the lock and
+    // the extents sealed meanwhile keep the dictionary they had.
+    dstd::SharedPtr<const PageDict> trained;
+    auto bytes = train_page_dict(
+        ByteView(reinterpret_cast<const std::byte*>(sample.data()),
+                 sample.size()),
+        dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+    sample = dstd::Vector<std::uint8_t>();
+    if (bytes) {
+        const ByteView view(reinterpret_cast<const std::byte*>(bytes->data()),
+                            bytes->size());
+        auto ref = file_.append_dict(view);
+        if (ref) {
+            auto made = PageDict::for_encode(view, *ref);
+            if (made) trained = std::move(*made);
+        }
+    }
+    std::lock_guard<std::mutex> lock(slot.dict_mutex);
+    slot.training = false;
+    if (trained == nullptr) {
+        slot.dict_stage = DICT_STAGES;
+        return slot.dict;
+    }
+    ++slot.dict_stage;
+    slot.dict = std::move(trained);
+    return slot.dict;
 }
 
 ExtentWriter::OpenExtent* ExtentWriter::publish_extent(NamespaceSlot& slot,
@@ -312,10 +392,15 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
         }
     }
     const dstd::Vector<std::uint32_t> starts = page_starts(spans, used);
+    dstd::SharedPtr<const PageDict> dict;
+    if (extent->codec == PageCodec::Zstd) {
+        dict = page_dict(*find_slot(extent->namespace_id, extent->codec),
+                         extent->buffer.data(), used, starts);
+    }
     auto stored = encode_extent(
         ByteView(reinterpret_cast<const std::byte*>(extent->buffer.data()),
                  used),
-        starts, EXTENT_ALIGN_BYTES, extent->codec);
+        starts, EXTENT_ALIGN_BYTES, extent->codec, dict.get());
     if (!stored) {
         reject();
         return;
@@ -341,24 +426,34 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
 }
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
-    ByteView segment_bytes, ExtentSegment info, void* context,
-    PageCodec codec) {
+    std::uint32_t namespace_id, ByteView segment_bytes, ExtentSegment info,
+    void* context, PageCodec codec) {
     dstd::Vector<SegmentSpan> spans;
     if (!append_segment_spans(segment_bytes, 0, spans)) return invalid_error();
-    const dstd::Vector<std::uint32_t> starts =
-        page_starts(spans, static_cast<std::uint32_t>(segment_bytes.size()));
-    auto stored =
-        encode_extent(segment_bytes, starts, EXTENT_ALIGN_BYTES, codec);
+    const std::uint32_t length =
+        static_cast<std::uint32_t>(segment_bytes.size());
+    const dstd::Vector<std::uint32_t> starts = page_starts(spans, length);
+    dstd::SharedPtr<const PageDict> dict;
+    if (codec == PageCodec::Zstd) {
+        dict = page_dict(
+            *find_slot(namespace_id, codec),
+            reinterpret_cast<const std::uint8_t*>(segment_bytes.data()), length,
+            starts);
+    }
+    auto stored = encode_extent(segment_bytes, starts, EXTENT_ALIGN_BYTES,
+                                codec, dict.get());
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
-    const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
+    const std::uint32_t stored_length =
+        static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
     pending->owner = this;
     pending->buffer = std::move(*stored);
-    pending->written.offset = file_.reserve_range(length, EXTENT_ALIGN_BYTES);
-    pending->written.length = length;
-    pending->written.crc = crc32(0, pending->buffer.data(), length);
+    pending->written.offset =
+        file_.reserve_range(stored_length, EXTENT_ALIGN_BYTES);
+    pending->written.length = stored_length;
+    pending->written.crc = crc32(0, pending->buffer.data(), stored_length);
     info.offset_in_extent = 0;
-    info.length = static_cast<std::uint32_t>(segment_bytes.size());
+    info.length = length;
     pending->written.segments.push_back(std::move(info));
     pending->written.contexts.push_back(context);
     begin_write();
@@ -378,7 +473,8 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append(
     // An extent's raw bytes keep room for the fixed header of its stored form.
     const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
     if (segment_bytes.size() >= capacity) {
-        return append_run(segment_bytes, std::move(info), context, codec);
+        return append_run(namespace_id, segment_bytes, std::move(info), context,
+                          codec);
     }
 
     NamespaceSlot* slot = find_slot(namespace_id, codec);

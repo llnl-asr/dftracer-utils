@@ -160,7 +160,8 @@ dstd::String group_key(dstd::StringView name, std::uint32_t version,
 /// lies outside `run` or does not decode.
 dstd::Expected<ByteView, dstd::Error> decode_covering(
     const ExtentPages& pages, std::uint32_t offset, std::uint32_t length,
-    ByteView run, std::uint64_t run_begin, dstd::Vector<std::uint8_t>& owned) {
+    ByteView run, std::uint64_t run_begin, dstd::Vector<std::uint8_t>& owned,
+    const PageDict* dict) {
     if (offset > pages.raw_length() || length > pages.raw_length() - offset) {
         return bad_extent_error();
     }
@@ -182,7 +183,7 @@ dstd::Expected<ByteView, dstd::Error> decode_covering(
         const ByteView stored{run.data() + (entry.stored_offset - run_begin),
                               entry.stored_length};
         auto decoded = ExtentPages::decode_page(
-            entry, stored, owned.data() + (entry.raw_offset - base));
+            entry, stored, owned.data() + (entry.raw_offset - base), dict);
         if (!decoded) return bad_extent_error();
     }
     return ByteView{owned.data() + (offset - base), length};
@@ -1479,6 +1480,7 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
     // the pages it names, so a segment that cannot be read makes the whole
     // commit Bad. A query reads the pages again through the table it keeps.
     dstd::Vector<dstd::Optional<ExtentPages>> whole(commit.blocks.size());
+    dstd::Vector<dstd::SharedPtr<const PageDict>> dicts(commit.blocks.size());
     if (!failure && !any_bad) {
         for (const std::size_t block : extent_blocks) {
             const ByteView bytes = bytes_of(stored[block]);
@@ -1488,6 +1490,16 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
                 any_bad = true;
                 break;
             }
+            auto dict = page_dict(files_[commit.file_index], pages->dict());
+            if (!dict) {
+                if (dict.error().is(dstd::Condition::Io)) {
+                    failure = dict.error();
+                } else {
+                    any_bad = true;
+                }
+                break;
+            }
+            dicts[block] = std::move(*dict);
             whole[block] = std::move(*pages);
             detail::ExtentSlot& slot = commit.extent_slots[block];
             slot.ref = commit.blocks[block].ref;
@@ -1503,9 +1515,10 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
                     any_bad = true;
                     break;
                 }
-                auto bytes = decode_covering(
-                    *whole[slot.block], slot.offset_in_extent, slot.length,
-                    bytes_of(stored[slot.block]), 0, owned);
+                auto bytes =
+                    decode_covering(*whole[slot.block], slot.offset_in_extent,
+                                    slot.length, bytes_of(stored[slot.block]),
+                                    0, owned, dicts[slot.block].get());
                 if (!bytes || !SegmentView::open_index(*bytes)) {
                     any_bad = true;
                     break;
@@ -1851,6 +1864,31 @@ detail::LoadStatus Snapshot::load_extent(const detail::FileData& file,
     return state_of(state);
 }
 
+dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
+Snapshot::page_dict(const detail::FileData& file, const DictRef& ref) const {
+    if (ref.empty()) return dstd::SharedPtr<const PageDict>();
+    detail::DictCache& cache = *file.dicts;
+    std::lock_guard<std::mutex> locked(cache.mutex);
+    for (const dstd::SharedPtr<const PageDict>& known : cache.dicts) {
+        if (known->ref().offset == ref.offset) {
+            if (known->ref().length != ref.length ||
+                known->ref().crc != ref.crc) {
+                return bad_extent_error();
+            }
+            return known;
+        }
+    }
+    BlockReads reads;
+    dstd::Vector<std::uint8_t> bytes;
+    auto read = file.reader.read_range(ref.offset, ref.length, bytes, &reads);
+    reads_->add_metadata(reads);
+    if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+    auto dict = PageDict::for_decode(bytes_of(bytes), ref);
+    if (!dict) return bad_extent_error();
+    cache.dicts.push_back(*dict);
+    return std::move(*dict);
+}
+
 void Snapshot::warm_window(const detail::FileData& file,
                            std::uint64_t offset) const {
     const std::uint64_t window = offset / READ_RUN_BYTES;
@@ -1897,6 +1935,13 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
     std::uint64_t decoded = 0;
     BlockReads reads;
     if (first_missing < covered.second) {
+        auto dict = page_dict(file, pages.dict());
+        if (!dict) {
+            if (dict.error().is(dstd::Condition::Io)) {
+                return dstd::Unexpected<dstd::Error>(dict.error());
+            }
+            return bad_extent_error();
+        }
         // The stored pages of an extent lie in page order with no gap, so the
         // pages a range lacks are one read.
         const PageEntry& first = pages.entry(first_missing);
@@ -1933,7 +1978,7 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
                 entry,
                 ByteView{run.data() + (entry.stored_offset - run_begin),
                          entry.stored_length},
-                fresh->data());
+                fresh->data(), dict->get());
             if (!ok) {
                 reads_->add_pages(decoded, 0, reads);
                 return bad_extent_error();

@@ -473,6 +473,12 @@ class ExtentSlots {
     mutable dstd::Vector<std::atomic<Chunk*>> chunks_;
 };
 
+/// The page dictionaries of one data file, loaded on first use, by offset.
+struct DictCache {
+    std::mutex mutex;
+    dstd::Vector<dstd::SharedPtr<const PageDict>> dicts;
+};
+
 struct FileData {
     explicit FileData(DataFileReader opened) : reader(std::move(opened)) {}
 
@@ -498,6 +504,8 @@ struct FileData {
     ExtentSlots extent_slots;
     /// Per window of READ_RUN_BYTES of the file, the extents loaded in it.
     mutable dstd::Vector<std::atomic<std::uint32_t>> windows;
+    /// Behind a pointer, so the file data moves.
+    dstd::UniquePtr<DictCache> dicts = dstd::make_unique<DictCache>();
 };
 
 /// The counters of Snapshot::read_stats, shared by every thread that loads.
@@ -901,6 +909,11 @@ class Snapshot {
     /// acquire load. A block built in memory at open is Good already.
     detail::LoadStatus load_block(const detail::FileData& file,
                                   detail::LazyBlock& block) const;
+    /// The dictionary at `ref` in `file`, read and checked on first use and
+    /// then shared; null for an empty `ref`. Io when the read fails, Parse
+    /// when the bytes do not match `ref`.
+    dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error> page_dict(
+        const detail::FileData& file, const DictRef& ref) const;
     /// Reads the page table of one extent of a closed file once, under the
     /// slot's mutex. An index at or past the extent count is Bad.
     detail::LoadStatus load_extent(const detail::FileData& file,

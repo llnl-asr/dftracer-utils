@@ -1,6 +1,7 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
+#include <zdict.h>
 #include <zstd.h>
 
 #include <algorithm>
@@ -44,7 +45,8 @@ const std::uint8_t* bytes_of(ByteView view) {
 }
 
 std::uint32_t table_crc(const std::uint8_t* head, std::size_t count) {
-    const std::uint32_t crc = crc32(0, head, 8);
+    std::uint32_t crc = crc32(0, head, 8);
+    crc = crc32(crc, head + 12, EXTENT_HEADER_BYTES - 12);
     return crc32(crc, head + EXTENT_HEADER_BYTES,
                  count * EXTENT_TABLE_ENTRY_BYTES);
 }
@@ -94,7 +96,7 @@ dstd::Vector<std::uint32_t> page_starts(dstd::Span<const SegmentSpan> segments,
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
     ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align,
-    PageCodec codec_wanted) {
+    PageCodec codec_wanted, const PageDict* dict) {
     const std::size_t raw_length = raw.size();
     if (raw_length == 0 || raw_length > EXTENT_MAX_RAW_BYTES || align == 0 ||
         (codec_wanted != PageCodec::None && codec_wanted != PageCodec::Zstd) ||
@@ -119,12 +121,18 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
         if (codec_wanted == PageCodec::Zstd && context.ctx != nullptr) {
             const std::size_t bound = ZSTD_compressBound(length);
             if (context.scratch.size() < bound) context.scratch.resize(bound);
-            const std::size_t compressed = ZSTD_compressCCtx(
-                context.ctx, context.scratch.data(), context.scratch.size(),
-                data + begin, length, PAGE_ZSTD_LEVEL);
+            const std::size_t compressed =
+                dict != nullptr
+                    ? ZSTD_compress_usingCDict(
+                          context.ctx, context.scratch.data(),
+                          context.scratch.size(), data + begin, length,
+                          dict->cdict())
+                    : ZSTD_compressCCtx(context.ctx, context.scratch.data(),
+                                        context.scratch.size(), data + begin,
+                                        length, PAGE_ZSTD_LEVEL);
             if (ZSTD_isError(compressed) == 0 &&
                 compressed <= length - length / 8) {
-                codec = PageCodec::Zstd;
+                codec = dict != nullptr ? PageCodec::ZstdDict : PageCodec::Zstd;
                 page_bytes = static_cast<std::uint32_t>(compressed);
                 std::memcpy(out.data() + stored, context.scratch.data(),
                             compressed);
@@ -147,6 +155,11 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
     out.resize(align_up(out.size(), align));
     write_u32_le(out.data(), static_cast<std::uint32_t>(count));
     write_u32_le(out.data() + 4, static_cast<std::uint32_t>(raw_length));
+    if (dict != nullptr && codec_wanted == PageCodec::Zstd) {
+        write_u32_le(out.data() + 12, dict->ref().length);
+        write_u64_le(out.data() + 16, dict->ref().offset);
+        write_u32_le(out.data() + 24, dict->ref().crc);
+    }
     write_u32_le(out.data() + 8, table_crc(out.data(), count));
     return out;
 }
@@ -179,8 +192,13 @@ dstd::Expected<ExtentPages, dstd::Error> ExtentPages::parse(
     const std::uint8_t* header = bytes_of(head);
     const std::uint32_t count = read_u32_le(header);
     const std::uint32_t raw_length = read_u32_le(header + 4);
-    if (read_u32_le(header + 12) != 0 || count == 0 || raw_length == 0 ||
-        raw_length > EXTENT_MAX_RAW_BYTES) {
+    DictRef dict;
+    dict.length = read_u32_le(header + 12);
+    dict.offset = read_u64_le(header + 16);
+    dict.crc = read_u32_le(header + 24);
+    if (read_u32_le(header + 28) != 0 || count == 0 || raw_length == 0 ||
+        raw_length > EXTENT_MAX_RAW_BYTES || dict.length > PAGE_DICT_BYTES ||
+        (dict.empty() && (dict.offset != 0 || dict.crc != 0))) {
         return parse_error();
     }
     if (count >
@@ -206,7 +224,9 @@ dstd::Expected<ExtentPages, dstd::Error> ExtentPages::parse(
         page.crc = read_u32_le(entry + 16);
         page.codec = static_cast<PageCodec>(entry[20]);
         if (entry[21] != 0 || entry[22] != 0 || entry[23] != 0 ||
-            (page.codec != PageCodec::None && page.codec != PageCodec::Zstd)) {
+            (page.codec != PageCodec::None && page.codec != PageCodec::Zstd &&
+             page.codec != PageCodec::ZstdDict) ||
+            (page.codec == PageCodec::ZstdDict && dict.empty())) {
             return parse_error();
         }
         if (page.raw_offset != next_raw || page.raw_length == 0 ||
@@ -224,7 +244,7 @@ dstd::Expected<ExtentPages, dstd::Error> ExtentPages::parse(
         entries.push_back(page);
     }
     if (next_raw != raw_length) return parse_error();
-    return ExtentPages(ByteView{}, std::move(entries), raw_length);
+    return ExtentPages(ByteView{}, std::move(entries), raw_length, dict);
 }
 
 std::pair<std::size_t, std::size_t> ExtentPages::covering(
@@ -250,17 +270,19 @@ std::pair<std::size_t, std::size_t> ExtentPages::covering(
 }
 
 dstd::Expected<void, dstd::Error> ExtentPages::decode(
-    std::size_t i, dstd::Vector<std::uint8_t>& out) const {
+    std::size_t i, dstd::Vector<std::uint8_t>& out,
+    const PageDict* dict) const {
     if (i >= entries_.size() || stored_.empty()) return parse_error();
     const PageEntry& page = entries_[i];
     out.resize(page.raw_length);
     return decode_page(
         page, ByteView{stored_.data() + page.stored_offset, page.stored_length},
-        out.data());
+        out.data(), dict);
 }
 
 dstd::Expected<void, dstd::Error> ExtentPages::decode_page(
-    const PageEntry& page, ByteView stored, std::uint8_t* out) {
+    const PageEntry& page, ByteView stored, std::uint8_t* out,
+    const PageDict* dict) {
     if (stored.size() != page.stored_length) return parse_error();
     const std::uint8_t* src = bytes_of(stored);
     if (crc32(0, src, page.stored_length) != page.crc) return parse_error();
@@ -280,8 +302,57 @@ dstd::Expected<void, dstd::Error> ExtentPages::decode_page(
             }
             return {};
         }
+        case PageCodec::ZstdDict: {
+            thread_local DecompressContext context;
+            if (context.ctx == nullptr || dict == nullptr) return parse_error();
+            const std::size_t got = ZSTD_decompress_usingDDict(
+                context.ctx, out, page.raw_length, src, page.stored_length,
+                dict->ddict());
+            if (ZSTD_isError(got) != 0 || got != page.raw_length) {
+                return parse_error();
+            }
+            return {};
+        }
     }
     return parse_error();
+}
+
+dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
+PageDict::for_encode(ByteView bytes, const DictRef& ref) {
+    ZSTD_CDict* cdict =
+        ZSTD_createCDict(bytes.data(), bytes.size(), PAGE_ZSTD_LEVEL);
+    if (cdict == nullptr) return parse_error();
+    return dstd::SharedPtr<const PageDict>(new PageDict(ref, cdict, nullptr));
+}
+
+dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
+PageDict::for_decode(ByteView bytes, const DictRef& ref) {
+    if (ref.empty() || bytes.size() != ref.length ||
+        crc32(0, bytes_of(bytes), bytes.size()) != ref.crc) {
+        return parse_error();
+    }
+    ZSTD_DDict* ddict = ZSTD_createDDict(bytes.data(), bytes.size());
+    if (ddict == nullptr) return parse_error();
+    return dstd::SharedPtr<const PageDict>(new PageDict(ref, nullptr, ddict));
+}
+
+PageDict::~PageDict() {
+    ZSTD_freeCDict(cdict_);
+    ZSTD_freeDDict(ddict_);
+}
+
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> train_page_dict(
+    ByteView samples, dstd::Span<const std::size_t> sizes) {
+    if (sizes.empty() || sizes.size() > std::numeric_limits<unsigned>::max()) {
+        return parse_error();
+    }
+    dstd::Vector<std::uint8_t> dict(PAGE_DICT_BYTES);
+    const std::size_t length = ZDICT_trainFromBuffer(
+        dict.data(), dict.size(), samples.data(), sizes.data(),
+        static_cast<unsigned>(sizes.size()));
+    if (ZDICT_isError(length) != 0) return parse_error();
+    dict.resize(length);
+    return dict;
 }
 
 dstd::Vector<std::uint8_t> encode_meta(ByteView raw, int level) {
@@ -329,18 +400,25 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> decode_meta(
             if (ZSTD_isError(got) != 0 || got != length) return parse_error();
             return out;
         }
+        case PageCodec::ZstdDict:
+            return parse_error();
     }
     return parse_error();
 }
 
 dstd::Expected<void, dstd::Error> decode_extent(
-    dstd::Vector<std::uint8_t>& stored) {
+    dstd::Vector<std::uint8_t>& stored, const PageDict* dict) {
     auto pages = ExtentPages::open(ByteView(stored.data(), stored.size()));
     if (!pages) return parse_error();
+    if (dict != nullptr && (dict->ref().offset != pages->dict().offset ||
+                            dict->ref().length != pages->dict().length ||
+                            dict->ref().crc != pages->dict().crc)) {
+        return parse_error();
+    }
     dstd::Vector<std::uint8_t> raw(pages->raw_length(), std::uint8_t{0});
     dstd::Vector<std::uint8_t> page;
     for (std::size_t i = 0; i < pages->size(); ++i) {
-        auto decoded = pages->decode(i, page);
+        auto decoded = pages->decode(i, page, dict);
         if (!decoded) return decoded;
         std::memcpy(raw.data() + pages->entry(i).raw_offset, page.data(),
                     page.size());

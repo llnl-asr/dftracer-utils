@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <dftracer/utils/store/record.h>
 
@@ -147,6 +148,11 @@ class DataFileWriter {
     /// offsets inside the extent count from the raw bytes.
     dstd::Expected<ExtentRef, dstd::Error> append_extent(ByteView bytes);
     dstd::Expected<ExtentRef, dstd::Error> append_big(ByteView bytes);
+    /// Writes the bytes of a page dictionary at an offset aligned to
+    /// EXTENT_ALIGN_BYTES, padded to a multiple of it, and returns where they
+    /// lie. The write is done when this returns, so an extent that names the
+    /// dictionary is written after it. Safe from many threads at once.
+    dstd::Expected<DictRef, dstd::Error> append_dict(ByteView bytes);
 
     /// Takes `length` bytes at the first offset that is a multiple of `align`
     /// at or after the file end, and moves the end past them. Safe from any
@@ -365,8 +371,14 @@ struct SpaceReport {
     /// The raw bytes those pages decode to.
     std::uint64_t page_raw_bytes = 0;
     std::uint64_t pages = 0;
-    /// The pages stored with zstd.
+    /// The pages stored with zstd, with a dictionary or without.
     std::uint64_t pages_compressed = 0;
+    /// The pages stored with zstd and a dictionary.
+    std::uint64_t pages_dict = 0;
+    /// Distinct page dictionaries the extents name.
+    std::uint64_t dicts = 0;
+    /// The bytes of those dictionaries, each padded to EXTENT_ALIGN_BYTES.
+    std::uint64_t dict_bytes = 0;
     /// The zero bytes an extent holds past its last page: part of extent_bytes.
     std::uint64_t extent_padding_bytes = 0;
     /// What no other line counts: the bytes that align a range, the runs that

@@ -135,20 +135,12 @@ class ExtentWriter {
     /// from `raw` compresses with, or null. Adds the pages to the sample of
     /// the namespace and starts the training of the next dictionary as a task
     /// of the executor once it is full; a later seal writes the trained
-    /// dictionary and uses it, and waits for it once the namespace sealed
-    /// DICT_WAIT_BYTES while it trained. A failed training or dictionary write
-    /// ends the training for the namespace.
+    /// dictionary and uses it, and once the namespace sealed DICT_WAIT_BYTES
+    /// while it trained, the seal finishes the training itself. A failed
+    /// training or dictionary write ends the training for the namespace.
     dstd::SharedPtr<const PageDict> page_dict(
         NamespaceSlot& slot, const std::uint8_t* raw, std::uint32_t used,
         dstd::Span<const std::uint32_t> starts);
-    /// Trains a dictionary on `sample` and leaves it for the next seal of
-    /// `slot`, then drops the count of running trainings.
-    void train(NamespaceSlot& slot, dstd::Vector<std::uint8_t> sample,
-               dstd::Vector<std::size_t> sizes);
-    static coro::CoroTask<void> train_task(ExtentWriter* writer,
-                                           NamespaceSlot* slot,
-                                           dstd::Vector<std::uint8_t> sample,
-                                           dstd::Vector<std::size_t> sizes);
     static void push_segment(OpenExtent* extent, OpenSegment segment);
     void leave_extent(OpenExtent* extent);
     bool seal_extent(OpenExtent* extent);
@@ -185,11 +177,6 @@ class ExtentWriter {
 
     std::atomic<NamespaceSlot*> namespaces_{nullptr};
     std::mutex namespaces_mutex_;
-    /// Dictionary trainings that run or wait to run; the destructor waits for
-    /// none.
-    std::mutex trainings_mutex_;
-    std::condition_variable trainings_cv_;
-    std::size_t trainings_ = 0;
     dstd::Vector<NamespaceSlot*> slots_;
     dstd::Vector<OpenExtent*> retired_;
     std::mutex retired_mutex_;

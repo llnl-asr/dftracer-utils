@@ -29,6 +29,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
@@ -767,11 +768,13 @@ TEST_SUITE("index store snapshot") {
             CHECK(all_equal);
         }
 
-        // A damaged dictionary fails the reads of the pages that need it.
+        // Damaged dictionaries fail the reads of the pages that need them.
+        // Every dictionary is damaged, so the check does not depend on which
+        // one a page's extent took.
         auto opened = DataFileReader::open(path);
         REQUIRE(opened.has_value());
         std::vector<std::uint8_t> bytes = read_file(path);
-        std::uint64_t dict_offset = 0;
+        std::set<std::uint64_t> dict_offsets;
         for (const store::IndexedExtentRef& indexed : extent_refs_of(*opened)) {
             if (indexed.ref.segments.empty()) continue;
             auto pages = store::ExtentPages::open_table(
@@ -780,16 +783,32 @@ TEST_SUITE("index store snapshot") {
                          indexed.ref.length},
                 indexed.ref.length);
             REQUIRE(pages.has_value());
-            if (!pages->dict().empty()) dict_offset = pages->dict().offset;
+            if (!pages->dict().empty())
+                dict_offsets.insert(pages->dict().offset);
         }
-        REQUIRE(dict_offset != 0);
-        bytes[static_cast<std::size_t>(dict_offset) + 100U] ^= 0xFFU;
+        REQUIRE(dict_offsets.size() == 2);
+        for (const std::uint64_t offset : dict_offsets) {
+            bytes[static_cast<std::size_t>(offset) + 100U] ^= 0xFFU;
+        }
         write_file(path, bytes);
         auto damaged = Snapshot::open(dir.str());
         REQUIRE(damaged.has_value());
-        const std::string last = dict_key(KEYS - 1);
-        auto found = damaged->get(spec, scope, view_of(last));
-        CHECK_FALSE(found.has_value());
+        std::size_t failed = 0;
+        std::size_t read = 0;
+        for (int i = 0; i < KEYS; i += 499) {
+            const std::string key = dict_key(i);
+            auto found = damaged->get(spec, scope, view_of(key));
+            ++read;
+            if (!found.has_value()) {
+                ++failed;
+            } else {
+                // A read that answers answers right: its page needed no
+                // dictionary.
+                REQUIRE(found->has_value());
+                CHECK(to_std((*found)->bytes()) == value(i));
+            }
+        }
+        CHECK(failed > read / 4);
     }
 
     TEST_CASE("the last put wins inside a batch and a later batch wins") {

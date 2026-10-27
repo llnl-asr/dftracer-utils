@@ -39,6 +39,56 @@ constexpr std::uint8_t DICT_STAGES = 2;
 /// waits for the training, so a dictionary is never later than this.
 constexpr std::uint64_t DICT_WAIT_BYTES = std::uint64_t{16} << 20;
 
+/// One dictionary training, shared by the namespace that started it and the
+/// executor task that runs it. Whoever claims it first trains: the task, or a
+/// seal that cannot wait longer. The task holds this alone (not the writer),
+/// so the writer never waits for a task that has not started.
+struct DictTraining {
+    std::mutex mutex;
+    std::condition_variable done_cv;
+    dstd::Vector<std::uint8_t> sample;
+    dstd::Vector<std::size_t> sizes;
+    /// The dictionary, empty when training failed.
+    dstd::Vector<std::uint8_t> result;
+    bool claimed = false;
+    bool done = false;
+};
+
+/// Trains `job` unless another thread claimed it; returns at once then.
+void run_training(DictTraining& job) {
+    dstd::Vector<std::uint8_t> sample;
+    dstd::Vector<std::size_t> sizes;
+    {
+        std::lock_guard<std::mutex> lock(job.mutex);
+        if (job.claimed) return;
+        job.claimed = true;
+        sample = std::move(job.sample);
+        sizes = std::move(job.sizes);
+    }
+    dstd::Vector<std::uint8_t> bytes;
+    try {
+        auto trained = train_page_dict(
+            ByteView(reinterpret_cast<const std::byte*>(sample.data()),
+                     sample.size()),
+            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
+        if (trained) bytes = std::move(*trained);
+    } catch (const std::exception&) {
+        bytes.clear();
+    }
+    sample = dstd::Vector<std::uint8_t>();
+    {
+        std::lock_guard<std::mutex> lock(job.mutex);
+        job.result = std::move(bytes);
+        job.done = true;
+    }
+    job.done_cv.notify_all();
+}
+
+coro::CoroTask<void> training_task(dstd::SharedPtr<DictTraining> job) {
+    run_training(*job);
+    co_return;
+}
+
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::InvalidArgument));
@@ -80,15 +130,10 @@ struct ExtentWriter::NamespaceSlot {
     dstd::Vector<std::size_t> sample_sizes;
     std::uint64_t pages_seen = 0;
     std::uint8_t dict_stage = 0;
-    /// A training runs, or its result waits for the next seal.
-    bool training = false;
-    /// The training finished: trained_bytes holds the dictionary, empty when
-    /// training failed.
-    bool trained = false;
-    dstd::Vector<std::uint8_t> trained_bytes;
-    /// Page bytes sealed since the running training started.
+    /// The training started for the next dictionary; null when none.
+    dstd::SharedPtr<DictTraining> training;
+    /// Page bytes sealed since that training started.
     std::uint64_t sealed_while_training = 0;
-    std::condition_variable trained_cv;
 };
 
 struct ExtentWriter::PendingWrite {
@@ -112,12 +157,6 @@ ExtentWriter::ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
       on_idle_(on_idle) {}
 
 ExtentWriter::~ExtentWriter() {
-    {
-        // A training task names its slot, so the slots outlive every one.
-        BlockingRegion blocking;
-        std::unique_lock<std::mutex> lock(trainings_mutex_);
-        trainings_cv_.wait(lock, [this] { return trainings_ == 0; });
-    }
     for (NamespaceSlot* slot : slots_) {
         OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
         if (extent != nullptr) retire(extent);
@@ -156,56 +195,19 @@ ExtentWriter::NamespaceSlot* ExtentWriter::find_slot(std::uint32_t namespace_id,
     return slot;
 }
 
-void ExtentWriter::train(NamespaceSlot& slot, dstd::Vector<std::uint8_t> sample,
-                         dstd::Vector<std::size_t> sizes) {
-    dstd::Vector<std::uint8_t> bytes;
-    try {
-        auto trained = train_page_dict(
-            ByteView(reinterpret_cast<const std::byte*>(sample.data()),
-                     sample.size()),
-            dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
-        if (trained) bytes = std::move(*trained);
-    } catch (const std::exception&) {
-        bytes.clear();
-    }
-    sample = dstd::Vector<std::uint8_t>();
-    {
-        std::lock_guard<std::mutex> lock(slot.dict_mutex);
-        slot.trained_bytes = std::move(bytes);
-        slot.trained = true;
-    }
-    slot.trained_cv.notify_all();
-    // Last: the writer may be destroyed as soon as the count reaches zero.
-    std::lock_guard<std::mutex> lock(trainings_mutex_);
-    --trainings_;
-    trainings_cv_.notify_all();
-}
-
-coro::CoroTask<void> ExtentWriter::train_task(ExtentWriter* writer,
-                                              NamespaceSlot* slot,
-                                              dstd::Vector<std::uint8_t> sample,
-                                              dstd::Vector<std::size_t> sizes) {
-    writer->train(*slot, std::move(sample), std::move(sizes));
-    co_return;
-}
-
 dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
     NamespaceSlot& slot, const std::uint8_t* raw, std::uint32_t used,
     dstd::Span<const std::uint32_t> starts) {
-    dstd::Vector<std::uint8_t> ready;
-    dstd::Vector<std::uint8_t> sample;
-    dstd::Vector<std::size_t> sizes;
+    dstd::SharedPtr<DictTraining> job;
+    bool must_finish = false;
+    bool started = false;
     {
-        std::unique_lock<std::mutex> lock(slot.dict_mutex);
-        if (slot.training && !slot.trained) {
+        std::lock_guard<std::mutex> lock(slot.dict_mutex);
+        if (slot.training != nullptr) {
+            job = slot.training;
             slot.sealed_while_training += used;
-            if (slot.sealed_while_training < DICT_WAIT_BYTES) return slot.dict;
-            // The namespace outran its training: wait, so the dictionary is
-            // never more than DICT_WAIT_BYTES late.
-            BlockingRegion blocking;
-            slot.trained_cv.wait(lock, [&slot] { return slot.trained; });
-        }
-        if (!slot.trained) {
+            must_finish = slot.sealed_while_training >= DICT_WAIT_BYTES;
+        } else {
             if (slot.dict_stage >= DICT_STAGES) return slot.dict;
             for (std::size_t i = 0;
                  i < starts.size() && slot.sample.size() < DICT_SAMPLE_BYTES;
@@ -230,42 +232,50 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
                 slot.sample_sizes.push_back(end - begin);
             }
             if (slot.sample.size() < DICT_SAMPLE_BYTES) return slot.dict;
-            slot.training = true;
-            slot.sealed_while_training = 0;
-            sample = std::move(slot.sample);
-            sizes = std::move(slot.sample_sizes);
+            // Training takes a fraction of a second, so it runs as a task of
+            // the writer's executor and the extents sealed meanwhile keep the
+            // dictionary they had. It only trains: the seal that finds it done
+            // writes the dictionary, while the data file is open.
+            job = dstd::make_shared<DictTraining>();
+            job->sample = std::move(slot.sample);
+            job->sizes = std::move(slot.sample_sizes);
             slot.sample = dstd::Vector<std::uint8_t>();
             slot.sample_sizes = dstd::Vector<std::size_t>();
-        } else {
-            ready = std::move(slot.trained_bytes);
-            slot.trained_bytes = dstd::Vector<std::uint8_t>();
-            slot.trained = false;
+            slot.training = job;
+            slot.sealed_while_training = 0;
+            started = true;
         }
     }
-    if (!sample.empty()) {
-        // Training takes a fraction of a second, so it runs as a task of the
-        // writer's executor and the extents sealed meanwhile keep the
-        // dictionary they had. It only trains: the seal that finds it done
-        // writes the dictionary, while the data file is open.
-        {
-            std::lock_guard<std::mutex> lock(trainings_mutex_);
-            ++trainings_;
-        }
-        if (!executor_.is_running()) {
-            train(slot, std::move(sample), std::move(sizes));
-        } else if (!spawn_detached(&executor_,
-                                   train_task(this, &slot, std::move(sample),
-                                              std::move(sizes)))) {
-            // The executor stopped in between; the task never ran.
-            std::lock_guard<std::mutex> lock(trainings_mutex_);
-            --trainings_;
-            trainings_cv_.notify_all();
-            std::lock_guard<std::mutex> stage(slot.dict_mutex);
-            slot.training = false;
-            slot.dict_stage = DICT_STAGES;
-        }
+    if (started) {
+        // Just started. A task that never runs leaves the job to the seal that
+        // must finish it.
+        (void)spawn_detached(&executor_, training_task(job));
         std::lock_guard<std::mutex> lock(slot.dict_mutex);
         return slot.dict;
+    }
+    if (must_finish) {
+        // The namespace outran its training: finish it here. A job no thread
+        // claimed is trained on this one; a claimed one runs on another thread
+        // and ends.
+        run_training(*job);
+        BlockingRegion blocking;
+        std::unique_lock<std::mutex> lock(job->mutex);
+        job->done_cv.wait(lock, [&job] { return job->done; });
+    }
+    bool done = false;
+    {
+        std::lock_guard<std::mutex> lock(job->mutex);
+        done = job->done;
+    }
+    dstd::Vector<std::uint8_t> ready;
+    {
+        // One seal takes the result: the one that still finds the job here.
+        // The slot lock is taken before the job lock, as everywhere.
+        std::lock_guard<std::mutex> lock(slot.dict_mutex);
+        if (!done || slot.training != job) return slot.dict;
+        slot.training = nullptr;
+        std::lock_guard<std::mutex> job_lock(job->mutex);
+        ready = std::move(job->result);
     }
     dstd::SharedPtr<const PageDict> made;
     if (!ready.empty()) {
@@ -278,7 +288,6 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
         }
     }
     std::lock_guard<std::mutex> lock(slot.dict_mutex);
-    slot.training = false;
     if (made == nullptr) {
         slot.dict_stage = DICT_STAGES;
         return slot.dict;

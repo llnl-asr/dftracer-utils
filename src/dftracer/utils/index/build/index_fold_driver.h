@@ -300,7 +300,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             probe_intern_order();
     }
 
-    void finalize(index::store::IndexDatabaseWriterContext& /*writer*/,
+    void finalize(index::store::IndexDatabaseWrite& /*writer*/,
                   int /*file_id*/) override {}
 
    private:

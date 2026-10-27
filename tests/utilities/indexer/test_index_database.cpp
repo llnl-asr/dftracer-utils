@@ -526,7 +526,7 @@ TEST_SUITE("IndexDatabase staleness") {
         CHECK(db.check_freshness(b) == IndexDatabase::Freshness::Stale);
     }
 
-    TEST_CASE("unregistered files and other formats are not fresh") {
+    TEST_CASE("unregistered files are not fresh") {
         auto root = dftu_utils_test::make_unique_test_path("fresh_negatives");
         fs::create_directories(root);
         auto a = write_file(root / "a.pfw", "aaa");
@@ -539,6 +539,16 @@ TEST_SUITE("IndexDatabase staleness") {
         // Registered file with no changes is fresh; unregistered is stale.
         CHECK(db.check_freshness(a) == IndexDatabase::Freshness::Fresh);
         CHECK(db.check_freshness(b) == IndexDatabase::Freshness::Stale);
+    }
+
+    TEST_CASE("another stored format version is not fresh") {
+        auto root = dftu_utils_test::make_unique_test_path("fresh_format");
+        fs::create_directories(root);
+        auto a = write_file(root / "a.pfw", "aaa");
+
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        register_files(db, {a});
 
         set_format_version(db, IndexDatabase::FORMAT_VERSION + 1);
         CHECK(db.check_freshness(a) ==

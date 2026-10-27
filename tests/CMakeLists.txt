@@ -295,6 +295,7 @@ set(TEST_CPP_SOURCES
     server/test_viz_aggregated.cpp
     server/test_viz_schema.cpp
     trace/genesis/test_genesis.cpp
+    index/test_index_database_store.cpp
     index/test_indexer.cpp
     index/test_store_key.cpp
     index/test_store_index_write.cpp
@@ -398,6 +399,39 @@ foreach(test_file ${TEST_CPP_SOURCES})
   if(DFTRACER_UTILS_ENABLE_TSAN)
     set(default_test_timeout 300)
   endif()
+
+  # The index tests that run on either backend, run again on the store backend
+  # of this process.
+  set(store_backend_cases
+      index/test_indexer
+      index/test_catalog
+      index/test_kinds
+      index/test_layout
+      index/test_bloom_open_counts
+      index/test_record_schema)
+  # "binary=case,case": the cases of `binary` the store backend cannot run yet.
+  # A case that writes the index through its own RocksDB handle has none to
+  # write, and a build path that bulk-ingests an SST throws: the store stages
+  # no SSTs.
+  set(store_backend_excluded_cases
+      "index/test_indexer=an index in another format is rebuilt"
+      "index/test_catalog=a wide file keeps evidence for every useful path,the cap keeps the most frequent paths whose evidence fits")
+  if(bin_exec IN_LIST store_backend_cases)
+    set(store_args)
+    foreach(excluded ${store_backend_excluded_cases})
+      string(FIND "${excluded}" "${bin_exec}=" prefix_end)
+      if(prefix_end EQUAL 0)
+        string(LENGTH "${bin_exec}=" prefix_length)
+        string(SUBSTRING "${excluded}" ${prefix_length} -1 cases)
+        set(store_args "--test-case-exclude=${cases}")
+      endif()
+    endforeach()
+    add_test(NAME "${bin_exec}[store]" COMMAND ${target_name} ${store_args})
+    set_tests_properties("${bin_exec}[store]" PROPERTIES
+                         ENVIRONMENT "DFTRACER_UTILS_INDEX_BACKEND=store"
+                         TIMEOUT ${default_test_timeout})
+  endif()
+
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})
 
   # These thread-heavy tests contend heavily when run together on low-core CI.

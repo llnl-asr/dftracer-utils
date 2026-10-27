@@ -641,8 +641,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
         auto* db = writer_db.get();
         block_writer.make_sink = [db] { return db->begin_write(); };
         block_writer.commit_sink = [](index::store::IndexWrite& sink) {
-            static_cast<index::store::IndexDatabaseWriterContext&>(sink)
-                .commit();
+            static_cast<index::store::IndexDatabaseWrite&>(sink).commit();
         };
         block_writer.commit_spill =
             [db](std::vector<

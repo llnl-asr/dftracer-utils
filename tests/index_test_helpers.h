@@ -18,14 +18,18 @@ namespace dftu_utils_test {
 namespace index_records = dftracer::utils::index::store::records;
 using dftracer::utils::index::store::IndexExtension;
 
-/// Registers `logical_path` in the write and returns its file id.
+/// Registers `logical_path` in the write and returns its file id. Writes what a
+/// build writes for a file before its data: the file record, the Members copy
+/// that holds the record's stat, and its manifest entry.
 inline int register_test_file(
-    dftracer::utils::index::store::IndexDatabaseWriterContext& w,
+    dftracer::utils::index::store::IndexDatabaseWrite& w,
     std::string_view logical_path, std::uint64_t hash = 0,
     std::uint64_t mtime = 0, std::uint64_t size = 0) {
     const int fid = w.file_id_for(logical_path);
     index_records::put_file_record(
         w, logical_path, {static_cast<std::uint32_t>(fid), mtime, hash, size});
+    index_records::put_file_metadata(w, fid, 0, 0, 0, false);
+    index_records::put_manifest(w, fid, IndexExtension::Members, 0);
     return fid;
 }
 

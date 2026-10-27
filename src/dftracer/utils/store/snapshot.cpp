@@ -2697,6 +2697,38 @@ dstd::Expected<dstd::Vector<ScopeEntry>, dstd::Error> Snapshot::scopes(
     return entries;
 }
 
+dstd::Expected<dstd::Vector<NamespaceDecl>, dstd::Error> Snapshot::namespaces()
+    const {
+    dstd::Vector<NamespaceDecl> declared;
+    for (const detail::FileData& file : files_) {
+        for (const NamespaceItem& item : file.reader.index().namespaces) {
+            bool known = false;
+            for (const NamespaceDecl& entry : declared) {
+                if (entry.format_version == item.format_version &&
+                    entry.name == item.name) {
+                    known = true;
+                    break;
+                }
+            }
+            if (known) continue;
+            NamespaceDecl entry;
+            entry.name = item.name;
+            entry.format_version = item.format_version;
+            declared.push_back(std::move(entry));
+        }
+    }
+    std::sort(
+        declared.begin(), declared.end(),
+        [](const NamespaceDecl& a, const NamespaceDecl& b) {
+            const int order =
+                std::string_view(a.name.data(), a.name.size())
+                    .compare(std::string_view(b.name.data(), b.name.size()));
+            if (order != 0) return order < 0;
+            return a.format_version < b.format_version;
+        });
+    return declared;
+}
+
 dstd::Expected<dstd::Vector<ScopeKey>, dstd::Error> Snapshot::namespace_scopes(
     const NamespaceSpec& spec) const {
     dstd::Vector<ScopeKey> scopes;

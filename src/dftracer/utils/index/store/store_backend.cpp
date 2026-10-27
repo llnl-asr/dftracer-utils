@@ -10,6 +10,7 @@
 #include <dftracer/utils/store/writer.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <mutex>
 #include <shared_mutex>
@@ -67,6 +68,19 @@ kv::NamespaceSpec make_spec(const std::string& name,
 kv::NamespaceSpec members_spec() {
     return make_spec(store_layout::namespace_name(layout::Ext::Members),
                      store_layout::namespace_version(layout::Ext::Members));
+}
+
+bool same_sources(const dstd::Vector<kv::SourceStat>& previous,
+                  const dstd::Vector<kv::SourceStat>& next) {
+    if (previous.size() != next.size()) return false;
+    for (std::size_t i = 0; i < previous.size(); ++i) {
+        if (previous[i].mtime != next[i].mtime ||
+            previous[i].size != next[i].size ||
+            previous[i].hash != next[i].hash) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::mutex& root_registry_mutex() {
@@ -149,6 +163,8 @@ void StoreRoot::ensure_writer_locked() {
     if (!created)
         throw_store_error("store index: open the writer", created.error());
     writer_ = std::move(*created);
+    // The view a read took before this writer holds none of its copies.
+    snapshot_taken_ = false;
 }
 
 dstd::Expected<void, dstd::Error> StoreRoot::run(
@@ -159,7 +175,14 @@ dstd::Expected<void, dstd::Error> StoreRoot::run(
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::open_snapshot_locked() {
-    ensure_dir_locked();
+    // A read-only root that was never written has no store directory; only a
+    // write creates it, so such a root reads as an empty store.
+    if (writer_) {
+        ensure_dir_locked();
+    } else {
+        std::error_code missing;
+        if (!std::filesystem::exists(store_dir_, missing)) return nullptr;
+    }
     auto opened = kv::Snapshot::open(store_dir_);
     if (!opened)
         throw_store_error("store index: open the store", opened.error());
@@ -167,9 +190,10 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::open_snapshot_locked() {
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
-    if (snapshot_ && snapshot_version_ == version_) return snapshot_;
+    if (snapshot_taken_ && snapshot_version_ == version_) return snapshot_;
     snapshot_ = open_snapshot_locked();
     snapshot_version_ = version_;
+    snapshot_taken_ = true;
     return snapshot_;
 }
 
@@ -185,7 +209,12 @@ void StoreRoot::seed_file_ids_locked() {
         seeded_ = true;
         return;
     }
-    const auto listed = snapshot_locked()->scopes(members_spec());
+    const auto held = snapshot_locked();
+    if (!held) {
+        seeded_ = true;
+        return;
+    }
+    const auto listed = held->scopes(members_spec());
     if (!listed) {
         throw_store_error("store index: list the files of the store",
                           listed.error());
@@ -217,6 +246,28 @@ int StoreRoot::file_id_for(std::string_view logical_path) {
     ids_by_path_.emplace(path, id);
     paths_by_id_.emplace(id, path);
     return id;
+}
+
+std::optional<int> StoreRoot::find_file_id(std::string_view logical_path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    seed_file_ids_locked();
+    auto at = ids_by_path_.find(std::string(logical_path));
+    if (at == ids_by_path_.end()) return std::nullopt;
+    return at->second;
+}
+
+int StoreRoot::reserve_file_id_range(std::size_t count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    seed_file_ids_locked();
+    const int first = next_file_id_;
+    next_file_id_ += static_cast<int>(count);
+    return first;
+}
+
+int StoreRoot::next_file_id() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    seed_file_ids_locked();
+    return next_file_id_;
 }
 
 std::optional<std::string> StoreRoot::path_of(int file_id) {
@@ -279,16 +330,30 @@ kv::NamespaceId StoreRoot::namespace_id(const std::string& name,
     return entry.id;
 }
 
-std::uint32_t StoreRoot::known_namespace_version(const std::string& name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto at = namespaces_.find(name);
-    return at != namespaces_.end() ? at->second.version : 0;
+std::uint32_t StoreRoot::resolved_namespace_version(const std::string& name) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto at = namespaces_.find(name);
+        if (at != namespaces_.end()) return at->second.version;
+    }
+    const auto held = snapshot();
+    if (!held) return 0;
+    const auto declared = held->namespaces();
+    if (!declared) return 0;
+    std::uint32_t highest = 0;
+    for (const kv::NamespaceDecl& entry : *declared) {
+        const std::string_view known(entry.name.data(), entry.name.size());
+        if (known == name) highest = std::max(highest, entry.format_version);
+    }
+    return highest;
 }
 
 bool StoreRoot::sources_of(const kv::ScopeKey& scope,
                            const std::map<std::string, kv::SourceStat>& stats,
                            dstd::Vector<kv::SourceStat>& sources) {
     if (scope.kind != kv::ScopeKind::File) return false;
+    const auto held = snapshot();
+    if (!held) return false;
     dstd::Vector<kv::SourceStat> found;
     for (const dstd::String& path : scope.paths) {
         const std::string key(path.data(), path.size());
@@ -298,7 +363,7 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
             continue;
         }
         const kv::CopyInfo info =
-            snapshot()->copy_info(members_spec(), kv::ScopeKey::file(key));
+            held->copy_info(members_spec(), kv::ScopeKey::file(key));
         if (info.sources.size() != 1) return false;
         found.push_back(info.sources[0]);
     }
@@ -308,15 +373,34 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
 }
 
 void StoreRoot::mark_committed(const std::string& name,
-                               const kv::ScopeKey& scope) {
+                               const kv::ScopeKey& scope,
+                               std::uint64_t params_hash,
+                               const dstd::Vector<kv::SourceStat>* sources) {
+    CommittedCopy committed;
+    committed.params_hash = params_hash;
+    if (sources != nullptr) committed.sources = *sources;
     std::lock_guard<std::mutex> lock(mutex_);
-    committed_.emplace(name, scope);
+    committed_.insert_or_assign({name, scope}, std::move(committed));
+}
+
+void StoreRoot::forget_committed(const std::string& name,
+                                 const kv::ScopeKey& scope) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    committed_.erase({name, scope});
 }
 
 bool StoreRoot::was_committed(const std::string& name,
                               const kv::ScopeKey& scope) {
     std::lock_guard<std::mutex> lock(mutex_);
     return committed_.find({name, scope}) != committed_.end();
+}
+
+std::optional<StoreRoot::CommittedCopy> StoreRoot::committed_copy(
+    const std::string& name, const kv::ScopeKey& scope) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto at = committed_.find({name, scope});
+    if (at == committed_.end()) return std::nullopt;
+    return at->second;
 }
 
 void StoreRoot::bump_version() {
@@ -345,6 +429,10 @@ void StoreRoot::close() {
 std::unique_ptr<StoreIndexWrite> StoreRoot::begin_write() {
     return std::unique_ptr<StoreIndexWrite>(
         new StoreIndexWrite(shared_from_this()));
+}
+
+int StoreIndexWrite::file_id_for(std::string_view logical_path) {
+    return root_->file_id_for(logical_path);
 }
 
 StoreIndexWrite::StoreIndexWrite(std::shared_ptr<StoreRoot> root)
@@ -379,7 +467,9 @@ StoreIndexWrite::PendingCopy& StoreIndexWrite::pending_copy(
     pending.plugin = ext == layout::Ext::Plugin;
     pending.name = pending.plugin ? store_layout::plugin_namespace_name(plugin)
                                   : store_layout::namespace_name(ext);
-    pending.version = pending.plugin ? 0 : store_layout::namespace_version(ext);
+    pending.version = pending.plugin
+                          ? root_->resolved_namespace_version(pending.name)
+                          : store_layout::namespace_version(ext);
     pending.scope = scope_of(file_id);
     std::pair<std::string, kv::ScopeKey> key{pending.name, pending.scope};
     auto inserted = pending_.try_emplace(std::move(key), std::move(pending));
@@ -390,14 +480,39 @@ StoreIndexWrite::PendingCopy& StoreIndexWrite::pending_copy(
     return *last_copy_;
 }
 
-void StoreIndexWrite::clear_copy(layout::Ext ext, std::uint32_t file_id,
-                                 std::string_view plugin) {
-    PendingCopy& copy = pending_copy(ext, file_id, plugin);
+void StoreIndexWrite::clear_pending(PendingCopy& copy) {
     copy.cleared = true;
     copy.has_manifest = false;
     copy.failed = false;
     copy.params_hash = 0;
     copy.keys.clear();
+}
+
+void StoreIndexWrite::clear_copy(layout::Ext ext, std::uint32_t file_id,
+                                 std::string_view plugin) {
+    clear_pending(pending_copy(ext, file_id, plugin));
+}
+
+void StoreIndexWrite::clear_plugin_copies(std::uint32_t file_id) {
+    const kv::ScopeKey scope = scope_of(file_id);
+    for (auto& entry : pending_)
+        if (entry.second.plugin && entry.second.scope == scope)
+            clear_pending(entry.second);
+    const auto held = root_->snapshot();
+    if (!held) return;
+    const auto declared = held->namespaces();
+    if (!declared)
+        throw_store_error("store index: list namespaces", declared.error());
+    for (const kv::NamespaceDecl& entry : *declared) {
+        const std::string_view name(entry.name.data(), entry.name.size());
+        if (!name.starts_with(store_layout::PLUGIN_NAMESPACE_PREFIX)) continue;
+        const std::string plugin(
+            name.substr(store_layout::PLUGIN_NAMESPACE_PREFIX.size()));
+        if (pending_.find({store_layout::plugin_namespace_name(plugin),
+                           scope}) != pending_.end())
+            continue;
+        clear_copy(layout::Ext::Plugin, file_id, plugin);
+    }
 }
 
 void StoreIndexWrite::host_put(const store_layout::HostTarget& target,
@@ -468,9 +583,8 @@ void StoreIndexWrite::host_delete(const store_layout::HostTarget& target) {
             return;
         case store_layout::HostKind::PluginManifest:
             if (target.plugin.empty()) {
-                throw std::runtime_error(
-                    "store index: a delete of every plugin of a file is not "
-                    "supported");
+                clear_plugin_copies(target.file_id);
+                return;
             }
             clear_copy(layout::Ext::Plugin, target.file_id, target.plugin);
             return;
@@ -527,6 +641,10 @@ void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
         throw std::runtime_error(
             "store index: a delete range is not an index key");
     }
+    if (target->plugin.empty() && target->ext == layout::Ext::Plugin) {
+        clear_plugin_copies(target->file_id);
+        return;
+    }
     if (begin.size() == layout::KEY_PREFIX_BYTES &&
         end == layout::prefix_end(begin)) {
         clear_copy(target->ext, target->file_id, target->plugin);
@@ -560,6 +678,10 @@ void StoreIndexWrite::del(layout::Family, std::string_view key) {
         throw std::runtime_error(
             "store index: a delete key is not an index key");
     }
+    if (target->plugin.empty() && target->ext == layout::Ext::Plugin) {
+        clear_plugin_copies(target->file_id);
+        return;
+    }
     const std::string name = namespace_of(*target);
     const kv::ScopeKey scope = scope_of(target->file_id);
     check_narrow_delete(name, scope);
@@ -575,32 +697,44 @@ void StoreIndexWrite::commit() {
     kv::Writer& writer = root_->writer();
     for (auto& entry : pending_) {
         PendingCopy& copy = entry.second;
-        const std::uint32_t version =
-            copy.plugin && !copy.has_manifest
-                ? root_->known_namespace_version(copy.name)
-                : copy.version;
+        const std::uint32_t version = copy.version;
         const kv::NamespaceId id = root_->namespace_id(copy.name, version);
-        if (copy.failed) {
-            check("store index: fail a copy",
-                  writer.fail(id, copy.scope, copy.params_hash));
-            root_->mark_committed(copy.name, copy.scope);
-            continue;
-        }
         const bool has_body = !copy.keys.empty() || copy.has_manifest;
-        // The writer keeps one copy of a scope across its commits, so a copy
-        // it already holds is replaced by a drop; a copy of an earlier writer
-        // is hidden by the generation of this one.
+        dstd::Vector<kv::SourceStat> sources;
+        const bool have_sources =
+            has_body && root_->sources_of(copy.scope, file_stats_, sources);
+        // The writer keeps one copy of a scope and the params hash and sources
+        // it announced for it, so a copy this root already holds with another
+        // of either, and a copy this write clears, is replaced by a drop first.
+        bool dropped = false;
         if (copy.cleared &&
             (!has_body || root_->was_committed(copy.name, copy.scope))) {
             check("store index: drop a copy", writer.drop(id, copy.scope));
+            dropped = true;
+        } else if (const auto previous =
+                       root_->committed_copy(copy.name, copy.scope)) {
+            if (previous->params_hash != copy.params_hash ||
+                !same_sources(previous->sources, sources)) {
+                check("store index: drop a copy", writer.drop(id, copy.scope));
+                dropped = true;
+            }
         }
         if (!has_body) {
-            root_->mark_committed(copy.name, copy.scope);
+            if (dropped) {
+                root_->forget_committed(copy.name, copy.scope);
+            } else {
+                root_->mark_committed(copy.name, copy.scope, copy.params_hash,
+                                      nullptr);
+            }
             continue;
         }
-        dstd::Vector<kv::SourceStat> sources;
-        const bool have_sources =
-            root_->sources_of(copy.scope, file_stats_, sources);
+        if (copy.failed) {
+            check("store index: fail a copy",
+                  writer.fail(id, copy.scope, copy.params_hash));
+            root_->mark_committed(copy.name, copy.scope, copy.params_hash,
+                                  nullptr);
+            continue;
+        }
         kv::Batch batch = writer.batch(id, copy.scope, copy.params_hash,
                                        have_sources ? &sources : nullptr);
         for (const auto& [key, value] : copy.keys) {
@@ -614,7 +748,8 @@ void StoreIndexWrite::commit() {
         }
         check("store index: commit a copy",
               root_->run(commit_with_space(writer, std::move(batch))));
-        root_->mark_committed(copy.name, copy.scope);
+        root_->mark_committed(copy.name, copy.scope, copy.params_hash,
+                              have_sources ? &sources : nullptr);
     }
     check("store index: flush the writer", root_->run(writer.flush()));
     root_->bump_version();

@@ -54,6 +54,21 @@ class IndexWrite {
     std::size_t buffered_bytes_ = 0;
 };
 
+/// One write to an index database, whichever backend holds it, with what a
+/// build asks the database itself.
+class IndexDatabaseWrite : public IndexWrite {
+   public:
+    ~IndexDatabaseWrite() override = default;
+
+    /// Makes every key of this write visible to later reads. A second call
+    /// does nothing.
+    virtual void commit() = 0;
+    /// The id of `logical_path`, assigned when the path is new.
+    virtual int file_id_for(std::string_view logical_path) = 0;
+    /// Creates what an empty index root needs to hold a build's writes.
+    virtual void init_schema() = 0;
+};
+
 /// Record writers. Each value gets the layout header of its (ext, kind).
 namespace records {
 

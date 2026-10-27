@@ -1492,6 +1492,52 @@ TEST_SUITE("index store snapshot") {
         CHECK(unknown->empty());
     }
 
+    TEST_CASE("namespaces lists every namespace its files declare") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_namespaces");
+        const NamespaceSpec older = put_spec("dftu.test.namespaces", 1);
+        const NamespaceSpec raised = put_spec("dftu.test.namespaces", 3);
+        const NamespaceSpec other = put_spec("dftu.test.namespaces.other", 2);
+        const ScopeKey a = file_scope("/traces/a.pfw");
+        const ScopeKey b = file_scope("/traces/b.pfw");
+        {
+            auto writer = make_writer(dir);
+            auto first = writer->add_namespace(older);
+            auto second = writer->add_namespace(other);
+            REQUIRE(first.has_value());
+            REQUIRE(second.has_value());
+            for (const auto& [at, scope] :
+                 {std::pair{*first, a}, std::pair{*second, a}}) {
+                Batch batch = writer->batch(at, scope, 0);
+                batch.put(view_of(std::string("key")),
+                          view_of(std::string("v")));
+                REQUIRE(writer->commit(std::move(batch)).has_value());
+            }
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        {
+            auto writer = make_writer(dir);
+            auto only = writer->add_namespace(raised);
+            REQUIRE(only.has_value());
+            Batch batch = writer->batch(*only, b, 0);
+            batch.put(view_of(std::string("key")), view_of(std::string("v")));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto listed = snapshot->namespaces();
+        REQUIRE(listed.has_value());
+        // One entry per name and version any file declares, in that order.
+        REQUIRE(listed->size() == 3);
+        CHECK(to_std((*listed)[0].name) == "dftu.test.namespaces");
+        CHECK((*listed)[0].format_version == 1);
+        CHECK(to_std((*listed)[1].name) == "dftu.test.namespaces");
+        CHECK((*listed)[1].format_version == 3);
+        CHECK(to_std((*listed)[2].name) == "dftu.test.namespaces.other");
+        CHECK((*listed)[2].format_version == 2);
+    }
+
     TEST_CASE("a batch whose sources differ from its copy fails") {
         dftu_utils_test::ScopedTestDir dir("snapshot_copy_sources_differ");
         const NamespaceSpec spec = put_spec("dftu.test.put");

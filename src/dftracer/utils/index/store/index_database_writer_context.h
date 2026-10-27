@@ -13,7 +13,7 @@ namespace dftracer::utils::index::store {
 class IndexDatabase;
 
 /// An IndexWrite over one RocksDB WriteBatch, applied by commit().
-class IndexDatabaseWriterContext : public IndexWrite {
+class IndexDatabaseWriterContext : public IndexDatabaseWrite {
    public:
     IndexDatabaseWriterContext(IndexDatabaseWriterContext&&) noexcept;
     IndexDatabaseWriterContext& operator=(
@@ -31,14 +31,14 @@ class IndexDatabaseWriterContext : public IndexWrite {
                       std::string_view end) override;
     void del(layout::Family family, std::string_view key) override;
 
-    void commit();
+    void commit() override;
 
     /// Writes the format version and the extension registry when absent.
-    void init_schema();
+    void init_schema() override;
 
     /// The file id of `logical_path`: its registered id, or the next free id
     /// (reserved in this write) when the path is new.
-    int file_id_for(std::string_view logical_path);
+    int file_id_for(std::string_view logical_path) override;
 
    private:
     friend class IndexDatabase;

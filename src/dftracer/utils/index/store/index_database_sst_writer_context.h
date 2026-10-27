@@ -116,8 +116,15 @@ class SstArtifactRegistry {
         return files_[static_cast<std::size_t>(family)];
     }
 
+    bool empty() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& files : files_)
+            if (!files.empty()) return false;
+        return true;
+    }
+
    private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::array<std::vector<std::string>, layout::FAMILY_COUNT> files_;
 };
 

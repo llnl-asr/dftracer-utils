@@ -20,7 +20,7 @@ class RocksDatabase;
 
 namespace dftracer::utils::index::store {
 
-class IndexDatabaseWriterContext;
+class IndexDatabaseWrite;
 class SstArtifactRegistry;
 
 /// How an index database is opened. Mapped to the RocksDB open mode inside the
@@ -50,9 +50,9 @@ ColumnType merge_column_type(ColumnType a, ColumnType b);
 const char* column_type_name(ColumnType t);
 
 /// The index database: the read/query surface plus the write/ingest/format
-/// surface over one on-disk `.dftindex`. The RocksDB engine and all mutable
-/// state live behind an opaque `Impl`. Reads are `const`; a
-/// `const IndexDatabase&` is therefore a read-only handle.
+/// surface over one on-disk `.dftindex`. The backend that holds it, RocksDB or
+/// the store, and all mutable state live behind an opaque `Impl`. Reads are
+/// `const`; a `const IndexDatabase&` is therefore a read-only handle.
 class IndexDatabase {
    public:
     /// On-disk layout version. An index with another stored version is
@@ -69,9 +69,12 @@ class IndexDatabase {
     IndexDatabase& operator=(IndexDatabase&&) noexcept;
     ~IndexDatabase();
 
-    /// The underlying RocksDB handle. Internal callers only; external users
-    /// should stay on the typed query/write API.
+    /// The underlying RocksDB handle. Throws std::runtime_error when the store
+    /// holds the index. Internal callers only; external users should stay on
+    /// the typed query/write API.
     std::shared_ptr<index::store::RocksDatabase> db() const;
+    /// Whether RocksDB holds the index, so db() has a handle.
+    bool has_rocksdb() const noexcept;
 
     /// The manifest entry of `ext` for `file_id`; nullopt when never built.
     std::optional<ExtensionState> extension_state(int file_id,
@@ -249,10 +252,12 @@ class IndexDatabase {
     /// Arrow IPC frame; nullopt when the file's row sets are not current.
     std::optional<std::string> rowset(int file_id, std::string_view name) const;
 
-    std::unique_ptr<IndexDatabaseWriterContext> begin_write();
+    /// One write to this index, on whichever backend holds it.
+    std::unique_ptr<IndexDatabaseWrite> begin_write();
 
     /// Ingest, in one atomic call, the SSTs of `IndexDatabaseSstWriterContext`
-    /// instances with disjoint file ids. No-op on an empty registry.
+    /// instances with disjoint file ids. No-op on an empty registry. Throws
+    /// std::runtime_error when the store holds the index.
     ///
     /// `skip_cfs` optionally holds CF names (e.g. `cf::SYSTEM_METRICS`) whose
     /// SSTs must be left outside the unified DB. Distributed builds use this
@@ -273,7 +278,8 @@ class IndexDatabase {
     std::vector<int> assign_file_ids(
         const std::vector<std::string>& file_paths);
 
-    /// Writes the format version and extension registry when absent.
+    /// Writes the format version and extension registry when absent; does
+    /// nothing when the store holds the index.
     void init_schema();
 
     /// Read-write opens of an index store by this process so far; each runs

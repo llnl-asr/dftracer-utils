@@ -172,8 +172,12 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             input.require_aggregation && input.aggregation_config;
         const std::uint64_t params =
             aggregate ? input.aggregation_config->params_hash() : 0;
+        // The tier is a set of RocksDB families, and a store index has no
+        // handle to them.
         if (auto stored =
-                index::schemas::dft::agg::tier::read_config(*db.db())) {
+                db.has_rocksdb()
+                    ? index::schemas::dft::agg::tier::read_config(*db.db())
+                    : std::optional<index::schemas::dft::agg::tier::Config>{}) {
             result.stored_time_interval_us = stored->time_interval_us;
             if (aggregate && stored->params_hash != params) {
                 result.aggregation_stale = true;

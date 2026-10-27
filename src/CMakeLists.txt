@@ -174,6 +174,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/db_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/error.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/filesystem.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database_sst_writer_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database_writer_context.cpp

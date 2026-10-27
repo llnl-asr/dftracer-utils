@@ -125,6 +125,11 @@ inline constexpr std::size_t SPAWN_FREE_DIVISOR = 4;
 }  // namespace file_admission
 
 namespace indexer {
+/// The engine that holds an index root: INDEX_BACKEND_ROCKSDB or
+/// INDEX_BACKEND_STORE. Unset reads as INDEX_BACKEND_ROCKSDB.
+inline constexpr const char* INDEX_BACKEND_ENV = "DFTRACER_UTILS_INDEX_BACKEND";
+inline constexpr const char* INDEX_BACKEND_ROCKSDB = "rocksdb";
+inline constexpr const char* INDEX_BACKEND_STORE = "store";
 static constexpr std::size_t ZLIB_WINDOW_SIZE = 32768;
 static constexpr int ZLIB_GZIP_WINDOW_BITS = 31;    ///< 15 + 16 for gzip format
 static constexpr int ZLIB_FORMAT_WINDOW_BITS = 15;  ///< zlib format

@@ -68,7 +68,9 @@ store::ScopeKey file_scope(std::string_view path) {
 
 /// The key inside a copy of `key`.
 std::string inner_of(const std::string& key) {
-    return std::string(key.begin() + 2, key.end());
+    std::string inner(1, key[2]);
+    inner.append(key, layout::KEY_PREFIX_BYTES, std::string::npos);
+    return inner;
 }
 
 /// Every row of the current copy of one scope of a namespace.

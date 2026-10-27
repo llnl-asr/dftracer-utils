@@ -83,6 +83,12 @@ struct ScopeGeneration {
     std::uint64_t generation = 0;
 };
 
+/// One namespace a data file of a snapshot declares, with its version.
+struct NamespaceDecl {
+    dstd::String name;
+    std::uint32_t format_version = 0;
+};
+
 /// One scope of a namespace that has a current copy, with that copy.
 struct ScopeEntry {
     ScopeKey scope;
@@ -861,6 +867,11 @@ class Snapshot {
     /// one a directory block failed to read with.
     dstd::Expected<dstd::Vector<ScopeEntry>, dstd::Error> scopes(
         const NamespaceSpec& spec) const;
+
+    /// Every namespace the data files of this snapshot declare, one entry per
+    /// (name, version) in name then version order. A file that declares the
+    /// same namespace at two versions appears twice.
+    dstd::Expected<dstd::Vector<NamespaceDecl>, dstd::Error> namespaces() const;
 
    private:
     friend class ScanCursor;

@@ -7,7 +7,6 @@ namespace dftracer::utils::index::store::store_layout {
 namespace {
 
 constexpr std::string_view NAMESPACE_PREFIX = "dftu.idx.";
-constexpr std::string_view PLUGIN_NAMESPACE_PREFIX = "dftu.idx.plugin.";
 /// [ext u16][kind u8]
 constexpr std::size_t KIND_PREFIX_BYTES = 3;
 /// The ext u16 that follows the file id of a manifest key.
@@ -59,7 +58,8 @@ std::optional<KeyTarget> target_of(std::string_view key) {
     target.file_id = layout::read_u32(key.substr(3, 4));
     const std::string_view tail = key.substr(layout::KEY_PREFIX_BYTES);
     if (ext == layout::Ext::Plugin) target.plugin = plugin_of(kind, tail);
-    target.inner_key = std::string(key.substr(2));
+    target.inner_key = std::string(1, static_cast<char>(kind));
+    target.inner_key.append(tail);
     return target;
 }
 

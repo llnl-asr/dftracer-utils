@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/error.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -20,6 +21,9 @@
 #include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/index/store/internal/statistics_codec.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/store_backend.h>
+#include <dftracer/utils/index/store/store_layout.h>
+#include <dftracer/utils/store/snapshot.h>
 
 #include <algorithm>
 #include <array>
@@ -28,6 +32,8 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <stdexcept>
+#include <system_error>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -35,6 +41,7 @@
 namespace dftracer::utils::index::store {
 
 namespace rocks = index::store;
+namespace kv = dftracer::utils::store;
 
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::index::store::internal;
@@ -72,53 +79,6 @@ const char* column_type_name(ColumnType t) {
 namespace {
 
 std::uint32_t fid(int file_id) { return static_cast<std::uint32_t>(file_id); }
-
-// Calls fn(key, payload) for every key under `prefix` in `family` whose value
-// carries the (ext, kind) header; values with another header are skipped.
-template <typename Fn>
-void scan(const rocks::RocksDatabase& db, Ext ext, std::uint8_t kind,
-          std::string_view prefix, Fn&& fn) {
-    scan_prefix_iterator(
-        "Failed to scan index data", prefix,
-        [&] {
-            return db.new_iterator(
-                layout::family_name(layout::family_of(ext, kind)));
-        },
-        [&](::rocksdb::Iterator& it) {
-            const std::string_view key(it.key().data(), it.key().size());
-            const std::string_view value(it.value().data(), it.value().size());
-            if (auto body = layout::payload(value, ext, kind)) fn(key, *body);
-        });
-}
-
-// Presence keys (empty values) under `prefix`.
-template <typename Fn>
-void scan_keys(const rocks::RocksDatabase& db, Ext ext, std::uint8_t kind,
-               std::string_view prefix, Fn&& fn) {
-    scan_prefix_iterator(
-        "Failed to scan index data", prefix,
-        [&] {
-            return db.new_iterator(
-                layout::family_name(layout::family_of(ext, kind)));
-        },
-        [&](::rocksdb::Iterator& it) {
-            fn(std::string_view(it.key().data(), it.key().size()));
-        });
-}
-
-// The payload stored at `key` for (ext, kind); nullopt when absent or when
-// its header does not match.
-std::optional<std::string> get(const rocks::RocksDatabase& db, Ext ext,
-                               std::uint8_t kind, std::string_view key) {
-    std::string value;
-    auto status =
-        db.get(key, &value, layout::family_name(layout::family_of(ext, kind)));
-    if (status.IsNotFound()) return std::nullopt;
-    if (!status.ok()) throw_db_error("Failed to read index data", status);
-    auto body = layout::payload(value, ext, kind);
-    if (!body) return std::nullopt;
-    return std::string(*body);
-}
 
 std::uint32_t tail_u32(std::string_view key, std::size_t offset) {
     return layout::read_u32(key.substr(offset));
@@ -233,34 +193,12 @@ StringViewMap<std::uint64_t> decode_count_map_value(std::string_view value) {
     return counts;
 }
 
-// Rows of (ext, kind) for the files in `file_ids`, in key order:
-// fn(file_id, key, payload).
-template <typename Fn>
-void scan_files(const rocks::RocksDatabase& db, Ext ext, std::uint8_t kind,
-                const std::vector<int>& file_ids, Fn&& fn) {
-    if (file_ids.empty()) return;
-    const ankerl::unordered_dense::set<int> wanted(file_ids.begin(),
-                                                   file_ids.end());
-    const auto [lo, hi] = std::minmax_element(file_ids.begin(), file_ids.end());
-    const auto kind_prefix = layout::kind_prefix(ext, kind);
-    const auto start = layout::file_prefix(ext, kind, fid(*lo));
-    scan_from(
-        "Failed to scan index data",
-        db.new_iterator(layout::family_name(layout::family_of(ext, kind))),
-        start, [&](::rocksdb::Iterator& it) {
-            const std::string_view key(it.key().data(), it.key().size());
-            if (!key.starts_with(kind_prefix) ||
-                key.size() < layout::KEY_PREFIX_BYTES)
-                return false;
-            const int file_id = static_cast<int>(tail_u32(key, 3));
-            if (file_id > *hi) return false;
-            if (!wanted.contains(file_id)) return true;
-            const std::string_view value(it.value().data(), it.value().size());
-            if (auto body = layout::payload(value, ext, kind))
-                fn(file_id, key, *body);
-            return true;
-        });
-}
+/// One store namespace a data scan reads.
+struct StoreNamespace {
+    std::string name;
+    std::uint32_t version = 0;
+    std::string plugin;
+};
 
 }  // namespace
 
@@ -289,10 +227,614 @@ rocks::RocksDatabase::CfOptionsOverride make_aggregation_cf_override() {
 
 struct IndexDatabase::Impl {
     std::string db_path_;
+    IndexBackend backend_ = IndexBackend::RocksDb;
     rocks::RocksDatabase::OpenMode open_mode_ =
         rocks::RocksDatabase::OpenMode::ReadWrite;
+    /// The RocksDB handle, null on the store.
     std::shared_ptr<rocks::RocksDatabase> db_;
+    /// The store root, null on RocksDB.
+    std::shared_ptr<StoreRoot> store_;
+
+    bool on_store() const { return backend_ == IndexBackend::Store; }
+
+    /// The value stored at the full index key `key` of `family`.
+    std::optional<std::string> raw_get(layout::Family family,
+                                       std::string_view key);
+    /// Calls fn(full_key, value) for every key of `family` under `prefix`, in
+    /// ascending byte order; the full RocksDB-form key goes to fn.
+    template <typename Fn>
+    void raw_scan(layout::Family family, std::string_view prefix, Fn&& fn);
+
+    /// The payload at `key` of (ext, kind); nullopt when absent or when its
+    /// header does not match.
+    std::optional<std::string> get(layout::Ext ext, std::uint8_t kind,
+                                   std::string_view key);
+    /// Calls fn(key, payload) for every key of (ext, kind) under `prefix`
+    /// whose value carries the (ext, kind) header.
+    template <typename Fn>
+    void scan(layout::Ext ext, std::uint8_t kind, std::string_view prefix,
+              Fn&& fn);
+    /// Calls fn(key) for every presence key of (ext, kind) under `prefix`.
+    template <typename Fn>
+    void scan_keys(layout::Ext ext, std::uint8_t kind, std::string_view prefix,
+                   Fn&& fn);
+    /// Calls fn(file_id, key, payload) for the rows of (ext, kind) of the
+    /// files in `file_ids`, in key order.
+    template <typename Fn>
+    void scan_files(layout::Ext ext, std::uint8_t kind,
+                    const std::vector<int>& file_ids, Fn&& fn);
+    bool any_with_prefix(layout::Family family, std::string_view prefix);
+    std::optional<layout::FileRecord> file_record(std::string_view path);
+
+    // The store mapping: one form per key of the index key space.
+    /// The store as it stands, null when the root holds no store yet, where
+    /// every read answers nothing.
+    std::shared_ptr<const kv::Snapshot> snapshot() const;
+    std::optional<std::string> store_get(std::string_view key);
+    template <typename Fn>
+    void store_scan(std::string_view prefix, Fn&& fn);
+    /// The plugin namespaces the store declares, highest version each, in
+    /// plugin name order.
+    std::vector<StoreNamespace> plugin_namespaces() const;
+    /// The file ids that hold a copy of `spec`, ascending.
+    std::vector<std::uint32_t> file_ids_of(const kv::NamespaceSpec& spec) const;
+    std::optional<std::string> registered_path(std::uint32_t file_id) const;
+    std::optional<std::string> store_manifest(int file_id, layout::Ext ext,
+                                              std::string_view plugin);
+    std::optional<layout::FileRecord> store_file_record(
+        std::string_view path) const;
+    /// The manifest keys of the plugins that hold a copy of `file_id` whose
+    /// plugin name starts with `plugin`.
+    template <typename Fn>
+    void store_manifests(std::uint32_t file_id, std::string_view plugin,
+                         Fn&& fn);
 };
+
+namespace {
+
+std::string_view view_of(const dstd::String& value) {
+    return std::string_view(value.data(), value.size());
+}
+
+constexpr std::string_view PLUGIN_NAMESPACE_PREFIX =
+    store_layout::PLUGIN_NAMESPACE_PREFIX;
+
+std::string next_file_id_value(std::uint32_t next) {
+    std::string body;
+    append_u32_be(body, next);
+    return layout::with_header(layout::Ext::Host, layout::host::NEXT_FILE_ID,
+                               body);
+}
+
+kv::NamespaceSpec namespace_spec(std::string_view name, std::uint32_t version) {
+    kv::NamespaceSpec spec;
+    spec.name.assign(name.data(), name.size());
+    spec.format_version = version;
+    return spec;
+}
+
+kv::NamespaceSpec ext_spec(layout::Ext ext) {
+    return namespace_spec(store_layout::namespace_name(ext),
+                          layout::ext_version(ext));
+}
+
+std::optional<kv::ScopeKey> file_scope(const std::string& path) {
+    kv::ScopeKey scope;
+    if (path.empty()) return std::nullopt;
+    scope.kind = kv::ScopeKind::File;
+    scope.paths.push_back(dstd::String(path.data(), path.size()));
+    return scope;
+}
+
+kv::ScopeKey root_scope() {
+    kv::ScopeKey scope;
+    scope.kind = kv::ScopeKind::Root;
+    return scope;
+}
+
+void throw_store_error(const char* what, const dstd::Error& error) {
+    const dstd::String text = error.format();
+    throw std::runtime_error(std::string(what) + ": " +
+                             std::string(text.data(), text.size()));
+}
+
+}  // namespace
+
+template <typename Fn>
+void IndexDatabase::Impl::raw_scan(layout::Family family,
+                                   std::string_view prefix, Fn&& fn) {
+    if (on_store()) {
+        store_scan(prefix, std::forward<Fn>(fn));
+        return;
+    }
+    scan_from("Failed to scan index data",
+              db_->new_iterator(layout::family_name(family)), prefix,
+              [&](::rocksdb::Iterator& it) {
+                  const std::string_view key(it.key().data(), it.key().size());
+                  if (!key.starts_with(prefix)) return false;
+                  return fn(key, std::string_view(it.value().data(),
+                                                  it.value().size()));
+              });
+}
+
+std::optional<std::string> IndexDatabase::Impl::raw_get(layout::Family family,
+                                                        std::string_view key) {
+    if (on_store()) return store_get(key);
+    std::string value;
+    auto status = db_->get(key, &value, layout::family_name(family));
+    if (status.IsNotFound()) return std::nullopt;
+    if (!status.ok()) throw_db_error("Failed to read index data", status);
+    return value;
+}
+
+std::optional<std::string> IndexDatabase::Impl::get(layout::Ext ext,
+                                                    std::uint8_t kind,
+                                                    std::string_view key) {
+    auto value = raw_get(layout::family_of(ext, kind), key);
+    if (!value) return std::nullopt;
+    auto body = layout::payload(*value, ext, kind);
+    if (!body) return std::nullopt;
+    return std::string(*body);
+}
+
+template <typename Fn>
+void IndexDatabase::Impl::scan(layout::Ext ext, std::uint8_t kind,
+                               std::string_view prefix, Fn&& fn) {
+    raw_scan(layout::family_of(ext, kind), prefix,
+             [&](std::string_view key, std::string_view value) {
+                 if (auto body = layout::payload(value, ext, kind))
+                     fn(key, *body);
+                 return true;
+             });
+}
+
+template <typename Fn>
+void IndexDatabase::Impl::scan_keys(layout::Ext ext, std::uint8_t kind,
+                                    std::string_view prefix, Fn&& fn) {
+    raw_scan(layout::family_of(ext, kind), prefix,
+             [&](std::string_view key, std::string_view) {
+                 fn(key);
+                 return true;
+             });
+}
+
+template <typename Fn>
+void IndexDatabase::Impl::scan_files(layout::Ext ext, std::uint8_t kind,
+                                     const std::vector<int>& file_ids,
+                                     Fn&& fn) {
+    std::vector<std::uint32_t> ids;
+    ids.reserve(file_ids.size());
+    for (int file_id : file_ids)
+        if (file_id >= 0) ids.push_back(fid(file_id));
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    if (ids.empty()) return;
+    if (!on_store()) {
+        // One iterator over the id range: the files of a batch are mostly
+        // dense, so a seek per file costs more than skipping the others.
+        const auto kind_prefix = layout::kind_prefix(ext, kind);
+        scan_from("Failed to scan index data",
+                  db_->new_iterator(
+                      layout::family_name(layout::family_of(ext, kind))),
+                  layout::file_prefix(ext, kind, ids.front()),
+                  [&](::rocksdb::Iterator& it) {
+                      const std::string_view key(it.key().data(),
+                                                 it.key().size());
+                      if (!key.starts_with(kind_prefix) ||
+                          key.size() < layout::KEY_PREFIX_BYTES)
+                          return false;
+                      const std::uint32_t file_id =
+                          layout::read_u32(key.substr(3, 4));
+                      if (file_id > ids.back()) return false;
+                      if (!std::binary_search(ids.begin(), ids.end(), file_id))
+                          return true;
+                      const std::string_view value(it.value().data(),
+                                                   it.value().size());
+                      if (auto body = layout::payload(value, ext, kind))
+                          fn(static_cast<int>(file_id), key, *body);
+                      return true;
+                  });
+        return;
+    }
+    for (std::uint32_t file_id : ids) {
+        scan(ext, kind, layout::file_prefix(ext, kind, file_id),
+             [&](std::string_view key, std::string_view body) {
+                 fn(static_cast<int>(file_id), key, body);
+             });
+    }
+}
+
+bool IndexDatabase::Impl::any_with_prefix(layout::Family family,
+                                          std::string_view prefix) {
+    bool found = false;
+    raw_scan(family, prefix, [&](std::string_view, std::string_view) {
+        found = true;
+        return false;
+    });
+    return found;
+}
+
+std::optional<layout::FileRecord> IndexDatabase::Impl::file_record(
+    std::string_view path) {
+    // A file record carries its own header, so the value goes through
+    // decode_file_record whole rather than through get().
+    auto value = raw_get(
+        layout::family_of(layout::Ext::Host, layout::host::FILE_BY_PATH),
+        layout::file_by_path_key(path));
+    if (!value) return std::nullopt;
+    return layout::decode_file_record(*value);
+}
+
+std::shared_ptr<const kv::Snapshot> IndexDatabase::Impl::snapshot() const {
+    return store_->snapshot();
+}
+
+std::vector<StoreNamespace> IndexDatabase::Impl::plugin_namespaces() const {
+    const std::string_view prefix(PLUGIN_NAMESPACE_PREFIX);
+    std::vector<StoreNamespace> out;
+    const auto held = snapshot();
+    if (!held) return out;
+    const auto declared = held->namespaces();
+    if (!declared)
+        throw_store_error("store index: list namespaces", declared.error());
+    for (const kv::NamespaceDecl& entry : *declared) {
+        const std::string_view name = view_of(entry.name);
+        if (!name.starts_with(prefix)) continue;
+        const std::string_view plugin = name.substr(prefix.size());
+        auto at = std::find_if(out.begin(), out.end(), [&](const auto& known) {
+            return known.plugin == plugin;
+        });
+        if (at == out.end()) {
+            out.push_back(StoreNamespace{
+                std::string(name), entry.format_version, std::string(plugin)});
+        } else if (entry.format_version > at->version) {
+            at->version = entry.format_version;
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const StoreNamespace& a, const StoreNamespace& b) {
+                  return a.plugin < b.plugin;
+              });
+    return out;
+}
+
+std::vector<std::uint32_t> IndexDatabase::Impl::file_ids_of(
+    const kv::NamespaceSpec& spec) const {
+    std::vector<std::uint32_t> ids;
+    const auto held = snapshot();
+    if (!held) return ids;
+    const auto listed = held->scopes(spec);
+    if (!listed) throw_store_error("store index: list scopes", listed.error());
+    for (const kv::ScopeEntry& entry : *listed) {
+        if (entry.scope.kind != kv::ScopeKind::File ||
+            entry.scope.paths.empty())
+            continue;
+        const auto id = store_->file_id_for(view_of(entry.scope.paths[0]));
+        ids.push_back(fid(id));
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    return ids;
+}
+
+std::optional<std::string> IndexDatabase::Impl::registered_path(
+    std::uint32_t file_id) const {
+    if (file_id == layout::INDEX_WIDE) return std::nullopt;
+    return store_->path_of(static_cast<int>(file_id));
+}
+
+std::optional<std::string> IndexDatabase::Impl::store_manifest(
+    int file_id, layout::Ext ext, std::string_view plugin) {
+    const auto path = registered_path(fid(file_id));
+    if (!path) return std::nullopt;
+    kv::NamespaceSpec spec;
+    if (ext == layout::Ext::Plugin) {
+        for (const auto& known : plugin_namespaces()) {
+            if (known.plugin == plugin) {
+                spec = namespace_spec(known.name, known.version);
+                break;
+            }
+        }
+        if (spec.name.empty()) return std::nullopt;
+    } else {
+        spec = ext_spec(ext);
+    }
+    const auto scope = file_scope(*path);
+    if (!scope) return std::nullopt;
+    const auto held = snapshot();
+    if (!held) return std::nullopt;
+    const kv::CopyInfo info = held->copy_info(spec, *scope);
+    layout::ManifestEntry entry;
+    entry.version = spec.format_version;
+    entry.params_hash = info.params_hash;
+    switch (info.state) {
+        case kv::ScopeState::Ready:
+            entry.status = layout::ExtStatus::Ready;
+            break;
+        case kv::ScopeState::Failed:
+            entry.status = layout::ExtStatus::Failed;
+            break;
+        default:
+            return std::nullopt;
+    }
+    return layout::encode_manifest(entry);
+}
+
+std::optional<layout::FileRecord> IndexDatabase::Impl::store_file_record(
+    std::string_view path) const {
+    auto id = store_->find_file_id(path);
+    if (!id) return std::nullopt;
+    layout::FileRecord record;
+    record.file_id = fid(*id);
+    const auto scope = file_scope(std::string(path));
+    if (!scope) return std::nullopt;
+    const auto held = snapshot();
+    if (!held) return std::nullopt;
+    const kv::CopyInfo info =
+        held->copy_info(ext_spec(layout::Ext::Members), *scope);
+    if (info.state != kv::ScopeState::Ready &&
+        info.state != kv::ScopeState::Failed)
+        return std::nullopt;
+    if (!info.sources.empty()) {
+        record.mtime = info.sources[0].mtime;
+        record.size = info.sources[0].size;
+        record.hash = info.sources[0].hash;
+    }
+    return record;
+}
+
+template <typename Fn>
+void IndexDatabase::Impl::store_manifests(std::uint32_t file_id,
+                                          std::string_view plugin, Fn&& fn) {
+    const auto path = registered_path(file_id);
+    if (!path) return;
+    const auto scope = file_scope(*path);
+    if (!scope) return;
+    const auto held = snapshot();
+    if (!held) return;
+    for (const auto& known : plugin_namespaces()) {
+        if (!std::string_view(known.plugin).starts_with(plugin)) continue;
+        const auto spec = namespace_spec(known.name, known.version);
+        const kv::CopyInfo info = held->copy_info(spec, *scope);
+        if (info.state != kv::ScopeState::Ready &&
+            info.state != kv::ScopeState::Failed)
+            continue;
+        layout::ManifestEntry entry;
+        entry.version = known.version;
+        entry.params_hash = info.params_hash;
+        entry.status = info.state == kv::ScopeState::Ready
+                           ? layout::ExtStatus::Ready
+                           : layout::ExtStatus::Failed;
+        fn(layout::plugin_manifest_key(file_id, known.plugin),
+           layout::encode_manifest(entry));
+    }
+}
+
+std::optional<std::string> IndexDatabase::Impl::store_get(
+    std::string_view key) {
+    if (auto host = store_layout::host_target_of(key)) {
+        switch (host->kind) {
+            case store_layout::HostKind::Format: {
+                std::string body;
+                append_u32_be(body, IndexDatabase::FORMAT_VERSION);
+                return layout::with_header(layout::Ext::Host,
+                                           layout::host::FORMAT, body);
+            }
+            case store_layout::HostKind::FileByPath: {
+                const auto record = store_file_record(host->path);
+                if (!record) return std::nullopt;
+                return layout::encode_file_record(*record);
+            }
+            case store_layout::HostKind::FileById: {
+                const auto path = registered_path(host->file_id);
+                if (!path) return std::nullopt;
+                return layout::with_header(layout::Ext::Host,
+                                           layout::host::FILE_BY_ID, *path);
+            }
+            case store_layout::HostKind::NextFileId:
+                return next_file_id_value(
+                    static_cast<std::uint32_t>(store_->next_file_id()));
+            case store_layout::HostKind::Manifest: {
+                if (!host->ext) return std::nullopt;
+                return store_manifest(static_cast<int>(host->file_id),
+                                      *host->ext, {});
+            }
+            case store_layout::HostKind::PluginManifest:
+                return store_manifest(static_cast<int>(host->file_id),
+                                      layout::Ext::Plugin, host->plugin);
+            case store_layout::HostKind::ExtRegistry:
+                return std::nullopt;
+        }
+        return std::nullopt;
+    }
+    const auto target = store_layout::target_of(key);
+    // A key the mapping cannot express holds nothing, like a key RocksDB
+    // never wrote.
+    if (!target) return std::nullopt;
+    kv::NamespaceSpec spec;
+    kv::ScopeKey scope;
+    if (target->file_id == layout::INDEX_WIDE) {
+        scope = root_scope();
+    } else {
+        const auto path = registered_path(target->file_id);
+        if (!path) return std::nullopt;
+        const auto file = file_scope(*path);
+        if (!file) return std::nullopt;
+        scope = *file;
+    }
+    if (target->plugin.empty()) {
+        spec = ext_spec(target->ext);
+    } else {
+        for (const auto& known : plugin_namespaces())
+            if (known.plugin == target->plugin)
+                spec = namespace_spec(known.name, known.version);
+        if (spec.name.empty()) return std::nullopt;
+    }
+    const auto held = snapshot();
+    if (!held) return std::nullopt;
+    auto found = held->get(spec, scope, ByteView(target->inner_key));
+    if (!found) throw_store_error("store index: read a value", found.error());
+    if (!*found) return std::nullopt;
+    const auto bytes = (*found)->bytes();
+    return std::string(reinterpret_cast<const char*>(bytes.data()),
+                       bytes.size());
+}
+
+template <typename Fn>
+void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
+    if (prefix.size() < 3) return;
+    const auto manifest_kind =
+        layout::kind_prefix(Ext::Host, layout::host::MANIFEST);
+    if (prefix.size() == manifest_kind.size() + 4 &&
+        prefix.starts_with(manifest_kind)) {
+        const auto file_id =
+            layout::read_u32(prefix.substr(manifest_kind.size()));
+        std::vector<layout::Ext> exts;
+        bool placed = false;
+        for (layout::Ext ext : ALL_EXTENSIONS) {
+            if (!placed &&
+                static_cast<std::uint16_t>(ext) >
+                    static_cast<std::uint16_t>(layout::Ext::Plugin)) {
+                exts.push_back(layout::Ext::Plugin);
+                placed = true;
+            }
+            exts.push_back(ext);
+        }
+        if (!placed) exts.push_back(layout::Ext::Plugin);
+        for (layout::Ext ext : exts) {
+            if (ext == layout::Ext::Plugin) {
+                store_manifests(file_id, {}, fn);
+                continue;
+            }
+            auto entry = store_manifest(static_cast<int>(file_id), ext, {});
+            if (!entry) continue;
+            if (!fn(layout::manifest_key(file_id, ext), *entry)) return;
+        }
+        return;
+    }
+    if (auto host = store_layout::host_target_of(prefix)) {
+        switch (host->kind) {
+            case store_layout::HostKind::PluginManifest:
+                store_manifests(host->file_id, host->plugin, fn);
+                return;
+            case store_layout::HostKind::FileByPath: {
+                const kv::NamespaceSpec spec = ext_spec(layout::Ext::Members);
+                const auto held = snapshot();
+                if (!held) return;
+                const auto listed = held->scopes(spec);
+                if (!listed)
+                    throw_store_error("store index: list scopes",
+                                      listed.error());
+                for (const kv::ScopeEntry& entry : *listed) {
+                    if (entry.scope.kind != kv::ScopeKind::File ||
+                        entry.scope.paths.empty())
+                        continue;
+                    const std::string_view walked =
+                        view_of(entry.scope.paths[0]);
+                    if (!walked.starts_with(host->path)) continue;
+                    if (entry.copy.state != kv::ScopeState::Ready &&
+                        entry.copy.state != kv::ScopeState::Failed)
+                        continue;
+                    const auto record = store_file_record(walked);
+                    if (!record) continue;
+                    if (!fn(layout::file_by_path_key(walked),
+                            layout::encode_file_record(*record)))
+                        return;
+                }
+                return;
+            }
+            default:
+                return;
+        }
+    }
+    const auto ext =
+        static_cast<layout::Ext>(layout::read_u16(prefix.substr(0, 2)));
+    std::string probe(prefix.substr(0, 3));
+    probe.append(layout::KEY_PREFIX_BYTES - 3, '\0');
+    if (!store_layout::target_of(probe)) return;
+    std::string plugin_prefix;
+    if (ext == layout::Ext::Plugin &&
+        prefix.size() > layout::KEY_PREFIX_BYTES) {
+        const std::string_view tail = prefix.substr(layout::KEY_PREFIX_BYTES);
+        const auto end = tail.find('\0');
+        plugin_prefix = std::string(
+            tail.substr(0, end == std::string_view::npos ? tail.size() : end));
+    }
+    std::vector<StoreNamespace> namespaces;
+    if (ext == layout::Ext::Plugin) {
+        for (auto& known : plugin_namespaces())
+            if (std::string_view(known.plugin).starts_with(plugin_prefix))
+                namespaces.push_back(std::move(known));
+    } else {
+        namespaces.push_back(
+            StoreNamespace{store_layout::namespace_name(ext),
+                           store_layout::namespace_version(ext),
+                           {}});
+    }
+    std::string inner_prefix(1, static_cast<char>(prefix[2]));
+    if (prefix.size() > layout::KEY_PREFIX_BYTES)
+        inner_prefix.append(prefix.substr(layout::KEY_PREFIX_BYTES));
+    auto scan_copy = [&](const StoreNamespace& ns, const kv::ScopeKey& scope,
+                         std::uint32_t file_id) {
+        const auto spec = namespace_spec(ns.name, ns.version);
+        // The cursor reads through this snapshot, which a commit on another
+        // thread may replace in the root.
+        const auto held = snapshot();
+        if (!held) return false;
+        auto cursor = held->scan(spec, scope, ByteView(inner_prefix));
+        for (; !cursor.at_end(); cursor.next()) {
+            const auto inner = cursor.key();
+            auto value = cursor.value();
+            if (!value)
+                throw_store_error("store index: read a value", value.error());
+            std::string key = layout::file_prefix(
+                ext, static_cast<std::uint8_t>(inner.data()[0]), file_id);
+            key.append(reinterpret_cast<const char*>(inner.data()) + 1,
+                       inner.size() - 1);
+            if (!std::string_view(key).starts_with(prefix)) continue;
+            if (!fn(std::string_view(key),
+                    std::string_view(
+                        reinterpret_cast<const char*>(value->data()),
+                        value->size())))
+                return false;
+        }
+        if (cursor.error())
+            throw_store_error("store index: scan index data", *cursor.error());
+        return true;
+    };
+    if (prefix.size() >= layout::KEY_PREFIX_BYTES) {
+        const std::uint32_t file_id = layout::read_u32(prefix.substr(3, 4));
+        if (file_id == layout::INDEX_WIDE) {
+            for (const auto& ns : namespaces)
+                if (!scan_copy(ns, root_scope(), file_id)) return;
+            return;
+        }
+        const auto path = registered_path(file_id);
+        if (!path) return;
+        const auto scope = file_scope(*path);
+        if (!scope) return;
+        for (const auto& ns : namespaces)
+            if (!scan_copy(ns, *scope, file_id)) return;
+        return;
+    }
+    std::vector<std::uint32_t> ids;
+    for (const auto& ns : namespaces) {
+        const auto spec = namespace_spec(ns.name, ns.version);
+        for (std::uint32_t id : file_ids_of(spec)) ids.push_back(id);
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    for (std::uint32_t id : ids) {
+        const auto path = registered_path(id);
+        if (!path) continue;
+        const auto scope = file_scope(*path);
+        if (!scope) continue;
+        for (const auto& ns : namespaces)
+            if (!scan_copy(ns, *scope, id)) return;
+    }
+    for (const auto& ns : namespaces)
+        if (!scan_copy(ns, root_scope(), layout::INDEX_WIDE)) return;
+}
 
 namespace {
 std::atomic<std::uint64_t> read_write_open_count{0};
@@ -306,11 +848,28 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
                              IndexOpenMode open_mode)
     : impl_(std::make_unique<Impl>()) {
     impl_->db_path_ = index::store::internal::normalize_index_root(index_path);
+    impl_->backend_ = index_backend();
     impl_->open_mode_ = open_mode == IndexOpenMode::ReadOnly
                             ? rocks::RocksDatabase::OpenMode::ReadOnly
                             : rocks::RocksDatabase::OpenMode::ReadWrite;
-    impl_->db_ = rocks::RocksDBManager::instance().get_or_open(
-        impl_->db_path_, impl_->open_mode_, make_aggregation_cf_override());
+    if (impl_->on_store()) {
+        impl_->store_ = StoreRoot::get_or_open(impl_->db_path_);
+        // An index root opened for writing exists from then on, as it does on
+        // the RocksDB backend, which creates its directory at open. Only a
+        // write creates the store inside it.
+        if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
+            std::error_code error;
+            fs::create_directories(impl_->db_path_, error);
+            if (error) {
+                throw std::runtime_error("store index: cannot create " +
+                                         impl_->db_path_ + ": " +
+                                         error.message());
+            }
+        }
+    } else {
+        impl_->db_ = rocks::RocksDBManager::instance().get_or_open(
+            impl_->db_path_, impl_->open_mode_, make_aggregation_cf_override());
+    }
     if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
         read_write_open_count.fetch_add(1, std::memory_order_relaxed);
         init_schema();
@@ -322,16 +881,30 @@ IndexDatabase& IndexDatabase::operator=(IndexDatabase&&) noexcept = default;
 IndexDatabase::~IndexDatabase() = default;
 
 std::shared_ptr<rocks::RocksDatabase> IndexDatabase::db() const {
+    if (impl_->on_store()) {
+        throw std::runtime_error(
+            "store index: " + impl_->db_path_ +
+            " is held by the store, which has no RocksDB handle");
+    }
     return impl_->db_;
 }
 
-std::unique_ptr<IndexDatabaseWriterContext> IndexDatabase::begin_write() {
-    return std::unique_ptr<IndexDatabaseWriterContext>(
+bool IndexDatabase::has_rocksdb() const noexcept { return !impl_->on_store(); }
+
+std::unique_ptr<IndexDatabaseWrite> IndexDatabase::begin_write() {
+    if (impl_->on_store()) {
+        return impl_->store_->begin_write();
+    }
+    return std::unique_ptr<IndexDatabaseWrite>(
         new IndexDatabaseWriterContext(impl_->db_));
 }
 
 void IndexDatabase::bulk_ingest(const SstArtifactRegistry& registry,
                                 const StringViewSet& skip_cfs) {
+    if (impl_->on_store()) {
+        if (registry.empty()) return;
+        throw std::runtime_error("store index: bulk ingest is not supported");
+    }
     // One atomic multi-CF ingest: a single manifest edit, so the manifest
     // entries in the registry family commit together with their data.
     // Overlapping index-wide SSTs (dictionaries) and system metrics SSTs are
@@ -368,18 +941,14 @@ std::vector<int> IndexDatabase::assign_file_ids(
     return ids;
 }
 
-namespace {
-std::string next_file_id_value(std::uint32_t next) {
-    std::string body;
-    append_u32_be(body, next);
-    return layout::with_header(Ext::Host, layout::host::NEXT_FILE_ID, body);
-}
-}  // namespace
-
 int IndexDatabase::reserve_file_id_range(std::size_t count) {
+    if (impl_->on_store()) {
+        return count == 0 ? impl_->store_->next_file_id()
+                          : impl_->store_->reserve_file_id_range(count);
+    }
     std::uint32_t first = 1;
-    if (auto body = get(*impl_->db_, Ext::Host, layout::host::NEXT_FILE_ID,
-                        layout::next_file_id_key()))
+    if (auto body = impl_->get(Ext::Host, layout::host::NEXT_FILE_ID,
+                               layout::next_file_id_key()))
         first = layout::read_u32(*body);
     if (count == 0) return static_cast<int>(first);
     auto status = impl_->db_->put(
@@ -390,6 +959,7 @@ int IndexDatabase::reserve_file_id_range(std::size_t count) {
 }
 
 void IndexDatabase::init_schema() {
+    if (impl_->on_store()) return;
     auto writer = begin_write();
     writer->init_schema();
     writer->commit();
@@ -405,12 +975,11 @@ void IndexDatabase::init_schema() {
 
 std::optional<ExtensionState> IndexDatabase::extension_state(
     int file_id, IndexExtension ext) const {
-    std::string value;
-    auto status = impl_->db_->get(layout::manifest_key(fid(file_id), ext),
-                                  &value, cf::DEFAULT);
-    if (status.IsNotFound()) return std::nullopt;
-    if (!status.ok()) throw_db_error("Failed to read the manifest", status);
-    auto entry = layout::decode_manifest(value);
+    auto value =
+        impl_->raw_get(layout::family_of(Ext::Host, layout::host::MANIFEST),
+                       layout::manifest_key(fid(file_id), ext));
+    if (!value) return std::nullopt;
+    auto entry = layout::decode_manifest(*value);
     if (!entry) return std::nullopt;
     return ExtensionState{entry->version, entry->params_hash,
                           entry->status == layout::ExtStatus::Ready};
@@ -418,12 +987,11 @@ std::optional<ExtensionState> IndexDatabase::extension_state(
 
 std::optional<ExtensionState> IndexDatabase::plugin_extension_state(
     int file_id, std::string_view name) const {
-    std::string value;
-    auto status = impl_->db_->get(
-        layout::plugin_manifest_key(fid(file_id), name), &value, cf::DEFAULT);
-    if (status.IsNotFound()) return std::nullopt;
-    if (!status.ok()) throw_db_error("Failed to read the manifest", status);
-    auto entry = layout::decode_manifest(value);
+    auto value =
+        impl_->raw_get(layout::family_of(Ext::Host, layout::host::MANIFEST),
+                       layout::plugin_manifest_key(fid(file_id), name));
+    if (!value) return std::nullopt;
+    auto entry = layout::decode_manifest(*value);
     if (!entry) return std::nullopt;
     return ExtensionState{entry->version, entry->params_hash,
                           entry->status == layout::ExtStatus::Ready};
@@ -433,20 +1001,18 @@ std::vector<std::pair<std::string, ExtensionState>>
 IndexDatabase::plugin_extension_states(int file_id) const {
     std::vector<std::pair<std::string, ExtensionState>> out;
     const auto prefix = layout::manifest_key(fid(file_id), Ext::Plugin);
-    scan_prefix_iterator(
-        "Failed to read the manifest", prefix,
-        [&] { return impl_->db_->new_iterator(cf::DEFAULT); },
-        [&](::rocksdb::Iterator& it) {
-            const std::string_view key(it.key().data(), it.key().size());
-            if (key.size() <= prefix.size() || key.back() != '\0') return;
-            auto entry = layout::decode_manifest(
-                std::string_view(it.value().data(), it.value().size()));
-            if (!entry) return;
+    impl_->raw_scan(
+        layout::Family::Registry, prefix,
+        [&](std::string_view key, std::string_view value) {
+            if (key.size() <= prefix.size() || key.back() != '\0') return true;
+            auto entry = layout::decode_manifest(value);
+            if (!entry) return true;
             out.emplace_back(
                 std::string(
                     key.substr(prefix.size(), key.size() - prefix.size() - 1)),
                 ExtensionState{entry->version, entry->params_hash,
                                entry->status == layout::ExtStatus::Ready});
+            return true;
         });
     return out;
 }
@@ -464,7 +1030,7 @@ std::vector<std::string> IndexDatabase::extension_paths(
     int file_id, IndexExtension ext) const {
     std::vector<std::string> paths;
     const auto prefix = layout::file_prefix(ext, pk::PATHS, fid(file_id));
-    scan_keys(*impl_->db_, ext, pk::PATHS, prefix, [&](std::string_view key) {
+    impl_->scan_keys(ext, pk::PATHS, prefix, [&](std::string_view key) {
         paths.emplace_back(key.substr(prefix.size()));
     });
     return paths;
@@ -474,12 +1040,12 @@ std::vector<std::pair<std::uint64_t, std::string>> IndexDatabase::path_granules(
     int file_id, IndexExtension ext, std::string_view path) const {
     std::vector<std::pair<std::uint64_t, std::string>> out;
     const auto prefix = layout::path_prefix(ext, pk::DATA, fid(file_id), path);
-    scan(*impl_->db_, ext, pk::DATA, prefix,
-         [&](std::string_view key, std::string_view body) {
-             if (key.size() == prefix.size() + 4)
-                 out.emplace_back(tail_u32(key, prefix.size()),
-                                  std::string(body));
-         });
+    impl_->scan(ext, pk::DATA, prefix,
+                [&](std::string_view key, std::string_view body) {
+                    if (key.size() == prefix.size() + 4)
+                        out.emplace_back(tail_u32(key, prefix.size()),
+                                         std::string(body));
+                });
     return out;
 }
 
@@ -487,14 +1053,14 @@ std::optional<std::string> IndexDatabase::path_file_value(
     int file_id, IndexExtension ext, std::string_view path) const {
     auto key = layout::file_prefix(ext, pk::FILE, fid(file_id));
     key.append(path);
-    return get(*impl_->db_, ext, pk::FILE, key);
+    return impl_->get(ext, pk::FILE, key);
 }
 
 bool IndexDatabase::has_postings(int file_id, std::string_view path) const {
     const auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
-    return any_key_with_prefix("Failed to read postings",
-                               impl_->db_->new_iterator(cf::POSTINGS), prefix);
+    return impl_->any_with_prefix(layout::family_of(Ext::Postings, pk::IN_FILE),
+                                  prefix);
 }
 
 bool IndexDatabase::has_posting(int file_id, std::string_view path,
@@ -502,11 +1068,8 @@ bool IndexDatabase::has_posting(int file_id, std::string_view path,
     auto key =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
     append_u64_be(key, value_hash);
-    std::string value;
-    auto status = impl_->db_->get(key, &value, cf::POSTINGS);
-    if (status.IsNotFound()) return false;
-    if (!status.ok()) throw_db_error("Failed to read postings", status);
-    return true;
+    return impl_->raw_get(layout::family_of(Ext::Postings, pk::IN_FILE), key)
+        .has_value();
 }
 
 std::vector<std::uint64_t> IndexDatabase::posting_granules(
@@ -515,48 +1078,36 @@ std::vector<std::uint64_t> IndexDatabase::posting_granules(
     auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_GRANULE, fid(file_id), path);
     append_u64_be(prefix, value_hash);
-    scan_keys(*impl_->db_, Ext::Postings, pk::IN_GRANULE, prefix,
-              [&](std::string_view key) {
-                  if (key.size() == prefix.size() + 4)
-                      out.push_back(tail_u32(key, prefix.size()));
-              });
+    impl_->scan_keys(Ext::Postings, pk::IN_GRANULE, prefix,
+                     [&](std::string_view key) {
+                         if (key.size() == prefix.size() + 4)
+                             out.push_back(tail_u32(key, prefix.size()));
+                     });
     return out;
 }
 
-namespace {
-std::optional<layout::FileRecord> file_record(const rocks::RocksDatabase& db,
-                                              std::string_view path) {
-    std::string value;
-    auto status = db.get(layout::file_by_path_key(path), &value);
-    if (status.IsNotFound()) return std::nullopt;
-    if (!status.ok())
-        throw_db_error("Failed to look up the file registry", status);
-    return layout::decode_file_record(value);
-}
-}  // namespace
-
 int IndexDatabase::get_file_info_id(std::string_view path) const {
-    auto record = file_record(*impl_->db_, path);
+    auto record = impl_->file_record(path);
     return record ? static_cast<int>(record->file_id) : -1;
 }
 
 std::optional<std::uint64_t> IndexDatabase::get_file_hash(
     std::string_view path) const {
-    auto record = file_record(*impl_->db_, path);
+    auto record = impl_->file_record(path);
     if (!record) return std::nullopt;
     return record->hash;
 }
 
 std::optional<IndexDatabase::FileStat> IndexDatabase::get_file_stat(
     std::string_view path) const {
-    auto record = file_record(*impl_->db_, path);
+    auto record = impl_->file_record(path);
     if (!record) return std::nullopt;
     return FileStat{record->mtime, record->size};
 }
 
 std::optional<std::uint32_t> IndexDatabase::get_format_version() const {
     auto body =
-        get(*impl_->db_, Ext::Host, layout::host::FORMAT, layout::format_key());
+        impl_->get(Ext::Host, layout::host::FORMAT, layout::format_key());
     if (!body) return std::nullopt;
     return layout::read_u32(*body);
 }
@@ -636,16 +1187,14 @@ StringViewMap<FileRegistryEntry> IndexDatabase::query_all_file_registry()
     StringViewMap<FileRegistryEntry> results;
     const auto prefix =
         layout::kind_prefix(Ext::Host, layout::host::FILE_BY_PATH);
-    scan_prefix_iterator(
-        "Failed to scan the file registry", prefix,
-        [&] { return impl_->db_->new_iterator(cf::DEFAULT); },
-        [&](::rocksdb::Iterator& it) {
-            const std::string_view key(it.key().data(), it.key().size());
-            if (auto record = layout::decode_file_record(
-                    std::string_view(it.value().data(), it.value().size())))
+    impl_->raw_scan(
+        layout::Family::Registry, prefix,
+        [&](std::string_view key, std::string_view value) {
+            if (auto record = layout::decode_file_record(value))
                 results.emplace(
                     key.substr(prefix.size()),
                     FileRegistryEntry{static_cast<int>(record->file_id)});
+            return true;
         });
     return results;
 }
@@ -686,19 +1235,21 @@ std::vector<std::pair<std::string, ColumnType>>
 IndexDatabase::query_all_column_types() const {
     constexpr std::string_view ARGS = "args.";
     ankerl::unordered_dense::map<std::string, ColumnType> cols;
-    scan(*impl_->db_, Ext::Catalog, layout::catalog_kind::PATH,
-         layout::kind_prefix(Ext::Catalog, layout::catalog_kind::PATH),
-         [&](std::string_view key, std::string_view body) {
-             if (key.size() <= layout::KEY_PREFIX_BYTES) return;
-             auto stat = layout::decode_path_stat(body);
-             if (!stat) return;
-             auto type = schema_type(stat->seen);
-             if (!type) return;
-             auto path = key.substr(layout::KEY_PREFIX_BYTES);
-             if (path.starts_with(ARGS)) path.remove_prefix(ARGS.size());
-             auto [pos, inserted] = cols.emplace(std::string(path), *type);
-             if (!inserted) pos->second = merge_column_type(pos->second, *type);
-         });
+    impl_->scan(Ext::Catalog, layout::catalog_kind::PATH,
+                layout::kind_prefix(Ext::Catalog, layout::catalog_kind::PATH),
+                [&](std::string_view key, std::string_view body) {
+                    if (key.size() <= layout::KEY_PREFIX_BYTES) return;
+                    auto stat = layout::decode_path_stat(body);
+                    if (!stat) return;
+                    auto type = schema_type(stat->seen);
+                    if (!type) return;
+                    auto path = key.substr(layout::KEY_PREFIX_BYTES);
+                    if (path.starts_with(ARGS)) path.remove_prefix(ARGS.size());
+                    auto [pos, inserted] =
+                        cols.emplace(std::string(path), *type);
+                    if (!inserted)
+                        pos->second = merge_column_type(pos->second, *type);
+                });
     std::vector<std::pair<std::string, ColumnType>> out(cols.begin(),
                                                         cols.end());
     std::sort(out.begin(), out.end(),
@@ -717,9 +1268,10 @@ IndexDatabase::file_column_types(int file_id) const {
 
 std::optional<std::string> IndexDatabase::file_schema(int file_id) const {
     if (!extension_current(file_id, Ext::Profile)) return std::nullopt;
-    auto body = get(*impl_->db_, Ext::Profile, layout::profile_kind::ID,
-                    layout::file_prefix(Ext::Profile, layout::profile_kind::ID,
-                                        fid(file_id)));
+    auto body =
+        impl_->get(Ext::Profile, layout::profile_kind::ID,
+                   layout::file_prefix(Ext::Profile, layout::profile_kind::ID,
+                                       fid(file_id)));
     if (!body) return std::nullopt;
     return std::string(*body);
 }
@@ -729,24 +1281,24 @@ std::vector<std::pair<std::string, PathStat>> IndexDatabase::catalog(
     std::vector<std::pair<std::string, PathStat>> out;
     const auto prefix = layout::file_prefix(
         Ext::Catalog, layout::catalog_kind::PATH, fid(file_id));
-    scan(*impl_->db_, Ext::Catalog, layout::catalog_kind::PATH, prefix,
-         [&](std::string_view key, std::string_view body) {
-             if (auto stat = layout::decode_path_stat(body))
-                 out.emplace_back(std::string(key.substr(prefix.size())),
-                                  *stat);
-         });
+    impl_->scan(Ext::Catalog, layout::catalog_kind::PATH, prefix,
+                [&](std::string_view key, std::string_view body) {
+                    if (auto stat = layout::decode_path_stat(body))
+                        out.emplace_back(std::string(key.substr(prefix.size())),
+                                         *stat);
+                });
     return out;
 }
 
 std::vector<index::schemas::dft::ChunkStatisticsResult>
 IndexDatabase::query_chunk_statistics(int file_id) const {
     std::vector<index::schemas::dft::ChunkStatisticsResult> results;
-    scan(*impl_->db_, Ext::Stats, sk::CHUNK_STATS,
-         layout::file_prefix(Ext::Stats, sk::CHUNK_STATS, fid(file_id)),
-         [&](std::string_view key, std::string_view body) {
-             results.push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
-                                decode_chunk_statistics_value(body)});
-         });
+    impl_->scan(Ext::Stats, sk::CHUNK_STATS,
+                layout::file_prefix(Ext::Stats, sk::CHUNK_STATS, fid(file_id)),
+                [&](std::string_view key, std::string_view body) {
+                    results.push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
+                                       decode_chunk_statistics_value(body)});
+                });
     return results;
 }
 
@@ -754,14 +1306,14 @@ std::optional<ankerl::unordered_dense::map<std::uint64_t, ChunkMetadata>>
 IndexDatabase::chunk_metadata(int file_id) const {
     if (!extension_current(file_id, Ext::Metadata)) return std::nullopt;
     ankerl::unordered_dense::map<std::uint64_t, ChunkMetadata> out;
-    scan(*impl_->db_, Ext::Metadata, layout::metadata_kind::CHUNK,
-         layout::file_prefix(Ext::Metadata, layout::metadata_kind::CHUNK,
-                             fid(file_id)),
-         [&](std::string_view key, std::string_view body) {
-             if (auto m = layout::decode_chunk_metadata(body))
-                 out.emplace(tail_u32(key, layout::KEY_PREFIX_BYTES),
-                             std::move(*m));
-         });
+    impl_->scan(Ext::Metadata, layout::metadata_kind::CHUNK,
+                layout::file_prefix(Ext::Metadata, layout::metadata_kind::CHUNK,
+                                    fid(file_id)),
+                [&](std::string_view key, std::string_view body) {
+                    if (auto m = layout::decode_chunk_metadata(body))
+                        out.emplace(tail_u32(key, layout::KEY_PREFIX_BYTES),
+                                    std::move(*m));
+                });
     return out;
 }
 
@@ -772,8 +1324,8 @@ IndexDatabase::query_chunk_statistics_batch(
     ankerl::unordered_dense::map<
         int, std::vector<index::schemas::dft::ChunkStatisticsResult>>
         results;
-    scan_files(
-        *impl_->db_, Ext::Stats, sk::CHUNK_STATS, file_ids,
+    impl_->scan_files(
+        Ext::Stats, sk::CHUNK_STATS, file_ids,
         [&](int file_id, std::string_view key, std::string_view body) {
             results[file_id].push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
                                         decode_chunk_statistics_value(body)});
@@ -787,11 +1339,11 @@ IndexDatabase::query_file_scalar_stats_batch(
     ankerl::unordered_dense::map<int,
                                  index::schemas::dft::MergedStatisticsResult>
         results;
-    scan_files(*impl_->db_, Ext::Stats, sk::FILE_SCALAR_STATS, file_ids,
-               [&](int file_id, std::string_view, std::string_view body) {
-                   results.emplace(file_id,
-                                   decode_file_scalar_stats_value(body));
-               });
+    impl_->scan_files(
+        Ext::Stats, sk::FILE_SCALAR_STATS, file_ids,
+        [&](int file_id, std::string_view, std::string_view body) {
+            results.emplace(file_id, decode_file_scalar_stats_value(body));
+        });
     return results;
 }
 
@@ -799,16 +1351,17 @@ ankerl::unordered_dense::map<int, FileMetadataResult>
 IndexDatabase::query_file_metadata_batch(
     const std::vector<int>& file_ids) const {
     ankerl::unordered_dense::map<int, FileMetadataResult> results;
-    scan_files(*impl_->db_, Ext::Members, layout::members::METADATA, file_ids,
-               [&](int file_id, std::string_view, std::string_view body) {
-                   Cursor cursor(body);
-                   auto& meta = results[file_id];
-                   meta.checkpoint_size = cursor.u64();
-                   meta.num_lines = cursor.u64();
-                   meta.max_bytes = cursor.u64();
-                   meta.truncated =
-                       (cursor.u64() & encoding::METADATA_FLAG_TRUNCATED) != 0;
-               });
+    impl_->scan_files(
+        Ext::Members, layout::members::METADATA, file_ids,
+        [&](int file_id, std::string_view, std::string_view body) {
+            Cursor cursor(body);
+            auto& meta = results[file_id];
+            meta.checkpoint_size = cursor.u64();
+            meta.num_lines = cursor.u64();
+            meta.max_bytes = cursor.u64();
+            meta.truncated =
+                (cursor.u64() & encoding::METADATA_FLAG_TRUNCATED) != 0;
+        });
     return results;
 }
 
@@ -816,10 +1369,11 @@ ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>>
 IndexDatabase::query_file_pid_tid_counts_batch(
     const std::vector<int>& file_ids) const {
     ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>> results;
-    scan_files(*impl_->db_, Ext::Stats, sk::FILE_PID_TID_COUNTS, file_ids,
-               [&](int file_id, std::string_view, std::string_view body) {
-                   results.emplace(file_id, decode_count_map_value(body));
-               });
+    impl_->scan_files(
+        Ext::Stats, sk::FILE_PID_TID_COUNTS, file_ids,
+        [&](int file_id, std::string_view, std::string_view body) {
+            results.emplace(file_id, decode_count_map_value(body));
+        });
     return results;
 }
 
@@ -827,21 +1381,21 @@ std::vector<index::gzip::GzipMemberRecord> IndexDatabase::query_gzip_members(
     int file_id) const {
     std::vector<index::gzip::GzipMemberRecord> members;
     if (!extension_current(file_id, Ext::Members)) return members;
-    scan(*impl_->db_, Ext::Members, layout::members::MEMBER,
-         layout::file_prefix(Ext::Members, layout::members::MEMBER,
-                             fid(file_id)),
-         [&](std::string_view key, std::string_view body) {
-             members.push_back(decode_gzip_member(key, body));
-         });
+    impl_->scan(Ext::Members, layout::members::MEMBER,
+                layout::file_prefix(Ext::Members, layout::members::MEMBER,
+                                    fid(file_id)),
+                [&](std::string_view key, std::string_view body) {
+                    members.push_back(decode_gzip_member(key, body));
+                });
     return members;
 }
 
 std::optional<std::string> IndexDatabase::query_restart_window(
     int file_id, std::uint64_t member_idx) const {
-    return get(*impl_->db_, Ext::Members, layout::members::RESTART,
-               layout::granule_key(Ext::Members, layout::members::RESTART,
-                                   fid(file_id),
-                                   static_cast<std::uint32_t>(member_idx)));
+    return impl_->get(Ext::Members, layout::members::RESTART,
+                      layout::granule_key(
+                          Ext::Members, layout::members::RESTART, fid(file_id),
+                          static_cast<std::uint32_t>(member_idx)));
 }
 
 std::vector<index::gzip::ChunkSpan> IndexDatabase::query_chunk_spans(
@@ -878,8 +1432,8 @@ ankerl::unordered_dense::set<std::uint64_t> pids_from_pid_tid_counts(
 
 ankerl::unordered_dense::set<std::uint64_t> IndexDatabase::query_file_pids(
     int file_id) const {
-    auto body = get(
-        *impl_->db_, Ext::Stats, sk::FILE_PID_TID_COUNTS,
+    auto body = impl_->get(
+        Ext::Stats, sk::FILE_PID_TID_COUNTS,
         layout::file_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS, fid(file_id)));
     if (!body) return {};
     return pids_from_pid_tid_counts(decode_count_map_value(*body));
@@ -890,23 +1444,24 @@ IndexDatabase::query_all_file_pids() const {
     ankerl::unordered_dense::map<int,
                                  ankerl::unordered_dense::set<std::uint64_t>>
         result;
-    scan(*impl_->db_, Ext::Stats, sk::FILE_PID_TID_COUNTS,
-         layout::kind_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS),
-         [&](std::string_view key, std::string_view body) {
-             result[static_cast<int>(tail_u32(key, 3))] =
-                 pids_from_pid_tid_counts(decode_count_map_value(body));
-         });
+    impl_->scan(Ext::Stats, sk::FILE_PID_TID_COUNTS,
+                layout::kind_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS),
+                [&](std::string_view key, std::string_view body) {
+                    result[static_cast<int>(tail_u32(key, 3))] =
+                        pids_from_pid_tid_counts(decode_count_map_value(body));
+                });
     return result;
 }
 
 namespace {
 
 // Metadata record field `idx` for `file_id`, 0 when the record is absent.
-std::uint64_t get_metadata_field(const rocks::RocksDatabase& db, int file_id,
-                                 std::size_t idx) {
-    auto body = get(db, Ext::Members, layout::members::METADATA,
-                    layout::file_prefix(Ext::Members, layout::members::METADATA,
-                                        fid(file_id)));
+template <typename Db>
+std::uint64_t get_metadata_field(Db& db, int file_id, std::size_t idx) {
+    auto body =
+        db.get(Ext::Members, layout::members::METADATA,
+               layout::file_prefix(Ext::Members, layout::members::METADATA,
+                                   fid(file_id)));
     if (!body || body->size() < (idx + 1) * 8) return 0;
     return layout::read_u64(std::string_view(*body).substr(idx * 8));
 }
@@ -914,23 +1469,24 @@ std::uint64_t get_metadata_field(const rocks::RocksDatabase& db, int file_id,
 }  // namespace
 
 std::uint64_t IndexDatabase::get_checkpoint_size(int file_id) const {
-    return get_metadata_field(*impl_->db_, file_id, 0);
+    return get_metadata_field(*impl_, file_id, 0);
 }
 
 std::uint64_t IndexDatabase::get_num_lines(int file_id) const {
-    return get_metadata_field(*impl_->db_, file_id, 1);
+    return get_metadata_field(*impl_, file_id, 1);
 }
 
 std::uint64_t IndexDatabase::get_max_bytes(int file_id) const {
-    return get_metadata_field(*impl_->db_, file_id, 2);
+    return get_metadata_field(*impl_, file_id, 2);
 }
 
 std::optional<std::string> IndexDatabase::rowset(int file_id,
                                                  std::string_view name) const {
     if (!extension_current(file_id, Ext::Rowset)) return std::nullopt;
-    auto body = get(*impl_->db_, Ext::Rowset, layout::rowset_kind::FRAME,
-                    layout::path_prefix(Ext::Rowset, layout::rowset_kind::FRAME,
-                                        fid(file_id), name));
+    auto body =
+        impl_->get(Ext::Rowset, layout::rowset_kind::FRAME,
+                   layout::path_prefix(Ext::Rowset, layout::rowset_kind::FRAME,
+                                       fid(file_id), name));
     if (!body) return std::nullopt;
     return std::string(*body);
 }

@@ -16,6 +16,9 @@ namespace dftracer::utils::index::store::store_layout {
 /// The store namespace holding the data of `ext`: "dftu.idx." and its name.
 std::string namespace_name(layout::Ext ext);
 
+/// The prefix of the namespace of every plugin extension.
+inline constexpr std::string_view PLUGIN_NAMESPACE_PREFIX = "dftu.idx.plugin.";
+
 /// The store namespace holding the data of plugin extension `plugin`. Every
 /// plugin has its own, so rebuilding one never hides another's data.
 std::string plugin_namespace_name(std::string_view plugin);

@@ -56,12 +56,23 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// seeded, on its first use, from the file scopes the store holds, in
     /// logical path order.
     int file_id_for(std::string_view logical_path);
+    /// The id of `logical_path` when the table binds it, without assigning
+    /// one.
+    std::optional<int> find_file_id(std::string_view logical_path);
+    /// `count` ids no path holds yet, handed out in a run for a caller that
+    /// numbers its files itself. The table binds them when the caller binds
+    /// each to its path; nothing else takes an id of the run.
+    int reserve_file_id_range(std::size_t count);
+    /// The first id no path holds yet.
+    int next_file_id();
     /// The path bound to `file_id`, or nullopt when the table does not bind
     /// it.
     std::optional<std::string> path_of(int file_id);
 
     /// The store as it stands, reopened after every commit through this root.
-    /// Throws std::runtime_error when it cannot be opened.
+    /// A root that was never written has no store directory and yields null: a
+    /// read of it answers nothing. Throws std::runtime_error when it cannot be
+    /// opened.
     std::shared_ptr<const kv::Snapshot> snapshot();
 
     /// Syncs what the writer holds and closes its data file, so a later
@@ -82,6 +93,14 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         std::uint32_t version = 0;
     };
 
+    /// The copy this root committed for one (namespace, scope): the writer
+    /// keeps the params hash and sources it announced for a copy, so a later
+    /// commit that changes either replaces the copy instead.
+    struct CommittedCopy {
+        std::uint64_t params_hash = 0;
+        dstd::Vector<kv::SourceStat> sources;
+    };
+
     explicit StoreRoot(std::string index_root);
 
     void ensure_dir_locked();
@@ -98,10 +117,19 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     kv::Writer& writer();
     kv::NamespaceId namespace_id(const std::string& name,
                                  std::uint32_t version);
-    std::uint32_t known_namespace_version(const std::string& name);
+    /// The format version of `name`: the one this write gave it, else the
+    /// highest one the store declares, else 0.
+    std::uint32_t resolved_namespace_version(const std::string& name);
     void bind_file_id(std::string_view logical_path, int file_id);
-    void mark_committed(const std::string& name, const kv::ScopeKey& scope);
+    void mark_committed(const std::string& name, const kv::ScopeKey& scope,
+                        std::uint64_t params_hash,
+                        const dstd::Vector<kv::SourceStat>* sources);
+    void forget_committed(const std::string& name, const kv::ScopeKey& scope);
     bool was_committed(const std::string& name, const kv::ScopeKey& scope);
+    /// The copy this root committed for (name, scope); nullopt when it holds
+    /// none.
+    std::optional<CommittedCopy> committed_copy(const std::string& name,
+                                                const kv::ScopeKey& scope);
     /// The sources of `scope`, one per path, from the file records of the
     /// write that asked or from the Members copy of the path; false when
     /// either holds none.
@@ -121,12 +149,13 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::map<std::string, NamespaceEntry> namespaces_;
     std::map<std::string, int> ids_by_path_;
     std::map<int, std::string> paths_by_id_;
-    std::set<std::pair<std::string, kv::ScopeKey>> committed_;
+    std::map<std::pair<std::string, kv::ScopeKey>, CommittedCopy> committed_;
     std::shared_ptr<const kv::Snapshot> snapshot_;
     std::uint64_t version_ = 0;
     std::uint64_t snapshot_version_ = 0;
     int next_file_id_ = 1;
     bool seeded_ = false;
+    bool snapshot_taken_ = false;
 };
 
 /// One write to the store of a StoreRoot, buffered until commit(): the data
@@ -135,7 +164,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
 ///
 /// The family of the seam is not part of the mapping: a key's extension names
 /// its namespace.
-class StoreIndexWrite final : public IndexWrite {
+class StoreIndexWrite final : public IndexDatabaseWrite {
    public:
     StoreIndexWrite(const StoreIndexWrite&) = delete;
     StoreIndexWrite& operator=(const StoreIndexWrite&) = delete;
@@ -155,7 +184,12 @@ class StoreIndexWrite final : public IndexWrite {
     /// writer. A second call does nothing. Throws std::runtime_error on a
     /// store error. put() and the deletes throw when a data key names a file
     /// id the table does not bind.
-    void commit();
+    void commit() override;
+
+    int file_id_for(std::string_view logical_path) override;
+    /// Does nothing: a namespace version carries the format of the data it
+    /// holds.
+    void init_schema() override {}
 
    private:
     friend class StoreRoot;
@@ -186,6 +220,9 @@ class StoreIndexWrite final : public IndexWrite {
     void host_delete(const store_layout::HostTarget& target);
     void clear_copy(layout::Ext ext, std::uint32_t file_id,
                     std::string_view plugin);
+    /// Clears the copy of every plugin namespace of one file, in name order.
+    void clear_plugin_copies(std::uint32_t file_id);
+    static void clear_pending(PendingCopy& copy);
     /// Throws when the copy of (name, scope) was committed by this root and
     /// this write does not clear it whole: the store hides a copy whole, so a
     /// gap inside one has no representation.

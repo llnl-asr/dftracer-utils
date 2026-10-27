@@ -10,7 +10,7 @@ class CoroScope;
 }  // namespace dftracer::utils
 
 namespace dftracer::utils::index::store {
-class IndexDatabaseWriterContext;
+class IndexDatabaseWrite;
 }  // namespace dftracer::utils::index::store
 
 namespace dftracer::utils::index::build {
@@ -46,7 +46,7 @@ class IndexVisitor {
     /// without blocking an executor thread.
     virtual coro::CoroTask<void> drain_pending() { co_return; }
 
-    virtual void finalize(index::store::IndexDatabaseWriterContext& writer,
+    virtual void finalize(index::store::IndexDatabaseWrite& writer,
                           int file_id) = 0;
 };
 

@@ -75,6 +75,18 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
     ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align,
     PageCodec codec = PageCodec::Zstd);
 
+/// The stored form of one metadata body (a block, a record body, a summary
+/// entry): a PageCodec byte, then for PageCodec::Zstd the raw length as a u32
+/// and one zstd frame, else the raw bytes. Compressed when that saves at least
+/// an eighth.
+dstd::Vector<std::uint8_t> encode_meta(ByteView raw);
+
+/// The raw body of a stored form encode_meta wrote. A Parse error for an
+/// unknown codec, a raw length past EXTENT_MAX_RAW_BYTES or a frame that does
+/// not decode to that length.
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> decode_meta(
+    ByteView stored);
+
 /// The pages of one stored extent, read in place over bytes that outlive it,
 /// or its page table alone, whose pages are read one range at a time.
 class ExtentPages {

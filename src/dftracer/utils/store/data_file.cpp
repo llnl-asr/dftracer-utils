@@ -438,7 +438,8 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
     payload.insert(payload.end(), name.begin(), name.end());
     append_u64_le(payload, needed_bytes);
     append_u64_le(payload, sequence);
-    const dstd::Vector<std::uint8_t> items = encode_items(footer);
+    const dstd::Vector<std::uint8_t> raw_items = encode_items(footer);
+    const dstd::Vector<std::uint8_t> items = encode_meta(bytes_of(raw_items));
     payload.insert(payload.end(), items.begin(), items.end());
     dstd::Vector<std::uint8_t> entry;
     entry.insert(entry.end(), SUMMARY_MAGIC.begin(), SUMMARY_MAGIC.end());
@@ -500,9 +501,11 @@ dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
         entry.needed_bytes = read_u64_le(data + body + 4 + name_length);
         entry.sequence = read_u64_le(data + body + 12 + name_length);
         const std::size_t items_at = body + 20 + name_length;
-        auto items = decode_items(
+        auto raw_items = decode_meta(
             ByteView{reinterpret_cast<const std::byte*>(data + items_at),
                      body + length - items_at});
+        if (!raw_items) break;
+        auto items = decode_items(bytes_of(*raw_items));
         if (!items) break;
         entry.footer = std::move(*items);
         entries.push_back(std::move(entry));
@@ -730,8 +733,9 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     dstd::Vector<std::uint8_t>& out) const {
     // Each block goes at the end of `out`, which lands at `base` in the file.
     // An empty block takes no bytes and a zero handle.
-    const auto place = [base, &out](const dstd::Vector<std::uint8_t>& bytes) {
-        if (bytes.empty()) return BlockHandle{};
+    const auto place = [base, &out](const dstd::Vector<std::uint8_t>& raw) {
+        if (raw.empty()) return BlockHandle{};
+        const dstd::Vector<std::uint8_t> bytes = encode_meta(bytes_of(raw));
         BlockHandle handle;
         handle.offset = base + out.size();
         handle.length = static_cast<std::uint32_t>(bytes.size());
@@ -1531,7 +1535,12 @@ DataFileReader::read_block(const BlockHandle& handle, BlockReads* reads) const {
     if (crc32(0, bytes->data(), bytes->size()) != handle.crc) {
         return parse_error();
     }
-    return bytes;
+    if (!bytes->empty() &&
+        bytes->front() == static_cast<std::uint8_t>(PageCodec::None)) {
+        bytes->erase(bytes->begin());
+        return bytes;
+    }
+    return decode_meta(bytes_of(*bytes));
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::verify_block(

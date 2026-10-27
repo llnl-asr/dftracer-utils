@@ -1,5 +1,6 @@
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/store/crc.h>
+#include <dftracer/utils/store/extent_codec.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/varint.h>
 
@@ -535,7 +536,9 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
         if (!item_is_valid(item)) return invalid_error();
     }
 
-    dstd::Vector<std::uint8_t> body = encode_items(items);
+    const dstd::Vector<std::uint8_t> raw_body = encode_items(items);
+    const dstd::Vector<std::uint8_t> body = encode_meta(ByteView{
+        reinterpret_cast<const std::byte*>(raw_body.data()), raw_body.size()});
     if (body.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
@@ -596,8 +599,12 @@ dstd::Expected<Record, dstd::Error> decode_record(ByteView bytes) {
     record.offset = offset;
     record.crc = stored_crc;
 
-    auto decoded =
-        decode_items(bytes.subspan(RECORD_HEADER_BYTES, body_length));
+    auto raw_body =
+        decode_meta(bytes.subspan(RECORD_HEADER_BYTES, body_length));
+    if (!raw_body) return dstd::Unexpected<dstd::Error>(raw_body.error());
+    auto decoded = decode_items(
+        ByteView{reinterpret_cast<const std::byte*>(raw_body->data()),
+                 raw_body->size()});
     if (!decoded) return dstd::Unexpected<dstd::Error>(decoded.error());
     record.items = std::move(*decoded);
     return record;

@@ -164,8 +164,13 @@ void rewrite_record_crc(std::vector<std::uint8_t>& file,
     write_u32_le_at(file, crc_at, crc);
 }
 
-// 40-byte record header plus one-byte varint item tag and length.
-std::size_t first_item_payload_offset() { return 42U; }
+// 40-byte record header, the body codec byte, then the one-byte varint item
+// tag and length. A test that edits the payload needs a body stored raw.
+std::size_t first_item_payload_offset(const std::vector<std::uint8_t>& record) {
+    REQUIRE(record.size() > 40U);
+    REQUIRE(record[40] == 0U);
+    return 43U;
+}
 
 std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
@@ -333,6 +338,7 @@ struct SegmentBlockEntry {
 
 struct SegmentBlockView {
     store::BlockHandle handle;
+    std::size_t raw_bytes = 0;
     std::vector<SegmentBlockEntry> entries;
 };
 
@@ -381,6 +387,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
     auto bytes = reader.read_block(handle, nullptr);
     REQUIRE(bytes.has_value());
     const std::vector<std::uint8_t> raw = std_bytes(*bytes);
+    block.raw_bytes = raw.size();
     const std::uint32_t count = read_u32_le_at(raw, 0);
     std::size_t at = 4;
     for (std::uint32_t i = 0; i < count; ++i) {
@@ -1267,7 +1274,7 @@ TEST_SUITE("index store file") {
                                                 record_offset, {scope});
             REQUIRE(encoded.has_value());
             std::vector<std::uint8_t> record = std_bytes(*encoded);
-            write_u32_le_at(record, first_item_payload_offset() + 5U,
+            write_u32_le_at(record, first_item_payload_offset(record) + 5U,
                             0xFFFFFFF0U);
             rewrite_record_crc(record, 0);
             decode_with_tracked_peak(bytes_of(view_of(record)));
@@ -1283,7 +1290,7 @@ TEST_SUITE("index store file") {
                                                 record_offset, {ref});
             REQUIRE(encoded.has_value());
             std::vector<std::uint8_t> record = std_bytes(*encoded);
-            write_u32_le_at(record, first_item_payload_offset() + 24U,
+            write_u32_le_at(record, first_item_payload_offset(record) + 24U,
                             0xFFFFFFF0U);
             rewrite_record_crc(record, 0);
             decode_with_tracked_peak(bytes_of(view_of(record)));
@@ -1334,7 +1341,7 @@ TEST_SUITE("index store file") {
         // record is the reader's only view of the range.
         {
             std::vector<std::uint8_t> record = encode(item);
-            record[first_item_payload_offset() + 12U] = 0x7FU;
+            record[first_item_payload_offset(record) + 12U] = 0x7FU;
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
             CHECK_FALSE(decoded.has_value());
@@ -1346,7 +1353,7 @@ TEST_SUITE("index store file") {
         // A copy id or an ordinal of zero names nothing.
         {
             std::vector<std::uint8_t> record = encode(item);
-            write_u32_le_at(record, first_item_payload_offset(), 0U);
+            write_u32_le_at(record, first_item_payload_offset(record), 0U);
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
             CHECK_FALSE(decoded.has_value());
@@ -1357,7 +1364,7 @@ TEST_SUITE("index store file") {
 
         {
             std::vector<std::uint8_t> record = encode(item);
-            write_u64_le_at(record, first_item_payload_offset() + 4U, 0U);
+            write_u64_le_at(record, first_item_payload_offset(record) + 4U, 0U);
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
             CHECK_FALSE(decoded.has_value());
@@ -1416,7 +1423,8 @@ TEST_SUITE("index store file") {
         // scope, two u64 and the state byte.
         {
             std::vector<std::uint8_t> record = encode(item);
-            write_u32_le_at(record, first_item_payload_offset() + 29U, 3U);
+            write_u32_le_at(record, first_item_payload_offset(record) + 29U,
+                            3U);
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
             CHECK_FALSE(decoded.has_value());
@@ -1427,7 +1435,7 @@ TEST_SUITE("index store file") {
 
         {
             std::vector<std::uint8_t> record = encode(item);
-            write_u32_le_at(record, first_item_payload_offset() + 29U,
+            write_u32_le_at(record, first_item_payload_offset(record) + 29U,
                             0xFFFFFFF0U);
             rewrite_record_crc(record, 0);
             auto decoded = decode(record);
@@ -1931,7 +1939,7 @@ TEST_SUITE("index store file") {
         const SegmentBlockView wide_block =
             read_segment_block(*reader, wide_handle);
         REQUIRE(wide_block.entries.size() == WIDE_SEGMENTS);
-        CHECK(wide_block.handle.length > store::SEGMENT_BLOCK_BYTES);
+        CHECK(wide_block.raw_bytes > store::SEGMENT_BLOCK_BYTES);
         for (std::size_t i = 0; i < wide_block.entries.size(); ++i) {
             CHECK(wide_block.entries[i].sequence == wide_sequence);
             CHECK(wide_block.entries[i].extent_offset ==

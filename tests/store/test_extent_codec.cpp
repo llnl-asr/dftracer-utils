@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <iterator>
 #include <random>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -410,5 +411,62 @@ TEST_SUITE("store extent codec") {
         auto decoded = *stored;
         REQUIRE(store::decode_extent(decoded).has_value());
         CHECK(decoded == raw);
+    }
+
+    TEST_CASE("metadata round-trips stored raw or as zstd") {
+        dstd::Vector<std::uint8_t> repeated;
+        for (int i = 0; i < 4096; ++i) {
+            for (const char c : std::string_view("/p/lustre/trace/file.pfw.gz"))
+                repeated.push_back(static_cast<std::uint8_t>(c));
+        }
+        const auto compressed = store::encode_meta(view_of(repeated));
+        CHECK(compressed[0] ==
+              static_cast<std::uint8_t>(store::PageCodec::Zstd));
+        CHECK(compressed.size() < repeated.size() / 8);
+        auto back = store::decode_meta(view_of(compressed));
+        REQUIRE(back.has_value());
+        CHECK(*back == repeated);
+
+        std::mt19937_64 random(7);
+        dstd::Vector<std::uint8_t> noise(4096);
+        for (std::uint8_t& byte : noise)
+            byte = static_cast<std::uint8_t>(random());
+        const auto raw = store::encode_meta(view_of(noise));
+        CHECK(raw[0] == static_cast<std::uint8_t>(store::PageCodec::None));
+        CHECK(raw.size() == noise.size() + 1);
+        auto raw_back = store::decode_meta(view_of(raw));
+        REQUIRE(raw_back.has_value());
+        CHECK(*raw_back == noise);
+
+        const auto empty =
+            store::encode_meta(view_of(dstd::Vector<std::uint8_t>{}));
+        auto empty_back = store::decode_meta(view_of(empty));
+        REQUIRE(empty_back.has_value());
+        CHECK(empty_back->empty());
+    }
+
+    TEST_CASE("metadata with a bad codec, length or frame does not decode") {
+        dstd::Vector<std::uint8_t> repeated(65536, std::uint8_t{'a'});
+        const auto stored = store::encode_meta(view_of(repeated));
+        REQUIRE(stored[0] == static_cast<std::uint8_t>(store::PageCodec::Zstd));
+
+        auto unknown = stored;
+        unknown[0] = 9;
+        CHECK_FALSE(store::decode_meta(view_of(unknown)).has_value());
+
+        auto longer = stored;
+        write_u32_le(longer.data() + 1,
+                     static_cast<std::uint32_t>(repeated.size() + 1));
+        CHECK_FALSE(store::decode_meta(view_of(longer)).has_value());
+
+        auto huge = stored;
+        write_u32_le(huge.data() + 1, store::EXTENT_MAX_RAW_BYTES + 1U);
+        CHECK_FALSE(store::decode_meta(view_of(huge)).has_value());
+
+        auto cut = stored;
+        cut.resize(cut.size() - 1);
+        CHECK_FALSE(store::decode_meta(view_of(cut)).has_value());
+
+        CHECK_FALSE(store::decode_meta(ByteView{}).has_value());
     }
 }

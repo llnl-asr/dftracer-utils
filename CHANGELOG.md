@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Build each file of `distributed_index` on one worker, with that worker's threads, where a file larger than its share of the work was cut across workers.
+  The `partition` argument keeps its values, and both place whole files.
 - Build zstd 1.5.7 from source for every build, as one static archive with its symbols hidden, where a build found the system zstd first.
   A system zstd can be much older (1.4.4 on Corona), and a program that also loads the system libzstd no longer has its zstd calls bound to ours.
 - Build the index store engine as its own library, `libdftracer_utils_store`, which links only the runtime libraries, libdeflate and zstd.
@@ -233,6 +235,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `plan_work_units`, `enumerate_gzip_members` and the `file_slices` argument of `build_sst_batch` from the Python bindings, since `distributed_index` no longer cuts a file across workers.
 - Remove the `DFTRACER_UTILS_ENABLE_ZSTD` and `DFTRACER_UTILS_ENABLE_LZ4` CMake options, and with them LZ4 compression of the RocksDB index.
   Every build links zstd, so spill files and Arrow IPC files can always compress with zstd.
 - Remove the `DFTRACER_UTILS_USE_ZLIB_NG` option and the fallback to madler/zlib.
@@ -252,6 +255,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `distributed_index` leaving out the events of every part but the first of a file it cut across workers.
+  A 4-member file built by 2 workers kept 1,205 of its 1,605 events, and it now keeps all of them.
 - Fix a coroutine that waits on a timer hanging forever when the timer is set while the timer thread goes to sleep.
 - Fix a file read or write waiting forever while the worker that started it runs a step that blocks.
   A worker now starts the I/O its step queued when the step ends, where it started it only after 16 queued operations or when it had no work.

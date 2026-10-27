@@ -580,15 +580,12 @@ def install_extension_stub() -> None:
         flush_every_files: int = 0,
         runtime: Runtime | object | None = None,
         aggregation_config: object = None,
-        file_slices: object = None,
     ) -> tuple[list[dict[str, str | None]], bytes]:
         """Run the indexer pipeline with an SST sink. Returns
         `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
         merged AssociationTracker for the batch (empty bytes when
-        `aggregation_config` is None). `file_slices` enables intra-file
-        parallelism; entries are `None` (whole file) or
-        `(member_begin, member_end, checkpoint_idx_base,
-        skip_file_scoped_writes, members)`."""
+        `aggregation_config` is None). On the store backend the batch writes
+        the index itself and returns no artifacts."""
         return ([], b"")
 
     def plan_lpt_partition(
@@ -624,24 +621,6 @@ def install_extension_stub() -> None:
         """Move every populated SST in `artifacts` into `dest_dir` via the
         C++ rename/copy helper, returning a fresh dict with the new paths."""
         return {}
-
-    def enumerate_gzip_members(
-        files: list[str],
-        runtime: Runtime | object | None = None,
-    ) -> list[list[tuple[int, int]]]:
-        """Cooperative async scan of gzip member offsets. Returns lists of
-        `(c_offset, c_size)` parallel to `files`; empty for non-gzip files."""
-        return []
-
-    def plan_work_units(
-        member_map: list[list[tuple[int, int]]],
-        num_workers: int,
-        target_c_size: int = 0,
-    ) -> list[list[tuple[int, int, int, int]]]:
-        """Deterministic LPT assignment of intra-file gzip-member slices across
-        workers. Returns per-worker lists of
-        `(file_idx, member_begin, member_end, c_size)`."""
-        return []
 
     class _Series(_BaseNative):
         """Native columnar Series handle (SIMD ops + Arrow C Data Interface).
@@ -745,15 +724,14 @@ def install_extension_stub() -> None:
         "build_sst_batch",
         "peek_default_runtime",
         "enable_aggregation_deterministic_ids",
-        "enumerate_gzip_members",
         "get_default_runtime",
         "get_log_level",
+        "index_backend",
         "jit_run_op",
         "memory_budget_advice",
         "merge_flamegraph_partials",
         "move_artifacts",
         "plan_lpt_partition",
-        "plan_work_units",
         "read_arrow_files_parallel",
         "scan_files",
         "set_default_runtime",

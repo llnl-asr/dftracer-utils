@@ -1,7 +1,6 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_partition.h>
-#include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
@@ -42,8 +41,6 @@ using dftracer::utils::index::build::BatchBuilder;
 using dftracer::utils::index::build::IndexBuildBatchConfig;
 using dftracer::utils::index::build::IndexBuildBatchResult;
 using dftracer::utils::index::build::plan_lpt_partition;
-using dftracer::utils::index::gzip::enumerate_gzip_member_candidates;
-using dftracer::utils::index::gzip::GzipMember;
 using dftracer::utils::index::store::IndexDatabaseSstWriterContext;
 using dftracer::utils::index::store::IndexWrite;
 using dftracer::utils::index::store::SstArtifactRegistry;
@@ -368,7 +365,6 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
                                    "flush_every_files",
                                    "runtime",
                                    "aggregation_config",
-                                   "file_slices",
                                    "progress",
                                    NULL};
     PyObject *files_obj;
@@ -385,15 +381,14 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     Py_ssize_t flush_every_files = 0;
     PyObject *runtime_arg = NULL;
     PyObject *aggregation_config_obj = NULL;
-    PyObject *file_slices_obj = NULL;
     PyObject *progress_obj = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "OOss|snppOnnOOOO", const_cast<char **>(kwlist),
+            args, kwds, "OOss|snppOnnOOO", const_cast<char **>(kwlist),
             &files_obj, &file_ids_obj, &staging_dir, &batch_id, &index_dir,
             &checkpoint_size, &force_rebuild, &build_bloom, &bloom_dims_obj,
             &parallelism, &flush_every_files, &runtime_arg,
-            &aggregation_config_obj, &file_slices_obj, &progress_obj)) {
+            &aggregation_config_obj, &progress_obj)) {
         return NULL;
     }
 
@@ -480,91 +475,16 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::python::agg_config_from_py(
                 aggregation_config_obj));
 
-    // owned_member_maps must outlive rt->submit: FileSlice::members is raw.
-    std::vector<std::vector<GzipMember>> owned_member_maps;
-    std::vector<IndexBuildBatchConfig::FileSlice> parsed_slices;
-    if (file_slices_obj && file_slices_obj != Py_None) {
-        PyObject *seq =
-            PySequence_Fast(file_slices_obj, "file_slices must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        if (static_cast<std::size_t>(n) != files.size()) {
-            Py_DECREF(seq);
-            PyErr_SetString(PyExc_ValueError,
-                            "file_slices must match files length");
-            return NULL;
-        }
-        owned_member_maps.resize(n);
-        parsed_slices.resize(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            PyObject *entry = PySequence_Fast_GET_ITEM(seq, i);
-            if (entry == Py_None) {
-                continue;  // leave slice default-constructed (members=null)
-            }
-            Py_ssize_t mb = 0, me = 0;
-            int skip_scoped = 0;
-            PyObject *members_obj = nullptr;
-            if (!PyArg_ParseTuple(entry, "nnpO", &mb, &me, &skip_scoped,
-                                  &members_obj)) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            PyObject *mseq = PySequence_Fast(
-                members_obj, "file_slices[i].members must be a sequence");
-            if (!mseq) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            Py_ssize_t mn = PySequence_Fast_GET_SIZE(mseq);
-            auto &mv = owned_member_maps[i];
-            mv.resize(mn);
-            for (Py_ssize_t j = 0; j < mn; ++j) {
-                PyObject *m = PySequence_Fast_GET_ITEM(mseq, j);
-                unsigned long long c_offset = 0, c_size = 0;
-                if (!PyArg_ParseTuple(m, "KK", &c_offset, &c_size)) {
-                    Py_DECREF(mseq);
-                    Py_DECREF(seq);
-                    return NULL;
-                }
-                mv[j].c_offset = static_cast<std::uint64_t>(c_offset);
-                mv[j].c_size = static_cast<std::uint64_t>(c_size);
-            }
-            Py_DECREF(mseq);
-            parsed_slices[i].members = &mv;
-            parsed_slices[i].member_begin = static_cast<std::size_t>(mb);
-            parsed_slices[i].member_end = static_cast<std::size_t>(me);
-            parsed_slices[i].skip_file_scoped_writes = skip_scoped != 0;
-        }
-        Py_DECREF(seq);
-    }
-
     // The store takes each worker's writes directly: no staged SSTs, and the
     // worker numbers its own files, since a file id is a label inside one
-    // process there. A slice would be a second copy of its file's scope, so
-    // the store builds whole files only.
+    // process there.
     const bool on_store = dftracer::utils::index::store::index_backend() ==
                           dftracer::utils::index::store::IndexBackend::Store;
-    if (on_store) {
-        for (std::size_t i = 0; i < parsed_slices.size(); ++i) {
-            const auto &slice = parsed_slices[i];
-            if (slice.members != nullptr &&
-                (slice.skip_file_scoped_writes || slice.member_begin != 0 ||
-                 slice.member_end < slice.members->size())) {
-                PyErr_SetString(PyExc_ValueError,
-                                "the store index builds whole files only");
-                return NULL;
-            }
-        }
-        parsed_slices.clear();
-        file_ids.clear();
-    }
+    if (on_store) file_ids.clear();
 
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(files);
     batch_config->preassigned_file_ids = std::move(file_ids);
-    if (!parsed_slices.empty()) {
-        batch_config->file_slices = parsed_slices;
-    }
     batch_config->index_dir = index_dir;
     batch_config->build_bloom = build_bloom != 0;
     batch_config->checkpoint_size = static_cast<std::size_t>(checkpoint_size);
@@ -755,266 +675,8 @@ static PyObject *move_artifacts_fn(PyObject * /*self*/, PyObject *args,
     return artifacts_to_dict(moved);
 }
 
-namespace {
-
-dftracer::utils::coro::CoroTask<void> scan_one_gzip_file(
-    std::string path, std::vector<GzipMember> *out) {
-    out->clear();
-    int fd = ::open(path.c_str(), O_RDONLY);
-    if (fd < 0) co_return;
-    struct stat st;
-    if (::fstat(fd, &st) == 0 && st.st_size >= 18) {
-        co_await enumerate_gzip_member_candidates(
-            fd, static_cast<std::uint64_t>(st.st_size), *out);
-    }
-    ::close(fd);
-}
-
-}  // namespace
-
-static PyObject *enumerate_gzip_members_fn(PyObject * /*self*/, PyObject *args,
-                                           PyObject *kwds) {
-    static const char *kwlist[] = {"files", "runtime", NULL};
-    PyObject *files_obj = NULL;
-    PyObject *runtime_arg = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O",
-                                     const_cast<char **>(kwlist), &files_obj,
-                                     &runtime_arg)) {
-        return NULL;
-    }
-
-    std::vector<std::string> files;
-    {
-        if (!parse_string_seq(files_obj, "files must be a sequence", files))
-            return NULL;
-    }
-
-    Runtime *rt = nullptr;
-    if (runtime_arg && runtime_arg != Py_None) {
-        if (PyObject_TypeCheck(runtime_arg, &RuntimeType)) {
-            rt = ((RuntimeObject *)runtime_arg)->runtime.get();
-        } else {
-            PyObject *native = PyObject_GetAttrString(runtime_arg, "_native");
-            if (!native || !PyObject_TypeCheck(native, &RuntimeType)) {
-                Py_XDECREF(native);
-                PyErr_SetString(PyExc_TypeError,
-                                "runtime must be a Runtime instance or None");
-                return NULL;
-            }
-            rt = ((RuntimeObject *)native)->runtime.get();
-            Py_DECREF(native);
-        }
-    } else {
-        rt = dftracer::utils::python::get_default_runtime();
-    }
-
-    std::vector<std::vector<GzipMember>> results(files.size());
-    if (!run_blocking([&] {
-            rt->submit(
-                  dftracer::utils::run_coro_scope(
-                      rt->executor(),
-                      [](dftracer::utils::CoroScope &scope,
-                         const std::vector<std::string> *paths,
-                         std::vector<std::vector<GzipMember>> *out)
-                          -> dftracer::utils::coro::CoroTask<void> {
-                          auto scan_scope =
-                              [paths, out](dftracer::utils::CoroScope &child)
-                              -> dftracer::utils::coro::CoroTask<void> {
-                              for (std::size_t i = 0; i < paths->size(); ++i) {
-                                  const std::string &path = (*paths)[i];
-                                  auto *slot = &(*out)[i];
-                                  child.spawn(
-                                      [path, slot](dftracer::utils::CoroScope &)
-                                          -> dftracer::utils::coro::CoroTask<
-                                              void> {
-                                          co_await scan_one_gzip_file(path,
-                                                                      slot);
-                                      });
-                              }
-                              co_return;
-                          };
-                          co_await scope.scope(scan_scope);
-                          co_return;
-                      },
-                      &files, &results),
-                  "enumerate-gzip-members")
-                .get();
-        })) {
-        return NULL;
-    }
-
-    PyObject *out_list = PyList_New(static_cast<Py_ssize_t>(results.size()));
-    if (!out_list) return NULL;
-    for (std::size_t i = 0; i < results.size(); ++i) {
-        const auto &mv = results[i];
-        PyObject *inner = PyList_New(static_cast<Py_ssize_t>(mv.size()));
-        if (!inner) {
-            Py_DECREF(out_list);
-            return NULL;
-        }
-        for (std::size_t j = 0; j < mv.size(); ++j) {
-            PyObject *t =
-                Py_BuildValue("(KK)", (unsigned long long)mv[j].c_offset,
-                              (unsigned long long)mv[j].c_size);
-            if (!t) {
-                Py_DECREF(inner);
-                Py_DECREF(out_list);
-                return NULL;
-            }
-            PyList_SET_ITEM(inner, j, t);
-        }
-        PyList_SET_ITEM(out_list, i, inner);
-    }
-    return out_list;
-}
-
 // LPT (longest-processing-time) work assignment for balanced SST distribution.
 // so the Dask backend produces identical work distribution to MPI.
-static PyObject *plan_work_units_fn(PyObject * /*self*/, PyObject *args,
-                                    PyObject *kwds) {
-    static const char *kwlist[] = {"member_map", "num_workers", "target_c_size",
-                                   NULL};
-    PyObject *map_obj = NULL;
-    Py_ssize_t num_workers = 0;
-    unsigned long long target_c_size = 0;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "On|K",
-                                     const_cast<char **>(kwlist), &map_obj,
-                                     &num_workers, &target_c_size)) {
-        return NULL;
-    }
-    if (num_workers <= 0) num_workers = 1;
-
-    std::vector<std::vector<GzipMember>> member_map;
-    {
-        PyObject *seq =
-            PySequence_Fast(map_obj, "member_map must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        member_map.resize(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            PyObject *inner = PySequence_Fast_GET_ITEM(seq, i);
-            PyObject *iseq =
-                PySequence_Fast(inner, "member_map[i] must be a sequence");
-            if (!iseq) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            Py_ssize_t ni = PySequence_Fast_GET_SIZE(iseq);
-            member_map[i].resize(ni);
-            for (Py_ssize_t j = 0; j < ni; ++j) {
-                PyObject *t = PySequence_Fast_GET_ITEM(iseq, j);
-                unsigned long long c_offset = 0, c_size = 0;
-                if (!PyTuple_Check(t)) {
-                    PyErr_SetString(
-                        PyExc_TypeError,
-                        "each member must be an (offset, size) tuple");
-                    Py_DECREF(iseq);
-                    Py_DECREF(seq);
-                    return NULL;
-                }
-                if (!PyArg_ParseTuple(t, "KK", &c_offset, &c_size)) {
-                    Py_DECREF(iseq);
-                    Py_DECREF(seq);
-                    return NULL;
-                }
-                member_map[i][j].c_offset =
-                    static_cast<std::uint64_t>(c_offset);
-                member_map[i][j].c_size = static_cast<std::uint64_t>(c_size);
-            }
-            Py_DECREF(iseq);
-        }
-        Py_DECREF(seq);
-    }
-
-    // Fallback: treat empty/non-gzip files as a single whole-file member.
-    std::uint64_t total_c = 0;
-    for (auto &mv : member_map) {
-        if (mv.empty()) mv.push_back({0, 0});
-        for (const auto &m : mv) total_c += m.c_size;
-    }
-
-    if (target_c_size == 0) {
-        target_c_size =
-            (total_c + static_cast<std::uint64_t>(num_workers) - 1) /
-            std::max<std::uint64_t>(static_cast<std::uint64_t>(num_workers), 1);
-    }
-
-    struct Unit {
-        std::size_t file_idx;
-        std::size_t member_begin;
-        std::size_t member_end;
-        std::uint64_t c_size;
-    };
-    std::vector<Unit> units;
-    for (std::size_t fi = 0; fi < member_map.size(); ++fi) {
-        const auto &members = member_map[fi];
-        if (members.empty()) continue;
-        std::size_t begin = 0;
-        std::uint64_t accum = 0;
-        for (std::size_t i = 0; i < members.size(); ++i) {
-            accum += members[i].c_size;
-            const bool is_last = (i + 1 == members.size());
-            if ((target_c_size > 0 && accum >= target_c_size) || is_last) {
-                units.push_back({fi, begin, i + 1, accum});
-                begin = i + 1;
-                accum = 0;
-            }
-        }
-    }
-
-    std::vector<std::size_t> order(units.size());
-    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-        if (units[a].c_size != units[b].c_size)
-            return units[a].c_size > units[b].c_size;
-        if (units[a].file_idx != units[b].file_idx)
-            return units[a].file_idx < units[b].file_idx;
-        return units[a].member_begin < units[b].member_begin;
-    });
-    const std::size_t nw = static_cast<std::size_t>(num_workers);
-    std::vector<std::uint64_t> loads(nw, 0);
-    std::vector<std::vector<std::size_t>> per_worker(nw);
-    for (std::size_t ord : order) {
-        std::size_t best = 0;
-        for (std::size_t r = 1; r < nw; ++r)
-            if (loads[r] < loads[best]) best = r;
-        per_worker[best].push_back(ord);
-        loads[best] += std::max<std::uint64_t>(units[ord].c_size, 1);
-    }
-
-    PyObject *out = PyList_New(static_cast<Py_ssize_t>(nw));
-    if (!out) return NULL;
-    for (std::size_t w = 0; w < nw; ++w) {
-        // Keep per-worker slices sorted by (file_idx, member_begin) for
-        // deterministic, file-group-friendly iteration downstream.
-        auto &lst = per_worker[w];
-        std::sort(lst.begin(), lst.end(), [&](std::size_t a, std::size_t b) {
-            if (units[a].file_idx != units[b].file_idx)
-                return units[a].file_idx < units[b].file_idx;
-            return units[a].member_begin < units[b].member_begin;
-        });
-        PyObject *inner = PyList_New(static_cast<Py_ssize_t>(lst.size()));
-        if (!inner) {
-            Py_DECREF(out);
-            return NULL;
-        }
-        for (std::size_t k = 0; k < lst.size(); ++k) {
-            const auto &u = units[lst[k]];
-            PyObject *t = Py_BuildValue(
-                "(nnnK)", (Py_ssize_t)u.file_idx, (Py_ssize_t)u.member_begin,
-                (Py_ssize_t)u.member_end, (unsigned long long)u.c_size);
-            if (!t) {
-                Py_DECREF(inner);
-                Py_DECREF(out);
-                return NULL;
-            }
-            PyList_SET_ITEM(inner, k, t);
-        }
-        PyList_SET_ITEM(out, w, inner);
-    }
-    return out;
-}
-
 // ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
@@ -1029,8 +691,7 @@ static PyMethodDef SstDistributionMethods[] = {
      "merged AssociationTracker from this batch's aggregation visitors "
      "(empty bytes when no aggregation_config was passed). On the store "
      "backend the batch writes the index itself and returns no artifacts: "
-     "file_ids are not used, staging_dir is unused, and file_slices must "
-     "name whole files."},
+     "file_ids are not used and staging_dir is unused."},
     {"plan_lpt_partition", DFTU_PYCFUNCTION(plan_lpt_partition_fn),
      METH_VARARGS,
      "plan_lpt_partition(entries, num_workers) -> list[list[(path, size)]]\n"
@@ -1061,22 +722,6 @@ static PyMethodDef SstDistributionMethods[] = {
      "`build_sst_batch`) into `dest_dir` via the C++ rename/copy helper, "
      "returning a fresh dict with the new paths. Single GIL release, no "
      "per-file Python shutil.move overhead."},
-    {"enumerate_gzip_members", DFTU_PYCFUNCTION(enumerate_gzip_members_fn),
-     METH_VARARGS | METH_KEYWORDS,
-     "enumerate_gzip_members(files, runtime=None) -> list[list[(c_offset, "
-     "c_size)]]\n"
-     "Cooperative async scan of gzip member offsets across `files`. "
-     "Returns lists of (c_offset, c_size) parallel to `files`; empty for "
-     "non-gzip / unreadable files."},
-    {"plan_work_units", DFTU_PYCFUNCTION(plan_work_units_fn),
-     METH_VARARGS | METH_KEYWORDS,
-     "plan_work_units(member_map, num_workers, target_c_size=0) "
-     "-> list[list[(file_idx, member_begin, member_end, c_size)]]\n"
-     "Deterministic LPT assignment of intra-file gzip-member slices "
-     "across workers. Each worker's list contains (file_idx, "
-     "member_begin, member_end, c_size) tuples; a file sliced across "
-     "multiple workers appears in each owner's list with disjoint "
-     "[member_begin, member_end) ranges."},
     {NULL, NULL, 0, NULL}};
 
 int dftracer::utils::python::init_sst_distribution(PyObject *m) {

@@ -160,25 +160,6 @@ struct IndexBuildBatchConfig {
     /// equal file counts.
     std::vector<std::uint64_t> file_costs;
 
-    /// Optional per-file member slice (cross-rank file splitting). When
-    /// non-empty, must be parallel to `file_paths`. A null/empty entry
-    /// means "process the whole file"; a populated entry restricts the
-    /// build to `[member_begin, member_end)`. The `members` vector must
-    /// outlive the batch (typically stored in a shared member map).
-    struct FileSlice {
-        const std::vector<index::gzip::GzipMember>* members = nullptr;
-        std::size_t member_begin = 0;
-        std::size_t member_end = 0;
-        /// When true, this file's file-scoped data (member table,
-        /// bloom/manifest/hashtable, file_metadata) is NOT persisted by
-        /// the write phase. Aggregation/system-metrics SSTs produced by
-        /// extra visitors are still collected. Set by the MPI driver for
-        /// sliced ranks where `member_begin > 0` to avoid cross-rank key
-        /// collisions on file-scoped CFs.
-        bool skip_file_scoped_writes = false;
-    };
-    std::vector<FileSlice> file_slices;
-
     /// Optional write factory. If set, the write phase constructs a fresh
     /// IndexWrite per batch via this factory instead of opening the
     /// RocksDB-backed writer on `index_dir`. Used by the distributed (SST)

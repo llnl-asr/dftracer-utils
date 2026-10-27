@@ -58,7 +58,6 @@ struct PreparedFile {
     /// The id was reserved by this build, so the index holds no data for it
     /// and its tiers need no clearing.
     bool fresh_id = false;
-    IndexBuildBatchConfig::FileSlice slice;
 };
 
 struct ParsedBloomJob {
@@ -331,11 +330,9 @@ static coro::CoroTask<void> parse_and_write_worker(
                     index::build::for_schema(bloom_config, schema);
 
                 // Bloom + hash are harvested by folds via an IndexFoldDriver.
-                // The file-scoped folds are skipped for non-first slices of a
-                // cross-rank split, exactly as the visitors were.
                 std::vector<views::Fold*> fold_ptrs;
                 std::optional<index::build::IndexFoldDriver> driver;
-                if (!pf.slice.skip_file_scoped_writes) {
+                {
                     job.intern =
                         std::make_unique<dftracer::utils::dstd::StringIntern>();
                     if (build_bloom) {
@@ -343,10 +340,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                             std::make_unique<index::extensions::BloomFold>(
                                 *job.intern, file_config);
                         job.bloom_fold->set_file_bytes(pf.file_size);
-                        // A slice sees only part of the file's chunks, so it
-                        // cannot tell which are finished.
-                        if (!admission->spill_root.empty() &&
-                            pf.slice.members == nullptr)
+                        if (!admission->spill_root.empty())
                             job.bloom_fold->enable_spill(
                                 ticket.elastic_bytes(),
                                 admission->spill_root + "/file_" +
@@ -370,9 +364,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                     driver->set_record_schema(schema);
                     driver->share_buffers(admission->buffers);
                     driver->set_parse_gate(admission->files.gate());
-                    // A slice sees part of the chunks, and a file payload built
-                    // from them could rule out the whole file.
-                    if (build_bloom && pf.slice.members == nullptr) {
+                    if (build_bloom) {
                         auto exts = index::extensions::plugin_extensions();
                         if (!exts.empty()) {
                             job.plugin_builders = std::make_unique<
@@ -385,18 +377,9 @@ static coro::CoroTask<void> parse_and_write_worker(
                     visitors.emplace_back(*driver);
                 }
 
-                gzip_indexer::GzipMemberSlice slice_arg;
-                const gzip_indexer::GzipMemberSlice* slice_ptr = nullptr;
-                if (pf.slice.members != nullptr &&
-                    pf.slice.member_end > pf.slice.member_begin) {
-                    slice_arg.members = pf.slice.members;
-                    slice_arg.member_begin = pf.slice.member_begin;
-                    slice_arg.member_end = pf.slice.member_end;
-                    slice_ptr = &slice_arg;
-                }
                 auto arts = co_await gzip_indexer::build_gzip_index_artifacts(
-                    fd, pf.file_path, checkpoint_size, visitors, scope,
-                    slice_ptr, admission->files.inflate_ways());
+                    fd, pf.file_path, checkpoint_size, visitors, scope, nullptr,
+                    admission->files.inflate_ways());
                 if (!arts) {
                     result.error_message =
                         "Failed to build gzip index artifacts";
@@ -483,15 +466,6 @@ static coro::CoroTask<void> parse_and_write_worker(
 
             if (!parse_ok) {
                 (*results_ptr)[idx] = std::move(result);
-                continue;
-            }
-
-            // Sliced rank with member_begin > 0: skip file-scoped channel send;
-            // the aggregation fold output is kept in parsed_jobs[idx] for
-            // downstream collection.
-            if (pf.slice.skip_file_scoped_writes) {
-                (*results_ptr)[idx] = std::move(result);
-                (*parsed_jobs_ptr)[idx] = std::move(job);
                 continue;
             }
 
@@ -743,12 +717,6 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
         std::make_shared<std::vector<IndexBuildResult>>(state->num_files);
     state->index_path =
         determine_index_path(config.file_paths.front(), config.index_dir);
-    if (!config.file_slices.empty() &&
-        config.file_slices.size() != config.file_paths.size()) {
-        throw index::store::IndexerError(
-            index::store::IndexerError::Type::InvalidArgument,
-            "file_slices.size() must match file_paths.size() (or be empty)");
-    }
     if (!config.preassigned_file_ids.empty()) {
         if (config.preassigned_file_ids.size() != config.file_paths.size()) {
             throw index::store::IndexerError(
@@ -763,7 +731,6 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
                                    config.preassigned_file_ids[i]);
             pf.fresh_id =
                 config.preassigned_file_ids[i] >= config.first_fresh_file_id;
-            if (!config.file_slices.empty()) pf.slice = config.file_slices[i];
             if (!config.input_fds.empty())
                 pf.input_fd = std::move(config.input_fds[i]);
             prepared.push_back(std::move(pf));
@@ -773,12 +740,6 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     } else {
         state->prepared = std::make_shared<std::vector<PreparedFile>>(
             prepare_file_identities(state->index_path, config.file_paths));
-        if (!config.file_slices.empty()) {
-            auto& prepared = *state->prepared;
-            for (std::size_t i = 0; i < prepared.size(); ++i) {
-                prepared[i].slice = config.file_slices[i];
-            }
-        }
         if (!config.input_fds.empty()) {
             auto& prepared = *state->prepared;
             for (std::size_t i = 0; i < prepared.size(); ++i)
@@ -906,13 +867,6 @@ static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
                 config_ptr->file_costs.begin() +
                     static_cast<std::ptrdiff_t>(end));
         }
-        if (!config_ptr->file_slices.empty()) {
-            chunk_config.file_slices.assign(
-                config_ptr->file_slices.begin() +
-                    static_cast<std::ptrdiff_t>(start),
-                config_ptr->file_slices.begin() +
-                    static_cast<std::ptrdiff_t>(end));
-        }
         chunk_config.first_fresh_file_id = config_ptr->first_fresh_file_id;
         chunk_config.sink_factory = config_ptr->sink_factory;
         chunk_config.sink_commit = config_ptr->sink_commit;
@@ -985,7 +939,6 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
     for (std::size_t r = 0; r < roots.size(); ++r) {
         auto part = std::make_shared<IndexBuildBatchConfig>(config);
         part->file_paths.clear();
-        part->file_slices.clear();
         part->preassigned_file_ids.clear();
         part->input_fds.clear();
         part->file_costs.clear();
@@ -994,8 +947,6 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
             if (root_of[i] != r) continue;
             at.push_back(i);
             part->file_paths.push_back(config.file_paths[i]);
-            if (!config.file_slices.empty())
-                part->file_slices.push_back(config.file_slices[i]);
             if (!config.preassigned_file_ids.empty())
                 part->preassigned_file_ids.push_back(
                     config.preassigned_file_ids[i]);

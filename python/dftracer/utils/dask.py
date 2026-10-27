@@ -57,10 +57,6 @@ from dftracer.utils.dask_frame import DaskFrame
 from dftracer.utils.dataframe import DataFrame, PhaseArg, TimeUnitArg
 from dftracer.utils.trace_viewer import TraceViewer
 
-# One intra-file work slice: (member_begin, member_end, is_partial, members),
-# members being (offset, size) pairs. Matches build_sst_batch's file_slices.
-_FileSlice = Tuple[int, int, bool, List[Tuple[int, int]]]
-
 __all__ = [
     "DaskFrame",
     "DaskTraceViewer",
@@ -995,7 +991,6 @@ def assign_files_by_pid(
 def _build_sst_task(
     files: List[str],
     file_ids: List[int],
-    file_slices: Optional[List[Optional[_FileSlice]]],
     local_staging: str,
     shared_staging: str,
     batch_id: str,
@@ -1044,7 +1039,6 @@ def _build_sst_task(
         flush_every_files,
         None,
         aggregation_config,
-        file_slices,
         progress=_progress_cb,
     )
     t_build = _time.monotonic()
@@ -1061,11 +1055,9 @@ def _build_sst_task(
     t_move = _time.monotonic()
 
     _log.info(
-        "build host=%s batch=%s n_files=%d n_slices=%d n_artifacts=%d "
-        "build=%.2fs move=%.2fs(n=%d) total=%.2fs",
+        "build host=%s batch=%s n_files=%d n_artifacts=%d build=%.2fs move=%.2fs(n=%d) total=%.2fs",
         _host,
         batch_id,
-        len(set(file_ids)),
         len(files),
         len(artifact_dicts),
         t_build - t0,
@@ -1074,13 +1066,6 @@ def _build_sst_task(
         t_move - t0,
     )
     return artifact_dicts, tracker_blob
-
-
-def _scan_gzip_members_task(paths: List[str]) -> List[List[Tuple[int, int]]]:
-    """Worker task: scan gzip member offsets for its file subset."""
-    from .dftracer_utils_ext import enumerate_gzip_members
-
-    return enumerate_gzip_members(paths, None)
 
 
 def distributed_index(
@@ -1104,7 +1089,9 @@ def distributed_index(
 
     Steps (all O(1) on the coordinator except the fan-out):
       1. Enumerate files + sizes via parallel scan.
-      2. LPT bin-pack files into one bucket per Dask worker.
+      2. LPT bin-pack whole files into one bucket per Dask worker. A file is
+         never split across workers: every part of its index is built from
+         the whole file, by one worker with its own threads.
       3. Assign file ids on the coordinator's IndexDatabase; each worker
          writes its files' records with their index data.
       4. Submit one Dask task per non-empty worker that runs the existing
@@ -1114,9 +1101,8 @@ def distributed_index(
          ingests them in one atomic bulk_ingest.
 
     On the store backend (``index_backend() == "store"``) each worker writes
-    the index directly and numbers its own files, files are not split across
-    workers, and nothing is staged or ingested: the staging arguments are
-    unused. The coordinator writes the aggregation config and trackers, then
+    the index directly and numbers its own files, and nothing is staged or
+    ingested: the staging arguments are unused. The coordinator writes the aggregation config and trackers, then
     refreshes its view of the index.
 
     Args:
@@ -1163,13 +1149,7 @@ def distributed_index(
         SstArtifactRegistry as _SstArtifactRegistry,
     )
     from .dftracer_utils_ext import (
-        enumerate_gzip_members as _enumerate_gzip_members,
-    )
-    from .dftracer_utils_ext import (
         plan_lpt_partition as _plan_lpt_partition,
-    )
-    from .dftracer_utils_ext import (
-        plan_work_units as _plan_work_units,
     )
     from .dftracer_utils_ext import (
         scan_files as _scan_files,
@@ -1251,106 +1231,40 @@ def distributed_index(
         _time.monotonic() - _t1,
     )
 
-    # 3. SCAN: distribute gzip-member scan across workers (round-robin
-    #    per file_idx). Each worker sends back only its 1/N member maps;
-    #    coordinator stitches into the full map.
-    _t2 = _time.monotonic()
-    member_map: List[List[Tuple[int, int]]] = [[] for _ in range(len(entries))]
-    if on_store:
-        # Whole files only, so no member map is needed.
-        member_map = [[] for _ in all_paths]
-    elif client is None:
-        member_map = list(_enumerate_gzip_members(all_paths, None))
-    else:
-        worker_addrs = list(client.nthreads().keys())
-        scan_buckets: List[List[int]] = [[] for _ in range(n_workers)]
-        for i in range(len(all_paths)):
-            scan_buckets[i % n_workers].append(i)
-        scan_futs = []
-        scan_idx_lists: List[List[int]] = []
-        for w, idxs in enumerate(scan_buckets):
-            if not idxs:
-                continue
-            sub_paths = [all_paths[i] for i in idxs]
-            target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
-            scan_idx_lists.append(idxs)
-            scan_futs.append(
-                client.submit(_scan_gzip_members_task, sub_paths, workers=target, pure=False)
-            )
-        scan_results = client.gather(scan_futs)
-        for idxs, res in zip(scan_idx_lists, scan_results):
-            for i, members in zip(idxs, res):
-                member_map[i] = list(members)
-    _log.info(
-        "distributed_index: gzip-member scan done in %.1fs",
-        _time.monotonic() - _t2,
-    )
-
-    # 4. PLAN: deterministic LPT of work units across workers (mirrors MPI).
+    # 3. PLAN: whole files bin-packed across workers. A file is never split
+    #    across workers: each part of a file's index is built from the whole
+    #    file, so one worker builds it, with its own threads.
     _t3 = _time.monotonic()
-    if on_store:
-        # One unit per whole file, bin-packed by size: a file split across
-        # workers would be two copies of its scope on the store.
+    if partition == "lpt":
         path_index = {p: i for i, p in enumerate(all_paths)}
-        per_worker_units = [
-            [(path_index[p], 0, 1, int(sz)) for (p, sz) in bucket]
+        per_worker_files = [
+            [path_index[p] for (p, _sz) in bucket]
             for bucket in _plan_lpt_partition(list(entries), n_workers)
         ]
-    elif partition == "lpt":
-        per_worker_units = _plan_work_units(member_map, n_workers, 0)
     elif partition == "round_robin":
-        # Whole-file fallback for round_robin (no intra-file slicing).
-        per_worker_units = [[] for _ in range(n_workers)]
-        for i, mv in enumerate(member_map):
-            mlen = max(1, len(mv))
-            per_worker_units[i % n_workers].append((i, 0, mlen, 0))
+        per_worker_files = [[] for _ in range(n_workers)]
+        for i in range(len(all_paths)):
+            per_worker_files[i % n_workers].append(i)
     else:
         raise ValueError(f"unknown partition={partition}")
     _log.info(
-        "distributed_index: planned in %.2fs (per-worker units=%s)",
+        "distributed_index: planned in %.2fs (per-worker files=%s)",
         _time.monotonic() - _t3,
-        [len(u) for u in per_worker_units],
+        [len(u) for u in per_worker_files],
     )
 
-    # 5. BUILD: each worker receives its (paths, file_ids, file_slices)
-    #    parallel lists. A file split across workers appears once per slice.
+    # 4. BUILD: each worker receives its (paths, file_ids) parallel lists.
     index_dir = os.path.dirname(index_path.rstrip("/"))
     if not on_store:
         os.makedirs(local_staging, exist_ok=True)
         os.makedirs(shared_staging, exist_ok=True)
 
-    worker_file_lists: List[List[str]] = []
-    worker_file_ids: List[List[int]] = []
-    worker_slices: List[List[Optional[_FileSlice]]] = []
-    for w, units in enumerate(per_worker_units):
-        paths_w: List[str] = []
-        ids_w: List[int] = []
-        slices_w: List[Optional[_FileSlice]] = []
-        for file_idx, mb, me, _csz in units:
-            paths_w.append(all_paths[file_idx])
-            ids_w.append(int(all_file_ids[file_idx]))
-            if on_store:
-                slices_w.append(None)
-                continue
-            members = member_map[file_idx] or [(0, 0)]
-            # Clamp [mb, me) into the actual member vector. plan_work_units
-            # may have synthesised a single (0, 0) for a non-gzip file; in
-            # that case mb=0, me=1 and the slice is "whole file".
-            if me > len(members):
-                me = len(members)
-            if mb > me:
-                mb = me
-            slices_w.append(
-                (
-                    int(mb),
-                    int(me),
-                    bool(mb != 0),
-                    [(int(mo), int(ms)) for (mo, ms) in members],
-                )
-            )
-        worker_file_lists.append(paths_w)
-        worker_file_ids.append(ids_w)
-        worker_slices.append(slices_w)
+    worker_file_lists: List[List[str]] = [
+        [all_paths[i] for i in files_w] for files_w in per_worker_files
+    ]
+    worker_file_ids: List[List[int]] = [
+        [int(all_file_ids[i]) for i in files_w] for files_w in per_worker_files
+    ]
 
     _t_build = _time.monotonic()
     worker_ids: List[int] = []
@@ -1358,9 +1272,7 @@ def distributed_index(
     # Each entry is (artifact_dicts, tracker_blob) returned by _build_sst_task.
     worker_results: List[Tuple[List[Dict[str, List[str]]], bytes]] = []
     if client is None:
-        for w, (paths_w, ids_w, slices_w) in enumerate(
-            zip(worker_file_lists, worker_file_ids, worker_slices)
-        ):
+        for w, (paths_w, ids_w) in enumerate(zip(worker_file_lists, worker_file_ids)):
             if not paths_w:
                 continue
             worker_ids.append(w)
@@ -1368,7 +1280,6 @@ def distributed_index(
                 _build_sst_task(
                     paths_w,
                     ids_w,
-                    slices_w,
                     local_staging,
                     shared_staging,
                     f"worker_{w}",
@@ -1387,9 +1298,7 @@ def distributed_index(
         worker_addrs = list(client.nthreads().keys())
         with ProgressAggregator(client, progress):
             futures = []
-            for w, (paths_w, ids_w, slices_w) in enumerate(
-                zip(worker_file_lists, worker_file_ids, worker_slices)
-            ):
+            for w, (paths_w, ids_w) in enumerate(zip(worker_file_lists, worker_file_ids)):
                 if not paths_w:
                     continue
                 target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
@@ -1399,7 +1308,6 @@ def distributed_index(
                         _build_sst_task,
                         paths_w,
                         ids_w,
-                        slices_w,
                         local_staging,
                         shared_staging,
                         f"worker_{w}",
@@ -1501,7 +1409,6 @@ def distributed_index(
         for _w, path in stale:
             _rmtree_quiet(path)
 
-    # A file split across slices appears once per slice in its worker's list.
     per_worker_file_counts = [len(set(paths)) for paths in worker_file_lists]
     return {
         "total_files": n_total_files,

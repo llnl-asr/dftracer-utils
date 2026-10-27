@@ -469,16 +469,14 @@ def build_sst_batch(
     flush_every_files: int = 0,
     runtime: Optional[Union[Runtime, object]] = None,
     aggregation_config: Optional[object] = None,
-    file_slices: Optional[List[Optional[Tuple[int, int, bool, List[Tuple[int, int]]]]]] = None,
     progress: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[List[Dict[str, List[str]]], bytes]:
     """Run the indexer pipeline with an SST sink. Returns
     `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
     merged AssociationTracker for the batch (empty bytes when
-    `aggregation_config` is None). `file_slices` enables intra-file
-    parallelism; entries are `None` (whole file) or
-    `(member_begin, member_end, checkpoint_idx_base,
-    skip_file_scoped_writes, members)`."""
+    `aggregation_config` is None). On the store backend the batch writes the
+    index itself and returns no artifacts: `file_ids` are not used and
+    `staging_dir` is unused."""
     ...
 
 def plan_lpt_partition(
@@ -1053,24 +1051,6 @@ def enable_aggregation_deterministic_ids() -> None:
 def move_artifacts(artifacts: Dict[str, List[str]], dest_dir: str) -> Dict[str, List[str]]:
     """Move every populated SST in `artifacts` into `dest_dir` via the
     C++ rename/copy helper, returning a fresh dict with the new paths."""
-    ...
-
-def enumerate_gzip_members(
-    files: List[str],
-    runtime: Optional[Union[Runtime, object]] = None,
-) -> List[List[Tuple[int, int]]]:
-    """Cooperative async scan of gzip member offsets. Returns lists of
-    `(c_offset, c_size)` parallel to `files`; empty for non-gzip files."""
-    ...
-
-def plan_work_units(
-    member_map: List[List[Tuple[int, int]]],
-    num_workers: int,
-    target_c_size: int = 0,
-) -> List[List[Tuple[int, int, int, int]]]:
-    """Deterministic LPT assignment of intra-file gzip-member slices across
-    workers. Returns per-worker lists of
-    `(file_idx, member_begin, member_end, c_size)`."""
     ...
 
 def set_log_level(

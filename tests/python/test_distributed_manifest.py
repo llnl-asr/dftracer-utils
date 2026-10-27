@@ -201,6 +201,57 @@ class TestDistributedWithDask:
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestDistributedWholeFiles:
+    def test_a_multi_member_file_keeps_every_event(self):
+        """A file larger than its share of the work is built whole by one
+        worker, so no member of it is left out of the index."""
+        from dask.distributed import Client, LocalCluster
+
+        with LocalCluster(
+            n_workers=2, threads_per_worker=1, dashboard_address=None, processes=True
+        ) as cluster, Client(cluster) as client:
+            with Environment(lines=40) as env:
+                parts = [
+                    env.create_dft_trace_file_with_pid(f"part{i}.pfw.gz", 1, 400) for i in range(4)
+                ]
+                big = os.path.join(env.temp_dir, "big.pfw.gz")
+                with open(big, "wb") as out:
+                    for part in parts:
+                        with open(part, "rb") as member:
+                            out.write(member.read())
+                for part in parts:
+                    os.remove(part)
+                small = env.create_dft_trace_file_with_pid("small.pfw.gz", 2, 5)
+                files = [big, small]
+
+                index_dir = os.path.join(env.temp_dir, "idx")
+                os.makedirs(index_dir, exist_ok=True)
+                staging = os.path.join(env.temp_dir, "stage")
+                os.makedirs(staging, exist_ok=True)
+                result = distributed_index(
+                    files=files,
+                    index_path=os.path.join(index_dir, ".dftindex"),
+                    local_staging=staging,
+                    shared_staging=staging,
+                    client=client,
+                    aggregation_config=AGG_CFG,
+                )
+                assert sorted(result["per_worker"]) == [1, 1]
+
+                serial_dir = os.path.join(env.temp_dir, "idx_serial")
+                os.makedirs(serial_dir, exist_ok=True)
+                Indexer(
+                    files=files,
+                    index_dir=serial_dir,
+                    require_aggregation=AGG_CFG,
+                    force_rebuild=True,
+                ).ensure_indexed()
+                serial_count = _agg_event_count(files, serial_dir)
+                assert serial_count > 1600
+                assert _agg_event_count(files, index_dir) == serial_count
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
 class TestDistributedIndexIdempotent:
     """distributed_index skips the parse fan-out for already-indexed files."""
 

@@ -4,6 +4,7 @@
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
+#include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/varint.h>
@@ -1944,5 +1945,277 @@ TEST_SUITE("index store file") {
         CHECK(other_block.entries[0].sequence == 4);
         CHECK(other_block.entries[0].extent_offset == last_extent->offset);
         CHECK(other_block.handle.length < store::SEGMENT_BLOCK_BYTES);
+    }
+
+    TEST_CASE("a space report accounts for every byte of a closed file") {
+        TempDir temp;
+        const std::string path = temp.file("space.dfs");
+        // One MiB per extent, so the one large copy fits in a single extent.
+        constexpr std::size_t SPACE_EXTENT_SIZE = std::size_t{1} << 20;
+        auto created = DataFileWriter::create(path, SPACE_EXTENT_SIZE,
+                                              "host.example", "rank-0");
+        REQUIRE(created.has_value());
+        auto& writer = *created;
+
+        NamespaceItem fold_namespace = make_namespace(3);
+        fold_namespace.fold_kind =
+            static_cast<std::uint8_t>(store::FoldKind::SumI64);
+        writer.add(make_namespace(1));
+        writer.add(make_namespace(2));
+        writer.add(fold_namespace);
+        for (std::uint32_t id = 1; id <= 3; ++id) writer.add(make_scope(id));
+        for (std::uint32_t id = 1; id <= 3; ++id) {
+            writer.add(make_copy(id, id, id));
+        }
+        writer.add(make_copy(4, 1, 1));
+
+        const auto segment_entry =
+            [](std::uint32_t copy_id, std::uint32_t offset,
+               const SegmentData& segment, std::uint64_t ordinal) {
+                ExtentSegment entry;
+                entry.copy_id = copy_id;
+                entry.offset_in_extent = offset;
+                entry.length = static_cast<std::uint32_t>(segment.bytes.size());
+                entry.entry_count = segment.entry_count;
+                entry.ordinal = ordinal;
+                entry.first_key = segment.first_key;
+                entry.last_key = segment.last_key;
+                return entry;
+            };
+        const auto extent_item = [](const ExtentRef& extent,
+                                    std::uint64_t sequence) {
+            ExtentRefItem item;
+            item.offset = extent.offset;
+            item.length = extent.length;
+            item.crc = extent.crc;
+            item.sequence = sequence;
+            return item;
+        };
+
+        // Six commits of two extents each: one holds the segments of two copies
+        // end to end, the other the segment of the fold copy.
+        constexpr std::uint64_t COMMITS = 6;
+        dstd::Vector<ExtentRef> written;
+        std::uint64_t raw_written = 0;
+        for (std::uint64_t sequence = 1; sequence <= COMMITS; ++sequence) {
+            const SegmentData left =
+                make_segment(static_cast<std::uint32_t>(sequence), 4);
+            const SegmentData right =
+                make_segment(static_cast<std::uint32_t>(sequence) + 100, 3);
+            const SegmentData folded =
+                make_segment(static_cast<std::uint32_t>(sequence) + 200, 2);
+            REQUIRE_FALSE(left.bytes.empty());
+            REQUIRE_FALSE(right.bytes.empty());
+            REQUIRE_FALSE(folded.bytes.empty());
+
+            dstd::Vector<std::uint8_t> packed = left.bytes;
+            while (packed.size() % store::SEGMENT_ALIGN != 0) {
+                packed.push_back(0);
+            }
+            const std::uint32_t right_at =
+                static_cast<std::uint32_t>(packed.size());
+            packed.insert(packed.end(), right.bytes.begin(), right.bytes.end());
+            auto packed_extent = writer.append_extent(view_of(packed));
+            REQUIRE(packed_extent.has_value());
+            auto folded_extent = writer.append_extent(view_of(folded.bytes));
+            REQUIRE(folded_extent.has_value());
+            raw_written += packed.size() + folded.bytes.size();
+            written.push_back(*packed_extent);
+            written.push_back(*folded_extent);
+
+            ExtentRefItem packed_item = extent_item(*packed_extent, sequence);
+            packed_item.segments.push_back(segment_entry(1, 0, left, sequence));
+            packed_item.segments.push_back(
+                segment_entry(2, right_at, right, sequence));
+            writer.add(std::move(packed_item));
+
+            ExtentRefItem folded_item = extent_item(*folded_extent, sequence);
+            folded_item.segments.push_back(
+                segment_entry(3, 0, folded, sequence));
+            writer.add(std::move(folded_item));
+            REQUIRE(writer.commit().has_value());
+        }
+
+        // One large copy of one entry, over ten pages of raw bytes.
+        SegmentBuilder large;
+        const std::string large_key = "large-key";
+        const std::string large_value(300U * 1024U, 'x');
+        large.add(view_of(large_key), view_of(large_value));
+        auto large_bytes = large.seal(nullptr, nullptr, nullptr);
+        REQUIRE(large_bytes.has_value());
+        SegmentData large_segment;
+        large_segment.bytes = std::move(*large_bytes);
+        large_segment.entry_count = large.entry_count();
+        large_segment.first_key = bytes_of(large.first_key());
+        large_segment.last_key = bytes_of(large.last_key());
+        auto large_extent = writer.append_extent(view_of(large_segment.bytes));
+        REQUIRE(large_extent.has_value());
+        raw_written += large_segment.bytes.size();
+        written.push_back(*large_extent);
+        ExtentRefItem large_item = extent_item(*large_extent, COMMITS + 1);
+        large_item.segments.push_back(
+            segment_entry(4, 0, large_segment, COMMITS + 1));
+        writer.add(std::move(large_item));
+        REQUIRE(writer.commit().has_value());
+        REQUIRE(writer.close().has_value());
+
+        constexpr std::uint64_t EXPECTED_COMMITS = COMMITS + 1;
+        constexpr std::uint64_t EXPECTED_SEGMENT_ENTRIES = 3 * COMMITS + 1;
+
+        auto report = store::space_report(path);
+        REQUIRE(report.has_value());
+        const store::SpaceReport& space = *report;
+        CHECK(space.file_bytes == std::filesystem::file_size(path));
+        CHECK(space.header_bytes == store::FILE_HEADER_BYTES);
+        CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
+                  space.gap_bytes + space.segment_block_bytes +
+                  space.items_block_bytes + space.directory_leaf_bytes +
+                  space.directory_separator_bytes + space.footer_bytes ==
+              space.file_bytes);
+
+        auto opened = DataFileReader::open(path);
+        REQUIRE(opened.has_value());
+        const FileIndex& index = opened->index();
+        REQUIRE(index.tail.has_value());
+        REQUIRE(written.size() == index.tail->extent_count);
+
+        // The extents and pages the writer wrote, counted through the reader.
+        std::uint64_t extents = 0;
+        std::uint64_t extent_bytes = 0;
+        std::uint64_t table_bytes = 0;
+        std::uint64_t pages = 0;
+        std::uint64_t page_bytes = 0;
+        std::uint64_t page_raw_bytes = 0;
+        std::uint64_t compressed = 0;
+        for (const ExtentRef& ref : written) {
+            auto stored = opened->read_extent(ref);
+            REQUIRE(stored.has_value());
+            auto view = store::ExtentPages::open(view_of(*stored));
+            REQUIRE(view.has_value());
+            ++extents;
+            extent_bytes += ref.length;
+            table_bytes += store::ExtentPages::table_length(view_of(*stored)) -
+                           store::EXTENT_HEADER_BYTES;
+            pages += view->size();
+            page_raw_bytes += view->raw_length();
+            for (std::size_t page = 0; page < view->size(); ++page) {
+                page_bytes += view->entry(page).stored_length;
+                if (view->entry(page).codec == store::PageCodec::Zstd) {
+                    ++compressed;
+                }
+            }
+        }
+        CHECK(space.extents == extents);
+        CHECK(space.extent_bytes == extent_bytes);
+        CHECK(space.extent_page_table_bytes == table_bytes);
+        CHECK(space.pages == pages);
+        CHECK(space.page_bytes == page_bytes);
+        CHECK(space.page_raw_bytes == page_raw_bytes);
+        CHECK(space.page_raw_bytes == raw_written);
+        CHECK(space.pages_compressed == compressed);
+        CHECK(space.pages_compressed > 0);
+        CHECK(space.extent_bytes % store::EXTENT_ALIGN_BYTES == 0);
+        CHECK(space.extent_bytes == store::EXTENT_HEADER_BYTES * space.extents +
+                                        space.extent_page_table_bytes +
+                                        space.page_bytes +
+                                        space.extent_padding_bytes);
+
+        // The blocks of the directory and the items block the footer names.
+        const std::vector<ClosedRun> runs = closed_runs(*opened);
+        CHECK(space.segment_entries == EXPECTED_SEGMENT_ENTRIES);
+        CHECK(space.segment_entries == runs.size());
+        CHECK(space.segment_key_bytes > 0);
+        CHECK(space.segment_block_bytes > 0);
+        CHECK(space.items_block_bytes == index.tail->items.length);
+        CHECK(space.filter_bytes == index.tail->scope_filter.size());
+        CHECK(space.directory_entries == 3);
+        CHECK(space.directory_leaf_bytes > 0);
+        CHECK(space.directory_separator_bytes == 0);
+        CHECK(space.directory_key_bytes > 0);
+        CHECK(space.directory_commit_key_bytes > 0);
+        CHECK(space.record_bytes ==
+              EXPECTED_COMMITS * store::FILE_HEADER_BYTES);
+        CHECK(space.commits == EXPECTED_COMMITS);
+        CHECK(space.copies == 4);
+        CHECK(space.copies == index.copies.size());
+        CHECK(space.footer_bytes > store::FILE_TRAILER_BYTES);
+
+        // Every extent, record and block the writer wrote is aligned, so the
+        // only bytes no category counts align the footer.
+        const std::uint64_t blocks =
+            space.segment_block_bytes + space.items_block_bytes +
+            space.directory_leaf_bytes + space.directory_separator_bytes;
+        CHECK(space.gap_bytes ==
+              (store::EXTENT_ALIGN_BYTES - blocks % store::EXTENT_ALIGN_BYTES) %
+                  store::EXTENT_ALIGN_BYTES);
+    }
+
+    TEST_CASE("a space report reads every leaf of a directory") {
+        TempDir temp;
+        const std::string path = temp.file("space_leaves.dfs");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+        REQUIRE(created.has_value());
+        auto& writer = *created;
+
+        // Past the entries of one leaf, so the directory has two of them.
+        constexpr std::uint32_t ENTRIES = 300;
+        static_assert(ENTRIES > store::DIRECTORY_BLOCK_ENTRIES);
+        for (std::uint32_t id = 1; id <= ENTRIES; ++id) {
+            writer.add(make_namespace(id));
+            writer.add(make_scope(id));
+            writer.add(make_copy(id, id, id));
+        }
+        REQUIRE(writer.commit().has_value());
+        REQUIRE(writer.close().has_value());
+
+        auto opened = DataFileReader::open(path);
+        REQUIRE(opened.has_value());
+        auto top =
+            store::SlotTable::open(view_of(opened->index().tail->top_table));
+        REQUIRE(top.has_value());
+        CHECK(top->size() == 2);
+
+        auto report = store::space_report(path);
+        REQUIRE(report.has_value());
+        const store::SpaceReport& space = *report;
+        CHECK(space.file_bytes == std::filesystem::file_size(path));
+        CHECK(space.extents == 0);
+        CHECK(space.extent_bytes == 0);
+        CHECK(space.pages == 0);
+        CHECK(space.segment_entries == 0);
+        CHECK(space.directory_entries == ENTRIES);
+        CHECK(space.directory_leaf_bytes > 0);
+        CHECK(space.directory_separator_bytes == 0);
+        CHECK(space.directory_key_bytes > 0);
+        CHECK(space.commits == 1);
+        CHECK(space.copies == ENTRIES);
+        CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
+                  space.gap_bytes + space.segment_block_bytes +
+                  space.items_block_bytes + space.directory_leaf_bytes +
+                  space.directory_separator_bytes + space.footer_bytes ==
+              space.file_bytes);
+    }
+
+    TEST_CASE("a space report refuses a file that is not closed") {
+        TempDir temp;
+        const std::string path = temp.file("space_open.dfs");
+        auto created =
+            DataFileWriter::create(path, EXTENT_SIZE, "host", "label");
+        REQUIRE(created.has_value());
+        auto& writer = *created;
+        const SegmentData segment = make_segment(1, 2);
+        REQUIRE_FALSE(segment.bytes.empty());
+        auto extent = writer.append_extent(view_of(segment.bytes));
+        REQUIRE(extent.has_value());
+        writer.add(make_namespace(1));
+        writer.add(make_scope(1));
+        writer.add(make_copy(1, 1, 1));
+        writer.add(make_extent_ref(*extent, segment, 1));
+        REQUIRE(writer.commit().has_value());
+
+        auto report = store::space_report(path);
+        REQUIRE_FALSE(report.has_value());
+        CHECK(report.error().is(dstd::Condition::Parse));
     }
 }

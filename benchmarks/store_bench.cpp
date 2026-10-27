@@ -20,11 +20,17 @@
 //   store_bench --dir /p/a --keep /p/kept --threads 96 --payload-mib 4096
 //   store_bench --dir /p/b --reuse /p/kept --threads 96 --payload-mib 4096
 //
+//   store_bench --space /p/kept/ours-shared-96-4096
+//
 // --keep writes the data of the query case under its path and keeps it, with
 // no reads; --reuse reads that data with no writes, so the reads can run on
 // another node, with nothing of the data in its page cache. Both runs take the
 // same --threads, --payload-mib, --value-bytes, --value-kind, --keys-per-batch
 // and --engine.
+//
+// --space writes and reads nothing: it prints the space report of every data
+// file of one store directory, the sum of them and the bytes of its summary
+// file, as `name value` lines, and exits.
 //
 // Output: comment lines naming the extent size, the I/O backend, the file
 // system kind and the options both engines run under, then TSV rows. A write
@@ -48,6 +54,7 @@
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/io_fault.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -206,6 +213,7 @@ struct Options {
     std::string which = "all";
     std::string keep;
     std::string reuse;
+    std::string space;
     store::PageCodec codec = store::PageCodec::Zstd;
 };
 
@@ -350,6 +358,9 @@ bool parse_args(int argc, char** argv, Options& opt) {
         } else if (arg == "--reuse") {
             opt.reuse = value();
             if (opt.reuse.empty()) return false;
+        } else if (arg == "--space") {
+            opt.space = value();
+            if (opt.space.empty()) return false;
         } else if (arg == "--case") {
             const std::string which = value();
             if (which != "write" && which != "query" && which != "scopes" &&
@@ -376,7 +387,8 @@ void usage() {
            "                   [--fold-scopes 1000,8404] [--fold-keys N]\n"
            "                   [--case write|query|scopes|fold|all]\n"
            "                   [--keep PATH | --reuse PATH] [--codec "
-           "zstd|none]\n";
+           "zstd|none]\n"
+           "                   [--space DIR]\n";
 }
 
 dstd::String dstring(std::string_view text) {
@@ -807,6 +819,85 @@ struct QueryPlan {
     std::vector<QueryItem> misses;
     std::vector<QueryScan> scans;
 };
+
+/// One field of a space report, so the mode prints every report alike.
+struct SpaceField {
+    const char* name;
+    std::uint64_t store::SpaceReport::* value;
+};
+
+constexpr SpaceField SPACE_FIELDS[] = {
+    {"file_bytes", &store::SpaceReport::file_bytes},
+    {"header_bytes", &store::SpaceReport::header_bytes},
+    {"extents", &store::SpaceReport::extents},
+    {"extent_bytes", &store::SpaceReport::extent_bytes},
+    {"extent_page_table_bytes", &store::SpaceReport::extent_page_table_bytes},
+    {"page_bytes", &store::SpaceReport::page_bytes},
+    {"page_raw_bytes", &store::SpaceReport::page_raw_bytes},
+    {"pages", &store::SpaceReport::pages},
+    {"pages_compressed", &store::SpaceReport::pages_compressed},
+    {"extent_padding_bytes", &store::SpaceReport::extent_padding_bytes},
+    {"gap_bytes", &store::SpaceReport::gap_bytes},
+    {"record_bytes", &store::SpaceReport::record_bytes},
+    {"segment_block_bytes", &store::SpaceReport::segment_block_bytes},
+    {"segment_entries", &store::SpaceReport::segment_entries},
+    {"segment_key_bytes", &store::SpaceReport::segment_key_bytes},
+    {"items_block_bytes", &store::SpaceReport::items_block_bytes},
+    {"directory_leaf_bytes", &store::SpaceReport::directory_leaf_bytes},
+    {"directory_separator_bytes",
+     &store::SpaceReport::directory_separator_bytes},
+    {"directory_entries", &store::SpaceReport::directory_entries},
+    {"directory_key_bytes", &store::SpaceReport::directory_key_bytes},
+    {"directory_commit_key_bytes",
+     &store::SpaceReport::directory_commit_key_bytes},
+    {"filter_bytes", &store::SpaceReport::filter_bytes},
+    {"footer_bytes", &store::SpaceReport::footer_bytes},
+    {"copies", &store::SpaceReport::copies},
+    {"commits", &store::SpaceReport::commits},
+};
+
+/// Prints the space report of every data file of `dir`, then the sum and the
+/// bytes of its summary file: one `name value` per line.
+bool print_space(const std::string& dir) {
+    std::error_code error;
+    std::filesystem::directory_iterator entries(dir, error);
+    if (error) {
+        std::cerr << "store_bench: cannot list " << dir << ": "
+                  << error.message() << "\n";
+        return false;
+    }
+    std::vector<std::string> names;
+    for (const std::filesystem::directory_entry& entry : entries) {
+        std::error_code kind_error;
+        if (!entry.is_regular_file(kind_error)) continue;
+        if (entry.path().extension() != ".dfs") continue;
+        names.push_back(entry.path().filename().string());
+    }
+    std::sort(names.begin(), names.end());
+    store::SpaceReport sum;
+    for (const std::string& name : names) {
+        const std::string path = dir + "/" + name;
+        auto report = store::space_report(path);
+        if (!report) {
+            std::cerr << "store_bench: " << path << ": "
+                      << to_std(report.error()) << "\n";
+            return false;
+        }
+        for (const SpaceField& field : SPACE_FIELDS) {
+            const std::uint64_t value = (*report).*(field.value);
+            std::cout << name << "." << field.name << " " << value << "\n";
+            sum.*(field.value) += value;
+        }
+    }
+    for (const SpaceField& field : SPACE_FIELDS) {
+        std::cout << "sum." << field.name << " " << sum.*(field.value) << "\n";
+    }
+    std::error_code size_error;
+    const std::uintmax_t summary_bytes = std::filesystem::file_size(
+        std::filesystem::path(dir) / store::SUMMARY_FILE_NAME, size_error);
+    std::cout << "summary_bytes " << (size_error ? 0 : summary_bytes) << "\n";
+    return true;
+}
 
 struct Bench {
     Options opt;
@@ -2561,6 +2652,9 @@ int main(int argc, char** argv) {
     if (options.help) {
         usage();
         return 0;
+    }
+    if (!options.space.empty()) {
+        return print_space(options.space) ? 0 : 1;
     }
     Bench bench;
     bench.opt = options;

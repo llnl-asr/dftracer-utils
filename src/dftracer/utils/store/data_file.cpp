@@ -31,6 +31,7 @@ namespace dstd = dftracer::utils::dstd;
 
 constexpr std::string_view FILE_MAGIC = "DFTUSTR0";
 constexpr std::string_view TRAILER_MAGIC = "DFTUEND0";
+constexpr std::string_view RECORD_MAGIC = "DFTUREC0";
 constexpr std::uint32_t FORMAT_VERSION = 0;
 constexpr std::uint64_t RECORD_HEADER_BYTES = 40;
 
@@ -209,8 +210,7 @@ dstd::Expected<std::uint64_t, dstd::Error> read_record_length(
     auto head = pread_all(fd, offset, RECORD_HEADER_BYTES);
     if (!head) return dstd::Unexpected<dstd::Error>(head.error());
     const auto* data = reinterpret_cast<const std::uint8_t*>(head->data());
-    constexpr std::string_view record_magic = "DFTUREC0";
-    if (std::memcmp(data, record_magic.data(), record_magic.size()) != 0) {
+    if (std::memcmp(data, RECORD_MAGIC.data(), RECORD_MAGIC.size()) != 0) {
         return parse_error();
     }
     const std::uint32_t kind = read_u32_le(data + 8);
@@ -1695,6 +1695,330 @@ DataFileReader::all_extent_refs() const {
                          return a.sequence < b.sequence;
                      });
     return refs;
+}
+
+namespace {
+
+namespace dstd = dftracer::utils::dstd;
+
+/// One entry of a segment block: u32 extent index, u64 sequence, u64 offset,
+/// u32 length, u32 crc, u32 offset in the extent, u32 segment length, u64 entry
+/// count, u64 ordinal, then the first and the last key, each as a varint length
+/// and its bytes.
+constexpr std::size_t SEGMENT_ENTRY_BYTES = 52;
+
+/// One byte range of a file that the space report classifies.
+struct SpaceRange {
+    std::uint64_t offset = 0;
+    std::uint64_t length = 0;
+};
+
+bool space_range_before(const SpaceRange& a, const SpaceRange& b) {
+    return a.offset < b.offset;
+}
+
+/// The end of the range of `ranges`, which ascend by offset, that holds
+/// `offset`, and zero when no range holds it.
+std::uint64_t space_range_end_at(dstd::Span<const SpaceRange> ranges,
+                                 std::uint64_t offset) {
+    const auto after =
+        std::upper_bound(ranges.begin(), ranges.end(), offset,
+                         [](std::uint64_t value, const SpaceRange& range) {
+                             return value < range.offset;
+                         });
+    if (after == ranges.begin()) return 0;
+    const SpaceRange& range = *(after - 1);
+    return offset < range.offset + range.length ? range.offset + range.length
+                                                : 0;
+}
+
+/// One space report being built: the bytes already classified, so the last
+/// pass adds up what is left, and the numbers.
+struct SpaceScan {
+    const DataFileReader* reader = nullptr;
+    SpaceReport report;
+    dstd::Vector<SpaceRange> ranges;
+
+    void cover(std::uint64_t offset, std::uint64_t length) {
+        if (length != 0) ranges.push_back({offset, length});
+    }
+};
+
+dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
+    auto refs = scan.reader->all_extent_refs();
+    if (!refs) return dstd::Unexpected<dstd::Error>(refs.error());
+    std::stable_sort(refs->begin(), refs->end(),
+                     [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
+                         return a.ref.offset < b.ref.offset;
+                     });
+    dstd::Vector<std::uint8_t> head;
+    dstd::Vector<std::uint8_t> table_bytes;
+    for (std::size_t at = 0; at < refs->size();) {
+        const ExtentRefItem& item = (*refs)[at].ref;
+        const ExtentRef ref{item.offset, item.length, item.crc};
+        std::size_t end = at + 1;
+        while (end < refs->size() && (*refs)[end].ref.offset == item.offset) {
+            ++end;
+        }
+        at = end;
+        if (ref.length == 0 || ref.offset > scan.report.file_bytes ||
+            ref.length > scan.report.file_bytes - ref.offset) {
+            return parse_error();
+        }
+        scan.cover(ref.offset, ref.length);
+        // A run that holds a big value has no page table: its bytes stay in the
+        // gap.
+        if (item.segments.empty()) continue;
+        ++scan.report.extents;
+        scan.report.extent_bytes += ref.length;
+        auto read = scan.reader->read_range(ref.offset, EXTENT_HEADER_BYTES,
+                                            head, nullptr);
+        if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+        const std::size_t table = ExtentPages::table_length(bytes_of(head));
+        if (table <= EXTENT_HEADER_BYTES || table > ref.length) {
+            return parse_error();
+        }
+        read = scan.reader->read_range(ref.offset, table, table_bytes, nullptr);
+        if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+        auto pages = ExtentPages::open_table(bytes_of(table_bytes), ref.length);
+        if (!pages) return dstd::Unexpected<dstd::Error>(pages.error());
+        scan.report.extent_page_table_bytes += table - EXTENT_HEADER_BYTES;
+        std::uint64_t stored = 0;
+        for (std::size_t page = 0; page < pages->size(); ++page) {
+            const PageEntry& entry = pages->entry(page);
+            ++scan.report.pages;
+            scan.report.page_bytes += entry.stored_length;
+            scan.report.page_raw_bytes += entry.raw_length;
+            if (entry.codec == PageCodec::Zstd) ++scan.report.pages_compressed;
+            stored += entry.stored_length;
+        }
+        if (stored > ref.length - table) return parse_error();
+        scan.report.extent_padding_bytes += ref.length - table - stored;
+    }
+    return {};
+}
+
+dstd::Expected<void, dstd::Error> space_segment_block(
+    SpaceScan& scan, const BlockHandle& handle) {
+    auto bytes = scan.reader->read_block(handle, nullptr);
+    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+    scan.report.segment_block_bytes += handle.length;
+    scan.cover(handle.offset, handle.length);
+    const dstd::Vector<std::uint8_t>& body = *bytes;
+    if (body.size() < 4) return parse_error();
+    const std::uint64_t count = read_u32_le(body.data());
+    if (count > (body.size() - 4) / SEGMENT_ENTRY_BYTES) return parse_error();
+    std::size_t at = 4;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        if (SEGMENT_ENTRY_BYTES > body.size() - at) return parse_error();
+        at += SEGMENT_ENTRY_BYTES;
+        for (std::size_t key = 0; key < 2; ++key) {
+            auto length = decode_varint(bytes_of(body), at);
+            if (!length || *length > body.size() - at) return parse_error();
+            scan.report.segment_key_bytes += *length;
+            at += static_cast<std::size_t>(*length);
+        }
+        ++scan.report.segment_entries;
+    }
+    if (at != body.size()) return parse_error();
+    return {};
+}
+
+/// Walks the directory from its top table down to its leaves: every leaf block
+/// is a slot table of directory entries and every separator block one of
+/// child handles. The segment blocks the entries name leave by reference.
+dstd::Expected<void, dstd::Error> space_directory(
+    SpaceScan& scan, const FileTail& tail,
+    dstd::Vector<BlockHandle>& segment_blocks) {
+    struct Pending {
+        BlockHandle handle;
+        std::uint32_t level = 0;
+    };
+    const auto child_of = [](ByteView payload, BlockHandle& child) {
+        std::size_t at = 0;
+        return read_block_handle(payload, at, child) && at == payload.size();
+    };
+    auto top = SlotTable::open(bytes_of(tail.top_table));
+    if (!top) return dstd::Unexpected<dstd::Error>(top.error());
+    dstd::Vector<Pending> pending;
+    pending.reserve(top->size());
+    for (std::size_t i = 0; i < top->size(); ++i) {
+        BlockHandle child;
+        if (!child_of(top->payload(i), child)) return parse_error();
+        pending.push_back({child, tail.directory_levels});
+    }
+    while (!pending.empty()) {
+        const Pending block = pending.back();
+        pending.pop_back();
+        auto bytes = scan.reader->read_block(block.handle, nullptr);
+        if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+        auto slots = SlotTable::open(bytes_of(*bytes));
+        if (!slots) return dstd::Unexpected<dstd::Error>(slots.error());
+        scan.cover(block.handle.offset, block.handle.length);
+        if (block.level > 1) {
+            scan.report.directory_separator_bytes += block.handle.length;
+            for (std::size_t i = 0; i < slots->size(); ++i) {
+                BlockHandle child;
+                if (!child_of(slots->payload(i), child)) return parse_error();
+                pending.push_back({child, block.level - 1});
+            }
+            continue;
+        }
+        scan.report.directory_leaf_bytes += block.handle.length;
+        auto directory = ScopeDirectory::open(bytes_of(*bytes));
+        if (!directory) return dstd::Unexpected<dstd::Error>(directory.error());
+        for (std::size_t i = 0; i < directory->size(); ++i) {
+            scan.report.directory_key_bytes += slots->key(i).size();
+            auto entry = directory->entry(i);
+            if (!entry) return dstd::Unexpected<dstd::Error>(entry.error());
+            ++scan.report.directory_entries;
+            for (const DirectoryCopy& copy : entry->copies) {
+                for (const DirectoryCommit& commit : copy.commits) {
+                    scan.report.directory_commit_key_bytes +=
+                        commit.first_key.size() + commit.last_key.size();
+                    if (!commit.segments.empty())
+                        segment_blocks.push_back(commit.segments);
+                }
+            }
+        }
+    }
+    return {};
+}
+
+/// Every commit and checkpoint record of the file, found by the record magic in
+/// each block the file lets a record start in. A record a block already covers
+/// is skipped, so an extent or a block that holds the bytes of one adds no
+/// record.
+dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
+    std::stable_sort(scan.ranges.begin(), scan.ranges.end(),
+                     space_range_before);
+    const std::uint64_t file_bytes = scan.report.file_bytes;
+    dstd::Vector<std::uint8_t> head;
+    std::uint64_t offset = FILE_HEADER_BYTES;
+    while (offset <= file_bytes && file_bytes - offset >= RECORD_HEADER_BYTES) {
+        const std::uint64_t covered = space_range_end_at(
+            dstd::Span<const SpaceRange>(scan.ranges), offset);
+        if (covered != 0) {
+            offset = align_up(covered, FILE_HEADER_BYTES);
+            continue;
+        }
+        auto read =
+            scan.reader->read_range(offset, RECORD_HEADER_BYTES, head, nullptr);
+        if (!read) return dstd::Unexpected<dstd::Error>(read.error());
+        const std::uint8_t* data = head.data();
+        if (std::memcmp(data, RECORD_MAGIC.data(), RECORD_MAGIC.size()) != 0) {
+            offset += FILE_HEADER_BYTES;
+            continue;
+        }
+        const std::uint32_t kind = read_u32_le(data + 8);
+        const std::uint32_t body_length = read_u32_le(data + 12);
+        const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
+        const std::uint64_t padded = align_up(crc_end, FILE_HEADER_BYTES);
+        if (kind < 1 || kind > 3 || padded < crc_end ||
+            padded > file_bytes - offset) {
+            offset += FILE_HEADER_BYTES;
+            continue;
+        }
+        if (kind == static_cast<std::uint32_t>(RecordKind::Commit) ||
+            kind == static_cast<std::uint32_t>(RecordKind::Checkpoint)) {
+            scan.report.record_bytes += padded;
+            ++scan.report.commits;
+            scan.cover(offset, padded);
+        }
+        offset += padded;
+    }
+    return {};
+}
+
+}  // namespace
+
+dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
+    auto opened = DataFileReader::open(path, FooterItems::All);
+    if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
+    const FileIndex& index = opened->index();
+    if (!index.closed || !index.tail.has_value()) return parse_error();
+    const FileTail& tail = *index.tail;
+    SpaceScan scan;
+    scan.reader = &*opened;
+    scan.report.file_bytes = opened->file_size();
+    scan.report.header_bytes = FILE_HEADER_BYTES;
+    scan.report.filter_bytes = tail.scope_filter.size();
+    scan.report.copies = index.copies.size();
+    if (scan.report.file_bytes < FILE_HEADER_BYTES + FILE_TRAILER_BYTES) {
+        return parse_error();
+    }
+    scan.cover(0, FILE_HEADER_BYTES);
+
+    // The trailer names the footer, so both are classified first: the records
+    // must not take the footer record for one of theirs.
+    std::uint64_t trailer_offset = scan.report.file_bytes - FILE_TRAILER_BYTES;
+    dstd::Vector<std::uint8_t> trailer;
+    auto trailer_read = opened->read_range(trailer_offset, FILE_TRAILER_BYTES,
+                                           trailer, nullptr);
+    if (!trailer_read) {
+        return dstd::Unexpected<dstd::Error>(trailer_read.error());
+    }
+    if (std::memcmp(trailer.data(), TRAILER_MAGIC.data(),
+                    TRAILER_MAGIC.size()) != 0) {
+        return parse_error();
+    }
+    if (read_u32_le(trailer.data() + 20) !=
+        crc32(0, trailer.data(), FILE_TRAILER_BYTES - 12)) {
+        return parse_error();
+    }
+    const std::uint64_t footer_offset = read_u64_le(trailer.data() + 8);
+    const std::uint32_t footer_length = read_u32_le(trailer.data() + 16);
+    if (footer_offset < FILE_HEADER_BYTES ||
+        footer_offset % FILE_HEADER_BYTES != 0 ||
+        footer_length < RECORD_HEADER_BYTES + 4 ||
+        footer_length > trailer_offset ||
+        footer_offset != trailer_offset - footer_length) {
+        return parse_error();
+    }
+    scan.report.footer_bytes = footer_length + FILE_TRAILER_BYTES;
+    scan.cover(footer_offset, footer_length);
+    scan.cover(trailer_offset, FILE_TRAILER_BYTES);
+
+    if (!tail.items.empty()) {
+        scan.report.items_block_bytes = tail.items.length;
+        scan.cover(tail.items.offset, tail.items.length);
+    }
+    auto extents = space_extents(scan);
+    if (!extents) return dstd::Unexpected<dstd::Error>(extents.error());
+    dstd::Vector<BlockHandle> segment_blocks;
+    auto directory = space_directory(scan, tail, segment_blocks);
+    if (!directory) return dstd::Unexpected<dstd::Error>(directory.error());
+    std::stable_sort(segment_blocks.begin(), segment_blocks.end(),
+                     [](const BlockHandle& a, const BlockHandle& b) {
+                         return a.offset < b.offset;
+                     });
+    for (std::size_t at = 0; at < segment_blocks.size();) {
+        const BlockHandle handle = segment_blocks[at];
+        std::size_t end = at + 1;
+        while (end < segment_blocks.size() &&
+               segment_blocks[end].offset == handle.offset) {
+            ++end;
+        }
+        at = end;
+        auto block = space_segment_block(scan, handle);
+        if (!block) return dstd::Unexpected<dstd::Error>(block.error());
+    }
+    auto records = space_records(scan);
+    if (!records) return dstd::Unexpected<dstd::Error>(records.error());
+    if (scan.report.extents != tail.extent_count) return parse_error();
+
+    std::stable_sort(scan.ranges.begin(), scan.ranges.end(),
+                     space_range_before);
+    std::uint64_t classified_end = 0;
+    for (const SpaceRange& range : scan.ranges) {
+        if (range.offset < classified_end) return parse_error();
+        scan.report.gap_bytes += range.offset - classified_end;
+        classified_end = range.offset + range.length;
+    }
+    if (classified_end < scan.report.file_bytes) {
+        scan.report.gap_bytes += scan.report.file_bytes - classified_end;
+    }
+    return scan.report;
 }
 
 }  // namespace dftracer::utils::store

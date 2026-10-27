@@ -344,6 +344,64 @@ class DataFileReader {
     dstd::UniquePtr<std::mutex> open_mutex_;
 };
 
+/// Where the bytes of one closed data file are. Each category counts bytes no
+/// other category counts, except extent_padding_bytes, which extent_bytes
+/// already holds, and the sum of file_bytes is exact:
+///   header_bytes + extent_bytes + record_bytes + gap_bytes +
+///   segment_block_bytes + items_block_bytes + directory_leaf_bytes +
+///   directory_separator_bytes + footer_bytes == file_bytes.
+struct SpaceReport {
+    std::uint64_t file_bytes = 0;
+    /// The file header.
+    std::uint64_t header_bytes = 0;
+    /// Distinct extents.
+    std::uint64_t extents = 0;
+    /// The stored bytes of every extent, the padding inside it included.
+    std::uint64_t extent_bytes = 0;
+    /// The page tables of the extents, their headers left out.
+    std::uint64_t extent_page_table_bytes = 0;
+    /// The stored bytes of every page, compressed or raw.
+    std::uint64_t page_bytes = 0;
+    /// The raw bytes those pages decode to.
+    std::uint64_t page_raw_bytes = 0;
+    std::uint64_t pages = 0;
+    /// The pages stored with zstd.
+    std::uint64_t pages_compressed = 0;
+    /// The zero bytes an extent holds past its last page: part of extent_bytes.
+    std::uint64_t extent_padding_bytes = 0;
+    /// What no other line counts: the bytes that align a range, the runs that
+    /// hold a big value outside an extent, and any byte after the trailer.
+    std::uint64_t gap_bytes = 0;
+    /// The commit and checkpoint records.
+    std::uint64_t record_bytes = 0;
+    std::uint64_t segment_block_bytes = 0;
+    std::uint64_t segment_entries = 0;
+    /// The first and last keys the segment entries hold.
+    std::uint64_t segment_key_bytes = 0;
+    std::uint64_t items_block_bytes = 0;
+    std::uint64_t directory_leaf_bytes = 0;
+    std::uint64_t directory_separator_bytes = 0;
+    std::uint64_t directory_entries = 0;
+    /// The keys of the directory entries, as a block stores them.
+    std::uint64_t directory_key_bytes = 0;
+    /// The first and last keys of the per-commit ranges of the entries.
+    std::uint64_t directory_commit_key_bytes = 0;
+    std::uint64_t filter_bytes = 0;
+    /// The footer record, the top table it holds and the trailer.
+    std::uint64_t footer_bytes = 0;
+    /// The copies the items block lists.
+    std::uint64_t copies = 0;
+    /// The commit and checkpoint records, one per commit.
+    std::uint64_t commits = 0;
+};
+
+/// The space report of one closed data file: reads the header, the trailer, the
+/// commits, every block the footer names and the page table of every extent,
+/// and decodes no page. Parse when the file is not closed, when a record, an
+/// extent or a block does not verify, or when two categories claim the same
+/// bytes; Io when a read fails.
+dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path);
+
 }  // namespace dftracer::utils::store
 
 #endif  // DFTRACER_UTILS_STORE_DATA_FILE_H

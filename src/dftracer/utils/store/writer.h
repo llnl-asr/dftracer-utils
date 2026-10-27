@@ -131,11 +131,11 @@ class Batch {
 /// One data file of one process. Entries become visible at the group commit
 /// that records their extent.
 ///
-/// add_namespace, batch, commit, fail and drop are safe from several threads at
-/// once; commit takes one lock of this writer, and that is the only one it
-/// shares with the others. A batch is sorted and sealed into one segment and
-/// appended to its namespace's open extent, so an extent of the file holds the
-/// segments of several batches. flush() and close() are coroutines of the
+/// add_namespace, batch, commit, fail, drop and erase are safe from several
+/// threads at once; commit takes one lock of this writer, and that is the only
+/// one it shares with the others. A batch is sorted and sealed into one segment
+/// and appended to its namespace's open extent, so an extent of the file holds
+/// the segments of several batches. flush() and close() are coroutines of the
 /// executor the writer was created with, and close() must not run while another
 /// thread is still calling the writer.
 class Writer {
@@ -187,6 +187,15 @@ class Writer {
     dstd::Expected<void, dstd::Error> drop(NamespaceId namespace_id,
                                            const ScopeKey& scope,
                                            ByteView begin, ByteView end);
+    /// Hides the keys of [begin, end) that the current copy holds from earlier
+    /// batches, with an empty `end` meaning to the last key, and nothing else:
+    /// the copy stays current, keeps its generation, its params hash and its
+    /// sources, and a batch committed after it shows its keys again. Without a
+    /// current copy of the scope in this writer there is nothing of this
+    /// writer's to hide and the call does nothing.
+    dstd::Expected<void, dstd::Error> erase(NamespaceId namespace_id,
+                                            const ScopeKey& scope,
+                                            ByteView begin, ByteView end);
 
     /// Covers every batch whose commit returned before this call: seals the
     /// open extents, waits for their writes and runs one group commit, syncing

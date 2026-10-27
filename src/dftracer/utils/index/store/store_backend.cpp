@@ -43,6 +43,15 @@ void check(std::string_view what,
     if (!result) throw_store_error(what, result.error());
 }
 
+/// The bound inside a copy of the full key `key`, which a copy names by its
+/// kind byte and then the tail of the key: empty for a bound at the prefix.
+std::string inner_bound_of(std::string_view key) {
+    if (key.size() <= layout::KEY_PREFIX_BYTES) return {};
+    std::string inner(1, key[2]);
+    inner.append(key.substr(layout::KEY_PREFIX_BYTES));
+    return inner;
+}
+
 /// Commits one batch, waiting for extent bytes and retrying while the writer
 /// reports Busy.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_with_space(
@@ -607,14 +616,20 @@ void StoreIndexWrite::host_delete(const store_layout::HostTarget& target) {
     }
 }
 
-void StoreIndexWrite::check_narrow_delete(const std::string& name,
-                                          const kv::ScopeKey& scope) {
+void StoreIndexWrite::erase_keys(const store_layout::KeyTarget& target,
+                                 std::string_view begin, std::string_view end) {
+    const std::string name = namespace_of(target);
+    const kv::ScopeKey scope = scope_of(target.file_id);
     auto at = pending_.find({name, scope});
     if (at != pending_.end() && at->second.cleared) return;
-    if (root_->was_committed(name, scope)) {
-        throw std::runtime_error(
-            "store index: a delete inside a committed copy is not supported");
-    }
+    if (!root_->was_committed(name, scope)) return;
+    const bool own_namespace =
+        target.ext == layout::Ext::Plugin || !target.meta.empty();
+    const std::uint32_t version =
+        own_namespace ? root_->resolved_namespace_version(name)
+                      : store_layout::namespace_version(target.ext);
+    erases_.push_back(PendingErase{name, version, scope, std::string(begin),
+                                   std::string(end)});
 }
 
 void StoreIndexWrite::put(layout::Family, std::string_view key,
@@ -661,7 +676,10 @@ void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
     }
     const std::string name = namespace_of(*target);
     const kv::ScopeKey scope = scope_of(target->file_id);
-    check_narrow_delete(name, scope);
+    // A key of the copy is longer than its prefix, so a range that ends at or
+    // below the prefix holds none.
+    if (end.size() <= layout::KEY_PREFIX_BYTES) return;
+    erase_keys(*target, inner_bound_of(begin), inner_bound_of(end));
     auto at = pending_.find({name, scope});
     if (at == pending_.end()) return;
     auto& keys = at->second.keys;
@@ -697,7 +715,8 @@ void StoreIndexWrite::del(layout::Family, std::string_view key) {
     }
     const std::string name = namespace_of(*target);
     const kv::ScopeKey scope = scope_of(target->file_id);
-    check_narrow_delete(name, scope);
+    // A single key is the range that holds it alone.
+    erase_keys(*target, target->inner_key, target->inner_key + '\0');
     auto at = pending_.find({name, scope});
     if (at == pending_.end()) return;
     at->second.keys.erase(target->inner_key);
@@ -708,6 +727,14 @@ void StoreIndexWrite::commit() {
     committed_ = true;
     std::shared_lock<std::shared_mutex> gate(root_->gate_);
     kv::Writer& writer = root_->writer();
+    for (const PendingErase& erase : erases_) {
+        const kv::NamespaceId id =
+            root_->namespace_id(erase.name, erase.version);
+        check("store index: erase the keys of a copy",
+              writer.erase(id, erase.scope,
+                           ByteView{erase.begin.data(), erase.begin.size()},
+                           ByteView{erase.end.data(), erase.end.size()}));
+    }
     for (auto& entry : pending_) {
         PendingCopy& copy = entry.second;
         const std::uint32_t version = copy.version;

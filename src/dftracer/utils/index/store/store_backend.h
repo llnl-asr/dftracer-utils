@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils {
 
@@ -223,15 +224,27 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     /// Clears the copy of every plugin namespace of one file, in name order.
     void clear_plugin_copies(std::uint32_t file_id);
     static void clear_pending(PendingCopy& copy);
-    /// Throws when the copy of (name, scope) was committed by this root and
-    /// this write does not clear it whole: the store hides a copy whole, so a
-    /// gap inside one has no representation.
-    void check_narrow_delete(const std::string& name,
-                             const kv::ScopeKey& scope);
+    /// Hides the keys [begin, end) that the copy of `target` this root already
+    /// committed holds, so the keys outside the range keep the generation,
+    /// params hash and sources the copy announced. `begin` and `end` are keys
+    /// inside the copy.
+    void erase_keys(const store_layout::KeyTarget& target,
+                    std::string_view begin, std::string_view end);
 
     std::shared_ptr<StoreRoot> root_;
     std::map<std::pair<std::string, kv::ScopeKey>, PendingCopy> pending_;
     std::map<std::string, kv::SourceStat> file_stats_;
+    /// A key range of a copy this root committed before, hidden at commit()
+    /// ahead of the copies of this write, so the write lands whole or not at
+    /// all.
+    struct PendingErase {
+        std::string name;
+        std::uint32_t version = 0;
+        kv::ScopeKey scope;
+        std::string begin;
+        std::string end;
+    };
+    std::vector<PendingErase> erases_;
     /// The copy the last data key went to, so a run of keys of one copy skips
     /// the lookup.
     PendingCopy* last_copy_ = nullptr;

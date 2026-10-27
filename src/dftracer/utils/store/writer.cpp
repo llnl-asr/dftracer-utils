@@ -896,6 +896,55 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
     return {};
 }
 
+dstd::Expected<void, dstd::Error> Writer::erase(NamespaceId namespace_id,
+                                                const ScopeKey& scope,
+                                                ByteView begin, ByteView end) {
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (committer_.failed()) {
+        return dstd::Unexpected<dstd::Error>(committer_.error());
+    }
+    auto* pending = new PendingBatch;
+    EraseItem item;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (latched_error_) {
+            delete pending;
+            return dstd::Unexpected<dstd::Error>(*latched_error_);
+        }
+        NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
+        if (namespace_entry == nullptr) {
+            delete pending;
+            return invalid_error();
+        }
+        ScopeEntry* scope_entry = find_scope(scope);
+        CopyEntry* copy_entry =
+            scope_entry == nullptr
+                ? nullptr
+                : find_copy(namespace_id.value, scope_entry->id);
+        if (copy_entry == nullptr || !copy_entry->live) {
+            delete pending;
+            return {};
+        }
+        item.copy_id = copy_entry->copy_id;
+        item.ordinal = next_ordinal_.fetch_add(1, std::memory_order_relaxed);
+        item.begin_key = copy_bytes(begin);
+        item.end_key = copy_bytes(end);
+
+        pending->namespace_id = namespace_entry->id.value;
+        pending->namespace_item =
+            namespace_item(namespace_entry->spec, namespace_entry->id);
+        pending->scope_id = scope_entry->id;
+        pending->scope_item = scope_item(scope, scope_entry->id);
+        pending->copy_item = copy_item(
+            copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
+            copy_entry->params_hash, copy_entry->generation, CopyState::Ready,
+            copy_entry->sources);
+        pending->durable = namespace_entry->spec.durable;
+    }
+    committer_.on_erase(pending, std::move(item));
+    return {};
+}
+
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::flush() {
     if (closed_.load(std::memory_order_acquire)) {
         if (committer_.failed()) {

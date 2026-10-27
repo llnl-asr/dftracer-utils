@@ -181,6 +181,19 @@ dstd::Expected<DropItem, dstd::Error> decode_drop(ByteView bytes) {
     return item;
 }
 
+dstd::Expected<EraseItem, dstd::Error> decode_erase(ByteView bytes) {
+    EraseItem item;
+    std::size_t at = 0;
+    if (!read_u32(bytes, at, item.copy_id) ||
+        !read_u64(bytes, at, item.ordinal) ||
+        !read_bytes(bytes, at, item.begin_key) ||
+        !read_bytes(bytes, at, item.end_key) || at != bytes.size()) {
+        return parse_error();
+    }
+    if (item.copy_id == 0 || item.ordinal == 0) return parse_error();
+    return item;
+}
+
 dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(ByteView bytes) {
     ExtentRefItem item;
     std::uint32_t segment_count = 0;
@@ -289,6 +302,13 @@ void encode_drop(dstd::Vector<std::uint8_t>& payload, const DropItem& item) {
     append_byte_vector(payload, item.end_key);
 }
 
+void encode_erase(dstd::Vector<std::uint8_t>& payload, const EraseItem& item) {
+    append_u32_le(payload, item.copy_id);
+    append_u64_le(payload, item.ordinal);
+    append_byte_vector(payload, item.begin_key);
+    append_byte_vector(payload, item.end_key);
+}
+
 void encode_commit_ref(dstd::Vector<std::uint8_t>& payload,
                        const CommitRefItem& item) {
     append_u64_le(payload, item.sequence);
@@ -384,6 +404,9 @@ bool item_is_valid(const RecordItem& item) {
     if (const auto* extent = std::get_if<ExtentRefItem>(&item)) {
         return extent->sequence != 0;
     }
+    if (const auto* erase = std::get_if<EraseItem>(&item)) {
+        return erase->copy_id != 0 && erase->ordinal != 0;
+    }
     if (const auto* commit = std::get_if<CommitRefItem>(&item)) {
         return commit->sequence != 0 && commit->synced <= 1 &&
                commit->record_offset >= RECORD_BYTES &&
@@ -410,6 +433,9 @@ dstd::Vector<std::uint8_t> encode_items(const RecordItems& items) {
         } else if (const auto* drop_item = std::get_if<DropItem>(&item)) {
             encode_drop(payload, *drop_item);
             append_item(body, 4, payload);
+        } else if (const auto* erase_item = std::get_if<EraseItem>(&item)) {
+            encode_erase(payload, *erase_item);
+            append_item(body, 7, payload);
         } else if (const auto* extent_ref_item =
                        std::get_if<ExtentRefItem>(&item)) {
             encode_extent_ref(payload, *extent_ref_item);
@@ -471,6 +497,12 @@ dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body) {
             }
             case 6: {
                 auto item = decode_commit_ref(item_bytes);
+                if (!item) return parse_error();
+                items.push_back(std::move(*item));
+                break;
+            }
+            case 7: {
+                auto item = decode_erase(item_bytes);
                 if (!item) return parse_error();
                 items.push_back(std::move(*item));
                 break;

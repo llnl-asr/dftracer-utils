@@ -344,6 +344,14 @@ struct LoadStatus {
     dstd::Error error;
 };
 
+struct EraseRange {
+    /// The batch ordinal the erase took: it hides the versions of the keys in
+    /// [begin, end) whose version comes from a smaller ordinal of the copy.
+    std::uint64_t ordinal = 0;
+    ByteView begin;
+    ByteView end;
+};
+
 struct CopyData {
     std::size_t file_index = 0;
     std::uint64_t generation = 0;
@@ -357,6 +365,8 @@ struct CopyData {
     /// The commits holding a segment of this copy, oldest first. The copy is
     /// readable only once every one of them that is not synced has verified.
     dstd::Vector<CopyCommit> commits;
+    /// The range erases the copy holds, in the order its file names them.
+    dstd::Vector<EraseRange> erases;
 };
 
 struct HiddenRange {

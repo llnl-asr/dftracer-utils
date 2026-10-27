@@ -26,6 +26,13 @@ struct DirectoryCommit {
     BlockHandle segments;
 };
 
+/// One range erase of one copy, by the batch ordinal it took.
+struct DirectoryErase {
+    std::uint64_t ordinal = 0;
+    ByteView begin;
+    ByteView end;
+};
+
 /// One copy of one directory entry. The views point into the directory.
 struct DirectoryCopy {
     std::uint32_t local_id = 0;
@@ -37,6 +44,8 @@ struct DirectoryCopy {
     dstd::Vector<SourceStat> sources;
     /// The commits holding a segment of the copy, in sequence order.
     dstd::Vector<DirectoryCommit> commits;
+    /// The erases the copy holds, in the order its items name them.
+    dstd::Vector<DirectoryErase> erases;
 };
 
 struct DirectoryDrop {
@@ -64,13 +73,13 @@ struct DirectoryEntry {
 
 /// Builds the scope directory of one file: one entry per namespace, format
 /// version and scope, sorted by name, then version, then scope kind and paths,
-/// with that scope's copies, the key range of each copy in each commit, and
-/// its drops. Copies and drops whose namespace or scope the items do not name
-/// are left out, as a reader leaves them out.
+/// with that scope's copies, the key range of each copy in each commit, its
+/// erases and its drops. Copies, erases and drops whose namespace, scope or
+/// copy the items do not name are left out, as a reader leaves them out.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     dstd::Span<const NamespaceItem> namespaces,
     dstd::Span<const ScopeItem> scopes, dstd::Span<const CopyItem> copies,
-    dstd::Span<const DropItem> drops,
+    dstd::Span<const DropItem> drops, dstd::Span<const EraseItem> erases,
     dstd::Span<const DirectoryCommit> commits);
 
 /// One entry of a slot table being built.

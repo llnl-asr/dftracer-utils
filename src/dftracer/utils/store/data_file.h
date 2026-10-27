@@ -90,6 +90,7 @@ struct FileIndex {
     dstd::Vector<ScopeItem> scopes;
     dstd::Vector<CopyItem> copies;
     dstd::Vector<DropItem> drops;
+    dstd::Vector<EraseItem> erases;
     /// The extent refs the chain lists itself: those of the commits after the
     /// newest checkpoint, and the checkpoint's own.
     dstd::Vector<IndexedExtentRef> extent_refs;

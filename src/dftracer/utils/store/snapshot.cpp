@@ -285,6 +285,28 @@ detail::LazyBlock* segment_block_of(detail::Commit& commit,
         .get();
 }
 
+/// True when an erase of one copy covers `key`, with an empty `end` at the
+/// last key.
+bool erase_covers(ByteView key, const detail::EraseRange& range) {
+    if (!range.begin.empty() && compare_bytes(key, range.begin) < 0) {
+        return false;
+    }
+    if (!range.end.empty() && compare_bytes(key, range.end) >= 0) return false;
+    return true;
+}
+
+/// The ordinal below which the erases of one copy hide every version of `key`:
+/// zero when none covers it, and every ordinal is at least one.
+std::uint64_t erase_limit(ByteView key,
+                          const dstd::Vector<detail::EraseRange>& erases) {
+    std::uint64_t limit = 0;
+    for (const detail::EraseRange& range : erases) {
+        if (!erase_covers(key, range)) continue;
+        limit = std::max(limit, range.ordinal);
+    }
+    return limit;
+}
+
 bool key_hidden(ByteView key, const dstd::Vector<detail::HiddenRange>& hidden) {
     for (const detail::HiddenRange& range : hidden) {
         if (!range.begin.empty() &&
@@ -425,7 +447,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> chain_directory(
         }
     }
     return build_scope_directory(index.namespaces, index.scopes, index.copies,
-                                 index.drops, commits);
+                                 index.drops, index.erases, commits);
 }
 
 /// The directory blocks of one file: the top table of a closed file and the
@@ -1285,6 +1307,9 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             copy.state = listed.state;
             copy.local_id = listed.local_id;
             copy.sources = listed.sources;
+            for (const DirectoryErase& erase : listed.erases) {
+                copy.erases.push_back({erase.ordinal, erase.begin, erase.end});
+            }
             // The block of one copy of a closed file holds the runs of many of
             // its commits, so the commits that name its offset share one.
             dstd::Vector<std::pair<std::uint64_t, detail::LazyBlock*>> blocks;
@@ -2244,6 +2269,9 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
     // The pages each source points into, one buffer per source and a spare: a
     // deque keeps each buffer in place as it grows.
     dstd::Deque<detail::PageHold> holders(1);
+    // The erases of the copy hide the versions of the keys they cover that a
+    // batch with a smaller ordinal put there.
+    const std::uint64_t limit = erase_limit(key, copy.erases);
     for (const detail::CopyCommit& held : copy.commits) {
         if (!holds_key(held.first_key, held.last_key)) continue;
         auto held_segments = copy_segments(copy, held);
@@ -2262,6 +2290,7 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
                 return dstd::Unexpected<dstd::Error>(found_entry.error());
             }
             if (found_entry->has_value()) {
+                if (slot.ordinal < limit) continue;
                 sources.push_back(
                     {copy.file_index, slot.ordinal, **found_entry});
                 holders.emplace_back();
@@ -2593,6 +2622,23 @@ void ScopeCursor::settle() {
         if (reload) continue;
         // The heap pops a tie by batch ordinal, so matching_ runs from the
         // oldest batch to the newest.
+        const std::uint64_t limit = erase_limit(best, copy_->erases);
+        if (limit != 0) {
+            std::size_t kept = 0;
+            for (const std::size_t index : matching_) {
+                if (ordinals_[index] < limit) {
+                    cursors_[index].next();
+                    push(index);
+                    continue;
+                }
+                matching_[kept] = index;
+                ++kept;
+            }
+            if (kept != matching_.size()) {
+                matching_.resize(kept);
+                if (matching_.empty()) continue;
+            }
+        }
         if (hidden_ != nullptr && key_hidden(best, *hidden_)) {
             advance_matching();
             continue;

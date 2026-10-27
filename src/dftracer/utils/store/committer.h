@@ -61,10 +61,10 @@ struct PendingBatch {
 /// Writes one record per group commit for the extents and copy state changes
 /// the writer produces, from one task of the writer's executor.
 ///
-/// on_extent(), on_drop() and on_fail() take their item from any thread, and
-/// commit_pending() is called by the writer's flush and close; only the task
-/// and those callers write records, one at a time. A record error latches, and
-/// every later commit reports it.
+/// on_extent(), on_drop(), on_erase() and on_fail() take their item from any
+/// thread, and commit_pending() is called by the writer's flush and close; only
+/// the task and those callers write records, one at a time. A record error
+/// latches, and every later commit reports it.
 class Committer {
    public:
     /// A group commit starts as soon as `commit_bytes` of segment bytes, raw,
@@ -90,6 +90,8 @@ class Committer {
     /// last key and both empty a whole-scope drop. Takes ownership of `batch`.
     void on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
                  dstd::Vector<std::uint8_t>&& end);
+    /// Queues a range erase of one copy. Takes ownership of `batch`.
+    void on_erase(PendingBatch* batch, EraseItem&& item);
     /// Queues a copy in state Failed with no entries. Takes ownership of
     /// `batch`.
     void on_fail(PendingBatch* batch);
@@ -117,7 +119,8 @@ class Committer {
    private:
     friend struct CommitterTestHook;
 
-    /// One queued item: a written extent, or a copy that was dropped or failed.
+    /// One queued item: a written extent, or a copy that was dropped, failed or
+    /// partly erased.
     struct PendingEntry {
         WrittenExtent extent;
         PendingBatch* batch = nullptr;
@@ -125,6 +128,7 @@ class Committer {
         bool emit_drop = false;
         dstd::Vector<std::uint8_t> begin_key;
         dstd::Vector<std::uint8_t> end_key;
+        dstd::Optional<EraseItem> erase;
     };
 
     struct WakeState;

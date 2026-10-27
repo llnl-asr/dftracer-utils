@@ -333,6 +333,7 @@ void apply_record(FileIndex& index, const Record& record) {
         index.scopes.clear();
         index.copies.clear();
         index.drops.clear();
+        index.erases.clear();
         index.extent_refs.clear();
         index.commit_refs.clear();
     }
@@ -345,6 +346,8 @@ void apply_record(FileIndex& index, const Record& record) {
             index.copies.push_back(*copy_item);
         } else if (const auto* drop_item = std::get_if<DropItem>(&item)) {
             index.drops.push_back(*drop_item);
+        } else if (const auto* erase_item = std::get_if<EraseItem>(&item)) {
+            index.erases.push_back(*erase_item);
         } else if (const auto* extent_ref_item =
                        std::get_if<ExtentRefItem>(&item)) {
             index.extent_refs.push_back(
@@ -870,6 +873,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     dstd::Vector<ScopeItem> scopes;
     dstd::Vector<CopyItem> copies;
     dstd::Vector<DropItem> drops;
+    dstd::Vector<EraseItem> erases;
     dstd::Vector<DirectoryCommit> commits;
     for (const RecordItem& item : items) {
         if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
@@ -880,6 +884,8 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
             copies.push_back(*copy);
         } else if (const auto* drop = std::get_if<DropItem>(&item)) {
             drops.push_back(*drop);
+        } else if (const auto* erase = std::get_if<EraseItem>(&item)) {
+            erases.push_back(*erase);
         } else if (const auto* commit = std::get_if<CommitRefItem>(&item)) {
             for (const CommitCopy& range : commit->copies) {
                 commits.push_back(
@@ -896,8 +902,8 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
             }
         }
     }
-    auto directory =
-        build_scope_directory(namespaces, scopes, copies, drops, commits);
+    auto directory = build_scope_directory(namespaces, scopes, copies, drops,
+                                           erases, commits);
     if (!directory) {
         return dstd::Unexpected<dstd::Error>(directory.error());
     }

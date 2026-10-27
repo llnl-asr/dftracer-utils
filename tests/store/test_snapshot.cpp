@@ -1299,6 +1299,269 @@ TEST_SUITE("index store snapshot") {
         CHECK(rows[1].second == "v-key-d");
     }
 
+    TEST_CASE("an erase hides the earlier keys of a copy in its range") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_erase_range");
+        const ScopeKey scope = file_scope("/traces/e.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+
+        dstd::Vector<SourceStat> sources;
+        sources.push_back(SourceStat{11, 22, 33});
+
+        // One writer, so one copy: a batch, an erase, then a batch that puts a
+        // key of the range back.
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch first = writer->batch(*id, scope, 41, &sources);
+        for (const std::string key : {"key-a", "key-b", "key-c", "key-d"}) {
+            first.put(view_of(key), view_of("v1-" + key));
+        }
+        REQUIRE(writer->commit(std::move(first)).has_value());
+        const std::string begin = "key-b";
+        const std::string end = "key-d";
+        REQUIRE(writer->erase(*id, scope, view_of(begin), view_of(end))
+                    .has_value());
+        Batch second = writer->batch(*id, scope, 41, &sources);
+        second.put(view_of(std::string("key-c")),
+                   view_of(std::string("v2-key-c")));
+        REQUIRE(writer->commit(std::move(second)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        const auto check_rows = [&](Snapshot& snapshot) {
+            // The copy stays current, with its generation, its params hash and
+            // its sources.
+            const CopyInfo info = snapshot.copy_info(spec, scope);
+            CHECK(info.state == ScopeState::Ready);
+            CHECK(info.generation == 1);
+            CHECK(info.params_hash == 41);
+            REQUIRE(info.sources.size() == 1);
+            CHECK(info.sources[0].mtime == 11);
+
+            auto hidden =
+                snapshot.get(spec, scope, view_of(std::string("key-b")));
+            REQUIRE(hidden.has_value());
+            CHECK_FALSE(hidden->has_value());
+            // A key the range holds in both batches reads its later version.
+            auto shown =
+                snapshot.get(spec, scope, view_of(std::string("key-c")));
+            REQUIRE(shown.has_value());
+            REQUIRE(shown->has_value());
+            CHECK(to_std((*shown)->bytes()) == "v2-key-c");
+            for (const std::string key : {"key-a", "key-d"}) {
+                auto found = snapshot.get(spec, scope, view_of(key));
+                REQUIRE(found.has_value());
+                REQUIRE(found->has_value());
+                CHECK(to_std((*found)->bytes()) == "v1-" + key);
+            }
+
+            auto whole = snapshot.scan(spec, scope, ByteView{}, ByteView{});
+            const auto rows = collect(whole);
+            REQUIRE(rows.size() == 3);
+            CHECK(rows[0] == std::make_pair(std::string("key-a"),
+                                            std::string("v1-key-a")));
+            CHECK(rows[1] == std::make_pair(std::string("key-c"),
+                                            std::string("v2-key-c")));
+            CHECK(rows[2] == std::make_pair(std::string("key-d"),
+                                            std::string("v1-key-d")));
+
+            auto prefix =
+                snapshot.scan(spec, scope, view_of(std::string("key-b")));
+            CHECK(collect(prefix).empty());
+
+            auto range = snapshot.scan(spec, scope, view_of(begin),
+                                       view_of(std::string("key-cc")));
+            const auto in_range = collect(range);
+            REQUIRE(in_range.size() == 1);
+            CHECK(in_range[0].first == "key-c");
+            CHECK(in_range[0].second == "v2-key-c");
+
+            auto all = snapshot.scan_all(spec, ByteView{}, ByteView{});
+            const auto all_rows = collect(all);
+            REQUIRE(all_rows.size() == 3);
+            CHECK(all_rows[1].second == "v2-key-c");
+        };
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        check_rows(*snapshot);
+
+        // The same file without its footer: the chain carries the erase.
+        dftu_utils_test::ScopedTestDir chain_dir("snapshot_erase_range_chain");
+        write_file(chain_dir.file("data.dfs"),
+                   without_footer(read_file(only_data_file(dir.str()))));
+        auto chain = Snapshot::open(chain_dir.str());
+        REQUIRE(chain.has_value());
+        check_rows(*chain);
+    }
+
+    TEST_CASE("an erase with an empty end hides to the last key") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_erase_open_end");
+        const ScopeKey scope = file_scope("/traces/o.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch batch = writer->batch(*id, scope, 0);
+        for (const std::string key : {"key-a", "key-b", "key-c"}) {
+            batch.put(view_of(key), view_of(key));
+        }
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(
+            writer->erase(*id, scope, view_of(std::string("key-b")), ByteView{})
+                .has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+        const auto rows = collect(cursor);
+        REQUIRE(rows.size() == 1);
+        CHECK(rows[0].first == "key-a");
+        for (const std::string key : {"key-b", "key-c"}) {
+            auto found = snapshot->get(spec, scope, view_of(key));
+            REQUIRE(found.has_value());
+            CHECK_FALSE(found->has_value());
+        }
+    }
+
+    TEST_CASE("an erase hides a version a fold namespace would fold") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_erase_fold");
+        const ScopeKey scope = file_scope("/traces/f.pfw");
+        const NamespaceSpec spec =
+            fold_spec("dftu.test.concat", FoldKind::Concat);
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        const auto fold = [&](const std::string& key,
+                              const std::string& value) {
+            Batch batch = writer->batch(*id, scope, 0);
+            batch.fold(view_of(key), view_of(value));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+        };
+        fold("key-x", "x1");
+        fold("key-z", "z1");
+        REQUIRE(writer
+                    ->erase(*id, scope, view_of(std::string("key-x")),
+                            view_of(std::string("key-y")))
+                    .has_value());
+        fold("key-x", "x2");
+        fold("key-z", "z2");
+        REQUIRE(close_writer(*writer).has_value());
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        // The hidden version of key-x is not folded; the later one is.
+        auto folded = snapshot->get(spec, scope, view_of(std::string("key-x")));
+        REQUIRE(folded.has_value());
+        REQUIRE(folded->has_value());
+        CHECK(to_std((*folded)->bytes()) == "x2");
+        // No erase covers key-z, so both versions fold in ordinal order.
+        auto both = snapshot->get(spec, scope, view_of(std::string("key-z")));
+        REQUIRE(both.has_value());
+        REQUIRE(both->has_value());
+        CHECK(to_std((*both)->bytes()) == "z1z2");
+
+        auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+        const auto rows = collect(cursor);
+        REQUIRE(rows.size() == 2);
+        CHECK(rows[0].first == "key-x");
+        CHECK(rows[0].second == "x2");
+        CHECK(rows[1].first == "key-z");
+        CHECK(rows[1].second == "z1z2");
+    }
+
+    TEST_CASE("an erase with no current copy of the scope does nothing") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_erase_absent");
+        const ScopeKey scope = file_scope("/traces/n.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+
+        {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch batch = writer->batch(*id, scope, 0);
+            batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
+            batch.put(view_of(std::string("key-b")), view_of(std::string("b")));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        // The second writer of the scope holds no copy of it yet.
+        {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            REQUIRE(writer
+                        ->erase(*id, scope, view_of(std::string("key-a")),
+                                view_of(std::string("key-b")))
+                        .has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        for (const std::string key : {"key-a", "key-b"}) {
+            auto found = snapshot->get(spec, scope, view_of(key));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+            CHECK(to_std((*found)->bytes()) == key.substr(key.size() - 1));
+        }
+        const CopyInfo info = snapshot->copy_info(spec, scope);
+        CHECK(info.state == ScopeState::Ready);
+        CHECK(info.generation == 1);
+    }
+
+    TEST_CASE("an erase is visible only once its commit record is") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_erase_crash");
+        const ScopeKey scope = file_scope("/traces/cr.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch batch = writer->batch(*id, scope, 0);
+        for (const std::string key : {"key-a", "key-b", "key-c"}) {
+            batch.put(view_of(key), view_of(key));
+        }
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(flush_writer(*writer).has_value());
+        // A crash here: the batch is recorded and the erase is not.
+        const std::vector<std::uint8_t> before =
+            read_file(to_std(writer->path()));
+        REQUIRE(writer
+                    ->erase(*id, scope, view_of(std::string("key-b")),
+                            view_of(std::string("key-c")))
+                    .has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        dftu_utils_test::ScopedTestDir cut("snapshot_erase_crash_cut");
+        write_file(cut.file("data.dfs"), before);
+        auto recovered = Snapshot::open(cut.str());
+        REQUIRE(recovered.has_value());
+        auto recovered_cursor =
+            recovered->scan(spec, scope, ByteView{}, ByteView{});
+        const auto recovered_rows = collect(recovered_cursor);
+        REQUIRE(recovered_rows.size() == 3);
+        auto visible =
+            recovered->get(spec, scope, view_of(std::string("key-b")));
+        REQUIRE(visible.has_value());
+        REQUIRE(visible->has_value());
+
+        // The same file with the record of the erase: the erase hides.
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+        const auto rows = collect(cursor);
+        REQUIRE(rows.size() == 2);
+        CHECK(rows[0].first == "key-a");
+        CHECK(rows[1].first == "key-c");
+        auto hidden = snapshot->get(spec, scope, view_of(std::string("key-b")));
+        REQUIRE(hidden.has_value());
+        CHECK_FALSE(hidden->has_value());
+    }
+
     TEST_CASE("a failed copy reads as Failed and returns nothing") {
         dftu_utils_test::ScopedTestDir dir("snapshot_failed");
         const ScopeKey scope = file_scope("/traces/x.pfw");

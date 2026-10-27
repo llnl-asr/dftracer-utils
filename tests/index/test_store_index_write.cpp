@@ -589,31 +589,61 @@ TEST_CASE("clearing an extension without data drops its copy") {
     CHECK(rows_of(*root, layout::Ext::Zonemap, file_scope(TRACE)).empty());
 }
 
-TEST_CASE("a delete inside a committed copy throws") {
-    dftu_test::ScopedTestDir dir("store_index_unsupported");
+TEST_CASE("clearing a path of a committed copy hides only its keys") {
+    dftu_test::ScopedTestDir dir("store_index_erase_path");
     auto root = StoreRoot::get_or_open(dir.str());
     const std::string path(TRACE);
     const int file_id = root->file_id_for(path);
+    const store::ScopeKey scope = file_scope(TRACE);
     {
         auto write = root->begin_write();
         records::put_file_record(*write, path, file_record(file_id));
         records::put_manifest(*write, file_id, layout::Ext::Members, PARAMS);
+        records::put_manifest(*write, file_id, layout::Ext::Zonemap, 1);
+        records::put_path(*write, layout::Ext::Zonemap, file_id, "args.name");
+        records::put_path_granule(*write, layout::Ext::Zonemap, file_id,
+                                  "args.name", 0, "name-old");
+        records::put_path(*write, layout::Ext::Zonemap, file_id, "args.dur");
+        records::put_path_granule(*write, layout::Ext::Zonemap, file_id,
+                                  "args.dur", 0, "dur-old");
         write->commit();
     }
+    REQUIRE(rows_of(*root, layout::Ext::Zonemap, scope).size() == 4);
 
-    auto write = root->begin_write();
-    records::put_path(*write, layout::Ext::Zonemap, file_id, "args.name");
-    records::put_manifest(*write, file_id, layout::Ext::Zonemap, 1);
-    write->commit();
-    CHECK(root->snapshot()
-              ->copy_info(spec_of(layout::Ext::Zonemap), file_scope(TRACE))
-              .state == store::ScopeState::Ready);
-
+    // A second commit of the same copy clears one path and writes a granule of
+    // it again, in the range the clear hides.
     auto later = root->begin_write();
-    CHECK_THROWS_WITH_AS(
-        records::clear_path(*later, layout::Ext::Zonemap, file_id, "args.name"),
-        doctest::Contains("a delete inside a committed copy"),
-        std::runtime_error);
+    records::clear_path(*later, layout::Ext::Zonemap, file_id, "args.name");
+    records::put_manifest(*later, file_id, layout::Ext::Zonemap, 1);
+    records::put_path_granule(*later, layout::Ext::Zonemap, file_id,
+                              "args.name", 1, "name-new");
+    later->commit();
+
+    const auto after = rows_of(*root, layout::Ext::Zonemap, scope);
+    std::size_t name_keys = 0;
+    std::size_t dur_keys = 0;
+    std::size_t name_old = 0;
+    std::size_t name_new = 0;
+    for (const auto& [key, value] : after) {
+        if (key.find("args.name") != std::string::npos) ++name_keys;
+        if (key.find("args.dur") != std::string::npos) ++dur_keys;
+        if (value.find("name-old") != std::string::npos) ++name_old;
+        if (value.find("name-new") != std::string::npos) ++name_new;
+    }
+    CHECK(after.size() == 4);
+    // The path list of args.name stays, its granule of the first commit is
+    // hidden, and the granule of the second is visible.
+    CHECK(name_keys == 2);
+    CHECK(name_old == 0);
+    CHECK(name_new == 1);
+    // The other path of the copy is untouched.
+    CHECK(dur_keys == 2);
+
+    const store::CopyInfo info =
+        root->snapshot()->copy_info(spec_of(layout::Ext::Zonemap), scope);
+    CHECK(info.state == store::ScopeState::Ready);
+    CHECK(info.generation == 1);
+    CHECK(info.params_hash == 1);
 }
 
 TEST_CASE("file ids are stable and a new store root seeds them in path order") {

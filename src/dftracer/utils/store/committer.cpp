@@ -278,6 +278,13 @@ void Committer::on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
     add_entry(std::move(entry));
 }
 
+void Committer::on_erase(PendingBatch* batch, EraseItem&& item) {
+    PendingEntry entry;
+    entry.batch = batch;
+    entry.erase = std::move(item);
+    add_entry(std::move(entry));
+}
+
 void Committer::on_fail(PendingBatch* batch) {
     PendingEntry entry;
     entry.batch = batch;
@@ -438,6 +445,7 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
             item.end_key = std::move(entry.end_key);
             file_.add(std::move(item));
         }
+        if (entry.erase) file_.add(std::move(*entry.erase));
     }
 
     dstd::Expected<void, dstd::Error> recorded;

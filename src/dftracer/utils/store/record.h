@@ -70,6 +70,21 @@ struct DropItem {
     dstd::Vector<std::uint8_t> end_key;
 };
 
+/// A range erase of one copy: it hides the versions of the keys in
+/// [begin_key, end_key) that batches of the copy with a smaller ordinal put
+/// there, and leaves every other key of the copy, and every batch committed
+/// after it.
+struct EraseItem {
+    /// The copy in its file, by the local id of its CopyItem.
+    std::uint32_t copy_id = 0;
+    /// The batch ordinal the erase took, which orders it with the batches of
+    /// its copy.
+    std::uint64_t ordinal = 0;
+    dstd::Vector<std::uint8_t> begin_key;
+    /// Empty means to the last key.
+    dstd::Vector<std::uint8_t> end_key;
+};
+
 struct ExtentSegment {
     std::uint32_t copy_id = 0;
     std::uint32_t offset_in_extent = 0;
@@ -149,8 +164,9 @@ struct FileTail {
     dstd::Vector<std::uint8_t> scope_filter;
 };
 
-using RecordItem = std::variant<NamespaceItem, ScopeItem, CopyItem, DropItem,
-                                ExtentRefItem, CommitRefItem, FileTail>;
+using RecordItem =
+    std::variant<NamespaceItem, ScopeItem, CopyItem, DropItem, EraseItem,
+                 ExtentRefItem, CommitRefItem, FileTail>;
 
 using RecordItems = dstd::Vector<RecordItem>;
 

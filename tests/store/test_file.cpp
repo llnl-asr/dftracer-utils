@@ -47,6 +47,7 @@ using store::CopyState;
 using store::DataFileReader;
 using store::DataFileWriter;
 using store::DropItem;
+using store::EraseItem;
 using store::ExtentRef;
 using store::ExtentRefItem;
 using store::ExtentSegment;
@@ -451,6 +452,13 @@ void check_drop(const DropItem& actual, const DropItem& expected) {
     CHECK(same_bytes(view_of(actual.end_key), view_of(expected.end_key)));
 }
 
+void check_erase(const EraseItem& actual, const EraseItem& expected) {
+    CHECK(actual.copy_id == expected.copy_id);
+    CHECK(actual.ordinal == expected.ordinal);
+    CHECK(same_bytes(view_of(actual.begin_key), view_of(expected.begin_key)));
+    CHECK(same_bytes(view_of(actual.end_key), view_of(expected.end_key)));
+}
+
 void check_extent_ref(const IndexedExtentRef& actual,
                       const IndexedExtentRef& expected) {
     CHECK(actual.sequence == expected.sequence);
@@ -478,6 +486,7 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     REQUIRE(actual.scopes.size() == expected.scopes.size());
     REQUIRE(actual.copies.size() == expected.copies.size());
     REQUIRE(actual.drops.size() == expected.drops.size());
+    REQUIRE(actual.erases.size() == expected.erases.size());
     REQUIRE(actual.extent_refs.size() == expected.extent_refs.size());
     CHECK(actual.last_sequence == expected.last_sequence);
     for (std::size_t i = 0; i < actual.namespaces.size(); ++i) {
@@ -491,6 +500,9 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     }
     for (std::size_t i = 0; i < actual.drops.size(); ++i) {
         check_drop(actual.drops[i], expected.drops[i]);
+    }
+    for (std::size_t i = 0; i < actual.erases.size(); ++i) {
+        check_erase(actual.erases[i], expected.erases[i]);
     }
     for (std::size_t i = 0; i < actual.extent_refs.size(); ++i) {
         check_extent_ref(actual.extent_refs[i], expected.extent_refs[i]);
@@ -1277,6 +1289,83 @@ TEST_SUITE("index store file") {
         }
     }
 
+    TEST_CASE("an erase record round-trips its range") {
+        const std::uint64_t record_offset = store::FILE_HEADER_BYTES;
+        const auto encode = [&](const EraseItem& erase) {
+            auto encoded = store::encode_record(store::RecordKind::Commit, 1, 0,
+                                                record_offset, {erase});
+            REQUIRE(encoded.has_value());
+            return std_bytes(*encoded);
+        };
+        const auto decode = [](const std::vector<std::uint8_t>& record) {
+            return store::decode_record(ByteView{record.data(), record.size()});
+        };
+
+        EraseItem item;
+        item.copy_id = 3;
+        item.ordinal = 9;
+        item.begin_key = bytes_of_string("key-b");
+        item.end_key = bytes_of_string("key-d");
+
+        {
+            auto decoded = decode(encode(item));
+            REQUIRE(decoded.has_value());
+            REQUIRE(decoded->items.size() == 1);
+            const auto* found = std::get_if<EraseItem>(&decoded->items[0]);
+            REQUIRE(found != nullptr);
+            check_erase(*found, item);
+        }
+
+        // An empty end is to the last key and round-trips as empty.
+        {
+            EraseItem open_end = item;
+            open_end.end_key.clear();
+            auto decoded = decode(encode(open_end));
+            REQUIRE(decoded.has_value());
+            REQUIRE(decoded->items.size() == 1);
+            const auto* found = std::get_if<EraseItem>(&decoded->items[0]);
+            REQUIRE(found != nullptr);
+            check_erase(*found, open_end);
+            CHECK(found->end_key.empty());
+        }
+
+        // The begin length sits at payload offset 12 and does not fit, and the
+        // record is the reader's only view of the range.
+        {
+            std::vector<std::uint8_t> record = encode(item);
+            record[first_item_payload_offset() + 12U] = 0x7FU;
+            rewrite_record_crc(record, 0);
+            auto decoded = decode(record);
+            CHECK_FALSE(decoded.has_value());
+            if (!decoded.has_value()) {
+                CHECK(decoded.error().is(dstd::Condition::Parse));
+            }
+        }
+
+        // A copy id or an ordinal of zero names nothing.
+        {
+            std::vector<std::uint8_t> record = encode(item);
+            write_u32_le_at(record, first_item_payload_offset(), 0U);
+            rewrite_record_crc(record, 0);
+            auto decoded = decode(record);
+            CHECK_FALSE(decoded.has_value());
+            if (!decoded.has_value()) {
+                CHECK(decoded.error().is(dstd::Condition::Parse));
+            }
+        }
+
+        {
+            std::vector<std::uint8_t> record = encode(item);
+            write_u64_le_at(record, first_item_payload_offset() + 4U, 0U);
+            rewrite_record_crc(record, 0);
+            auto decoded = decode(record);
+            CHECK_FALSE(decoded.has_value());
+            if (!decoded.has_value()) {
+                CHECK(decoded.error().is(dstd::Condition::Parse));
+            }
+        }
+    }
+
     TEST_CASE("a copy record round-trips its sources") {
         const std::uint64_t record_offset = store::FILE_HEADER_BYTES;
         const auto encode = [&](const CopyItem& copy) {
@@ -1559,6 +1648,16 @@ TEST_SUITE("index store file") {
         const std::string low = "k0";
         const std::string mid = "k5";
         const std::string high = "k9";
+        // An erase of copy 100 of the entry that copy keys, and one of a copy
+        // no item names, which the directory leaves out.
+        dstd::Vector<EraseItem> erases;
+        EraseItem erase;
+        erase.copy_id = 100;
+        erase.ordinal = 3;
+        erase.begin_key = bytes_of_string(mid);
+        erase.end_key = bytes_of_string(high);
+        erases.push_back(std::move(erase));
+        erases.push_back({999, 4, bytes_of_string(low), bytes_of_string(mid)});
         // Two ranges of one copy in one commit merge into one.
         const std::vector<store::DirectoryCommit> commits = {
             {4, 100, view_of(mid), view_of(high), {}},
@@ -1566,7 +1665,7 @@ TEST_SUITE("index store file") {
             {2, 100, view_of(low), view_of(low), {}},
             {3, 200, view_of(mid), view_of(mid), {}}};
         auto built = store::build_scope_directory(
-            namespaces, scopes, copies, drops,
+            namespaces, scopes, copies, drops, erases,
             dstd::Span<const store::DirectoryCommit>(commits.data(),
                                                      commits.size()));
         REQUIRE(built.has_value());
@@ -1626,6 +1725,10 @@ TEST_SUITE("index store file") {
         CHECK(same_bytes(copy.commits[1].last_key, view_of(high)));
         REQUIRE(entry->drops.size() == 1);
         CHECK(entry->drops[0].generation == 9);
+        REQUIRE(copy.erases.size() == 1);
+        CHECK(copy.erases[0].ordinal == 3);
+        CHECK(same_bytes(copy.erases[0].begin, view_of(mid)));
+        CHECK(same_bytes(copy.erases[0].end, view_of(high)));
 
         auto other = directory->entry(0);
         REQUIRE(other.has_value());
@@ -1650,8 +1753,8 @@ TEST_SUITE("index store file") {
         copies.back().sources.push_back(SourceStat{21, 22, 23});
         copies.push_back({101, 1, 10, 6, 2, CopyState::Failed, {}});
 
-        auto built =
-            store::build_scope_directory(namespaces, scopes, copies, {}, {});
+        auto built = store::build_scope_directory(namespaces, scopes, copies,
+                                                  {}, {}, {});
         REQUIRE(built.has_value());
         auto directory = store::ScopeDirectory::open(view_of(*built));
         REQUIRE(directory.has_value());
@@ -1675,7 +1778,7 @@ TEST_SUITE("index store file") {
         wrong.push_back({102, 1, 10, 7, 3, CopyState::Ready, {}});
         wrong.back().sources.push_back(SourceStat{1, 2, 3});
         auto rejected =
-            store::build_scope_directory(namespaces, scopes, wrong, {}, {});
+            store::build_scope_directory(namespaces, scopes, wrong, {}, {}, {});
         REQUIRE_FALSE(rejected.has_value());
         if (!rejected.has_value()) {
             CHECK(rejected.error().is(dstd::Condition::InvalidArgument));
@@ -1690,8 +1793,8 @@ TEST_SUITE("index store file") {
         scopes[0].local_id = 2;
         dstd::Vector<CopyItem> copies;
         copies.push_back({3, 1, 2, 0, 1, CopyState::Ready, {}});
-        auto built =
-            store::build_scope_directory(namespaces, scopes, copies, {}, {});
+        auto built = store::build_scope_directory(namespaces, scopes, copies,
+                                                  {}, {}, {});
         REQUIRE(built.has_value());
         CHECK(store::ScopeDirectory::open(view_of(*built)).has_value());
         dstd::Vector<std::uint8_t> broken = *built;

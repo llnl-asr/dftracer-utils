@@ -125,6 +125,7 @@ struct Draft {
     const ScopeItem* scope = nullptr;
     dstd::Vector<const CopyItem*> copies;
     dstd::Vector<const DropItem*> drops;
+    dstd::Vector<const EraseItem*> erases;
 };
 
 int compare_drafts(const Draft& a, const Draft& b) {
@@ -186,7 +187,7 @@ void append_vector(dstd::Vector<std::uint8_t>& out,
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     dstd::Span<const NamespaceItem> namespaces,
     dstd::Span<const ScopeItem> scopes, dstd::Span<const CopyItem> copies,
-    dstd::Span<const DropItem> drops,
+    dstd::Span<const DropItem> drops, dstd::Span<const EraseItem> erases,
     dstd::Span<const DirectoryCommit> commits) {
     dstd::Vector<const NamespaceItem*> namespace_ids;
     namespace_ids.reserve(namespaces.size());
@@ -194,11 +195,15 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     dstd::Vector<const ScopeItem*> scope_ids;
     scope_ids.reserve(scopes.size());
     for (const ScopeItem& item : scopes) scope_ids.push_back(&item);
+    dstd::Vector<const CopyItem*> copy_ids;
+    copy_ids.reserve(copies.size());
+    for (const CopyItem& item : copies) copy_ids.push_back(&item);
     const auto by_id = [](const auto* a, const auto* b) {
         return a->local_id < b->local_id;
     };
     std::stable_sort(namespace_ids.begin(), namespace_ids.end(), by_id);
     std::stable_sort(scope_ids.begin(), scope_ids.end(), by_id);
+    std::stable_sort(copy_ids.begin(), copy_ids.end(), by_id);
 
     // One draft per copy and per drop, merged below by key.
     dstd::Vector<Draft> drafts;
@@ -224,6 +229,21 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         draft.drops.push_back(&drop);
         drafts.push_back(std::move(draft));
     }
+    // An erase names its copy, and its namespace and scope are the ones of that
+    // copy's item.
+    for (const EraseItem& erase : erases) {
+        const CopyItem* copy = find_local(copy_ids, erase.copy_id);
+        if (copy == nullptr) continue;
+        const NamespaceItem* namespace_item =
+            find_local(namespace_ids, copy->namespace_id);
+        const ScopeItem* scope = find_local(scope_ids, copy->scope_id);
+        if (namespace_item == nullptr || scope == nullptr) continue;
+        Draft draft;
+        draft.namespace_item = namespace_item;
+        draft.scope = scope;
+        draft.erases.push_back(&erase);
+        drafts.push_back(std::move(draft));
+    }
     std::stable_sort(drafts.begin(), drafts.end(),
                      [](const Draft& a, const Draft& b) {
                          return compare_drafts(a, b) < 0;
@@ -236,6 +256,8 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
                                draft.copies.end());
             into.drops.insert(into.drops.end(), draft.drops.begin(),
                               draft.drops.end());
+            into.erases.insert(into.erases.end(), draft.erases.begin(),
+                               draft.erases.end());
             continue;
         }
         entries.push_back(std::move(draft));
@@ -331,6 +353,17 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
                 append_view(data, at->first_key);
                 append_view(data, at->last_key);
                 append_block_handle(data, at->segments);
+            }
+            std::uint64_t erase_count = 0;
+            for (const EraseItem* erase : entry.erases) {
+                if (erase->copy_id == copy->local_id) ++erase_count;
+            }
+            encode_varint(data, erase_count);
+            for (const EraseItem* erase : entry.erases) {
+                if (erase->copy_id != copy->local_id) continue;
+                append_u64_le(data, erase->ordinal);
+                append_vector(data, erase->begin_key);
+                append_vector(data, erase->end_key);
             }
         }
         encode_varint(data, entry.drops.size());
@@ -522,6 +555,19 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
                 return parse_error();
             }
             copy.commits.push_back(commit);
+        }
+        std::uint64_t erase_count = 0;
+        if (!cursor.varint(erase_count) || erase_count > payload.size()) {
+            return parse_error();
+        }
+        copy.erases.reserve(static_cast<std::size_t>(erase_count));
+        for (std::uint64_t e = 0; e < erase_count; ++e) {
+            DirectoryErase erase;
+            if (!cursor.u64(erase.ordinal) || !cursor.bytes(erase.begin) ||
+                !cursor.bytes(erase.end) || erase.ordinal == 0) {
+                return parse_error();
+            }
+            copy.erases.push_back(erase);
         }
         entry.copies.push_back(std::move(copy));
     }

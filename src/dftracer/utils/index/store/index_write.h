@@ -24,9 +24,6 @@ class IndexWrite {
     virtual ~IndexWrite() = default;
     virtual void put(layout::Family family, std::string_view key,
                      std::string_view value) = 0;
-    /// Only for the aggregation and system_metrics families.
-    virtual void merge(layout::Family family, std::string_view key,
-                       std::string_view operand) = 0;
     virtual void delete_range(layout::Family family, std::string_view begin,
                               std::string_view end) = 0;
     /// Removes exactly `key`.
@@ -156,6 +153,21 @@ void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
                      std::uint32_t cat_id, std::uint32_t name_id,
                      std::uint32_t host_id, std::uint32_t extra_id,
                      std::uint8_t kind, std::string_view payload);
+
+/// One system metric row of the file's aggregation, `payload` the serialized
+/// SystemAggregationMetrics and `key` the serialized system key it belongs to.
+void put_agg_system_row(IndexWrite& w, int file_id, std::string_view key,
+                        std::string_view payload);
+
+/// The dictionary text `id` stands for, as the file's partials use it.
+void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
+                              std::string_view text);
+
+/// Index-wide aggregation record `name` (config, tracker, time bounds).
+void put_agg_meta(IndexWrite& w, std::string_view name,
+                  std::string_view payload);
+/// Removes index-wide aggregation record `name`.
+void del_agg_meta(IndexWrite& w, std::string_view name);
 
 }  // namespace records
 

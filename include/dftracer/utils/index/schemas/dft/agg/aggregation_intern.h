@@ -3,7 +3,6 @@
 
 #include <dftracer/utils/dstd/string_intern.h>
 
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -14,8 +13,6 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// in every index, so a process touching two indexes needs a table per index.
 struct AggInternTable {
     dstd::StringIntern intern;
-    /// Entries already in that index's dictionary; a flush appends past it.
-    std::atomic<std::uint32_t> flushed_entries{0};
 };
 
 using AggInternPtr = std::shared_ptr<AggInternTable>;

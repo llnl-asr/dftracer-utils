@@ -11,6 +11,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -24,17 +25,18 @@ namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace store = dftracer::utils::index::store;
 namespace dataframe = dftracer::utils::dataframe;
 
-// The system rows are index-wide, so they answer a plan only when the plan
-// spans every file of one index and each file's partials are current. The
-// database of that index; null otherwise.
-std::shared_ptr<store::RocksDatabase> covering_index(const ViewPlan& plan) {
-    if (plan.files.empty()) return nullptr;
+// The plan's event-side time_bucket/group_by do not apply here - system
+// rows carry their own (host,name,time_bucket) grain. Every row is keyed by
+// the same shard prefix as the partials' system rows, so it range-splits
+// identically.
+std::optional<store::IndexDatabase> covering_index(const ViewPlan& plan) {
+    if (plan.files.empty()) return std::nullopt;
     const std::string& index_path = plan.files.front().index_path;
-    if (index_path.empty()) return nullptr;
+    if (index_path.empty()) return std::nullopt;
     try {
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        const auto config = agg::tier::read_config(*db.db());
-        if (!config) return nullptr;
+        const auto config = agg::tier::read_config(db);
+        if (!config) return std::nullopt;
         std::set<std::string> current;
         for (const auto& [path, id] : db.query_all_file_info_ids()) {
             const auto state =
@@ -45,15 +47,15 @@ std::shared_ptr<store::RocksDatabase> covering_index(const ViewPlan& plan) {
                 state->params_hash == config->params_hash)
                 current.insert(path);
         }
-        if (current.size() != plan.files.size()) return nullptr;
+        if (current.size() != plan.files.size()) return std::nullopt;
         for (const auto& f : plan.files) {
-            if (f.index_path != index_path) return nullptr;
+            if (f.index_path != index_path) return std::nullopt;
             if (!current.count(store::internal::get_logical_path(f.file_path)))
-                return nullptr;
+                return std::nullopt;
         }
-        return db.db();
+        return db;
     } catch (const std::exception&) {
-        return nullptr;
+        return std::nullopt;
     }
 }
 
@@ -61,23 +63,16 @@ std::shared_ptr<store::RocksDatabase> covering_index(const ViewPlan& plan) {
 
 bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
                     int shard_begin, int shard_end, const ProgressFn*) {
-    // The plan's event-side time_bucket/group_by do not apply here - system
-    // rows carry their own (host,name,time_bucket) grain. The CF now has the
-    // same shard prefix as the partials' system rows, so it range-splits
-    // identically.
-    const auto rdb = covering_index(plan);
-    if (!rdb) return false;
+    auto index = covering_index(plan);
+    if (!index) return false;
     if (shard_end <= 0) shard_end = agg::AGG_KEY_NUM_SHARDS;
-
-    auto for_each =
-        [&](const std::function<void(std::string_view, std::string_view)>& cb) {
-            agg::tier::for_each_system_row(
-                *rdb, static_cast<std::uint16_t>(shard_begin),
-                static_cast<std::uint16_t>(shard_end),
-                [&cb](std::string_view k, std::string_view v) {
-                    cb(k, v);
-                    return true;
-                });
+    const auto rows =
+        agg::tier::system_rows(*index, static_cast<std::uint16_t>(shard_begin),
+                               static_cast<std::uint16_t>(shard_end));
+    const auto for_each =
+        [&rows](
+            const std::function<void(std::string_view, std::string_view)>& cb) {
+            for (const auto& [key, value] : rows) cb(key, value);
         };
 
     // First pass: the sorted union of metric names, so the schema is stable.

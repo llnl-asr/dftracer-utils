@@ -121,7 +121,7 @@ Stored read_partials(const IndexDatabase& db, int fid,
                      const agg::AggInternTable& dictionary) {
     Stored out;
     agg::tier::for_each_partial(
-        *db.db(), fid,
+        db, fid,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t, std::uint32_t, agg::PartialKind,
             std::span<const std::uint8_t> bytes) {
@@ -185,7 +185,7 @@ TEST_SUITE("AggPartialsStore") {
             trace::internal::determine_index_path(files[0], index_dir);
         IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
         auto dictionary = agg::make_intern_table();
-        agg::tier::load_dictionary(*db.db(), *dictionary);
+        agg::tier::load_dictionary(db, *dictionary);
 
         std::map<Key, agg::AggPartial> all;
         std::size_t stored = 0;
@@ -244,7 +244,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(*db.db(), *dictionary);
+            agg::tier::load_dictionary(db, *dictionary);
             for (const auto& f : files) {
                 ids.push_back(db.get_file_info_id(
                     index::store::internal::get_logical_path(f)));
@@ -258,12 +258,12 @@ TEST_SUITE("AggPartialsStore") {
         // partials.
         {
             IndexDatabase db(index_path);
-            const auto config = agg::tier::read_config(*db.db());
+            const auto config = agg::tier::read_config(db);
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
-            agg::tier::write_config(*db.db(), old);
-            agg::tier::put_files(*db.db(), ids, old.params_hash);
+            agg::tier::write_config(db, old);
+            agg::tier::put_files(db, ids, old.params_hash);
             auto w = db.begin_write();
             const auto begin = layout::kind_prefix(layout::Ext::Agg,
                                                    layout::agg_kind::PARTIAL);
@@ -274,7 +274,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(*db.db(), *dictionary);
+            agg::tier::load_dictionary(db, *dictionary);
             for (int id : ids)
                 CHECK(read_partials(db, id, *dictionary).count == 0);
         }
@@ -283,7 +283,7 @@ TEST_SUITE("AggPartialsStore") {
 
         IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
         auto dictionary = agg::make_intern_table();
-        agg::tier::load_dictionary(*db.db(), *dictionary);
+        agg::tier::load_dictionary(db, *dictionary);
         for (std::size_t i = 0; i < ids.size(); ++i)
             CHECK(read_partials(db, ids[i], *dictionary).count == before[i]);
     }
@@ -304,7 +304,7 @@ TEST_SUITE("AggPartialsStore") {
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(*db.db(), *dictionary);
+            agg::tier::load_dictionary(db, *dictionary);
             for (const auto& f : files) {
                 ids.push_back(db.get_file_info_id(
                     index::store::internal::get_logical_path(f)));
@@ -333,18 +333,18 @@ TEST_SUITE("AggPartialsStore") {
         }
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(agg::tier::read_config(*db.db()));
+            CHECK_FALSE(agg::tier::read_config(db));
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(*db.db(), *dictionary);
+            agg::tier::load_dictionary(db, *dictionary);
             CHECK_THROWS(read_partials(db, ids[0], *dictionary));
         }
 
         build_seconds(files, index_dir);
 
         IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-        CHECK(agg::tier::read_config(*db.db()));
+        CHECK(agg::tier::read_config(db));
         auto dictionary = agg::make_intern_table();
-        agg::tier::load_dictionary(*db.db(), *dictionary);
+        agg::tier::load_dictionary(db, *dictionary);
         for (std::size_t i = 0; i < ids.size(); ++i)
             CHECK(read_partials(db, ids[i], *dictionary).count == before[i]);
     }

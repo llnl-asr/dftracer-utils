@@ -41,6 +41,12 @@ std::string plugin_namespace_name(std::string_view plugin) {
     return name;
 }
 
+std::string agg_meta_namespace_name(std::string_view record) {
+    std::string name(AGG_META_NAMESPACE_PREFIX);
+    name.append(record);
+    return name;
+}
+
 std::uint32_t namespace_version(layout::Ext ext) {
     return layout::ext_version(ext);
 }
@@ -58,6 +64,8 @@ std::optional<KeyTarget> target_of(std::string_view key) {
     target.file_id = layout::read_u32(key.substr(3, 4));
     const std::string_view tail = key.substr(layout::KEY_PREFIX_BYTES);
     if (ext == layout::Ext::Plugin) target.plugin = plugin_of(kind, tail);
+    if (ext == layout::Ext::Agg && kind == layout::agg_kind::META)
+        target.meta = std::string(tail);
     target.inner_key = std::string(1, static_cast<char>(kind));
     target.inner_key.append(tail);
     return target;

@@ -316,12 +316,14 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         // Held to the end, so a reader that opens the root meanwhile shares
         // this read-write handle, and the ingest needs no upgrade.
         store->db.emplace(index_path);
-        store->pause.emplace(store->db->db());
-        const auto idle = store->db->db()->wait_for_compactions();
-        if (!idle.ok())
-            throw DFTUtilsException(
-                ErrorCode::Io,
-                "Failed to wait for compaction: " + idle.ToString());
+        if (store->db->has_rocksdb()) {
+            store->pause.emplace(store->db->db());
+            const auto idle = store->db->db()->wait_for_compactions();
+            if (!idle.ok())
+                throw DFTUtilsException(
+                    ErrorCode::Io,
+                    "Failed to wait for compaction: " + idle.ToString());
+        }
         const auto got = store->db->assign_file_ids(paths);
         for (std::size_t i : members)
             out.ids[i] =
@@ -339,6 +341,8 @@ struct BootstrapSink {
     dstd::UniquePtr<
         dftracer::utils::index::store::IndexDatabaseSstWriterContext>
         sink;
+    /// The write of a root the store holds, which needs no staged SSTs.
+    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> write;
     std::vector<std::vector<SstArtifacts>> spilled;
     /// Bytes the sink holds before its worker commits it.
     std::size_t limit = 0;
@@ -349,8 +353,15 @@ struct BootstrapSink {
 // Workers ingest at once; RocksDB runs the prepare step of each outside its
 // mutex and takes the ranges of the ingests one at a time.
 void commit_bootstrap_sink(BootstrapSink& open) {
-    if (!open.sink && open.spilled.empty()) return;
+    if (!open.sink && !open.write && open.spilled.empty()) return;
     auto& counters = bootstrap_counters();
+    if (open.write) {
+        counters.ingest_calls.fetch_add(1, std::memory_order_relaxed);
+        open.write->commit();
+        open.write.reset();
+        counters.sink_commits.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     dftracer::utils::index::store::SstArtifactRegistry registry;
     if (open.sink) {
         registry.append(open.sink->commit());
@@ -388,27 +399,38 @@ void write_bootstrap_file(
     dftracer::utils::index::extensions::BloomFold& bloom,
     dftracer::utils::index::extensions::RowSetFold& rowsets,
     std::uint64_t hash) {
-    if (!open.sink)
-        open.sink = dstd::make_unique<
-            dftracer::utils::index::store::IndexDatabaseSstWriterContext>(
-            open.root->staging, "batch_" + std::to_string(open.names->fetch_add(
-                                               1, std::memory_order_relaxed)));
+    if (!open.sink && !open.write) {
+        if (open.root->db->has_rocksdb())
+            open.sink = dstd::make_unique<
+                dftracer::utils::index::store::IndexDatabaseSstWriterContext>(
+                open.root->staging,
+                "batch_" + std::to_string(open.names->fetch_add(
+                               1, std::memory_order_relaxed)));
+        else
+            open.write = open.root->db->begin_write();
+    }
+    dftracer::utils::index::store::IndexWrite& sink =
+        open.sink ? static_cast<dftracer::utils::index::store::IndexWrite&>(
+                        *open.sink)
+                  : static_cast<dftracer::utils::index::store::IndexWrite&>(
+                        *open.write);
     // The id was reserved for this pass, so the index holds nothing of it to
     // clear. A clear would be a range delete whose end bound reaches the next
     // file's first key, which puts the SSTs of two blocks in overlap.
-    open.sink->set_fresh_file(file_id);
+    sink.set_fresh_file(file_id);
     auto runs = write_bootstrap_index(
-        *open.sink,
+        sink,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path),
         f.file_path, arts, schema, bloom, rowsets, hash, file_id);
     if (!runs.empty()) open.spilled.push_back(std::move(runs));
-    if (open.sink->buffered_bytes() >= open.limit) commit_bootstrap_sink(open);
+    if (sink.buffered_bytes() >= open.limit) commit_bootstrap_sink(open);
 }
 
 // Every batch is ingested by the worker that committed it, so the compactions
 // are all that is left to resume.
 void resume_bootstrap(BootstrapStores& stores) {
     for (const auto& store : stores.roots) {
+        if (!store->pause) continue;
         const auto resumed = store->pause->resume();
         if (!resumed.ok())
             throw DFTUtilsException(
@@ -504,7 +526,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     for (const auto& root : stores.roots) {
         slot_of.emplace(root->index_path, open.size());
         open.push_back(
-            {root.get(), &stores.sink_names, nullptr, {}, sink_limit});
+            {root.get(), &stores.sink_names, nullptr, nullptr, {}, sink_limit});
     }
 
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
@@ -861,11 +883,9 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 run->next_block.fetch_add(1, std::memory_order_relaxed);
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
-            BootstrapSink open{block.root,
-                               &run->stores->sink_names,
-                               nullptr,
-                               {},
-                               run->sink_limit};
+            BootstrapSink open{block.root, &run->stores->sink_names,
+                               nullptr,    nullptr,
+                               {},         run->sink_limit};
             auto& merged = run->states[b];
             for (std::size_t k = block.begin; k < block.end; ++k) {
                 if (run->failed.load(std::memory_order_relaxed))

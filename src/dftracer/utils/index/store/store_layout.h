@@ -23,6 +23,13 @@ inline constexpr std::string_view PLUGIN_NAMESPACE_PREFIX = "dftu.idx.plugin.";
 /// plugin has its own, so rebuilding one never hides another's data.
 std::string plugin_namespace_name(std::string_view plugin);
 
+/// The prefix of the namespace of every index-wide aggregation record.
+inline constexpr std::string_view AGG_META_NAMESPACE_PREFIX = "dftu.idx.agg.";
+
+/// The store namespace holding aggregation record `record` (config, tracker,
+/// time bounds). Every record has its own, so writing one never hides another.
+std::string agg_meta_namespace_name(std::string_view record);
+
 /// The format version of the namespace of `ext`. A plugin namespace is at the
 /// version its manifest entry carries, so it has no fixed version here.
 std::uint32_t namespace_version(layout::Ext ext);
@@ -35,6 +42,9 @@ struct KeyTarget {
     /// The plugin whose namespace holds the key; empty for every other
     /// extension.
     std::string plugin;
+    /// The index-wide aggregation record of an Ext::Agg META key; empty for
+    /// every other key.
+    std::string meta;
     /// The key inside the copy: [kind] and the tail of the key, which is the
     /// key without its extension and file id.
     std::string inner_key;

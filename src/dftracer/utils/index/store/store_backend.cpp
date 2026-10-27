@@ -451,23 +451,30 @@ kv::ScopeKey StoreIndexWrite::scope_of(std::uint32_t file_id) {
 
 std::string StoreIndexWrite::namespace_of(
     const store_layout::KeyTarget& target) const {
-    if (target.ext == layout::Ext::Plugin) {
+    if (!target.meta.empty())
+        return store_layout::agg_meta_namespace_name(target.meta);
+    if (target.ext == layout::Ext::Plugin)
         return store_layout::plugin_namespace_name(target.plugin);
-    }
     return store_layout::namespace_name(target.ext);
 }
 
 StoreIndexWrite::PendingCopy& StoreIndexWrite::pending_copy(
-    layout::Ext ext, std::uint32_t file_id, std::string_view plugin) {
+    layout::Ext ext, std::uint32_t file_id, std::string_view plugin,
+    std::string_view meta) {
     if (last_copy_ != nullptr && last_ext_ == ext && last_file_id_ == file_id &&
-        last_plugin_ == plugin) {
+        last_plugin_ == plugin && last_meta_ == meta) {
         return *last_copy_;
     }
     PendingCopy pending;
     pending.plugin = ext == layout::Ext::Plugin;
-    pending.name = pending.plugin ? store_layout::plugin_namespace_name(plugin)
-                                  : store_layout::namespace_name(ext);
-    pending.version = pending.plugin
+    pending.own_namespace = pending.plugin || !meta.empty();
+    if (!meta.empty())
+        pending.name = store_layout::agg_meta_namespace_name(meta);
+    else if (pending.plugin)
+        pending.name = store_layout::plugin_namespace_name(plugin);
+    else
+        pending.name = store_layout::namespace_name(ext);
+    pending.version = pending.own_namespace
                           ? root_->resolved_namespace_version(pending.name)
                           : store_layout::namespace_version(ext);
     pending.scope = scope_of(file_id);
@@ -477,6 +484,7 @@ StoreIndexWrite::PendingCopy& StoreIndexWrite::pending_copy(
     last_ext_ = ext;
     last_file_id_ = file_id;
     last_plugin_.assign(plugin.data(), plugin.size());
+    last_meta_.assign(meta.data(), meta.size());
     return *last_copy_;
 }
 
@@ -489,8 +497,9 @@ void StoreIndexWrite::clear_pending(PendingCopy& copy) {
 }
 
 void StoreIndexWrite::clear_copy(layout::Ext ext, std::uint32_t file_id,
-                                 std::string_view plugin) {
-    clear_pending(pending_copy(ext, file_id, plugin));
+                                 std::string_view plugin,
+                                 std::string_view meta) {
+    clear_pending(pending_copy(ext, file_id, plugin, meta));
 }
 
 void StoreIndexWrite::clear_plugin_copies(std::uint32_t file_id) {
@@ -540,7 +549,8 @@ void StoreIndexWrite::host_put(const store_layout::HostTarget& target,
                 throw std::runtime_error(
                     "store index: a manifest does not decode");
             }
-            PendingCopy& copy = pending_copy(*target.ext, target.file_id, {});
+            PendingCopy& copy =
+                pending_copy(*target.ext, target.file_id, {}, {});
             copy.params_hash = entry->params_hash;
             copy.has_manifest = true;
             copy.failed = entry->status == layout::ExtStatus::Failed;
@@ -557,7 +567,7 @@ void StoreIndexWrite::host_put(const store_layout::HostTarget& target,
                     "store index: a manifest does not decode");
             }
             PendingCopy& copy = pending_copy(layout::Ext::Plugin,
-                                             target.file_id, target.plugin);
+                                             target.file_id, target.plugin, {});
             copy.params_hash = entry->params_hash;
             copy.version = entry->version;
             copy.has_manifest = true;
@@ -618,15 +628,10 @@ void StoreIndexWrite::put(layout::Family, std::string_view key,
     if (!target) {
         throw std::runtime_error("store index: a put key is not an index key");
     }
-    PendingCopy& copy =
-        pending_copy(target->ext, target->file_id, target->plugin);
+    PendingCopy& copy = pending_copy(target->ext, target->file_id,
+                                     target->plugin, target->meta);
     copy.keys.insert_or_assign(std::move(target->inner_key),
                                std::string(value));
-}
-
-void StoreIndexWrite::merge(layout::Family, std::string_view,
-                            std::string_view) {
-    throw std::runtime_error("store index: merge is not supported");
 }
 
 void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
@@ -643,6 +648,10 @@ void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
     }
     if (target->plugin.empty() && target->ext == layout::Ext::Plugin) {
         clear_plugin_copies(target->file_id);
+        return;
+    }
+    if (!target->meta.empty()) {
+        clear_copy(target->ext, target->file_id, target->plugin, target->meta);
         return;
     }
     if (begin.size() == layout::KEY_PREFIX_BYTES &&
@@ -680,6 +689,10 @@ void StoreIndexWrite::del(layout::Family, std::string_view key) {
     }
     if (target->plugin.empty() && target->ext == layout::Ext::Plugin) {
         clear_plugin_copies(target->file_id);
+        return;
+    }
+    if (!target->meta.empty()) {
+        clear_copy(target->ext, target->file_id, target->plugin, target->meta);
         return;
     }
     const std::string name = namespace_of(*target);

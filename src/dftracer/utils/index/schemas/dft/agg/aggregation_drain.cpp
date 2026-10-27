@@ -7,7 +7,7 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
-                             index::store::RocksDatabase& db) {
+                             index::store::IndexDatabase& db) {
     AssociationTracker merged;
     bool any_tracker = false;
     std::uint64_t min_bucket = std::numeric_limits<std::uint64_t>::max();

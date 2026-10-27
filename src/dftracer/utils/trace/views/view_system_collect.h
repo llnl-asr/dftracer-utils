@@ -7,13 +7,15 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-/// One-pass read of the SYSTEM_METRICS CF (its own key/value format, per-metric
-/// named float stats). Each stored row is already aggregated per (host_hash,
-/// name, time_bucket); emits one output row per key with a dynamic column per
-/// metric (its mean), the sorted union of metric names giving a stable schema.
-/// Absent metrics are NaN. Reads the shard range [shard_begin, shard_end)
-/// (shard_end <= 0 means all shards). Returns false (out_table untouched) when
-/// the plan does not span the files of one index whose partials are current.
+/// One-pass read of the aggregation tier's system metric rows (the serialized
+/// keys and per-metric named float stats). Each stored row is already
+/// aggregated per (host_hash, name, time_bucket), and the rows every file holds
+/// for one key are merged; emits one output row per key in row-key order with a
+/// dynamic column per metric (its mean), the sorted union of metric names
+/// giving a stable schema. Absent metrics are NaN. Reads the shard range
+/// [shard_begin, shard_end) (shard_end <= 0 means all shards). Returns false
+/// (out_table untouched) when the plan does not span the files of one index
+/// whose partials are current.
 bool system_collect(const ViewPlan& plan,
                     dftracer::utils::dataframe::DataFrame& out_table,
                     int shard_begin = 0, int shard_end = 0,

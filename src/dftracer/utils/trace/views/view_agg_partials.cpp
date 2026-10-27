@@ -401,7 +401,7 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
             if (it == root_of.end()) {
                 auto db = std::make_unique<IndexDatabase>(
                     f.index_path, store::IndexOpenMode::ReadOnly);
-                const auto config = agg::tier::read_config(*db->db());
+                const auto config = agg::tier::read_config(*db);
                 if (!config) return std::nullopt;
                 AggQuerySource src;
                 src.index_path =

@@ -22,6 +22,9 @@ namespace dftracer::utils::index::store {
 
 class IndexDatabaseWrite;
 class SstArtifactRegistry;
+/// Reads the aggregation extension's records by index key on either backend;
+/// defined in the index library.
+class AggRowReader;
 
 /// How an index database is opened. Mapped to the RocksDB open mode inside the
 /// implementation; kept RocksDB-free here so the public header does not pull in
@@ -289,6 +292,8 @@ class IndexDatabase {
    private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+
+    friend class AggRowReader;
 };
 
 }  // namespace dftracer::utils::index::store

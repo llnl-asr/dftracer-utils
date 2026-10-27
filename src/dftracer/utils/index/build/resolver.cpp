@@ -165,19 +165,11 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         }
         auto registry = db.query_all_file_registry();
 
-        // The tier holds no file id, so one file's rows cannot be replaced:
-        // rows built with other params, or of a file rebuilt whole, make the
-        // whole tier stale.
         const bool aggregate =
             input.require_aggregation && input.aggregation_config;
         const std::uint64_t params =
             aggregate ? input.aggregation_config->params_hash() : 0;
-        // The tier is a set of RocksDB families, and a store index has no
-        // handle to them.
-        if (auto stored =
-                db.has_rocksdb()
-                    ? index::schemas::dft::agg::tier::read_config(*db.db())
-                    : std::optional<index::schemas::dft::agg::tier::Config>{}) {
+        if (auto stored = index::schemas::dft::agg::tier::read_config(db)) {
             result.stored_time_interval_us = stored->time_interval_us;
             if (aggregate && stored->params_hash != params) {
                 result.aggregation_stale = true;
@@ -198,10 +190,15 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 }
         }
         std::vector<std::pair<FileWorkItem, bool>> agg_candidates;
+        // A file rebuilt whole writes its own partials and system rows again
+        // when the build aggregates, so only its own aggregation is replaced.
+        // A build that does not aggregate replaces nothing, and the whole
+        // tier is stale.
         auto rebuilt_whole = [&](int file_id) {
-            if (file_id >= 0 &&
-                db.extension_state(file_id, index::store::IndexExtension::Agg))
-                result.aggregation_stale = true;
+            if (file_id < 0 ||
+                !db.extension_state(file_id, index::store::IndexExtension::Agg))
+                return;
+            if (!aggregate) result.aggregation_stale = true;
         };
 
         for (auto& f : input.files) {
@@ -268,10 +265,10 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 if (find_schema(schema)) {
                     const auto agg_state = db.extension_state(
                         reg.file_id, index::store::IndexExtension::Agg);
-                    // Rows stored by another version of the tier are of another
-                    // layout and the tier cannot replace one file's rows, so
-                    // the whole tier is stale: it is cleared and rebuilt, never
-                    // merged onto.
+                    // Rows stored by another version of the tier are of
+                    // another layout, and the index-wide records cannot hold
+                    // two layouts at once: the tier is cleared and rebuilt,
+                    // never merged onto.
                     if (agg_state && agg_state->version !=
                                          index::store::layout::ext_version(
                                              index::store::IndexExtension::Agg))
@@ -314,8 +311,8 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         DFTRACER_UTILS_LOG_WARN(
             "Index resolve failed (%s); falling back to full rebuild",
             e.what());
-        // Every file is rebuilt whole and the tier cannot replace one file's
-        // rows, so the stored tier (possibly the corrupt part) is cleared.
+        // The tier may be what failed to read, so it is cleared and built
+        // again with the files.
         result.aggregation_stale = true;
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(

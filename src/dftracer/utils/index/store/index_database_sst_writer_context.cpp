@@ -1,5 +1,4 @@
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
@@ -42,12 +41,10 @@ std::string_view range_end(const Buffer& buf,
 ::rocksdb::Slice slice(std::string_view v) { return {v.data(), v.size()}; }
 
 // Entries [lo, hi) of a sorted buffer, one entry per key: a run of same-key
-// merge operands is combined with `merge_op` (PartialMerge is associative, so
-// reads see the same result as separate operands); any other run keeps its
-// last entry. `ranges` are the range deletes (indices into buf.ranges).
+// entries keeps its last one. `ranges` are the range deletes (indices into
+// buf.ranges).
 std::string emit_sst(const std::string& path, const Buffer& buf, std::size_t lo,
-                     std::size_t hi, const dstd::Vector<std::size_t>& ranges,
-                     const ::rocksdb::MergeOperator* merge_op) {
+                     std::size_t hi, const dstd::Vector<std::size_t>& ranges) {
     ::rocksdb::EnvOptions env_opts;
     ::rocksdb::Options writer_options(
         index::store::RocksDatabase::default_options(),
@@ -74,27 +71,10 @@ std::string emit_sst(const std::string& path, const Buffer& buf, std::size_t lo,
         const std::string_view key = key_of(buf, buf.entries[i]);
         std::size_t j = i + 1;
         while (j < hi && key_of(buf, buf.entries[j]) == key) ++j;
-        if (buf.entries[i].op == Op::Merge && j - i > 1 && merge_op) {
-            std::string combined(value_of(buf, buf.entries[i]));
-            for (std::size_t k = i + 1; k < j; ++k) {
-                std::string next;
-                if (!merge_op->PartialMerge(
-                        slice(key), slice(combined),
-                        slice(value_of(buf, buf.entries[k])), &next, nullptr))
-                    internal::throw_db_error(
-                        "PartialMerge failed combining SST operands for '" +
-                            path + "'",
-                        ::rocksdb::Status::Corruption("PartialMerge"));
-                combined = std::move(next);
-            }
-            status = writer.Merge(slice(key), slice(combined));
-        } else {
-            const auto& e = buf.entries[j - 1];
-            const auto value = slice(value_of(buf, e));
-            status = e.op == Op::Merge    ? writer.Merge(slice(key), value)
-                     : e.op == Op::Delete ? writer.Delete(slice(key))
-                                          : writer.Put(slice(key), value);
-        }
+        const auto& e = buf.entries[j - 1];
+        const auto value = slice(value_of(buf, e));
+        status = e.op == Op::Delete ? writer.Delete(slice(key))
+                                    : writer.Put(slice(key), value);
         if (!status.ok())
             internal::throw_db_error("Failed to append to SST '" + path + "'",
                                      status);
@@ -209,12 +189,6 @@ void IndexDatabaseSstWriterContext::put(layout::Family family,
     stage(family, key, value, Op::Put);
 }
 
-void IndexDatabaseSstWriterContext::merge(layout::Family family,
-                                          std::string_view key,
-                                          std::string_view operand) {
-    stage(family, key, operand, Op::Merge);
-}
-
 void IndexDatabaseSstWriterContext::delete_range(layout::Family family,
                                                  std::string_view begin,
                                                  std::string_view end) {
@@ -233,13 +207,10 @@ IndexDatabaseSstWriterContext::commit() {
     committed_ = true;
 
     const auto batch_dir = fs::path(staging_dir_) / batch_id_;
-    index::schemas::dft::agg::SystemMetricsMergeOperator sys_merge_op;
     for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
         auto& buf = buffers_[f];
         if (buf.entries.empty() && buf.ranges.empty()) continue;
         const auto family = static_cast<layout::Family>(f);
-        const ::rocksdb::MergeOperator* merge_op = nullptr;
-        if (family == layout::Family::SystemMetrics) merge_op = &sys_merge_op;
         std::stable_sort(buf.entries.begin(), buf.entries.end(),
                          [&buf](const auto& a, const auto& b) {
                              return key_of(buf, a) < key_of(buf, b);
@@ -280,7 +251,7 @@ IndexDatabaseSstWriterContext::commit() {
             out.sst[f].push_back(emit_sst(
                 (batch_dir / (family_name + "_" + std::to_string(g) + ".sst"))
                     .string(),
-                buf, lo, hi, ranges, merge_op));
+                buf, lo, hi, ranges));
             lo = hi;
         }
         held_ -= buf.footprint();

@@ -4,7 +4,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/error.h>
@@ -13,6 +12,7 @@
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/store/internal/agg_row_reader.h>
 #include <dftracer/utils/index/store/internal/db_error.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
@@ -193,35 +193,17 @@ StringViewMap<std::uint64_t> decode_count_map_value(std::string_view value) {
     return counts;
 }
 
-/// One store namespace a data scan reads.
-struct StoreNamespace {
-    std::string name;
-    std::uint32_t version = 0;
-    std::string plugin;
-};
-
 }  // namespace
 
 namespace {
 
-::rocksdb::CompressionType select_compression_type() {
-    return ::rocksdb::kZSTD;
-}
-
-// Every open registers the system metrics merge operator: RocksDBManager shares
-// one handle per path, and ingested system metrics SSTs hold merge operands.
-rocks::RocksDatabase::CfOptionsOverride make_aggregation_cf_override() {
-    using index::schemas::dft::agg::SystemMetricsMergeOperator;
-    auto sys_merge_op = std::make_shared<SystemMetricsMergeOperator>();
-    return [sys_merge_op](const std::string& cf_name,
-                          ::rocksdb::ColumnFamilyOptions& opts) {
-        if (cf_name == cf::SYSTEM_METRICS) {
-            opts.merge_operator = sys_merge_op;
-            opts.compression = select_compression_type();
-            opts.bottommost_compression = select_compression_type();
-        }
-    };
-}
+/// One store namespace a data scan reads.
+struct StoreNamespace {
+    std::string name;
+    std::uint32_t version = 0;
+    /// The plugin or the aggregation record the namespace belongs to.
+    std::string owner;
+};
 
 }  // namespace
 
@@ -276,6 +258,9 @@ struct IndexDatabase::Impl {
     /// The plugin namespaces the store declares, highest version each, in
     /// plugin name order.
     std::vector<StoreNamespace> plugin_namespaces() const;
+    /// The aggregation record namespaces the store declares, highest version
+    /// each, in record name order.
+    std::vector<StoreNamespace> meta_namespaces() const;
     /// The file ids that hold a copy of `spec`, ascending.
     std::vector<std::uint32_t> file_ids_of(const kv::NamespaceSpec& spec) const;
     std::optional<std::string> registered_path(std::uint32_t file_id) const;
@@ -482,7 +467,7 @@ std::vector<StoreNamespace> IndexDatabase::Impl::plugin_namespaces() const {
         if (!name.starts_with(prefix)) continue;
         const std::string_view plugin = name.substr(prefix.size());
         auto at = std::find_if(out.begin(), out.end(), [&](const auto& known) {
-            return known.plugin == plugin;
+            return known.owner == plugin;
         });
         if (at == out.end()) {
             out.push_back(StoreNamespace{
@@ -493,7 +478,36 @@ std::vector<StoreNamespace> IndexDatabase::Impl::plugin_namespaces() const {
     }
     std::sort(out.begin(), out.end(),
               [](const StoreNamespace& a, const StoreNamespace& b) {
-                  return a.plugin < b.plugin;
+                  return a.owner < b.owner;
+              });
+    return out;
+}
+
+std::vector<StoreNamespace> IndexDatabase::Impl::meta_namespaces() const {
+    const std::string_view prefix(store_layout::AGG_META_NAMESPACE_PREFIX);
+    std::vector<StoreNamespace> out;
+    const auto held = snapshot();
+    if (!held) return out;
+    const auto declared = held->namespaces();
+    if (!declared)
+        throw_store_error("store index: list namespaces", declared.error());
+    for (const kv::NamespaceDecl& entry : *declared) {
+        const std::string_view name = view_of(entry.name);
+        if (!name.starts_with(prefix)) continue;
+        const std::string_view record = name.substr(prefix.size());
+        auto at = std::find_if(out.begin(), out.end(), [&](const auto& known) {
+            return known.owner == record;
+        });
+        if (at == out.end()) {
+            out.push_back(StoreNamespace{
+                std::string(name), entry.format_version, std::string(record)});
+        } else if (entry.format_version > at->version) {
+            at->version = entry.format_version;
+        }
+    }
+    std::sort(out.begin(), out.end(),
+              [](const StoreNamespace& a, const StoreNamespace& b) {
+                  return a.owner < b.owner;
               });
     return out;
 }
@@ -530,7 +544,7 @@ std::optional<std::string> IndexDatabase::Impl::store_manifest(
     kv::NamespaceSpec spec;
     if (ext == layout::Ext::Plugin) {
         for (const auto& known : plugin_namespaces()) {
-            if (known.plugin == plugin) {
+            if (known.owner == plugin) {
                 spec = namespace_spec(known.name, known.version);
                 break;
             }
@@ -593,7 +607,7 @@ void IndexDatabase::Impl::store_manifests(std::uint32_t file_id,
     const auto held = snapshot();
     if (!held) return;
     for (const auto& known : plugin_namespaces()) {
-        if (!std::string_view(known.plugin).starts_with(plugin)) continue;
+        if (!std::string_view(known.owner).starts_with(plugin)) continue;
         const auto spec = namespace_spec(known.name, known.version);
         const kv::CopyInfo info = held->copy_info(spec, *scope);
         if (info.state != kv::ScopeState::Ready &&
@@ -605,7 +619,7 @@ void IndexDatabase::Impl::store_manifests(std::uint32_t file_id,
         entry.status = info.state == kv::ScopeState::Ready
                            ? layout::ExtStatus::Ready
                            : layout::ExtStatus::Failed;
-        fn(layout::plugin_manifest_key(file_id, known.plugin),
+        fn(layout::plugin_manifest_key(file_id, known.owner),
            layout::encode_manifest(entry));
     }
 }
@@ -662,11 +676,16 @@ std::optional<std::string> IndexDatabase::Impl::store_get(
         if (!file) return std::nullopt;
         scope = *file;
     }
-    if (target->plugin.empty()) {
+    if (!target->meta.empty()) {
+        for (const auto& known : meta_namespaces())
+            if (known.owner == target->meta)
+                spec = namespace_spec(known.name, known.version);
+        if (spec.name.empty()) return std::nullopt;
+    } else if (target->plugin.empty()) {
         spec = ext_spec(target->ext);
     } else {
         for (const auto& known : plugin_namespaces())
-            if (known.plugin == target->plugin)
+            if (known.owner == target->plugin)
                 spec = namespace_spec(known.name, known.version);
         if (spec.name.empty()) return std::nullopt;
     }
@@ -749,6 +768,45 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
     }
     const auto ext =
         static_cast<layout::Ext>(layout::read_u16(prefix.substr(0, 2)));
+    if (ext == layout::Ext::Agg &&
+        static_cast<std::uint8_t>(prefix[2]) == layout::agg_kind::META) {
+        const std::string_view tail =
+            prefix.size() > layout::KEY_PREFIX_BYTES
+                ? std::string_view(prefix).substr(layout::KEY_PREFIX_BYTES)
+                : std::string_view();
+        for (const auto& known : meta_namespaces()) {
+            const std::string_view record(known.owner);
+            if (!record.starts_with(tail)) continue;
+            std::string inner(1, static_cast<char>(layout::agg_kind::META));
+            inner.append(record.data() + tail.size(),
+                         record.size() - tail.size());
+            const kv::NamespaceSpec spec =
+                namespace_spec(known.name, known.version);
+            const auto held = snapshot();
+            if (!held) return;
+            auto cursor = held->scan(spec, root_scope(), ByteView(inner));
+            for (; !cursor.at_end(); cursor.next()) {
+                const auto inner_key = cursor.key();
+                auto value = cursor.value();
+                if (!value)
+                    throw_store_error("store index: read a value",
+                                      value.error());
+                std::string key = layout::file_prefix(
+                    ext, layout::agg_kind::META, layout::INDEX_WIDE);
+                key.append(reinterpret_cast<const char*>(inner_key.data()) + 1,
+                           inner_key.size() - 1);
+                if (!fn(std::string_view(key),
+                        std::string_view(
+                            reinterpret_cast<const char*>(value->data()),
+                            value->size())))
+                    return;
+            }
+            if (cursor.error())
+                throw_store_error("store index: scan index data",
+                                  *cursor.error());
+        }
+        return;
+    }
     std::string probe(prefix.substr(0, 3));
     probe.append(layout::KEY_PREFIX_BYTES - 3, '\0');
     if (!store_layout::target_of(probe)) return;
@@ -763,7 +821,7 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
     std::vector<StoreNamespace> namespaces;
     if (ext == layout::Ext::Plugin) {
         for (auto& known : plugin_namespaces())
-            if (std::string_view(known.plugin).starts_with(plugin_prefix))
+            if (std::string_view(known.owner).starts_with(plugin_prefix))
                 namespaces.push_back(std::move(known));
     } else {
         namespaces.push_back(
@@ -868,7 +926,7 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
         }
     } else {
         impl_->db_ = rocks::RocksDBManager::instance().get_or_open(
-            impl_->db_path_, impl_->open_mode_, make_aggregation_cf_override());
+            impl_->db_path_, impl_->open_mode_);
     }
     if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
         read_write_open_count.fetch_add(1, std::memory_order_relaxed);
@@ -1489,6 +1547,49 @@ std::optional<std::string> IndexDatabase::rowset(int file_id,
                                        fid(file_id), name));
     if (!body) return std::nullopt;
     return std::string(*body);
+}
+
+}  // namespace dftracer::utils::index::store
+
+namespace dftracer::utils::index::store {
+
+void AggRowReader::for_each_row(const IndexDatabase& db, std::uint8_t kind,
+                                std::string_view prefix, const RowFn& fn) {
+    db.impl_->raw_scan(
+        layout::family_of(layout::Ext::Agg, kind), prefix,
+        [&](std::string_view key, std::string_view value) {
+            if (auto body = layout::payload(value, layout::Ext::Agg, kind))
+                return fn(key, *body);
+            return true;
+        });
+}
+
+std::optional<std::string> AggRowReader::get_row(const IndexDatabase& db,
+                                                 std::uint8_t kind,
+                                                 std::string_view key) {
+    return db.impl_->get(layout::Ext::Agg, kind, key);
+}
+
+std::vector<std::uint32_t> AggRowReader::file_ids(const IndexDatabase& db) {
+    std::vector<std::uint32_t> out;
+    for (const std::uint8_t kind :
+         {layout::agg_kind::PARTIAL, layout::agg_kind::SYSTEM,
+          layout::agg_kind::DICT}) {
+        const auto prefix = layout::kind_prefix(layout::Ext::Agg, kind);
+        db.impl_->raw_scan(layout::family_of(layout::Ext::Agg, kind), prefix,
+                           [&](std::string_view key, std::string_view) {
+                               if (key.size() < layout::KEY_PREFIX_BYTES)
+                                   return true;
+                               const std::uint32_t file_id =
+                                   layout::read_u32(key.substr(3, 4));
+                               if (file_id != layout::INDEX_WIDE)
+                                   out.push_back(file_id);
+                               return true;
+                           });
+    }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
 }
 
 }  // namespace dftracer::utils::index::store

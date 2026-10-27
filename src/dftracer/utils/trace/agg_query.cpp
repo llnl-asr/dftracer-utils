@@ -75,12 +75,12 @@ struct Source {
     Source(const AggQuerySource& s, std::uint64_t default_params_hash)
         : path(s.index_path),
           idx(path, index::store::IndexOpenMode::ReadOnly),
-          db(idx.db()),
+          dict(idx),
           params_hash(s.params_hash ? *s.params_hash : default_params_hash) {}
 
     std::string path;
     index::store::IndexDatabase idx;
-    std::shared_ptr<index::store::RocksDatabase> db;
+    agg::tier::Dictionary dict;
     std::uint64_t params_hash;
 };
 
@@ -228,7 +228,7 @@ class Task {
 
     template <class Filter>
     std::uint32_t map_root(std::uint32_t id, const Filter& filter) {
-        const auto text = agg::tier::read_dictionary_entry(*src_.db, id);
+        const std::string* text = src_.dict.find(id);
         if (!text)
             throw DFTUtilsException::cat(ErrorCode::Parse,
                                          "aggregation query: dictionary id ",
@@ -241,7 +241,7 @@ class Task {
 
     std::uint32_t map_root_arg(std::uint32_t id) {
         return root_arg_.get(id, [&](std::uint32_t i) {
-            const auto text = agg::tier::read_dictionary_entry(*src_.db, i);
+            const std::string* text = src_.dict.find(i);
             if (!text)
                 throw DFTUtilsException::cat(
                     ErrorCode::Parse, "aggregation query: dictionary id ", i,
@@ -493,7 +493,7 @@ coro::CoroTask<void> Task::scan_file(
     std::size_t seen = 0;
     if (usable) {
         agg::tier::for_each_partial(
-            *src_.db, fid,
+            src_.idx, fid,
             [&](std::uint32_t chunk, std::uint32_t cat_root,
                 std::uint32_t name_root, std::uint32_t host_root,
                 std::uint32_t extra_root, AggKind kind,
@@ -516,8 +516,7 @@ coro::CoroTask<void> Task::scan_file(
                 }
                 const std::uint32_t extra =
                     root_extra_.get(extra_root, [&](std::uint32_t id) {
-                        const auto text =
-                            agg::tier::read_dictionary_entry(*src_.db, id);
+                        const std::string* text = src_.dict.find(id);
                         if (!text)
                             throw DFTUtilsException::cat(
                                 ErrorCode::Parse,

@@ -42,8 +42,10 @@ namespace {
 constexpr std::string_view SENTINEL = "agg_extension.sentinel";
 
 // `n` POSIX reads of 100 us each, one per millisecond from `start_us`.
+/// `n` reads from `start_us`, one per millisecond; with `system`, also one
+/// system counter event per read.
 std::string write_trace(const std::string& dir, const std::string& name, int n,
-                        std::uint64_t start_us) {
+                        std::uint64_t start_us, bool system = false) {
     const std::string pfw = dir + "/" + name + ".pfw";
     {
         std::ofstream out(pfw);
@@ -52,6 +54,11 @@ std::string write_trace(const std::string& dir, const std::string& name, int n,
                    R"("tid":1,"ts":)"
                 << start_us + static_cast<std::uint64_t>(i) * 1000
                 << R"(,"dur":100,"args":{}})" << "\n";
+        for (int i = 0; system && i < n; ++i)
+            out << R"({"ph":"C","name":"cpu","cat":"sys","pid":1,"tid":1,)"
+                   R"("ts":)"
+                << start_us + static_cast<std::uint64_t>(i) * 1000
+                << R"(,"args":{"hhash":"h1","util":)" << i << "}}\n";
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
@@ -69,6 +76,14 @@ IndexerOptions with_aggregation(std::uint64_t interval_us) {
 
 std::string index_of(const std::string& trace) {
     return trace::internal::determine_index_path(trace, "");
+}
+
+/// Every merged system row of the index of `trace`, all shards.
+std::vector<index::schemas::dft::agg::tier::SystemRow> system_rows_of(
+    const std::string& trace) {
+    IndexDatabase db(index_of(trace), index::store::IndexOpenMode::ReadOnly);
+    return index::schemas::dft::agg::tier::system_rows(
+        db, 0, index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
 }
 
 int file_id(const std::string& trace) {
@@ -226,7 +241,7 @@ TEST_SUITE("AggExtension") {
         {
             IndexDatabase db(index_of(gz),
                              index::store::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(index::schemas::dft::agg::tier::read_config(*db.db()));
+            CHECK_FALSE(index::schemas::dft::agg::tier::read_config(db));
         }
         auto ix = Indexer::open({gz}, with_aggregation(1'000'000));
         ix.build();
@@ -275,19 +290,21 @@ TEST_SUITE("AggExtension") {
 
     TEST_CASE("a changed source rebuilds the tier and that file only") {
         TestEnvironment env(10);
-        const auto a = write_trace(env.get_dir(), "a", 30, 1000);
-        const auto b = write_trace(env.get_dir(), "b", 20, 500'000);
+        const auto a = write_trace(env.get_dir(), "a", 30, 1000, true);
+        const auto b = write_trace(env.get_dir(), "b", 20, 500'000, true);
         Indexer::open({a, b}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({a, b}) == 50);
         plant_sentinel(a);
 
         index::store::RocksDBManager::instance().reset(index_of(a));
-        write_trace(env.get_dir(), "b", 45, 500'000);
+        write_trace(env.get_dir(), "b", 45, 500'000, true);
         fs::last_write_time(b,
                             fs::last_write_time(b) + std::chrono::seconds(10));
 
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
-        CHECK(ix.status().aggregation_needs_rebuild);
+        // The build aggregates `b` as it rebuilds it whole, which replaces its
+        // own partials and system rows, so no whole-tier rebuild is due.
+        CHECK_FALSE(ix.status().aggregation_needs_rebuild);
         ix.build();
         CHECK(has_sentinel(a));
         CHECK(count_reads({a, b}) == 75);
@@ -304,6 +321,10 @@ TEST_SUITE("AggExtension") {
         fs::copy_file(b, fb);
         Indexer::open({fa, fb}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({fa, fb}) == 75);
+        // The rebuild replaced b's system rows rather than dropping them.
+        const auto rebuilt = system_rows_of(a);
+        CHECK_FALSE(rebuilt.empty());
+        CHECK(rebuilt == system_rows_of(fa));
     }
 
     TEST_CASE("a file without a current entry makes readers scan") {

@@ -1,7 +1,6 @@
 # Check that only the aggregation extension's store (agg/agg_store.cpp) reads
 # or writes the system_metrics column family. The index store may name it where
-# it defines it: the family name, the column family options with the merge
-# operator, and the SST writer's merge setup.
+# it defines it: the kind-to-family table in layout.cpp.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_agg_families.cmake
 
@@ -11,9 +10,7 @@ endif()
 
 set(ALLOWED
     src/dftracer/utils/index/schemas/dft/agg/agg_store.cpp
-    src/dftracer/utils/index/store/layout.cpp
-    src/dftracer/utils/index/store/index_database.cpp
-    src/dftracer/utils/index/store/index_database_sst_writer_context.cpp)
+    src/dftracer/utils/index/store/layout.cpp)
 
 file(GLOB_RECURSE sources "${SOURCE_DIR}/src/*.h" "${SOURCE_DIR}/src/*.cpp"
      "${SOURCE_DIR}/include/*.h")

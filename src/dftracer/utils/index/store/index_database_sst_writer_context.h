@@ -54,8 +54,6 @@ class IndexDatabaseSstWriterContext : public IndexWrite {
 
     void put(layout::Family family, std::string_view key,
              std::string_view value) override;
-    void merge(layout::Family family, std::string_view key,
-               std::string_view operand) override;
     void delete_range(layout::Family family, std::string_view begin,
                       std::string_view end) override;
     void del(layout::Family family, std::string_view key) override;
@@ -63,7 +61,7 @@ class IndexDatabaseSstWriterContext : public IndexWrite {
     /// Writes the SSTs and returns their paths; a second call returns none.
     Artifacts commit();
 
-    enum class Op : std::uint8_t { Put, Merge, Delete, Range };
+    enum class Op : std::uint8_t { Put, Delete, Range };
 
     /// One family's staged bytes: the key and value of an entry, or the two
     /// bounds of a range, lie one after the other in `bytes`.

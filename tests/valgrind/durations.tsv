@@ -154,7 +154,6 @@ dataframe/test_lazy_frame_ops	9.7
 dataframe/test_join_null_keys	9.7
 coro/test_coro_syntax	9.7
 runtime/test_runtime_abi	9.6
-trace/aggregators/test_system_metrics_merge_operator	9.5
 dataframe/test_string_simd	9.5
 task_graph/test_task_graph	9.4
 dataframe/test_expr_string_methods	9.4

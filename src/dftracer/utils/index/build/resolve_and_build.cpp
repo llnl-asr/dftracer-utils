@@ -67,16 +67,16 @@ namespace agg = index::schemas::dft::agg;
 
 // The aggregation of one build into one index's tier.
 struct AggRun {
-    std::shared_ptr<index::store::RocksDatabase> db;
+    std::shared_ptr<index::store::IndexDatabase> db;
     IndexBuildBatchConfig::AggFoldFactory factory;
 };
 
 AggRun start_aggregation(const std::string& index_path,
                          const agg::AggregationConfig& config) {
     AggRun run;
-    run.db = agg::tier::open(index_path,
-                             index::store::RocksDatabase::OpenMode::ReadWrite);
-    auto intern = agg::intern_for_index(run.db->path());
+    run.db = std::make_shared<index::store::IndexDatabase>(
+        index_path, index::store::IndexOpenMode::ReadWrite);
+    auto intern = agg::intern_for_index(index_path);
     agg::tier::load_dictionary(*run.db, *intern);
     agg::tier::write_config(*run.db,
                             {config.time_interval_us, config.params_hash(),
@@ -91,11 +91,9 @@ AggRun start_aggregation(const std::string& index_path,
     return run;
 }
 
-// Persists what the folds of `batch` left out of band and folds the system
-// merge operands, so a reader without the merge operator sees whole rows.
+// Persists what the folds of `batch` left out of band.
 void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
     agg::merge_aggregation_folds(batch.agg_outputs, *run.db);
-    agg::tier::compact(*run.db);
 }
 
 // Aggregates files whose members are current, leaving every other extension.
@@ -191,8 +189,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
     for (const auto& root : stale_tiers) {
         DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of %s",
                                 root.c_str());
-        agg::tier::clear(*agg::tier::open(
-            root, index::store::RocksDatabase::OpenMode::ReadWrite));
+        index::store::IndexDatabase db(root,
+                                       index::store::IndexOpenMode::ReadWrite);
+        agg::tier::clear(db);
     }
 
     std::vector<std::string> files_needing_work;
@@ -457,8 +456,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     for (const auto& root : roots)
         if (fs::exists(root)) {
             index::store::RocksDBManager::instance().reset(root);
-            agg::tier::clear(*agg::tier::open(
-                root, index::store::RocksDatabase::OpenMode::ReadWrite));
+            index::store::IndexDatabase db(
+                root, index::store::IndexOpenMode::ReadWrite);
+            agg::tier::clear(db);
         }
     std::string retry_failure;
     try {

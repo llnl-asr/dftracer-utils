@@ -192,47 +192,67 @@ TEST_CASE("opening an index reports a damaged legacy rollup family") {
 TEST_CASE("aggregation tier readers report a damaged store") {
     SUBCASE("system metrics rows") {
         TempDir dir("agg_system");
+        {
+            rdb::IndexDatabase idx(dir.index());
+            auto w = idx.begin_write();
+            rdb::records::put_agg_system_row(*w, 1, "row", "value");
+            w->commit();
+        }
+        rdb::RocksDBManager::instance().reset(dir.index());
         const auto store = make_store(dir.index(), {rdb::cf::SYSTEM_METRICS});
         damage(store, rdb::cf::SYSTEM_METRICS);
-        auto db = open_db(store, rdb::RocksDatabase::OpenMode::ReadOnly);
+        rdb::RocksDBManager::instance().reset(store.path);
+        rdb::IndexDatabase idx(dir.index(), rdb::IndexOpenMode::ReadOnly);
         CHECK_THROWS_AS(
             agg::tier::for_each_system_row(
-                *db, 0, agg::AGG_KEY_NUM_SHARDS,
+                idx, 1,
                 [](std::string_view, std::string_view) { return true; }),
             DFTUtilsException);
+        CHECK_THROWS_AS(agg::tier::system_rows(idx, 0, agg::AGG_KEY_NUM_SHARDS),
+                        DFTUtilsException);
     }
     SUBCASE("partials, dictionary and records") {
         TempDir dir("agg_blob");
-        const auto store = make_store(
-            dir.index(), {rdb::cf::BLOB}, [](rdb::RocksDatabase& db) {
-                agg::AggInternTable table;
-                REQUIRE(table.intern.insert_at_id(3, "name") ==
-                        dstd::StringIntern::InsertStatus::Ok);
-                agg::tier::flush_dictionary(db, table);
-                agg::tier::widen_time_bounds(db, {1, 2});
-                agg::tier::write_tracker(db, "t");
-                agg::tier::write_config(db, agg::tier::Config{});
-            });
+        {
+            rdb::IndexDatabase idx(dir.index());
+            auto w = idx.begin_write();
+            rdb::records::put_agg_dictionary_entry(*w, 1, 3, "name");
+            w->commit();
+            agg::tier::widen_time_bounds(idx, {1, 2});
+            agg::tier::write_tracker(idx, "t");
+            agg::tier::write_config(idx, agg::tier::Config{});
+        }
+        rdb::RocksDBManager::instance().reset(dir.index());
+        const auto store = make_store(dir.index(), {rdb::cf::BLOB});
         damage(store, rdb::cf::BLOB);
-        auto db = open_db(store, rdb::RocksDatabase::OpenMode::ReadOnly);
+        rdb::RocksDBManager::instance().reset(store.path);
+        rdb::IndexDatabase idx(dir.index(), rdb::IndexOpenMode::ReadOnly);
         CHECK_THROWS_AS(
-            agg::tier::for_each_partial(*db, 1, [](auto&&...) { return true; }),
+            agg::tier::for_each_partial(idx, 1, [](auto&&...) { return true; }),
             DFTUtilsException);
         agg::AggInternTable table;
-        CHECK_THROWS_AS(agg::tier::load_dictionary(*db, table),
+        CHECK_THROWS_AS(agg::tier::load_dictionary(idx, table),
                         DFTUtilsException);
-        CHECK_THROWS_AS(agg::tier::read_dictionary_entry(*db, 3),
+        CHECK_THROWS_AS(agg::tier::read_dictionary_entry(idx, 3),
                         DFTUtilsException);
-        CHECK_THROWS_AS(agg::tier::read_time_bounds(*db), DFTUtilsException);
-        CHECK_THROWS_AS(agg::tier::read_tracker(*db), DFTUtilsException);
-        CHECK_THROWS_AS(agg::tier::read_config(*db), DFTUtilsException);
+        CHECK_THROWS_AS(agg::tier::read_time_bounds(idx), DFTUtilsException);
+        CHECK_THROWS_AS(agg::tier::read_tracker(idx), DFTUtilsException);
+        CHECK_THROWS_AS(agg::tier::read_config(idx), DFTUtilsException);
     }
     SUBCASE("clearing the tier") {
         TempDir dir("agg_clear");
-        const auto store = make_store(dir.index(), {rdb::cf::DEFAULT});
-        damage(store, rdb::cf::DEFAULT);
-        auto db = open_db(store, rdb::RocksDatabase::OpenMode::ReadWrite);
-        CHECK_THROWS_AS(agg::tier::clear(*db), DFTUtilsException);
+        {
+            rdb::IndexDatabase idx(dir.index());
+            auto w = idx.begin_write();
+            rdb::records::put_agg_dictionary_entry(*w, 1, 3, "name");
+            w->commit();
+        }
+        rdb::RocksDBManager::instance().reset(dir.index());
+        const auto store = make_store(dir.index(), {rdb::cf::BLOB});
+        damage(store, rdb::cf::BLOB);
+        rdb::RocksDBManager::instance().reset(store.path);
+        rdb::IndexDatabase idx(dir.index(), rdb::IndexOpenMode::ReadWrite);
+        CHECK_THROWS_AS(agg::tier::clear(idx), DFTUtilsException);
     }
 }
 

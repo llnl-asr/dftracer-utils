@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_DRAIN_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_DRAIN_H
 
-#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_database.h>
 
 #include <cstdint>
 #include <limits>
@@ -26,9 +26,10 @@ struct AggFoldOutput {
 /// Merges the per-file AggregationFold out-of-band outputs into the index of
 /// `db`: the trackers are finalized and merged with the stored one, and the
 /// stored time bounds are widened by the range of the events. Synchronous, so
-/// safe to call from a coroutine without suspending.
+/// safe to call from a coroutine without suspending. `db` must be open for
+/// writing.
 void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
-                             index::store::RocksDatabase& db);
+                             index::store::IndexDatabase& db);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg
 

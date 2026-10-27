@@ -89,7 +89,6 @@ set(TRACE_TEST_SOURCES
     aggregators/test_aggregation_metrics.cpp
     aggregators/test_aggregation_config.cpp
     aggregators/test_system_metrics.cpp
-    aggregators/test_system_metrics_merge_operator.cpp
     aggregators/test_agg_parity.cpp
     aggregators/test_quantile_store.cpp
     aggregators/test_agg_partial.cpp
@@ -173,3 +172,53 @@ set_tests_properties(trace/aggregators/test_quantile_store PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
 set_tests_properties(trace/aggregators/test_agg_partial PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
+
+# The aggregation tests that run on either backend, run again on the store
+# backend of this process.
+set(store_backend_cases
+    aggregators/test_agg_parity
+    aggregators/test_agg_partial
+    aggregators/test_agg_query
+    aggregators/test_system_metrics
+    views/test_view_partials
+    views/test_view_aggregate
+    views/test_view_agg_parity
+    views/test_view_agg_keys
+    views/test_view_agg_scan
+    views/test_view_index_freshness
+    views/test_stats_view)
+# "binary=case,case": the cases of `binary` the store backend cannot run. A
+# case that reads the index through its own RocksDB handle has none to read:
+# the store has no such handle.
+set(store_backend_excluded_cases
+    "views/test_view_partials=a fresh index build writes no aggregation column family,an index with the legacy aggregation column family answers")
+foreach(bin_exec ${store_backend_cases})
+  string(REPLACE "/" "_" target_name "trace_${bin_exec}")
+  set(store_args)
+  foreach(excluded ${store_backend_excluded_cases})
+    string(FIND "${excluded}" "${bin_exec}=" prefix_end)
+    if(prefix_end EQUAL 0)
+      string(LENGTH "${bin_exec}=" prefix_length)
+      string(SUBSTRING "${excluded}" ${prefix_length} -1 cases)
+      set(store_args "--test-case-exclude=${cases}")
+    endif()
+  endforeach()
+  set(store_env "DFTRACER_UTILS_INDEX_BACKEND=store")
+  set(store_timeout 300)
+  if(bin_exec STREQUAL "aggregators/test_agg_parity")
+    set(store_env
+        "${store_env};DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>")
+    set(store_timeout 600)
+  elseif(bin_exec STREQUAL "aggregators/test_agg_partial")
+    set(store_env "${store_env};DFTRACER_UTILS_MEMORY_DEBUG=1")
+  endif()
+  # Its own directory: a test may clear its directory, and the default run of
+  # the same binary can run beside it.
+  set(store_working_directory
+      "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${target_name}_store")
+  file(MAKE_DIRECTORY "${store_working_directory}")
+  add_test(NAME "trace/${bin_exec}[store]" COMMAND ${target_name} ${store_args})
+  set_tests_properties("trace/${bin_exec}[store]" PROPERTIES
+                       WORKING_DIRECTORY "${store_working_directory}"
+                       ENVIRONMENT "${store_env}" TIMEOUT ${store_timeout})
+endforeach()

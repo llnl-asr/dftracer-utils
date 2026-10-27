@@ -104,10 +104,6 @@ class RecordingWrite final : public IndexWrite {
         puts.emplace_back(std::string(key), std::string(value));
         inner_.put(family, key, value);
     }
-    void merge(layout::Family family, std::string_view key,
-               std::string_view operand) override {
-        inner_.merge(family, key, operand);
-    }
     void delete_range(layout::Family family, std::string_view begin,
                       std::string_view end) override {
         inner_.delete_range(family, begin, end);
@@ -593,7 +589,7 @@ TEST_CASE("clearing an extension without data drops its copy") {
     CHECK(rows_of(*root, layout::Ext::Zonemap, file_scope(TRACE)).empty());
 }
 
-TEST_CASE("merge throws and a delete inside a committed copy throws") {
+TEST_CASE("a delete inside a committed copy throws") {
     dftu_test::ScopedTestDir dir("store_index_unsupported");
     auto root = StoreRoot::get_or_open(dir.str());
     const std::string path(TRACE);
@@ -606,14 +602,6 @@ TEST_CASE("merge throws and a delete inside a committed copy throws") {
     }
 
     auto write = root->begin_write();
-    CHECK_THROWS_WITH_AS(
-        write->merge(
-            layout::Family::SystemMetrics,
-            layout::file_prefix(layout::Ext::Zonemap, layout::path_kind::PATHS,
-                                static_cast<std::uint32_t>(file_id)),
-            std::string(8, '\0')),
-        doctest::Contains("merge is not supported"), std::runtime_error);
-
     records::put_path(*write, layout::Ext::Zonemap, file_id, "args.name");
     records::put_manifest(*write, file_id, layout::Ext::Zonemap, 1);
     write->commit();

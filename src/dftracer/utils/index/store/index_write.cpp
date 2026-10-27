@@ -230,4 +230,35 @@ void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
     put_value(w, Ext::Agg, layout::agg_kind::PARTIAL, key, payload);
 }
 
+void put_agg_system_row(IndexWrite& w, int file_id, std::string_view key,
+                        std::string_view payload) {
+    auto full =
+        layout::file_prefix(Ext::Agg, layout::agg_kind::SYSTEM, fid(file_id));
+    full.append(key);
+    put_value(w, Ext::Agg, layout::agg_kind::SYSTEM, full, payload);
+}
+
+void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
+                              std::string_view text) {
+    auto key =
+        layout::file_prefix(Ext::Agg, layout::agg_kind::DICT, fid(file_id));
+    append_u32_be(key, id);
+    put_value(w, Ext::Agg, layout::agg_kind::DICT, key, text);
+}
+
+void put_agg_meta(IndexWrite& w, std::string_view name,
+                  std::string_view payload) {
+    auto key = layout::file_prefix(Ext::Agg, layout::agg_kind::META,
+                                   layout::INDEX_WIDE);
+    key.append(name);
+    put_value(w, Ext::Agg, layout::agg_kind::META, key, payload);
+}
+
+void del_agg_meta(IndexWrite& w, std::string_view name) {
+    auto key = layout::file_prefix(Ext::Agg, layout::agg_kind::META,
+                                   layout::INDEX_WIDE);
+    key.append(name);
+    w.del(layout::family_of(Ext::Agg, layout::agg_kind::META), key);
+}
+
 }  // namespace dftracer::utils::index::store::records

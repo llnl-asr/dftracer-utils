@@ -6,6 +6,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -89,6 +90,12 @@ void AggregationFold::close_chunk() {
         const std::size_t offset = arena_.size();
         slot.partial.serialize_into(arena_);
         closed_.push_back({chunk_, offset, arena_.size() - offset, slot.key});
+        referenced_.push_back(slot.key.cat);
+        referenced_.push_back(slot.key.name);
+        referenced_.push_back(slot.key.host);
+        referenced_.push_back(slot.key.extra);
+        for (const ArgStat& arg : slot.partial.args)
+            referenced_.push_back(arg.id);
         slot.partial.clear();
         slot.used = false;
     }
@@ -126,35 +133,47 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
         c.offset += base;
         closed_.push_back(c);
     }
+    referenced_.insert(referenced_.end(), o.referenced_.begin(),
+                       o.referenced_.end());
     o.arena_.clear();
     o.closed_.clear();
+    o.referenced_.clear();
 
     os.system_buffer.clear();
 }
 
 void AggregationFold::write(index::store::IndexWrite& w) {
-    namespace agg = index::schemas::dft::agg;
     namespace layout = index::store::layout;
+    if (file_id_ < 0) {
+        throw std::logic_error(
+            "an aggregation fold writes the data of one file, and has none");
+    }
+    close_chunk();
+    // The clear covers every kind of the file's aggregation data, its
+    // system rows included, so it comes before any of them is put.
+    index::store::records::clear_file(w, layout::Ext::Agg, file_id_);
     std::string sys_val_buf;
     for (auto& [k, m] : state_.system_buffer) {
-        agg::serialize_system_value_into(sys_val_buf, m);
-        tier::merge_system_row(w, k, sys_val_buf);
+        serialize_system_value_into(sys_val_buf, m);
+        index::store::records::put_agg_system_row(w, file_id_, k, sys_val_buf);
     }
-    if (file_id_ >= 0) {
-        close_chunk();
-        index::store::records::clear_file(w, layout::Ext::Agg, file_id_);
-        for (const Closed& c : closed_)
-            index::store::records::put_agg_partial(
-                w, file_id_, c.chunk, c.key.cat, c.key.name, c.key.host,
-                c.key.extra, static_cast<std::uint8_t>(c.key.kind),
-                std::string_view(
-                    reinterpret_cast<const char*>(arena_.data()) + c.offset,
-                    c.size));
-        closed_.clear();
-        arena_.clear();
-    }
-    tier::flush_dictionary(w, *agg_intern_);
-    if (file_id_ >= 0) tier::put_file(w, file_id_, config_.params_hash());
+    for (const Closed& c : closed_)
+        index::store::records::put_agg_partial(
+            w, file_id_, c.chunk, c.key.cat, c.key.name, c.key.host,
+            c.key.extra, static_cast<std::uint8_t>(c.key.kind),
+            std::string_view(
+                reinterpret_cast<const char*>(arena_.data()) + c.offset,
+                c.size));
+    closed_.clear();
+    arena_.clear();
+    std::sort(referenced_.begin(), referenced_.end());
+    referenced_.erase(std::unique(referenced_.begin(), referenced_.end()),
+                      referenced_.end());
+    for (const std::uint32_t id : referenced_)
+        index::store::records::put_agg_dictionary_entry(
+            w, file_id_, id, agg_intern_->intern.resolve(id));
+    tier::put_file(w, file_id_, config_.params_hash());
+    referenced_.clear();
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

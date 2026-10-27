@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
@@ -28,6 +29,8 @@ using dftracer::utils::index::store::IndexExtension;
 using dftracer::utils::index::store::IndexWrite;
 namespace records = dftracer::utils::index::store::records;
 namespace layout = dftracer::utils::index::store::layout;
+namespace agg = dftracer::utils::index::schemas::dft::agg;
+namespace tier = dftracer::utils::index::schemas::dft::agg::tier;
 using dftracer::utils::index::extensions::kinds::value_hash;
 using dftracer::utils::index::store::IndexDatabaseSstWriterContext;
 using dftracer::utils::index::store::SstArtifactRegistry;
@@ -148,10 +151,14 @@ struct Fixture {
         records::put_rowset(w, file_id, "files", "files-frame");
         records::put_rowset(w, file_id, "hosts", "hosts-frame");
 
-        // One merge per key: the SST emitter combines same-key operands, so
-        // each SST stays key-unique either way.
-        w.merge(layout::Family::SystemMetrics, "sys-key-1", "sys-1");
-        w.merge(layout::Family::SystemMetrics, "sys-key-2", "sys-2");
+        // One system metric row of the file, keyed the way the build keys it.
+        agg::SystemAggregationMetrics sys;
+        sys.count = 1;
+        sys.update_timestamp(1000);
+        sys.update_metric("cpu_user", 40.0);
+        records::put_agg_system_row(w, file_id,
+                                    agg::serialize_system_key("host", "cpu", 0),
+                                    agg::serialize_system_value(sys));
 
         records::put_manifest(w, file_id, IndexExtension::Members, 0);
         for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
@@ -172,8 +179,8 @@ std::map<std::string, std::string> entries(const IndexDatabase& db,
     return out;
 }
 
-// Merge-operand families combine on read, so both paths must return
-// byte-identical keys and values in every family.
+// Both paths write the same records, so they must return byte-identical keys
+// and values in every family.
 void check_same_bytes(const IndexDatabase& db_a, const IndexDatabase& db_b) {
     for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
         const auto family = static_cast<layout::Family>(f);
@@ -204,6 +211,19 @@ void check_readable(const IndexDatabase& db, int file_id) {
           std::vector<std::uint64_t>{1});
     CHECK(db.rowset(file_id, "hosts") == "hosts-frame");
     CHECK(db.rowset(file_id, "files") == "files-frame");
+}
+
+/// The system rows of every file, merged by row key: both files of the fixture
+/// write the same row, so the merge sees it twice.
+void check_system_rows(const IndexDatabase& db) {
+    const auto rows = tier::system_rows(db, 0, agg::AGG_KEY_NUM_SHARDS);
+    REQUIRE(rows.size() == 1);
+    CHECK(rows.front().first == agg::serialize_system_key("host", "cpu", 0));
+    const auto merged = agg::deserialize_system_value(rows.front().second);
+    CHECK(merged.count == 2);
+    CHECK(merged.ts == 1000);
+    REQUIRE(merged.metrics != nullptr);
+    CHECK(merged.metrics->at("cpu_user").count() == 2);
 }
 
 }  // namespace
@@ -246,6 +266,7 @@ TEST_SUITE("IndexDatabaseSstWriterContext") {
         check_same_bytes(db_a, db_b);
         check_readable(db_b, 1);
         check_readable(db_b, 2);
+        check_system_rows(db_b);
     }
 
     TEST_CASE("re-indexing a file leaves nothing of its fewer members") {

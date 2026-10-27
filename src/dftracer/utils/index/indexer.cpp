@@ -340,13 +340,10 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
         // dftracer.agg is current at the requested config, else at the one
         // the tier holds.
         std::optional<std::uint64_t> agg_params;
-        // The aggregation tier lives in RocksDB families a store index has no
-        // handle to.
         if (impl_->options.aggregation) {
             agg_params = impl_->options.aggregation->params_hash();
-        } else if (db.has_rocksdb()) {
-            if (auto stored = schemas::dft::agg::tier::read_config(*db.db()))
-                agg_params = stored->params_hash;
+        } else if (auto stored = schemas::dft::agg::tier::read_config(db)) {
+            agg_params = stored->params_hash;
         }
         for (const auto* p : traces) {
             const int fid =

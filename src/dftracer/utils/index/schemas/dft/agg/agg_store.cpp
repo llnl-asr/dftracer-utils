@@ -1,20 +1,18 @@
-#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/store/internal/agg_row_reader.h>
 #include <dftracer/utils/index/store/layout.h>
-#include <rocksdb/table.h>
 
 #include <algorithm>
+#include <array>
+#include <map>
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
-namespace cf = index::store::cf;
 namespace layout = index::store::layout;
+using index::store::AggRowReader;
 
 namespace {
 
@@ -24,20 +22,9 @@ constexpr std::string_view TRACKER_NAME = "tracker";
 constexpr std::size_t CONFIG_FIXED_BYTES = 17;
 constexpr char KEY_SEP = '\x1f';
 constexpr std::uint8_t FLAG_GROUP_BY_FILE = 1U << 0;
-constexpr std::size_t WRITER_BATCH_ROWS = 4096;
 
-// A corrupt index names its directory and says what to do; the status text
-// alone does not.
-void check(const ::rocksdb::Status& status, const char* what,
-           const RocksDatabase& db) {
-    if (status.ok()) return;
-    if (status.IsCorruption())
-        throw DFTUtilsException::cat(
-            ErrorCode::Aggregation, what, " failed: the index at ", db.path(),
-            " is corrupt (", status.ToString(),
-            "); delete that directory and build the index again");
-    throw DFTUtilsException::cat(ErrorCode::Io, what, ": ", status.ToString());
-}
+constexpr std::array<std::string_view, 3> META_NAMES = {
+    CONFIG_NAME, TIME_BOUNDS_NAME, TRACKER_NAME};
 
 std::string meta_key(std::string_view name) {
     auto key = layout::file_prefix(layout::Ext::Agg, layout::agg_kind::META,
@@ -47,89 +34,52 @@ std::string meta_key(std::string_view name) {
 }
 
 std::string dict_prefix() {
-    return layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
-                               layout::INDEX_WIDE);
+    return layout::kind_prefix(layout::Ext::Agg, layout::agg_kind::DICT);
 }
 
-std::string dict_key(std::uint32_t id) {
-    auto key = dict_prefix();
-    append_u32_be(key, id);
-    return key;
-}
-
-// The payload of the record `name`; nullopt when it is absent or in another
-// format.
-std::optional<std::string> get_meta(const RocksDatabase& db,
+// The payload of the index-wide record `name`; nullopt when it is absent or
+// in another format.
+std::optional<std::string> get_meta(const IndexDatabase& db,
                                     std::string_view name) {
-    std::string value;
-    auto status = db.get(meta_key(name), &value, cf::BLOB);
-    if (status.IsNotFound()) return std::nullopt;
-    check(status, "aggregation record read", db);
-    const auto body =
-        layout::payload(value, layout::Ext::Agg, layout::agg_kind::META);
-    if (!body) return std::nullopt;
-    return std::string(*body);
+    return AggRowReader::get_row(db, layout::agg_kind::META, meta_key(name));
 }
 
-void put_meta(RocksDatabase& db, std::string_view name,
+void put_meta(IndexDatabase& db, std::string_view name,
               std::string_view value) {
-    check(db.put(meta_key(name),
-                 layout::with_header(layout::Ext::Agg, layout::agg_kind::META,
-                                     value),
-                 cf::BLOB),
-          "aggregation record write", db);
+    auto write = db.begin_write();
+    index::store::records::put_agg_meta(*write, name, value);
+    write->commit();
 }
 
-std::string manifest_value(std::uint64_t params_hash) {
-    return layout::encode_manifest({layout::ext_version(layout::Ext::Agg),
-                                    params_hash, layout::ExtStatus::Ready});
+[[noreturn]] void throw_conflict(std::uint32_t id, std::string_view existing,
+                                 std::string_view text) {
+    throw DFTUtilsException(
+        ErrorCode::InvalidArgument,
+        "string intern: id " + std::to_string(id) + " is already '" +
+            std::string(existing) + "', cannot rebind to '" +
+            std::string(text) +
+            "' (dictionaries from two indexes in one table?)");
 }
 
-template <class Put>
-void flush_entries(AggInternTable& table, Put&& put_entry) {
-    auto& intern = table.intern;
-    const auto current = static_cast<std::uint32_t>(intern.entry_count());
-    auto flushed = table.flushed_entries.load(std::memory_order_relaxed);
-    if (current <= flushed) return;
-    for (std::uint32_t n = flushed; n < current; ++n) {
-        const auto id = intern.entry_id(n);
-        put_entry(dict_key(id),
-                  layout::with_header(layout::Ext::Agg, layout::agg_kind::DICT,
-                                      intern.resolve(id)));
-    }
-    // Another writer may have advanced the watermark meanwhile.
-    while (flushed < current &&
-           !table.flushed_entries.compare_exchange_weak(
-               flushed, current, std::memory_order_relaxed)) {
-    }
+/// The id of one dictionary record, whose key is the file prefix and the id.
+std::uint32_t entry_id(std::string_view prefix, std::string_view key) {
+    if (key.size() != prefix.size() + 2 * sizeof(std::uint32_t))
+        throw DFTUtilsException(ErrorCode::Parse,
+                                "aggregation dictionary: malformed entry");
+    return layout::read_u32(key.substr(prefix.size() + sizeof(std::uint32_t)));
+}
+
+std::string_view row_key_of(std::string_view key, std::string_view prefix) {
+    return key.substr(prefix.size() + sizeof(std::uint32_t));
+}
+
+std::uint16_t shard_of(std::string_view row) {
+    return read_u16_be(reinterpret_cast<const std::uint8_t*>(row.data()));
 }
 
 }  // namespace
 
-std::shared_ptr<RocksDatabase> open(const std::string& index_path,
-                                    RocksDatabase::OpenMode mode) {
-    auto sys_merge = std::make_shared<SystemMetricsMergeOperator>();
-    const bool writing = mode == RocksDatabase::OpenMode::ReadWrite;
-    // Rows are rewritten by every rebuild, so they take zstd at its default
-    // level; the rest of the index is tuned for size.
-    auto fast_compression = [](::rocksdb::ColumnFamilyOptions& opts) {
-        opts.compression = ::rocksdb::kZSTD;
-        opts.bottommost_compression = ::rocksdb::kZSTD;
-    };
-    auto override = [sys_merge, writing, fast_compression](
-                        const std::string& name,
-                        ::rocksdb::ColumnFamilyOptions& opts) {
-        if (name == cf::SYSTEM_METRICS) {
-            opts.merge_operator = sys_merge;
-            if (writing) fast_compression(opts);
-        }
-    };
-    auto& mgr = index::store::RocksDBManager::instance();
-    mgr.reset(index_path);
-    return mgr.get_or_open(index_path, mode, override);
-}
-
-std::optional<Config> read_config(const RocksDatabase& db) {
+std::optional<Config> read_config(const IndexDatabase& db) {
     auto value = get_meta(db, CONFIG_NAME);
     if (!value || value->size() < CONFIG_FIXED_BYTES) return std::nullopt;
     Config c;
@@ -148,7 +98,7 @@ std::optional<Config> read_config(const RocksDatabase& db) {
     return c;
 }
 
-void write_config(RocksDatabase& db, const Config& config) {
+void write_config(IndexDatabase& db, const Config& config) {
     std::string value;
     append_u64_be(value, config.time_interval_us);
     append_u64_be(value, config.params_hash);
@@ -161,59 +111,103 @@ void write_config(RocksDatabase& db, const Config& config) {
     put_meta(db, CONFIG_NAME, value);
 }
 
-void put_file(index::store::IndexWrite& w, int file_id,
-              std::uint64_t params_hash) {
+void put_file(IndexWrite& w, int file_id, std::uint64_t params_hash) {
     index::store::records::put_manifest(w, file_id, layout::Ext::Agg,
                                         params_hash);
 }
 
-void put_files(RocksDatabase& db, std::span<const int> file_ids,
+void put_files(IndexDatabase& db, std::span<const int> file_ids,
                std::uint64_t params_hash) {
-    auto batch = db.begin_batch();
-    const auto value = manifest_value(params_hash);
-    for (int id : file_ids)
-        if (id >= 0)
-            db.put(batch, cf::DEFAULT,
-                   layout::manifest_key(static_cast<std::uint32_t>(id),
-                                        layout::Ext::Agg),
-                   value);
-    check(db.commit_batch(batch), "aggregation manifest write", db);
+    auto write = db.begin_write();
+    for (const int file_id : file_ids)
+        if (file_id >= 0) put_file(*write, file_id, params_hash);
+    write->commit();
 }
 
-void merge_system_row(index::store::IndexWrite& w, std::string_view key,
-                      std::string_view value) {
-    w.merge(layout::Family::SystemMetrics, key, value);
+std::vector<SystemRow> system_rows(const IndexDatabase& db, std::uint16_t begin,
+                                   std::uint16_t end) {
+    const auto prefix =
+        layout::kind_prefix(layout::Ext::Agg, layout::agg_kind::SYSTEM);
+    std::map<std::string, SystemAggregationMetrics, std::less<>> merged;
+    // The rows of one file are in shard order, so each file's scan stops at
+    // the end of the range.
+    for (const std::uint32_t file_id : AggRowReader::file_ids(db)) {
+        AggRowReader::for_each_row(
+            db, layout::agg_kind::SYSTEM,
+            layout::file_prefix(layout::Ext::Agg, layout::agg_kind::SYSTEM,
+                                file_id),
+            [&](std::string_view key, std::string_view body) {
+                const std::string_view row = row_key_of(key, prefix);
+                if (row.size() < 2) return true;
+                const std::uint16_t shard = shard_of(row);
+                if (shard >= end || shard >= AGG_KEY_NUM_SHARDS) return false;
+                if (shard < begin) return true;
+                auto at = merged.find(row);
+                if (at == merged.end())
+                    merged.emplace(std::string(row),
+                                   deserialize_system_value(body));
+                else
+                    at->second.merge_from(deserialize_system_value(body));
+                return true;
+            });
+    }
+    std::vector<SystemRow> out;
+    out.reserve(merged.size());
+    for (auto& [row, metrics] : merged)
+        out.emplace_back(row, serialize_system_value(metrics));
+    return out;
 }
 
-Writer::Writer(RocksDatabase& db) : db_(&db), batch_(db.begin_batch()) {}
-
-void Writer::merge_system_row(std::string_view key, std::string_view value) {
-    db_->merge(batch_, cf::SYSTEM_METRICS, key, value);
-    if (++pending_ < WRITER_BATCH_ROWS) return;
-    check(db_->commit_batch(batch_), "aggregation tier write", *db_);
-    batch_ = db_->begin_batch();
-    pending_ = 0;
+void for_each_system_row(
+    const IndexDatabase& db, int file_id,
+    const std::function<bool(std::string_view, std::string_view)>& fn) {
+    const auto prefix =
+        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::SYSTEM,
+                            static_cast<std::uint32_t>(file_id));
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::SYSTEM, prefix,
+        [&](std::string_view key, std::string_view body) {
+            return fn(row_key_of(key, prefix), body);
+        });
 }
 
-void Writer::finish() {
-    check(db_->commit_batch(batch_), "aggregation tier write", *db_);
-    batch_ = db_->begin_batch();
-    pending_ = 0;
+void for_each_partial(
+    const IndexDatabase& db, int file_id,
+    const std::function<bool(std::uint64_t, std::uint32_t, std::uint32_t,
+                             std::uint32_t, std::uint32_t, PartialKind,
+                             std::span<const std::uint8_t>)>& fn) {
+    constexpr std::size_t RECORD_BYTES =
+        5 * sizeof(std::uint32_t) + sizeof(std::uint8_t);
+    const auto prefix =
+        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::PARTIAL,
+                            static_cast<std::uint32_t>(file_id));
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::PARTIAL, prefix,
+        [&](std::string_view key, std::string_view body) {
+            if (key.size() != prefix.size() + RECORD_BYTES)
+                throw DFTUtilsException(
+                    ErrorCode::Parse, "aggregation partial: malformed record");
+            const auto tail = key.substr(prefix.size());
+            return fn(
+                layout::read_u32(tail), layout::read_u32(tail.substr(4)),
+                layout::read_u32(tail.substr(8)),
+                layout::read_u32(tail.substr(12)),
+                layout::read_u32(tail.substr(16)),
+                static_cast<PartialKind>(static_cast<std::uint8_t>(tail[20])),
+                std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(body.data()),
+                    body.size()));
+        });
 }
 
-std::unique_ptr<::rocksdb::Iterator> system_row_iterator(
-    const RocksDatabase& db) {
-    return db.new_iterator(cf::SYSTEM_METRICS);
-}
-
-std::optional<TimeBounds> read_time_bounds(const RocksDatabase& db) {
+std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db) {
     auto value = get_meta(db, TIME_BOUNDS_NAME);
     if (!value || value->size() < 16) return std::nullopt;
     return TimeBounds{layout::read_u64(*value),
                       layout::read_u64(std::string_view(*value).substr(8))};
 }
 
-void widen_time_bounds(RocksDatabase& db, TimeBounds bounds) {
+void widen_time_bounds(IndexDatabase& db, TimeBounds bounds) {
     if (auto stored = read_time_bounds(db)) {
         bounds.min_bucket = std::min(bounds.min_bucket, stored->min_bucket);
         bounds.max_bucket = std::max(bounds.max_bucket, stored->max_bucket);
@@ -224,107 +218,76 @@ void widen_time_bounds(RocksDatabase& db, TimeBounds bounds) {
     put_meta(db, TIME_BOUNDS_NAME, value);
 }
 
-std::optional<std::string> read_tracker(const RocksDatabase& db) {
+std::optional<std::string> read_tracker(const IndexDatabase& db) {
     return get_meta(db, TRACKER_NAME);
 }
 
-void write_tracker(RocksDatabase& db, std::string_view bytes) {
+void write_tracker(IndexDatabase& db, std::string_view bytes) {
     put_meta(db, TRACKER_NAME, bytes);
 }
 
-void load_dictionary(const RocksDatabase& db, AggInternTable& table) {
+void load_dictionary(const IndexDatabase& db, AggInternTable& table) {
     const auto prefix = dict_prefix();
-    index::store::internal::scan_prefix_iterator(
-        "aggregation dictionary scan", prefix,
-        [&] { return db.new_iterator(cf::BLOB); },
-        [&](::rocksdb::Iterator& it) {
-            const std::string_view key(it.key().data(), it.key().size());
-            const auto body = layout::payload(
-                std::string_view(it.value().data(), it.value().size()),
-                layout::Ext::Agg, layout::agg_kind::DICT);
-            if (key.size() != prefix.size() + 4 || !body)
-                throw DFTUtilsException(
-                    ErrorCode::Parse,
-                    "aggregation dictionary: malformed entry");
-            const std::uint32_t id =
-                layout::read_u32(key.substr(prefix.size()));
-            switch (table.intern.insert_at_id(id, *body)) {
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::DICT, prefix,
+        [&](std::string_view key, std::string_view body) {
+            const std::uint32_t id = entry_id(prefix, key);
+            switch (table.intern.insert_at_id(id, body)) {
                 case dstd::StringIntern::InsertStatus::Ok:
                     break;
                 case dstd::StringIntern::InsertStatus::Conflict:
-                    throw DFTUtilsException(
-                        ErrorCode::InvalidArgument,
-                        "string intern: id " + std::to_string(id) +
-                            " is already '" +
-                            std::string(table.intern.resolve(id)) +
-                            "', cannot rebind to '" + std::string(*body) +
-                            "' (dictionaries from two indexes in one table?)");
+                    throw_conflict(id, table.intern.resolve(id), body);
                 case dstd::StringIntern::InsertStatus::OutOfRange:
                     throw DFTUtilsException(ErrorCode::InvalidArgument,
                                             "string intern: id " +
                                                 std::to_string(id) +
                                                 " is out of range");
             }
+            return true;
         });
-    table.flushed_entries.store(
-        static_cast<std::uint32_t>(table.intern.entry_count()),
-        std::memory_order_relaxed);
 }
 
-std::optional<std::string> read_dictionary_entry(const RocksDatabase& db,
+Dictionary::Dictionary(const IndexDatabase& db) {
+    const auto prefix = dict_prefix();
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::DICT, prefix,
+        [&](std::string_view key, std::string_view body) {
+            const std::uint32_t id = entry_id(prefix, key);
+            auto [at, inserted] = entries_.try_emplace(id, body);
+            if (!inserted && at->second != body)
+                throw_conflict(id, at->second, body);
+            return true;
+        });
+}
+
+const std::string* Dictionary::find(std::uint32_t id) const {
+    auto at = entries_.find(id);
+    return at == entries_.end() ? nullptr : &at->second;
+}
+
+std::optional<std::string> read_dictionary_entry(const IndexDatabase& db,
                                                  std::uint32_t id) {
-    std::string value;
-    auto status = db.get(dict_key(id), &value, cf::BLOB);
-    if (status.IsNotFound()) return std::nullopt;
-    check(status, "aggregation dictionary read", db);
-    const auto body =
-        layout::payload(value, layout::Ext::Agg, layout::agg_kind::DICT);
-    if (!body) return std::nullopt;
-    return std::string(*body);
-}
-
-void flush_dictionary(index::store::IndexWrite& w, AggInternTable& table) {
-    flush_entries(table, [&w](std::string_view key, std::string_view value) {
-        w.put(layout::Family::Blob, key, value);
-    });
-}
-
-void flush_dictionary(RocksDatabase& db, AggInternTable& table) {
-    auto batch = db.begin_batch();
-    flush_entries(table, [&](std::string_view key, std::string_view value) {
-        db.put(batch, cf::BLOB, key, value);
-    });
-    check(db.commit_batch(batch), "aggregation dictionary write", db);
-}
-
-void clear(RocksDatabase& db) {
-    const std::string all_end(32, '\xFF');
-    auto batch = db.begin_batch();
-    db.delete_range(batch, cf::SYSTEM_METRICS, std::string_view(), all_end);
-    for (const std::uint8_t kind :
-         {layout::agg_kind::PARTIAL, layout::agg_kind::META,
-          layout::agg_kind::DICT}) {
-        const auto begin = layout::kind_prefix(layout::Ext::Agg, kind);
-        db.delete_range(batch, cf::BLOB, begin, layout::prefix_end(begin));
-    }
-    const auto prefix =
-        layout::kind_prefix(layout::Ext::Host, layout::host::MANIFEST);
-    const std::size_t agg_entry = prefix.size() + 4 + 2;
-    index::store::internal::scan_prefix_iterator(
-        "aggregation manifest scan", prefix,
-        [&] { return db.new_iterator(cf::DEFAULT); },
-        [&](::rocksdb::Iterator& it) {
-            const std::string_view key(it.key().data(), it.key().size());
-            if (key.size() == agg_entry &&
-                layout::read_u16(key.substr(prefix.size() + 4)) ==
-                    static_cast<std::uint16_t>(layout::Ext::Agg))
-                db.del(batch, cf::DEFAULT, key);
+    const auto prefix = dict_prefix();
+    std::optional<std::string> out;
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::DICT, prefix,
+        [&](std::string_view key, std::string_view body) {
+            if (entry_id(prefix, key) != id) return true;
+            out = std::string(body);
+            return false;
         });
-    check(db.commit_batch(batch), "aggregation tier clear", db);
-    intern_for_index(db.path())->flushed_entries.store(
-        0, std::memory_order_relaxed);
+    return out;
 }
 
-void compact(RocksDatabase& db) { db.compact(cf::SYSTEM_METRICS); }
+void clear(IndexDatabase& db) {
+    const auto file_ids = AggRowReader::file_ids(db);
+    auto write = db.begin_write();
+    for (const std::uint32_t file_id : file_ids)
+        index::store::records::clear_file(*write, layout::Ext::Agg,
+                                          static_cast<int>(file_id));
+    for (const std::string_view name : META_NAMES)
+        index::store::records::del_agg_meta(*write, name);
+    write->commit();
+}
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier

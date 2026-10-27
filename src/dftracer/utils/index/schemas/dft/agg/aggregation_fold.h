@@ -136,13 +136,14 @@ class PodAccessor {
     const dftracer::utils::dstd::StringIntern& intern_;
 };
 
-/// Builds the system metric rows and the chunk partials of a file (when the
-/// fold has a file id) as a fold on the fused scan, so it rides the same single
-/// parse as BloomFold / DictFold. `build_intern` is the fused-scan intern that
-/// produced the events (resolves the POD's ids); `agg_intern` is the per-index
-/// aggregation intern table whose ids the partial keys embed. write emits the
-/// system merge operands, the partials and the intern dictionary; the tracker
-/// and time-bound outputs are returned out-of-band.
+/// Builds the system metric rows, the chunk partials and the dictionary
+/// entries they use for a file (when the fold has a file id) as a fold on the
+/// fused scan, so it rides the same single parse as BloomFold / DictFold.
+/// `build_intern` is the fused-scan intern that produced the events (resolves
+/// the POD's ids); `agg_intern` is the per-index aggregation intern table
+/// whose ids the partial keys embed. write emits the system rows, the
+/// partials, the dictionary entries the partials reference and the file's
+/// manifest; the tracker and time-bound outputs are returned out-of-band.
 class AggregationFold : public trace::views::detail::Fold {
    public:
     AggregationFold(dftracer::utils::dstd::StringIntern& build_intern,
@@ -196,9 +197,9 @@ class AggregationFold : public trace::views::detail::Fold {
         co_return false;
     }
 
-    /// Emit the accumulated system-metrics merge operands, the partials and the
-    /// intern dictionary into `w`, with the dftracer.agg manifest entry of the
-    /// fold's file when it has one.
+    /// Emit the accumulated system metric rows, the partials and the
+    /// dictionary entries the partials reference into `w`, with the
+    /// dftracer.agg manifest entry of the fold's file when it has one.
     void write(index::store::IndexWrite& w);
 
     std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
@@ -300,6 +301,9 @@ class AggregationFold : public trace::views::detail::Fold {
         arg_ids_;
     dftracer::utils::dstd::Vector<std::uint8_t> arena_;
     dftracer::utils::dstd::Vector<Closed> closed_;
+    /// Every dictionary id the partials of this file reference, duplicates
+    /// included; cleared once they are written.
+    dftracer::utils::dstd::Vector<std::uint32_t> referenced_;
 };
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

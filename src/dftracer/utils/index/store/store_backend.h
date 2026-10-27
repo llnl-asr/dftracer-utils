@@ -172,10 +172,6 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
 
     void put(layout::Family family, std::string_view key,
              std::string_view value) override;
-    /// Throws std::runtime_error: the aggregation tier writes through the
-    /// store in a later step.
-    void merge(layout::Family family, std::string_view key,
-               std::string_view operand) override;
     void delete_range(layout::Family family, std::string_view begin,
                       std::string_view end) override;
     void del(layout::Family family, std::string_view key) override;
@@ -200,6 +196,10 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     struct PendingCopy {
         std::string name;
         std::uint32_t version = 0;
+        /// The namespace belongs to one plugin or one aggregation record, so
+        /// its version is the one the store declares, not a fixed one.
+        bool own_namespace = false;
+        /// The copy holds a plugin extension.
         bool plugin = false;
         kv::ScopeKey scope;
         std::uint64_t params_hash = 0;
@@ -212,14 +212,14 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     explicit StoreIndexWrite(std::shared_ptr<StoreRoot> root);
 
     PendingCopy& pending_copy(layout::Ext ext, std::uint32_t file_id,
-                              std::string_view plugin);
+                              std::string_view plugin, std::string_view meta);
     kv::ScopeKey scope_of(std::uint32_t file_id);
     std::string namespace_of(const store_layout::KeyTarget& target) const;
     void host_put(const store_layout::HostTarget& target,
                   std::string_view value);
     void host_delete(const store_layout::HostTarget& target);
     void clear_copy(layout::Ext ext, std::uint32_t file_id,
-                    std::string_view plugin);
+                    std::string_view plugin, std::string_view meta = {});
     /// Clears the copy of every plugin namespace of one file, in name order.
     void clear_plugin_copies(std::uint32_t file_id);
     static void clear_pending(PendingCopy& copy);
@@ -238,6 +238,7 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     layout::Ext last_ext_ = layout::Ext::Host;
     std::uint32_t last_file_id_ = 0;
     std::string last_plugin_;
+    std::string last_meta_;
     bool committed_ = false;
 };
 

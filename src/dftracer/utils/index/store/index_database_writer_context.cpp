@@ -28,14 +28,6 @@ void IndexDatabaseWriterContext::put(layout::Family family,
     if (!status.ok()) internal::throw_db_error("Failed to stage put", status);
 }
 
-void IndexDatabaseWriterContext::merge(layout::Family family,
-                                       std::string_view key,
-                                       std::string_view operand) {
-    note_bytes(key.size() + operand.size());
-    auto status = db_->merge(batch_, layout::family_name(family), key, operand);
-    if (!status.ok()) internal::throw_db_error("Failed to stage merge", status);
-}
-
 void IndexDatabaseWriterContext::delete_range(layout::Family family,
                                               std::string_view begin,
                                               std::string_view end) {

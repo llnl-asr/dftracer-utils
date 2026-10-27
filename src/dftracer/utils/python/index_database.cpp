@@ -154,9 +154,8 @@ static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
     const auto config = dftracer::utils::python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
             dftracer::utils::index::schemas::dft::agg::tier::write_config(
-                *self->db->db(),
-                {config.time_interval_us, config.params_hash(),
-                 config.group_by_file, config.extra_group_keys});
+                *self->db, {config.time_interval_us, config.params_hash(),
+                            config.group_by_file, config.extra_group_keys});
         }))
         return NULL;
     Py_RETURN_NONE;
@@ -197,7 +196,7 @@ static PyObject *IndexDatabase_write_aggregation_tracker(
                 unified.merge(AssociationTracker::deserialize(b));
             unified.finalize();
             dftracer::utils::index::schemas::dft::agg::tier::write_tracker(
-                *self->db->db(), unified.serialize());
+                *self->db, unified.serialize());
         }))
         return NULL;
     Py_RETURN_NONE;

@@ -575,7 +575,7 @@ std::size_t partial_count(const Fixture& fx) {
             db.get_file_info_id(index::store::internal::get_logical_path(f));
         REQUIRE(fid >= 0);
         agg::tier::for_each_partial(
-            *db.db(), fid,
+            db, fid,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                 std::uint32_t, agg::PartialKind,
                 std::span<const std::uint8_t>) {

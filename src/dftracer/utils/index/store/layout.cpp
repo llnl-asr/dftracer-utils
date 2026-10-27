@@ -9,7 +9,7 @@ namespace dftracer::utils::index::store::layout {
 
 namespace {
 
-constexpr std::array<KindSpec, 26> KINDS = {{
+constexpr std::array<KindSpec, 27> KINDS = {{
     {Ext::Members, members::MEMBER, Family::Members},
     {Ext::Members, members::METADATA, Family::Registry},
     {Ext::Members, members::RESTART, Family::Blob},
@@ -36,6 +36,7 @@ constexpr std::array<KindSpec, 26> KINDS = {{
     {Ext::Agg, agg_kind::PARTIAL, Family::Blob},
     {Ext::Agg, agg_kind::META, Family::Blob},
     {Ext::Agg, agg_kind::DICT, Family::Blob},
+    {Ext::Agg, agg_kind::SYSTEM, Family::SystemMetrics},
 }};
 
 constexpr std::uint8_t PAYLOAD_VERSION = 0;

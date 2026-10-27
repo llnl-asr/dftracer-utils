@@ -243,22 +243,23 @@ std::size_t merge_shard_set(const std::string& root,
         dftracer::utils::index::store::IndexDatabase out_db(
             out_idx, dftracer::utils::index::store::IndexOpenMode::ReadWrite);
         out_db.init_schema();
-        auto out = out_db.db();
 
         for (const auto& shard : manifest->shards) {
             if (shard.empty()) continue;
             const std::string idx = (fs::path(root) / shard.path).string();
             dftracer::utils::index::store::IndexDatabase sdb(
                 idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            // The shard's file records are copied whole, which the shard's
+            // own RocksDB handle iterates.
             auto s = sdb.db();
 
             agg::AggInternTable shard_intern;
-            agg::tier::load_dictionary(*s, shard_intern);
+            agg::tier::load_dictionary(sdb, shard_intern);
 
-            if (auto shard_config = agg::tier::read_config(*s)) {
+            if (auto shard_config = agg::tier::read_config(sdb)) {
                 if (!config) {
                     config = shard_config;
-                    agg::tier::write_config(*out, *config);
+                    agg::tier::write_config(out_db, *config);
                 } else if (config->params_hash != shard_config->params_hash) {
                     throw DFTUtilsException(
                         ErrorCode::InvalidArgument,
@@ -266,20 +267,6 @@ std::size_t merge_shard_set(const std::string& root,
                             " was aggregated with another config than the "
                             "first shard");
                 }
-            }
-
-            // System metrics keys carry raw hhash/name, so their rows copy
-            // verbatim and the merge operator combines the ones that recur
-            // across shards.
-            {
-                agg::tier::Writer w(*out);
-                agg::tier::for_each_system_row(
-                    *s, 0, agg::AGG_KEY_NUM_SHARDS,
-                    [&w](std::string_view key, std::string_view value) {
-                        w.merge_system_row(key, value);
-                        return true;
-                    });
-                w.finish();
             }
 
             // Each shard numbers its files from the start, so a file takes
@@ -316,6 +303,21 @@ std::size_t merge_shard_set(const std::string& root,
                 write->commit();
             }
 
+            // System metrics keys carry raw hhash/name, so a file's rows copy
+            // verbatim under its new id.
+            {
+                auto write = out_db.begin_write();
+                for (const auto& [old_id, new_id] : remap)
+                    agg::tier::for_each_system_row(
+                        sdb, old_id,
+                        [&](std::string_view key, std::string_view value) {
+                            dftracer::utils::index::store::records::
+                                put_agg_system_row(*write, new_id, key, value);
+                            return true;
+                        });
+                write->commit();
+            }
+
             // The dftracer.agg entry of a file follows its new id.
             if (config) {
                 std::vector<int> aggregated;
@@ -329,7 +331,7 @@ std::size_t merge_shard_set(const std::string& root,
                         aggregated_old.push_back(id);
                     }
                 }
-                agg::tier::put_files(*out, aggregated, config->params_hash);
+                agg::tier::put_files(out_db, aggregated, config->params_hash);
 
                 // The partials carry dictionary ids in their cat, name, host,
                 // extra and arg keys; pid, tid and file hashes inside are raw.
@@ -340,7 +342,7 @@ std::size_t merge_shard_set(const std::string& root,
                 for (const int old_id : aggregated_old) {
                     const int new_id = remap[old_id];
                     agg::tier::for_each_partial(
-                        *s, old_id,
+                        sdb, old_id,
                         [&](std::uint32_t chunk, std::uint32_t cat,
                             std::uint32_t name, std::uint32_t host,
                             std::uint32_t extra, agg::PartialKind kind,
@@ -388,15 +390,23 @@ std::size_t merge_shard_set(const std::string& root,
                                                 new_name, new_host, new_extra,
                                                 static_cast<std::uint8_t>(kind),
                                                 payload);
+                            for (const std::uint32_t id :
+                                 {new_cat, new_name, new_host, new_extra})
+                                dftracer::utils::index::store::records::
+                                    put_agg_dictionary_entry(
+                                        *write, new_id, id,
+                                        out_intern.intern.resolve(id));
+                            for (const auto& a : parsed->args)
+                                dftracer::utils::index::store::records::
+                                    put_agg_dictionary_entry(
+                                        *write, new_id, a.id,
+                                        out_intern.intern.resolve(a.id));
                             return true;
                         });
                 }
                 write->commit();
             }
         }
-
-        agg::tier::flush_dictionary(*out, out_intern);
-        agg::tier::compact(*out);
     }
 
     write_shard_set(out_root, {out_idx});

@@ -43,8 +43,6 @@ set(ALLOWED
   "index/gzip/gzip_indexer.h|index/build/index_visitor.h"
   "index/gzip/checkpoint_indexer.h|index/build/index_visitor.h"
   "index/schemas/dft/bloom_core.h|index/build/chunk_indexer.h"
-  "index/store/index_database.cpp|index/schemas/dft/agg/system_metrics_merge_operator.h"
-  "index/store/index_database_sst_writer_context.cpp|index/schemas/dft/agg/system_metrics_merge_operator.h"
   "index/store/index_write.h|index/gzip/gzip_member_record.h"
   "index/store/index_write.h|index/schemas/dft/chunk_statistics.h"
   # the store backend is the write seam of the key-value store

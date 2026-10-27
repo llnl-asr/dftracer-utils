@@ -47,6 +47,12 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     static std::shared_ptr<StoreRoot> get_or_open(
         const std::string& index_root);
 
+    /// Closes the writer of every root this process holds, as close() does.
+    /// Runs while the runtime the writers wait on still runs, so a root that
+    /// dies later has nothing left to wait for. Returns the first error; every
+    /// root is closed either way.
+    static std::optional<std::string> close_all();
+
     /// Closes the writer, as close() does; a destructor cannot report the
     /// store error close() throws.
     ~StoreRoot();
@@ -82,6 +88,11 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// flight; a later write opens a new writer. Throws std::runtime_error on
     /// a store error.
     void close();
+
+    /// Drops the snapshot, so the next read sees the data files other
+    /// processes wrote since, and binds an id to each file path they added,
+    /// after the ids bound so far. An id this root handed out never changes.
+    void refresh();
 
     /// One write over this root. Nothing it buffers is visible until its
     /// commit().

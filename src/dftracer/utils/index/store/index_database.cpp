@@ -960,6 +960,13 @@ class RetainedStoreRoots {
 };
 }  // namespace
 
+void close_index_writers() {
+    if (const auto error = StoreRoot::close_all()) {
+        DFTRACER_UTILS_LOG_ERROR("store index: close at exit: %s",
+                                 error->c_str());
+    }
+}
+
 std::uint64_t IndexDatabase::read_write_opens() noexcept {
     return read_write_open_count.load(std::memory_order_relaxed);
 }
@@ -1080,6 +1087,14 @@ int IndexDatabase::reserve_file_id_range(std::size_t count) {
         next_file_id_value(first + static_cast<std::uint32_t>(count)));
     if (!status.ok()) throw_db_error("Failed to advance next file id", status);
     return static_cast<int>(first);
+}
+
+void IndexDatabase::close_writer() {
+    if (impl_->on_store()) impl_->store_->close();
+}
+
+void IndexDatabase::refresh() {
+    if (impl_->on_store()) impl_->store_->refresh();
 }
 
 void IndexDatabase::init_schema() {

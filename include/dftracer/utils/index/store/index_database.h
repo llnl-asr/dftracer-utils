@@ -56,6 +56,12 @@ const char* column_type_name(ColumnType t);
 /// surface over one on-disk `.dftindex`. The backend that holds it, RocksDB or
 /// the store, and all mutable state live behind an opaque `Impl`. Reads are
 /// `const`; a `const IndexDatabase&` is therefore a read-only handle.
+/// Closes the store writer of every index this process holds, so each data
+/// file is complete. Call it at process exit while the runtime still runs: a
+/// writer left open then waits on stopped threads. Logs a close that fails.
+/// Nothing to do on RocksDB.
+void close_index_writers();
+
 class IndexDatabase {
    public:
     /// On-disk layout version. An index with another stored version is
@@ -284,6 +290,18 @@ class IndexDatabase {
     /// Writes the format version and extension registry when absent; does
     /// nothing when the store holds the index.
     void init_schema();
+
+    /// The store: closes this process's writer of the index, so its data file
+    /// is complete for other processes, and a later write opens a new writer
+    /// that sees every generation written so far. RocksDB: nothing to do.
+    /// Throws std::runtime_error on a store error.
+    void close_writer();
+
+    /// The store: later reads through any handle of this index in this
+    /// process see the data files other processes wrote since. File ids
+    /// handed out so far keep their paths. RocksDB: nothing to do, since an
+    /// open handle sees every write.
+    void refresh();
 
     /// Read-write opens of an index store by this process so far; each runs
     /// init_schema.

@@ -1113,12 +1113,18 @@ def distributed_index(
       5. Collect artifact dicts into an SstArtifactRegistry; the coordinator
          ingests them in one atomic bulk_ingest.
 
+    On the store backend (``index_backend() == "store"``) each worker writes
+    the index directly and numbers its own files, files are not split across
+    workers, and nothing is staged or ingested: the staging arguments are
+    unused. The coordinator writes the aggregation config and trackers, then
+    refreshes its view of the index.
+
     Args:
         directory: Directory containing trace files.
         files: Explicit file list (alternative to directory).
         index_path: Target .dftindex path (coordinator-writable).
         local_staging: Per-worker SST build dir. If equal to shared_staging,
-            no post-build move.
+            no post-build move. Required on RocksDB only.
         shared_staging: Shared FS dir the coordinator reads SSTs from during
             ingest. Must be on the same filesystem as index_path for the
             cheapest ingest.
@@ -1138,7 +1144,10 @@ def distributed_index(
     checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
     if not index_path:
         raise ValueError("index_path is required")
-    if not local_staging:
+    from .dftracer_utils_ext import index_backend as _index_backend
+
+    on_store = _index_backend() == "store"
+    if not on_store and not local_staging:
         raise ValueError("local_staging is required")
     if not shared_staging:
         shared_staging = local_staging
@@ -1155,6 +1164,9 @@ def distributed_index(
     )
     from .dftracer_utils_ext import (
         enumerate_gzip_members as _enumerate_gzip_members,
+    )
+    from .dftracer_utils_ext import (
+        plan_lpt_partition as _plan_lpt_partition,
     )
     from .dftracer_utils_ext import (
         plan_work_units as _plan_work_units,
@@ -1230,7 +1242,9 @@ def distributed_index(
     _log.info("distributed_index: opening IndexDatabase at %s", index_path)
     db = _IndexDatabase(index_path)
     db.init_schema()
-    all_file_ids = db.assign_file_ids(all_paths)
+    # On the store a file id is a label inside one process: each worker
+    # numbers its own files.
+    all_file_ids = [0] * len(all_paths) if on_store else db.assign_file_ids(all_paths)
     _log.info(
         "distributed_index: assign_file_ids done (%d files, %.1fs)",
         len(all_paths),
@@ -1242,7 +1256,10 @@ def distributed_index(
     #    coordinator stitches into the full map.
     _t2 = _time.monotonic()
     member_map: List[List[Tuple[int, int]]] = [[] for _ in range(len(entries))]
-    if client is None:
+    if on_store:
+        # Whole files only, so no member map is needed.
+        member_map = [[] for _ in all_paths]
+    elif client is None:
         member_map = list(_enumerate_gzip_members(all_paths, None))
     else:
         worker_addrs = list(client.nthreads().keys())
@@ -1271,7 +1288,15 @@ def distributed_index(
 
     # 4. PLAN: deterministic LPT of work units across workers (mirrors MPI).
     _t3 = _time.monotonic()
-    if partition == "lpt":
+    if on_store:
+        # One unit per whole file, bin-packed by size: a file split across
+        # workers would be two copies of its scope on the store.
+        path_index = {p: i for i, p in enumerate(all_paths)}
+        per_worker_units = [
+            [(path_index[p], 0, 1, int(sz)) for (p, sz) in bucket]
+            for bucket in _plan_lpt_partition(list(entries), n_workers)
+        ]
+    elif partition == "lpt":
         per_worker_units = _plan_work_units(member_map, n_workers, 0)
     elif partition == "round_robin":
         # Whole-file fallback for round_robin (no intra-file slicing).
@@ -1290,8 +1315,9 @@ def distributed_index(
     # 5. BUILD: each worker receives its (paths, file_ids, file_slices)
     #    parallel lists. A file split across workers appears once per slice.
     index_dir = os.path.dirname(index_path.rstrip("/"))
-    os.makedirs(local_staging, exist_ok=True)
-    os.makedirs(shared_staging, exist_ok=True)
+    if not on_store:
+        os.makedirs(local_staging, exist_ok=True)
+        os.makedirs(shared_staging, exist_ok=True)
 
     worker_file_lists: List[List[str]] = []
     worker_file_ids: List[List[int]] = []
@@ -1303,6 +1329,9 @@ def distributed_index(
         for file_idx, mb, me, _csz in units:
             paths_w.append(all_paths[file_idx])
             ids_w.append(int(all_file_ids[file_idx]))
+            if on_store:
+                slices_w.append(None)
+                continue
             members = member_map[file_idx] or [(0, 0)]
             # Clamp [mb, me) into the actual member vector. plan_work_units
             # may have synthesised a single (0, 0) for a non-gzip file; in
@@ -1418,17 +1447,19 @@ def distributed_index(
     # bulk_ingest is a single coordinator call with no granular counter yet, so
     # report it as an indeterminate labelled phase.
     _t_ingest = _time.monotonic()
-    if progress is not None:
-        progress(0, 0, "Ingesting SSTs")
-    db.bulk_ingest(registry)
-    if progress is not None:
-        progress(1, 1, "Ingesting SSTs")
+    if not on_store:
+        if progress is not None:
+            progress(0, 0, "Ingesting SSTs")
+        db.bulk_ingest(registry)
+        if progress is not None:
+            progress(1, 1, "Ingesting SSTs")
     _log.info(
         "distributed_index: bulk_ingest done in %.1fs (%d artifacts)",
         _time.monotonic() - _t_ingest,
         total_artifacts,
     )
-    if aggregation_config is not None and total_artifacts:
+    built = bool(worker_ids) if on_store else total_artifacts > 0
+    if aggregation_config is not None and built:
         _t_meta = _time.monotonic()
         db.write_agg_config(aggregation_config)
         if tracker_blobs:
@@ -1439,8 +1470,14 @@ def distributed_index(
             len(tracker_blobs),
         )
 
+    # The coordinator's own writes end in a complete data file, and reads in
+    # this process see what the workers wrote; on the store the workers wrote
+    # from other processes.
+    db.close_writer()
+    db.refresh()
+
     stale = []
-    for w in worker_ids:
+    for w in [] if on_store else worker_ids:
         stale.append((w, os.path.join(local_staging, f"worker_{w}")))
         if shared_staging and shared_staging != local_staging:
             stale.append((w, os.path.join(shared_staging, f"worker_{w}")))
@@ -1464,7 +1501,8 @@ def distributed_index(
         for _w, path in stale:
             _rmtree_quiet(path)
 
-    per_worker_file_counts = [len(set(ids)) for ids in worker_file_ids]
+    # A file split across slices appears once per slice in its worker's list.
+    per_worker_file_counts = [len(set(paths)) for paths in worker_file_lists]
     return {
         "total_files": n_total_files,
         "per_worker": per_worker_file_counts,

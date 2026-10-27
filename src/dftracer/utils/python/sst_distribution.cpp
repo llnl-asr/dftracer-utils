@@ -5,6 +5,8 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
+#include <dftracer/utils/index/store/index_backend.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -536,6 +538,27 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         Py_DECREF(seq);
     }
 
+    // The store takes each worker's writes directly: no staged SSTs, and the
+    // worker numbers its own files, since a file id is a label inside one
+    // process there. A slice would be a second copy of its file's scope, so
+    // the store builds whole files only.
+    const bool on_store = dftracer::utils::index::store::index_backend() ==
+                          dftracer::utils::index::store::IndexBackend::Store;
+    if (on_store) {
+        for (std::size_t i = 0; i < parsed_slices.size(); ++i) {
+            const auto &slice = parsed_slices[i];
+            if (slice.members != nullptr &&
+                (slice.skip_file_scoped_writes || slice.member_begin != 0 ||
+                 slice.member_end < slice.members->size())) {
+                PyErr_SetString(PyExc_ValueError,
+                                "the store index builds whole files only");
+                return NULL;
+            }
+        }
+        parsed_slices.clear();
+        file_ids.clear();
+    }
+
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(files);
     batch_config->preassigned_file_ids = std::move(file_ids);
@@ -597,22 +620,32 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
 
     // Atomic: write phase calls sink_factory from N coroutines concurrently.
     auto batch_counter = std::make_shared<std::atomic<std::size_t>>(0);
-    batch_config->sink_factory =
-        [staging, batch, batch_counter]() -> std::unique_ptr<IndexWrite> {
-        const std::size_t idx =
-            batch_counter->fetch_add(1, std::memory_order_relaxed);
-        std::string sub_batch = batch + "_" + std::to_string(idx);
-        return std::make_unique<IndexDatabaseSstWriterContext>(staging,
-                                                               sub_batch);
-    };
-    batch_config->sink_commit = [artifacts](IndexWrite &sink) {
-        auto &sst = static_cast<IndexDatabaseSstWriterContext &>(sink);
-        auto batch_artifacts = sst.commit();
-        std::lock_guard<std::mutex> lock(artifacts->mu);
-        if (!batch_artifacts.empty()) {
-            artifacts->list.push_back(std::move(batch_artifacts));
-        }
-    };
+    if (!on_store) {
+        batch_config->sink_factory =
+            [staging, batch, batch_counter]() -> std::unique_ptr<IndexWrite> {
+            const std::size_t idx =
+                batch_counter->fetch_add(1, std::memory_order_relaxed);
+            std::string sub_batch = batch + "_" + std::to_string(idx);
+            return std::make_unique<IndexDatabaseSstWriterContext>(staging,
+                                                                   sub_batch);
+        };
+        batch_config->sink_commit = [artifacts](IndexWrite &sink) {
+            auto &sst = static_cast<IndexDatabaseSstWriterContext &>(sink);
+            auto batch_artifacts = sst.commit();
+            std::lock_guard<std::mutex> lock(artifacts->mu);
+            if (!batch_artifacts.empty()) {
+                artifacts->list.push_back(std::move(batch_artifacts));
+            }
+        };
+    }
+    // Held across the build, so the builder shares this process's writer of
+    // the index, which then closes and leaves a complete data file.
+    std::optional<dftracer::utils::index::store::IndexDatabase> store_db;
+    if (on_store) {
+        store_db.emplace(index_dir);
+        // A worker process may hold this index from an earlier task.
+        store_db->refresh();
+    }
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
@@ -628,6 +661,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
                            batch_config, &result),
                        "build-sst-batch")
                 .get();
+            if (store_db) store_db->close_writer();
         })) {
         return NULL;
     }
@@ -687,6 +721,14 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     Py_DECREF(out_list);
     Py_DECREF(tracker_bytes);
     return ret;
+}
+
+static PyObject *index_backend_fn(PyObject * /*self*/, PyObject * /*args*/) {
+    using dftracer::utils::index::store::IndexBackend;
+    return PyUnicode_FromString(
+        dftracer::utils::index::store::index_backend() == IndexBackend::Store
+            ? dftracer::utils::constants::indexer::INDEX_BACKEND_STORE
+            : dftracer::utils::constants::indexer::INDEX_BACKEND_ROCKSDB);
 }
 
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
@@ -985,7 +1027,10 @@ static PyMethodDef SstDistributionMethods[] = {
      "Run the indexer pipeline with an SST sink and return "
      "(artifact_dicts, tracker_blob). The tracker blob is the serialized "
      "merged AssociationTracker from this batch's aggregation visitors "
-     "(empty bytes when no aggregation_config was passed)."},
+     "(empty bytes when no aggregation_config was passed). On the store "
+     "backend the batch writes the index itself and returns no artifacts: "
+     "file_ids are not used, staging_dir is unused, and file_slices must "
+     "name whole files."},
     {"plan_lpt_partition", DFTU_PYCFUNCTION(plan_lpt_partition_fn),
      METH_VARARGS,
      "plan_lpt_partition(entries, num_workers) -> list[list[(path, size)]]\n"
@@ -998,6 +1043,10 @@ static PyMethodDef SstDistributionMethods[] = {
      "-> list[(path, size)]\n"
      "Parallel directory scan returning (path, size) tuples for regular "
      "files matching the patterns."},
+    {"index_backend", DFTU_PYCFUNCTION(index_backend_fn), METH_NOARGS,
+     "index_backend() -> str\n"
+     "The backend that holds the indexes this process opens: \"rocksdb\" or "
+     "\"store\", as DFTRACER_UTILS_INDEX_BACKEND chose it."},
     {"enable_aggregation_deterministic_ids",
      DFTU_PYCFUNCTION(enable_aggregation_deterministic_ids_fn), METH_NOARGS,
      "enable_aggregation_deterministic_ids() -> None\n"

@@ -17,6 +17,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/error.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -619,7 +620,9 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto admission = std::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
-    if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit))
+    // A spilled file is a run of SSTs to ingest, which the store cannot take.
+    if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit) &&
+        index::store::index_backend() == index::store::IndexBackend::RocksDb)
         admission->spill_root = state->spill_dir.empty()
                                     ? state->index_path + ".spill"
                                     : state->spill_dir;

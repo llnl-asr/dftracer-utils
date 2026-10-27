@@ -156,6 +156,39 @@ TEST_SUITE("DFTracerIndex") {
                                  "--stats-share", "1.5"}) != 0);
     }
 
+    TEST_CASE("a later run reads the index back and builds only new files") {
+        auto binary = find_index_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_index binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        REQUIRE(!create_pfw_gz(env, 100, 0).empty());
+        REQUIRE(!create_pfw_gz(env, 150, 1).empty());
+
+        dftu_utils_test::set_test_library_path(binary);
+        const auto run = [&binary, &env](std::size_t processed,
+                                         std::size_t skipped) {
+            int rc = -1;
+            const std::string out = dftu_utils_test::run_process_capture(
+                binary, {"-d", env.get_dir()}, true, &rc);
+            INFO(out);
+            CHECK(rc == 0);
+            CHECK(out.find("Files processed: " + std::to_string(processed) +
+                           "\n") != std::string::npos);
+            CHECK(out.find("Files skipped: " + std::to_string(skipped) +
+                           "\n") != std::string::npos);
+        };
+        run(2, 0);
+        // Each run is its own process, so the second one learns the two
+        // files from the index the first one wrote.
+        run(0, 2);
+        REQUIRE(!create_pfw_gz(env, 120, 2).empty());
+        run(1, 2);
+    }
+
     TEST_CASE("a plain trace makes the run fail and names the file") {
         auto binary = find_index_binary();
         if (binary.empty()) {

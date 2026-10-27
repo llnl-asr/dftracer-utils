@@ -719,6 +719,12 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_index")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>")
+    # The same runs with the index on the store backend.
+    add_test(NAME "${bin_exec}[store]" COMMAND ${target_name})
+    set_tests_properties("${bin_exec}[store]" PROPERTIES
+      TIMEOUT ${integration_test_timeout}
+      ENVIRONMENT
+      "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>;DFTRACER_UTILS_INDEX_BACKEND=store")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_gen_dlio_config")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>")

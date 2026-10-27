@@ -17,6 +17,7 @@ except ImportError:
 
 from dftracer.utils import AggregationConfig, Indexer, TraceViewer
 from dftracer.utils.dask import distributed_index
+from dftracer.utils.dftracer_utils_ext import index_backend
 
 from .common import Environment
 
@@ -166,8 +167,37 @@ class TestDistributedWithDask:
                     aggregation_config=AGG_CFG,
                 )
                 assert result["total_files"] == len(files)
-                assert result["artifact_batches"] > 0
+                # The store takes the workers' writes directly: nothing staged.
+                if index_backend() == "store":
+                    assert result["artifact_batches"] == 0
+                else:
+                    assert result["artifact_batches"] > 0
                 assert not os.path.exists(os.path.join(index_path, "agg_manifest.json"))
+
+                # The coordinator process reads back what the worker processes
+                # wrote, and it matches a serial build.
+                status = Indexer(
+                    files=files,
+                    index_dir=index_dir,
+                    require_checkpoint=True,
+                    require_bloom=True,
+                    require_aggregation=AGG_CFG,
+                    force_rebuild=False,
+                ).ensure_indexed()
+                assert len(status.ready) == len(files)
+                assert len(status.needs_work) == 0
+
+                serial_dir = os.path.join(env.temp_dir, "idx_serial")
+                os.makedirs(serial_dir, exist_ok=True)
+                Indexer(
+                    files=files,
+                    index_dir=serial_dir,
+                    require_aggregation=AGG_CFG,
+                    force_rebuild=True,
+                ).ensure_indexed()
+                serial_count = _agg_event_count(files, serial_dir)
+                assert serial_count > 0
+                assert _agg_event_count(files, index_dir) == serial_count
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
@@ -196,7 +226,10 @@ class TestDistributedIndexIdempotent:
         with Environment(lines=50) as env:
             files, index_path, staging = self._setup(env, [1, 2])
             cold = self._run(files, index_path, staging)
-            assert cold["artifact_batches"] > 0
+            assert sum(cold["per_worker"]) == 2
+            # The store takes the workers' writes directly: nothing staged.
+            if index_backend() != "store":
+                assert cold["artifact_batches"] > 0
             warm = self._run(files, index_path, staging)
             assert warm["artifact_batches"] == 0
             assert warm["per_worker"] == []

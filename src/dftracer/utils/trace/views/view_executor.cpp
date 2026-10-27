@@ -25,6 +25,7 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -842,7 +843,10 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET)
+    // A spilled file is a run of SSTs to ingest, which the store cannot take.
+    if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET &&
+        dftracer::utils::index::store::index_backend() ==
+            dftracer::utils::index::store::IndexBackend::RocksDb)
         bloom.enable_spill(ticket.elastic_bytes(),
                            bootstrap_spill_root(f.index_path) + "/file_" +
                                std::to_string(file_id),

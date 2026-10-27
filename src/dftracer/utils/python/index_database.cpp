@@ -60,6 +60,26 @@ static PyObject *IndexDatabase_init_schema(IndexDatabaseObject *self,
     Py_RETURN_NONE;
 }
 
+static PyObject *IndexDatabase_close_writer(IndexDatabaseObject *self,
+                                            PyObject * /*ignored*/) {
+    if (!self->db) {
+        PyErr_SetString(PyExc_RuntimeError, "IndexDatabase not initialised");
+        return NULL;
+    }
+    if (!run_blocking([&] { self->db->close_writer(); })) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *IndexDatabase_refresh(IndexDatabaseObject *self,
+                                       PyObject * /*ignored*/) {
+    if (!self->db) {
+        PyErr_SetString(PyExc_RuntimeError, "IndexDatabase not initialised");
+        return NULL;
+    }
+    if (!run_blocking([&] { self->db->refresh(); })) return NULL;
+    Py_RETURN_NONE;
+}
+
 static PyObject *IndexDatabase_assign_file_ids(IndexDatabaseObject *self,
                                                PyObject *args, PyObject *kwds) {
     static const char *kwlist[] = {"paths", NULL};
@@ -249,6 +269,15 @@ static PyObject *IndexDatabase_find_stale_files(IndexDatabaseObject *self,
 static PyMethodDef IndexDatabase_methods[] = {
     {"init_schema", DFTU_PYCFUNCTION(IndexDatabase_init_schema), METH_NOARGS,
      "Idempotently write the format version and extension registry."},
+    {"close_writer", DFTU_PYCFUNCTION(IndexDatabase_close_writer), METH_NOARGS,
+     "close_writer() -> None\n"
+     "Store backend: close this process's writer of the index, so its data "
+     "file is complete for other processes; a later write opens a new one. "
+     "No-op on RocksDB."},
+    {"refresh", DFTU_PYCFUNCTION(IndexDatabase_refresh), METH_NOARGS,
+     "refresh() -> None\n"
+     "Store backend: later reads in this process see the data files other "
+     "processes wrote since. No-op on RocksDB."},
     {"assign_file_ids", DFTU_PYCFUNCTION(IndexDatabase_assign_file_ids),
      METH_VARARGS | METH_KEYWORDS,
      "assign_file_ids(paths) -> list[int]\n"

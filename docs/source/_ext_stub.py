@@ -456,6 +456,16 @@ def install_extension_stub() -> None:
         def init_schema(self) -> None:
             return None
 
+        def close_writer(self) -> None:
+            """Store backend: close this process's writer of the index, so its
+            data file is complete for other processes. No-op on RocksDB."""
+            return None
+
+        def refresh(self) -> None:
+            """Store backend: later reads in this process see the data files
+            other processes wrote since. No-op on RocksDB."""
+            return None
+
         def assign_file_ids(self, paths: list[str]) -> list[int]:
             """The file_id of each path (parallel to `paths`): its registered
             id, or a newly reserved one. The file record is written with the
@@ -597,6 +607,11 @@ def install_extension_stub() -> None:
         """Parallel directory scan returning (path, size) tuples for regular
         files matching the patterns."""
         return []
+
+    def index_backend() -> str:
+        """The backend that holds the indexes this process opens: "rocksdb"
+        or "store", as DFTRACER_UTILS_INDEX_BACKEND chose it."""
+        return "rocksdb"
 
     def enable_aggregation_deterministic_ids() -> None:
         """Flip the global aggregation StringIntern into deterministic-id mode

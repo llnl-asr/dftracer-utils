@@ -402,6 +402,8 @@ class IndexDatabase:
 
     def __init__(self, index_path: str) -> None: ...
     def init_schema(self) -> None: ...
+    def close_writer(self) -> None: ...
+    def refresh(self) -> None: ...
     def assign_file_ids(self, paths: List[str]) -> List[int]:
         """The file_id of each path (parallel to `paths`): its registered id,
         or a newly reserved one. The file record is written with the file's
@@ -1036,6 +1038,11 @@ def scan_files(
 ) -> List[Tuple[str, int]]:
     """Parallel directory scan returning (path, size) tuples for regular
     files matching the patterns."""
+    ...
+
+def index_backend() -> str:
+    """The backend that holds the indexes this process opens: "rocksdb" or
+    "store", as DFTRACER_UTILS_INDEX_BACKEND chose it."""
     ...
 
 def enable_aggregation_deterministic_ids() -> None:

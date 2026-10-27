@@ -1,6 +1,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -482,6 +483,8 @@ static PyMethodDef runtime_module_methods[] = {
 // scan can leave hundreds of SSTs open (more so on a networked filesystem),
 // and without this the process can appear to hang after the work is done.
 static void dftracer_utils_atexit_cleanup() {
+    // A store writer waits on the runtime to close, so it closes first.
+    dftracer::utils::index::store::close_index_writers();
     if (auto rt = dftracer::utils::peek_default_runtime()) {
         rt->shutdown();
     }

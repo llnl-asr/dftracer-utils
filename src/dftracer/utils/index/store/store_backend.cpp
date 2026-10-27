@@ -153,6 +153,26 @@ std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
     return created;
 }
 
+std::optional<std::string> StoreRoot::close_all() {
+    std::vector<std::shared_ptr<StoreRoot>> live;
+    {
+        std::lock_guard<std::mutex> lock(root_registry_mutex());
+        for (const auto& entry : root_registry()) {
+            if (auto root = entry.second.lock())
+                live.push_back(std::move(root));
+        }
+    }
+    std::optional<std::string> first;
+    for (const auto& root : live) {
+        try {
+            root->close();
+        } catch (const std::exception& error) {
+            if (!first) first = error.what();
+        }
+    }
+    return first;
+}
+
 StoreRoot::~StoreRoot() {
     memory::Scope in_pool(*pool_);
     // A destructor cannot report the store error close() throws.
@@ -248,11 +268,23 @@ void StoreRoot::seed_file_ids_locked() {
     }
     paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
     for (const std::string& path : paths) {
+        if (ids_by_path_.find(path) != ids_by_path_.end()) continue;
         const int id = next_file_id_++;
         ids_by_path_.emplace(path, id);
         paths_by_id_.emplace(id, path);
     }
     seeded_ = true;
+}
+
+void StoreRoot::refresh() {
+    memory::Scope in_pool(*pool_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++version_;
+    // A table never seeded binds every path on its first use anyway.
+    if (seeded_) {
+        seeded_ = false;
+        seed_file_ids_locked();
+    }
 }
 
 int StoreRoot::file_id_for(std::string_view logical_path) {

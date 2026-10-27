@@ -66,6 +66,15 @@ enum class ScopeState : std::uint8_t {
     Bad = 3
 };
 
+/// The current copy of one scope, read from the scope directories alone.
+struct CopyInfo {
+    ScopeState state = ScopeState::Absent;
+    std::uint64_t generation = 0;
+    std::uint64_t params_hash = 0;
+    /// Empty, or one per path of the scope in its path order.
+    dstd::Vector<SourceStat> sources;
+};
+
 /// The highest generation a scope has in one directory, over copies and drops.
 struct ScopeGeneration {
     dstd::String namespace_name;
@@ -331,6 +340,8 @@ struct CopyData {
     CopyState state = CopyState::Ready;
     /// The id of the copy in its file, which the segments of its commits name.
     std::uint32_t local_id = 0;
+    /// Empty, or one per path of its scope in scope path order.
+    dstd::Vector<SourceStat> sources;
     /// The commits holding a segment of this copy, oldest first. The copy is
     /// readable only once every one of them that is not synced has verified.
     dstd::Vector<CopyCommit> commits;
@@ -808,7 +819,16 @@ class Snapshot {
     dstd::Expected<dstd::Vector<ScopeGeneration>, dstd::Error> generations()
         const;
 
+    /// The state of the current copy of `scope`: the state of what `copy_info`
+    /// returns.
     ScopeState state(const NamespaceSpec& spec, const ScopeKey& scope) const;
+
+    /// The current copy of `scope`: its state, its generation, its params hash
+    /// and its sources, from the scope directories. No data page is read; for a
+    /// file that is not closed, the state verifies the blocks of the copy's
+    /// commits as Snapshot::state does. A scope with no copy, or a dropped one,
+    /// reads Absent, with the other fields of a CopyInfo default.
+    CopyInfo copy_info(const NamespaceSpec& spec, const ScopeKey& scope) const;
 
     /// The value of `key`, or an empty Optional when the scope is absent,
     /// Failed or Bad, when the key is absent, or when a drop hides it. The

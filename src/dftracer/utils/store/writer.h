@@ -121,7 +121,7 @@ class Batch {
     NamespaceId namespace_id_;
     ScopeKey scope_;
     std::uint64_t params_hash_ = 0;
-    dstd::Vector<ScopePath> signature_;
+    dstd::Vector<SourceStat> sources_;
     FoldKind fold_ = FoldKind::None;
     dstd::Optional<dstd::Error> error_;
     dstd::Vector<Entry> entries_;
@@ -158,12 +158,12 @@ class Writer {
     dstd::Expected<NamespaceId, dstd::Error> add_namespace(
         const NamespaceSpec& spec);
 
-    /// `scope_paths`, when given, holds one signature per path of `scope`; its
-    /// mtime, size and hash are stored with the scope. Without it they are
-    /// zero.
+    /// `sources`, when given, holds one signature per path of `scope`, in its
+    /// path order; it is stored with the copy this batch is the first to
+    /// announce. Without it the copy carries none.
     Batch batch(NamespaceId namespace_id, const ScopeKey& scope,
                 std::uint64_t params_hash,
-                const dstd::Vector<ScopePath>* scope_paths = nullptr);
+                const dstd::Vector<SourceStat>* sources = nullptr);
 
     /// InvalidArgument on a closed writer, an unknown namespace, an invalid
     /// batch, or a closed pool; the committer's error once it failed; and
@@ -171,6 +171,8 @@ class Writer {
     /// written. A Busy commit assigns no scope, copy or generation and leaves
     /// `batch` whole, so the caller retries it, waiting on space():
     /// `while (commit(std::move(b)) is Busy) co_await space();`
+    /// InvalidArgument also when a batch of a copy an earlier batch of this
+    /// writer announced passes another params hash or other sources.
     dstd::Expected<void, dstd::Error> commit(Batch&& batch);
     /// A copy in state Failed with no entries, under the next generation.
     dstd::Expected<void, dstd::Error> fail(NamespaceId namespace_id,
@@ -219,10 +221,17 @@ class Writer {
     /// The state of one copy of one scope. The namespace id and the scope id
     /// are the key of copies_.
     struct CopyEntry {
-        std::uint32_t copy_id = 0;
         std::uint64_t generation = 0;
         std::uint64_t highest_generation = 0;
+        /// The params hash and the sources of the first batch of this copy,
+        /// which the CopyItem it announces carries.
+        std::uint64_t params_hash = 0;
+        dstd::Vector<SourceStat> sources;
+        std::uint32_t copy_id = 0;
         bool live = false;
+        /// Whether a batch of this copy was seen, so its params hash and
+        /// sources are known.
+        bool announced = false;
     };
 
     /// Hashes a scope by kind and paths, so a lookup over any number of scopes

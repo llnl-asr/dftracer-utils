@@ -587,8 +587,8 @@ store::ScopeKey scope_key_of(const store::ScopeItem& item) {
     store::ScopeKey key;
     key.kind = item.kind;
     key.paths.reserve(item.paths.size());
-    for (const store::ScopePath& path : item.paths) {
-        key.paths.push_back(path.logical_path);
+    for (const dstd::String& path : item.paths) {
+        key.paths.push_back(path);
     }
     return key;
 }

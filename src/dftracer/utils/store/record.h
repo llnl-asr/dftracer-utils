@@ -33,17 +33,22 @@ struct NamespaceItem {
     std::uint8_t durable = 0;
 };
 
-struct ScopePath {
-    dstd::String logical_path;
+/// The signature of one trace file of a scope, so a later check can tell
+/// whether a stored copy still matches the trace files it was read from.
+struct SourceStat {
     std::uint64_t mtime = 0;
     std::uint64_t size = 0;
     std::uint64_t hash = 0;
 };
 
+/// The bytes one source stat takes where a record or a scope directory
+/// encodes it: three u64.
+inline constexpr std::size_t SOURCE_STAT_BYTES = 24;
+
 struct ScopeItem {
     std::uint32_t local_id = 0;
     ScopeKind kind = ScopeKind::Root;
-    dstd::Vector<ScopePath> paths;
+    dstd::Vector<dstd::String> paths;
 };
 
 struct CopyItem {
@@ -53,6 +58,8 @@ struct CopyItem {
     std::uint64_t params_hash = 0;
     std::uint64_t generation = 0;
     CopyState state = CopyState::Ready;
+    /// Empty, or one per path of its scope in scope path order.
+    dstd::Vector<SourceStat> sources;
 };
 
 struct DropItem {

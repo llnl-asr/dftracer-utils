@@ -16,7 +16,7 @@ namespace dstd = dftracer::utils::dstd;
 
 constexpr std::string_view RECORD_MAGIC = "DFTUREC0";
 constexpr std::size_t RECORD_HEADER_BYTES = 40;
-constexpr std::size_t MIN_SCOPE_PATH_BYTES = 25;
+constexpr std::size_t MIN_SCOPE_PATH_BYTES = 1;
 constexpr std::size_t MIN_EXTENT_SEGMENT_BYTES = 30;
 constexpr std::size_t MIN_COMMIT_COPY_BYTES = 6;
 
@@ -129,13 +129,8 @@ dstd::Expected<ScopeItem, dstd::Error> decode_scope(ByteView bytes) {
     }
     item.paths.reserve(path_count);
     for (std::uint32_t i = 0; i < path_count; ++i) {
-        ScopePath path;
-        if (!read_string(bytes, at, path.logical_path) ||
-            !read_u64(bytes, at, path.mtime) ||
-            !read_u64(bytes, at, path.size) ||
-            !read_u64(bytes, at, path.hash)) {
-            return parse_error();
-        }
+        dstd::String path;
+        if (!read_string(bytes, at, path)) return parse_error();
         item.paths.push_back(std::move(path));
     }
     if (at != bytes.size()) return parse_error();
@@ -145,16 +140,31 @@ dstd::Expected<ScopeItem, dstd::Error> decode_scope(ByteView bytes) {
 dstd::Expected<CopyItem, dstd::Error> decode_copy(ByteView bytes) {
     CopyItem item;
     std::uint8_t state = 0;
+    std::uint32_t source_count = 0;
     std::size_t at = 0;
     if (!read_u32(bytes, at, item.local_id) ||
         !read_u32(bytes, at, item.namespace_id) ||
         !read_u32(bytes, at, item.scope_id) ||
         !read_u64(bytes, at, item.params_hash) ||
         !read_u64(bytes, at, item.generation) || !read_u8(bytes, at, state) ||
-        state > 1 || at != bytes.size()) {
+        state > 1 || !read_u32(bytes, at, source_count)) {
         return parse_error();
     }
     item.state = static_cast<CopyState>(state);
+    if (!count_fits(bytes.size() - at, source_count, SOURCE_STAT_BYTES)) {
+        return parse_error();
+    }
+    item.sources.reserve(source_count);
+    for (std::uint32_t i = 0; i < source_count; ++i) {
+        SourceStat source;
+        if (!read_u64(bytes, at, source.mtime) ||
+            !read_u64(bytes, at, source.size) ||
+            !read_u64(bytes, at, source.hash)) {
+            return parse_error();
+        }
+        item.sources.push_back(source);
+    }
+    if (at != bytes.size()) return parse_error();
     return item;
 }
 
@@ -251,11 +261,8 @@ void encode_scope(dstd::Vector<std::uint8_t>& payload, const ScopeItem& item) {
     append_u32_le(payload, item.local_id);
     payload.push_back(static_cast<std::uint8_t>(item.kind));
     append_u32_le(payload, static_cast<std::uint32_t>(item.paths.size()));
-    for (const ScopePath& path : item.paths) {
-        append_byte_string(payload, path.logical_path);
-        append_u64_le(payload, path.mtime);
-        append_u64_le(payload, path.size);
-        append_u64_le(payload, path.hash);
+    for (const dstd::String& path : item.paths) {
+        append_byte_string(payload, path);
     }
 }
 
@@ -266,6 +273,12 @@ void encode_copy(dstd::Vector<std::uint8_t>& payload, const CopyItem& item) {
     append_u64_le(payload, item.params_hash);
     append_u64_le(payload, item.generation);
     payload.push_back(static_cast<std::uint8_t>(item.state));
+    append_u32_le(payload, static_cast<std::uint32_t>(item.sources.size()));
+    for (const SourceStat& source : item.sources) {
+        append_u64_le(payload, source.mtime);
+        append_u64_le(payload, source.size);
+        append_u64_le(payload, source.hash);
+    }
 }
 
 void encode_drop(dstd::Vector<std::uint8_t>& payload, const DropItem& item) {

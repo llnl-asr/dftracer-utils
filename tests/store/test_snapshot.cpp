@@ -43,6 +43,7 @@ using dftracer::utils::ByteView;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::Condition;
 using store::Batch;
+using store::CopyInfo;
 using store::DataFileReader;
 using store::FoldKind;
 using store::NamespaceSpec;
@@ -50,6 +51,7 @@ using store::ScopeKey;
 using store::ScopeState;
 using store::SegmentView;
 using store::Snapshot;
+using store::SourceStat;
 using store::Writer;
 using store::WriterOptions;
 
@@ -1318,6 +1320,196 @@ TEST_SUITE("index store snapshot") {
         CHECK(cursor.at_end());
     }
 
+    TEST_CASE("a copy keeps the sources of its build") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_copy_sources");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey one = file_scope("/traces/a.pfw");
+        const std::vector<dstd::StringView> given = {
+            dstd::StringView("/traces/b.pfw"),
+            dstd::StringView("/traces/a.pfw")};
+        const ScopeKey two = ScopeKey::files(given);
+        REQUIRE(two.paths.size() == 2);
+        CHECK(to_std(two.paths[0]) == "/traces/a.pfw");
+        CHECK(to_std(two.paths[1]) == "/traces/b.pfw");
+
+        dstd::Vector<SourceStat> one_sources;
+        one_sources.push_back(SourceStat{100, 200, 300});
+        dstd::Vector<SourceStat> two_sources;
+        two_sources.push_back(SourceStat{400, 500, 600});
+        two_sources.push_back(SourceStat{700, 800, 900});
+
+        {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch first = writer->batch(*id, one, 41, &one_sources);
+            first.put(view_of(std::string("key-a")), view_of(std::string("a")));
+            REQUIRE(writer->commit(std::move(first)).has_value());
+            Batch second = writer->batch(*id, two, 42, &two_sources);
+            second.put(view_of(std::string("key-b")),
+                       view_of(std::string("b")));
+            REQUIRE(writer->commit(std::move(second)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        const auto check_one = [](const CopyInfo& info) {
+            CHECK(info.state == ScopeState::Ready);
+            CHECK(info.params_hash == 41);
+            CHECK(info.generation == 1);
+            REQUIRE(info.sources.size() == 1);
+            CHECK(info.sources[0].mtime == 100);
+            CHECK(info.sources[0].size == 200);
+            CHECK(info.sources[0].hash == 300);
+        };
+        const auto check_two = [](const CopyInfo& info) {
+            CHECK(info.state == ScopeState::Ready);
+            CHECK(info.params_hash == 42);
+            CHECK(info.generation == 1);
+            REQUIRE(info.sources.size() == 2);
+            CHECK(info.sources[0].mtime == 400);
+            CHECK(info.sources[0].size == 500);
+            CHECK(info.sources[0].hash == 600);
+            CHECK(info.sources[1].mtime == 700);
+            CHECK(info.sources[1].size == 800);
+            CHECK(info.sources[1].hash == 900);
+        };
+
+        // Through the summary a close leaves.
+        {
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            check_one(snapshot->copy_info(spec, one));
+            check_two(snapshot->copy_info(spec, two));
+
+            const CopyInfo absent =
+                snapshot->copy_info(spec, file_scope("/t/z"));
+            CHECK(absent.state == ScopeState::Absent);
+            CHECK(absent.params_hash == 0);
+            CHECK(absent.generation == 0);
+            CHECK(absent.sources.empty());
+        }
+
+        // Through the records of a file whose summary and footer a crash took.
+        drop_summary(dir.str());
+        const std::string path = only_data_file(dir.str());
+        write_file(path, without_footer(read_file(path)));
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        check_one(snapshot->copy_info(spec, one));
+        check_two(snapshot->copy_info(spec, two));
+    }
+
+    TEST_CASE("a rebuild with new sources replaces the copy") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_copy_sources_rebuilt");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey scope = file_scope("/traces/a.pfw");
+
+        dstd::Vector<SourceStat> old_sources;
+        old_sources.push_back(SourceStat{1, 2, 3});
+        dstd::Vector<SourceStat> new_sources;
+        new_sources.push_back(SourceStat{7, 8, 9});
+
+        const auto write = [&](const dstd::Vector<SourceStat>& sources) {
+            auto writer = make_writer(dir);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch batch = writer->batch(*id, scope, 5, &sources);
+            batch.put(view_of(std::string("key-a")), view_of(std::string("a")));
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        };
+        write(old_sources);
+        write(new_sources);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        const CopyInfo info = snapshot->copy_info(spec, scope);
+        CHECK(info.state == ScopeState::Ready);
+        CHECK(info.generation == 2);
+        CHECK(info.params_hash == 5);
+        REQUIRE(info.sources.size() == 1);
+        CHECK(info.sources[0].mtime == 7);
+        CHECK(info.sources[0].size == 8);
+        CHECK(info.sources[0].hash == 9);
+    }
+
+    TEST_CASE("a batch whose sources differ from its copy fails") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_copy_sources_differ");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey scope = file_scope("/traces/a.pfw");
+
+        dstd::Vector<SourceStat> kept_sources;
+        kept_sources.push_back(SourceStat{1, 2, 3});
+        dstd::Vector<SourceStat> other_sources;
+        other_sources.push_back(SourceStat{4, 5, 6});
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch first = writer->batch(*id, scope, 9, &kept_sources);
+        first.put(view_of(std::string("key-a")), view_of(std::string("a")));
+        REQUIRE(writer->commit(std::move(first)).has_value());
+
+        Batch sources_changed = writer->batch(*id, scope, 9, &other_sources);
+        sources_changed.put(view_of(std::string("key-b")),
+                            view_of(std::string("b")));
+        auto rejected = writer->commit(std::move(sources_changed));
+        REQUIRE_FALSE(rejected.has_value());
+        CHECK(rejected.error().is(dstd::Condition::InvalidArgument));
+
+        Batch hash_changed = writer->batch(*id, scope, 10, &kept_sources);
+        hash_changed.put(view_of(std::string("key-c")),
+                         view_of(std::string("c")));
+        auto rejected_hash = writer->commit(std::move(hash_changed));
+        REQUIRE_FALSE(rejected_hash.has_value());
+        CHECK(rejected_hash.error().is(dstd::Condition::InvalidArgument));
+
+        // The copy is still the one its first batch announced.
+        Batch again = writer->batch(*id, scope, 9, &kept_sources);
+        again.put(view_of(std::string("key-d")), view_of(std::string("d")));
+        REQUIRE(writer->commit(std::move(again)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        const CopyInfo info = snapshot->copy_info(spec, scope);
+        CHECK(info.state == ScopeState::Ready);
+        CHECK(info.generation == 1);
+        CHECK(info.params_hash == 9);
+        REQUIRE(info.sources.size() == 1);
+        CHECK(info.sources[0].mtime == 1);
+        CHECK(info.sources[0].size == 2);
+        CHECK(info.sources[0].hash == 3);
+        auto found = snapshot->get(spec, scope, view_of(std::string("key-d")));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == "d");
+        auto missing =
+            snapshot->get(spec, scope, view_of(std::string("key-b")));
+        REQUIRE(missing.has_value());
+        CHECK_FALSE(missing->has_value());
+    }
+
+    TEST_CASE("a failed copy reads as Failed through copy_info") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_copy_failed_info");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey scope = file_scope("/traces/x.pfw");
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        REQUIRE(writer->fail(*id, scope, 17).has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        const CopyInfo info = snapshot->copy_info(spec, scope);
+        CHECK(info.state == ScopeState::Failed);
+        CHECK(info.generation == 1);
+        CHECK(info.params_hash == 17);
+        CHECK(info.sources.empty());
+    }
+
     TEST_CASE("a corrupt extent makes its copy Bad and leaves other scopes") {
         dftu_utils_test::ScopedTestDir dir("snapshot_bad_extent");
         dftu_utils_test::ScopedTestDir copy_dir("snapshot_bad_extent_copy");
@@ -1872,9 +2064,7 @@ TEST_SUITE("index store snapshot") {
             store::ScopeItem item;
             item.local_id = id;
             item.kind = store::ScopeKind::File;
-            store::ScopePath entry;
-            entry.logical_path = dstring(path);
-            item.paths.push_back(std::move(entry));
+            item.paths.push_back(dstring(path));
             file.add(std::move(item));
         };
         const auto add_copy = [](store::DataFileWriter& file, std::uint32_t id,
@@ -3433,9 +3623,7 @@ TEST_SUITE("index store snapshot") {
             store::ScopeItem scope_item;
             scope_item.local_id = 1;
             scope_item.kind = store::ScopeKind::File;
-            store::ScopePath entry;
-            entry.logical_path = dstring("/traces/check.pfw");
-            scope_item.paths.push_back(std::move(entry));
+            scope_item.paths.push_back(dstring("/traces/check.pfw"));
             file->add(std::move(scope_item));
             store::CopyItem copy;
             copy.local_id = 1;
@@ -3567,9 +3755,7 @@ TEST_SUITE("index store snapshot") {
                 store::ScopeItem scope_item;
                 scope_item.local_id = i + 1;
                 scope_item.kind = store::ScopeKind::File;
-                store::ScopePath entry;
-                entry.logical_path = dstring(scope_path(i));
-                scope_item.paths.push_back(std::move(entry));
+                scope_item.paths.push_back(dstring(scope_path(i)));
                 file->add(std::move(scope_item));
                 store::CopyItem copy;
                 copy.local_id = i + 1;

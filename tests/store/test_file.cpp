@@ -55,8 +55,8 @@ using store::IndexedExtentRef;
 using store::NamespaceItem;
 using store::ScopeItem;
 using store::ScopeKind;
-using store::ScopePath;
 using store::SegmentBuilder;
+using store::SourceStat;
 
 constexpr std::size_t EXTENT_SIZE = 4096;
 
@@ -238,18 +238,21 @@ NamespaceItem make_namespace(std::uint32_t local_id) {
     return item;
 }
 
-ScopeItem make_scope(std::uint32_t local_id, std::uint32_t namespace_id) {
+ScopeItem make_scope(std::uint32_t local_id) {
     ScopeItem item;
     item.local_id = local_id;
     item.kind = local_id % 2 == 0 ? ScopeKind::File : ScopeKind::Files;
-    ScopePath path;
-    path.logical_path =
-        dstring("/traces/run" + std::to_string(local_id) + ".pfw");
-    path.mtime = 1000 + local_id;
-    path.size = 2000 + local_id;
-    path.hash = 3000 + namespace_id;
-    item.paths.push_back(std::move(path));
+    item.paths.push_back(
+        dstring("/traces/run" + std::to_string(local_id) + ".pfw"));
     return item;
+}
+
+SourceStat make_source(std::uint32_t local_id, std::uint32_t namespace_id) {
+    SourceStat source;
+    source.mtime = 1000 + local_id;
+    source.size = 2000 + local_id;
+    source.hash = 3000 + namespace_id;
+    return source;
 }
 
 CopyItem make_copy(std::uint32_t local_id, std::uint32_t namespace_id,
@@ -261,6 +264,7 @@ CopyItem make_copy(std::uint32_t local_id, std::uint32_t namespace_id,
     item.params_hash = 4000 + local_id;
     item.generation = local_id;
     item.state = local_id % 2 == 0 ? CopyState::Ready : CopyState::Failed;
+    item.sources.push_back(make_source(local_id, namespace_id));
     return item;
 }
 
@@ -420,11 +424,7 @@ void check_scope(const ScopeItem& actual, const ScopeItem& expected) {
     CHECK(actual.kind == expected.kind);
     REQUIRE(actual.paths.size() == expected.paths.size());
     for (std::size_t i = 0; i < actual.paths.size(); ++i) {
-        CHECK(to_std(actual.paths[i].logical_path) ==
-              to_std(expected.paths[i].logical_path));
-        CHECK(actual.paths[i].mtime == expected.paths[i].mtime);
-        CHECK(actual.paths[i].size == expected.paths[i].size);
-        CHECK(actual.paths[i].hash == expected.paths[i].hash);
+        CHECK(to_std(actual.paths[i]) == to_std(expected.paths[i]));
     }
 }
 
@@ -435,6 +435,12 @@ void check_copy(const CopyItem& actual, const CopyItem& expected) {
     CHECK(actual.params_hash == expected.params_hash);
     CHECK(actual.generation == expected.generation);
     CHECK(actual.state == expected.state);
+    REQUIRE(actual.sources.size() == expected.sources.size());
+    for (std::size_t i = 0; i < actual.sources.size(); ++i) {
+        CHECK(actual.sources[i].mtime == expected.sources[i].mtime);
+        CHECK(actual.sources[i].size == expected.sources[i].size);
+        CHECK(actual.sources[i].hash == expected.sources[i].hash);
+    }
 }
 
 void check_drop(const DropItem& actual, const DropItem& expected) {
@@ -615,7 +621,7 @@ void add_five_commit(DataFileWriter& writer, FileIndex& expected,
                      std::uint32_t commit_id,
                      dstd::Vector<ExtentRef>* extents = nullptr) {
     const NamespaceItem ns = make_namespace(commit_id);
-    const ScopeItem scope = make_scope(commit_id, commit_id);
+    const ScopeItem scope = make_scope(commit_id);
     const CopyItem copy = make_copy(commit_id, commit_id, commit_id);
     const DropItem drop = make_drop(commit_id, commit_id, commit_id);
     const SegmentData segment = make_segment(commit_id, 4);
@@ -1271,6 +1277,77 @@ TEST_SUITE("index store file") {
         }
     }
 
+    TEST_CASE("a copy record round-trips its sources") {
+        const std::uint64_t record_offset = store::FILE_HEADER_BYTES;
+        const auto encode = [&](const CopyItem& copy) {
+            auto encoded = store::encode_record(store::RecordKind::Commit, 1, 0,
+                                                record_offset, {copy});
+            REQUIRE(encoded.has_value());
+            return std_bytes(*encoded);
+        };
+        const auto decode = [](const std::vector<std::uint8_t>& record) {
+            auto decoded =
+                store::decode_record(ByteView{record.data(), record.size()});
+            return decoded;
+        };
+
+        CopyItem item;
+        item.local_id = 3;
+        item.namespace_id = 2;
+        item.scope_id = 7;
+        item.params_hash = 0x0102030405060708ULL;
+        item.generation = 5;
+        item.state = CopyState::Failed;
+        item.sources.push_back(SourceStat{11, 12, 13});
+        item.sources.push_back(SourceStat{21, 22, 23});
+
+        {
+            auto decoded = decode(encode(item));
+            REQUIRE(decoded.has_value());
+            REQUIRE(decoded->items.size() == 1);
+            const auto* found = std::get_if<CopyItem>(&decoded->items[0]);
+            REQUIRE(found != nullptr);
+            check_copy(*found, item);
+        }
+
+        {
+            CopyItem bare = item;
+            bare.sources.clear();
+            auto decoded = decode(encode(bare));
+            REQUIRE(decoded.has_value());
+            REQUIRE(decoded->items.size() == 1);
+            const auto* found = std::get_if<CopyItem>(&decoded->items[0]);
+            REQUIRE(found != nullptr);
+            check_copy(*found, bare);
+            CHECK(found->sources.empty());
+        }
+
+        // The source count is at payload offset 29: u32 id, namespace and
+        // scope, two u64 and the state byte.
+        {
+            std::vector<std::uint8_t> record = encode(item);
+            write_u32_le_at(record, first_item_payload_offset() + 29U, 3U);
+            rewrite_record_crc(record, 0);
+            auto decoded = decode(record);
+            CHECK_FALSE(decoded.has_value());
+            if (!decoded.has_value()) {
+                CHECK(decoded.error().is(dstd::Condition::Parse));
+            }
+        }
+
+        {
+            std::vector<std::uint8_t> record = encode(item);
+            write_u32_le_at(record, first_item_payload_offset() + 29U,
+                            0xFFFFFFF0U);
+            rewrite_record_crc(record, 0);
+            auto decoded = decode(record);
+            CHECK_FALSE(decoded.has_value());
+            if (!decoded.has_value()) {
+                CHECK(decoded.error().is(dstd::Condition::Parse));
+            }
+        }
+    }
+
     TEST_CASE("a newest record with a forward prev offset falls back cleanly") {
         TempDir temp;
         const std::string path = temp.file("forward_prev.dfs");
@@ -1463,18 +1540,19 @@ TEST_SUITE("index store file") {
             scope.kind =
                 scope_paths[i].size() > 1 ? ScopeKind::Files : ScopeKind::File;
             for (const std::string& path : scope_paths[i]) {
-                scope.paths.push_back({dstring(path), 1, 2, 3});
+                scope.paths.push_back(dstring(path));
             }
             scopes.push_back(std::move(scope));
         }
         dstd::Vector<CopyItem> copies;
         for (std::uint32_t i = 0; i < 4; ++i) {
-            copies.push_back({100 + i, 1, 10 + i, 7, i + 1, CopyState::Ready});
+            copies.push_back(
+                {100 + i, 1, 10 + i, 7, i + 1, CopyState::Ready, {}});
         }
         // The same scope in the other namespace, and a copy whose scope no
         // item names, which the directory leaves out.
-        copies.push_back({200, 2, 10, 0, 5, CopyState::Failed});
-        copies.push_back({201, 2, 99, 0, 6, CopyState::Ready});
+        copies.push_back({200, 2, 10, 0, 5, CopyState::Failed, {}});
+        copies.push_back({201, 2, 99, 0, 6, CopyState::Ready, {}});
         dstd::Vector<DropItem> drops;
         drops.push_back({1, 10, 9, {}, {}});
 
@@ -1556,6 +1634,54 @@ TEST_SUITE("index store file") {
         CHECK(other->copies[0].commits.size() == 1);
     }
 
+    TEST_CASE("a scope directory keeps the sources of each copy") {
+        dstd::Vector<NamespaceItem> namespaces(1);
+        namespaces[0] = make_namespace(1);
+        dstd::Vector<ScopeItem> scopes(1);
+        scopes[0].local_id = 10;
+        scopes[0].kind = ScopeKind::Files;
+        scopes[0].paths.push_back(dstring("/t/a.pfw"));
+        scopes[0].paths.push_back(dstring("/t/b.pfw"));
+
+        // One copy with a source per path, and one with none.
+        dstd::Vector<CopyItem> copies;
+        copies.push_back({100, 1, 10, 5, 1, CopyState::Ready, {}});
+        copies.back().sources.push_back(SourceStat{11, 12, 13});
+        copies.back().sources.push_back(SourceStat{21, 22, 23});
+        copies.push_back({101, 1, 10, 6, 2, CopyState::Failed, {}});
+
+        auto built =
+            store::build_scope_directory(namespaces, scopes, copies, {}, {});
+        REQUIRE(built.has_value());
+        auto directory = store::ScopeDirectory::open(view_of(*built));
+        REQUIRE(directory.has_value());
+        auto entry = directory->entry(0);
+        REQUIRE(entry.has_value());
+        REQUIRE(entry->copies.size() == 2);
+        CHECK(entry->highest_generation == 2);
+        REQUIRE(entry->copies[0].sources.size() == 2);
+        CHECK(entry->copies[0].sources[0].mtime == 11);
+        CHECK(entry->copies[0].sources[0].size == 12);
+        CHECK(entry->copies[0].sources[0].hash == 13);
+        CHECK(entry->copies[0].sources[1].mtime == 21);
+        CHECK(entry->copies[0].sources[1].size == 22);
+        CHECK(entry->copies[0].sources[1].hash == 23);
+        CHECK(entry->copies[0].params_hash == 5);
+        CHECK(entry->copies[1].sources.empty());
+        CHECK(entry->copies[1].state == CopyState::Failed);
+
+        // A count that is neither zero nor the path count of its scope.
+        dstd::Vector<CopyItem> wrong;
+        wrong.push_back({102, 1, 10, 7, 3, CopyState::Ready, {}});
+        wrong.back().sources.push_back(SourceStat{1, 2, 3});
+        auto rejected =
+            store::build_scope_directory(namespaces, scopes, wrong, {}, {});
+        REQUIRE_FALSE(rejected.has_value());
+        if (!rejected.has_value()) {
+            CHECK(rejected.error().is(dstd::Condition::InvalidArgument));
+        }
+    }
+
     TEST_CASE("a scope directory whose slot leaves its bytes does not open") {
         dstd::Vector<NamespaceItem> namespaces(1);
         namespaces[0].local_id = 1;
@@ -1563,7 +1689,7 @@ TEST_SUITE("index store file") {
         dstd::Vector<ScopeItem> scopes(1);
         scopes[0].local_id = 2;
         dstd::Vector<CopyItem> copies;
-        copies.push_back({3, 1, 2, 0, 1, CopyState::Ready});
+        copies.push_back({3, 1, 2, 0, 1, CopyState::Ready, {}});
         auto built =
             store::build_scope_directory(namespaces, scopes, copies, {}, {});
         REQUIRE(built.has_value());
@@ -1584,7 +1710,7 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
 
         const NamespaceItem ns = make_namespace(1);
-        const ScopeItem scope = make_scope(1, 1);
+        const ScopeItem scope = make_scope(1);
         const std::uint32_t small_copy = 10;
         const std::uint32_t other_copy = 12;
         writer.add(ns);

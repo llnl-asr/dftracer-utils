@@ -90,9 +90,8 @@ class Cursor {
 /// Compares a key with (name, version, kind, paths) in directory order,
 /// decoding only as far as it must. `prefix_only` stops after the version.
 /// A key that does not decode sorts last.
-template <class Path>
 int compare_key(ByteView key, dstd::StringView name, std::uint32_t version,
-                ScopeKind kind, dstd::Span<const Path> paths,
+                ScopeKind kind, dstd::Span<const dstd::String> paths,
                 bool prefix_only) {
     Cursor cursor(key);
     dstd::StringView key_name;
@@ -113,8 +112,7 @@ int compare_key(ByteView key, dstd::StringView name, std::uint32_t version,
     for (std::size_t i = 0; i < common; ++i) {
         dstd::StringView path;
         if (!cursor.text(path)) return 1;
-        const int by_path = compare_views(
-            path, dstd::StringView(paths[i].data(), paths[i].size()));
+        const int by_path = compare_views(path, paths[i]);
         if (by_path != 0) return by_path;
     }
     if (count != paths.size()) return count < paths.size() ? -1 : 1;
@@ -148,8 +146,7 @@ int compare_drafts(const Draft& a, const Draft& b) {
     const std::size_t common =
         std::min(a.scope->paths.size(), b.scope->paths.size());
     for (std::size_t i = 0; i < common; ++i) {
-        const int by_path = compare_views(a.scope->paths[i].logical_path,
-                                          b.scope->paths[i].logical_path);
+        const int by_path = compare_views(a.scope->paths[i], b.scope->paths[i]);
         if (by_path != 0) return by_path;
     }
     if (a.scope->paths.size() != b.scope->paths.size()) {
@@ -288,8 +285,8 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         append_u32_le(data, entry.namespace_item->format_version);
         data.push_back(static_cast<std::uint8_t>(entry.scope->kind));
         encode_varint(data, entry.scope->paths.size());
-        for (const ScopePath& path : entry.scope->paths) {
-            append_text(data, path.logical_path);
+        for (const dstd::String& path : entry.scope->paths) {
+            append_text(data, path);
         }
         const std::size_t payload_at = data_start + data.size();
 
@@ -303,11 +300,21 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         append_u64_le(data, highest);
         encode_varint(data, entry.copies.size());
         for (const CopyItem* copy : entry.copies) {
+            if (!copy->sources.empty() &&
+                copy->sources.size() != entry.scope->paths.size()) {
+                return invalid_error();
+            }
             append_u32_le(data, copy->local_id);
             append_u64_le(data, copy->generation);
             append_u64_le(data, copy->params_hash);
             data.push_back(static_cast<std::uint8_t>(copy->state));
             data.push_back(entry.namespace_item->fold_kind);
+            encode_varint(data, copy->sources.size());
+            for (const SourceStat& source : copy->sources) {
+                append_u64_le(data, source.mtime);
+                append_u64_le(data, source.size);
+                append_u64_le(data, source.hash);
+            }
             const auto first = std::lower_bound(
                 sorted_commits.begin(), sorted_commits.end(), copy->local_id,
                 [](const DirectoryCommit& commit, std::uint32_t id) {
@@ -480,15 +487,29 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
     for (std::uint64_t i = 0; i < copy_count; ++i) {
         DirectoryCopy copy;
         std::uint8_t state = 0;
+        std::uint64_t source_count = 0;
         std::uint64_t commit_count = 0;
         if (!cursor.u32(copy.local_id) || !cursor.u64(copy.generation) ||
             !cursor.u64(copy.params_hash) || !cursor.u8(state) ||
             state > static_cast<std::uint8_t>(CopyState::Failed) ||
-            !cursor.u8(copy.fold_kind) || !cursor.varint(commit_count) ||
-            commit_count > payload.size()) {
+            !cursor.u8(copy.fold_kind) || !cursor.varint(source_count) ||
+            source_count >
+                (payload.size() - cursor.position()) / SOURCE_STAT_BYTES) {
             return parse_error();
         }
         copy.state = static_cast<CopyState>(state);
+        copy.sources.reserve(static_cast<std::size_t>(source_count));
+        for (std::uint64_t s = 0; s < source_count; ++s) {
+            SourceStat source;
+            if (!cursor.u64(source.mtime) || !cursor.u64(source.size) ||
+                !cursor.u64(source.hash)) {
+                return parse_error();
+            }
+            copy.sources.push_back(source);
+        }
+        if (!cursor.varint(commit_count) || commit_count > payload.size()) {
+            return parse_error();
+        }
         copy.commits.reserve(static_cast<std::size_t>(commit_count));
         for (std::uint64_t c = 0; c < commit_count; ++c) {
             DirectoryCommit commit;

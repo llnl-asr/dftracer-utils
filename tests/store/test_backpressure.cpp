@@ -312,7 +312,7 @@ std::vector<CopyRow> read_copies(const std::string& path) {
     std::map<std::uint32_t, std::string> scope_paths;
     for (const store::ScopeItem& scope : reader->index().scopes) {
         REQUIRE_FALSE(scope.paths.empty());
-        scope_paths[scope.local_id] = to_std(scope.paths[0].logical_path);
+        scope_paths[scope.local_id] = to_std(scope.paths[0]);
     }
     std::vector<CopyRow> out;
     for (const store::CopyItem& copy : reader->index().copies) {

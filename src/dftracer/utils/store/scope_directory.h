@@ -33,6 +33,8 @@ struct DirectoryCopy {
     std::uint64_t params_hash = 0;
     CopyState state = CopyState::Ready;
     std::uint8_t fold_kind = 0;
+    /// Empty, or one per path of the entry's scope in its path order.
+    dstd::Vector<SourceStat> sources;
     /// The commits holding a segment of the copy, in sequence order.
     dstd::Vector<DirectoryCommit> commits;
 };

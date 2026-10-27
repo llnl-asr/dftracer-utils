@@ -1284,6 +1284,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             copy.fold = static_cast<FoldKind>(listed.fold_kind);
             copy.state = listed.state;
             copy.local_id = listed.local_id;
+            copy.sources = listed.sources;
             // The block of one copy of a closed file holds the runs of many of
             // its commits, so the commits that name its offset share one.
             dstd::Vector<std::pair<std::uint64_t, detail::LazyBlock*>> blocks;
@@ -1363,24 +1364,38 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
 
 ScopeState Snapshot::state(const NamespaceSpec& spec,
                            const ScopeKey& scope) const {
+    return copy_info(spec, scope).state;
+}
+
+CopyInfo Snapshot::copy_info(const NamespaceSpec& spec,
+                             const ScopeKey& scope) const {
+    CopyInfo info;
     auto found = find_group(spec, scope);
     // The state has no channel for the error of a block that could not be
     // read, so it reads Bad; `get` and a cursor report the error itself.
-    if (!found) return ScopeState::Bad;
+    if (!found) {
+        info.state = ScopeState::Bad;
+        return info;
+    }
     const detail::ScopeGroup* group = *found;
     if (group == nullptr || group->dropped || group->copies.empty()) {
-        return ScopeState::Absent;
+        return info;
     }
     const detail::CopyData& copy = group->copies[group->current];
+    info.generation = copy.generation;
+    info.params_hash = copy.params_hash;
+    info.sources = copy.sources;
     const detail::LoadStatus status = ensure_copy(copy);
     // The state has no channel for the error of a commit whose block could not
     // be read, so it reads Bad; `get` and a cursor report the error itself.
     if (status.state == detail::LoadState::Bad ||
         status.state == detail::LoadState::Failed) {
-        return ScopeState::Bad;
+        info.state = ScopeState::Bad;
+        return info;
     }
-    if (copy.state == CopyState::Failed) return ScopeState::Failed;
-    return ScopeState::Ready;
+    info.state = copy.state == CopyState::Failed ? ScopeState::Failed
+                                                 : ScopeState::Ready;
+    return info;
 }
 
 detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {

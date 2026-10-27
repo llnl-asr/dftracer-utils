@@ -168,24 +168,19 @@ NamespaceItem namespace_item(const NamespaceSpec& spec, NamespaceId id) {
     return item;
 }
 
-ScopeItem scope_item(const ScopeKey& key, std::uint32_t id,
-                     const dstd::Vector<ScopePath>* signature) {
+ScopeItem scope_item(const ScopeKey& key, std::uint32_t id) {
     ScopeItem item;
     item.local_id = id;
     item.kind = key.kind;
     item.paths.reserve(key.paths.size());
-    for (std::size_t i = 0; i < key.paths.size(); ++i) {
-        ScopePath path;
-        if (signature != nullptr) path = (*signature)[i];
-        path.logical_path = key.paths[i];
-        item.paths.push_back(std::move(path));
-    }
+    for (const dstd::String& path : key.paths) item.paths.push_back(path);
     return item;
 }
 
 CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
                    std::uint32_t scope_id, std::uint64_t params_hash,
-                   std::uint64_t generation, CopyState state) {
+                   std::uint64_t generation, CopyState state,
+                   const dstd::Vector<SourceStat>& sources) {
     CopyItem item;
     item.local_id = copy_id;
     item.namespace_id = namespace_id;
@@ -193,7 +188,20 @@ CopyItem copy_item(std::uint32_t copy_id, std::uint32_t namespace_id,
     item.params_hash = params_hash;
     item.generation = generation;
     item.state = state;
+    item.sources = sources;
     return item;
+}
+
+bool same_sources(const dstd::Vector<SourceStat>& a,
+                  const dstd::Vector<SourceStat>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].mtime != b[i].mtime || a[i].size != b[i].size ||
+            a[i].hash != b[i].hash) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::atomic<WriterTestHook::SpaceSealedFn>& space_sealed_hook() {
@@ -428,6 +436,9 @@ Writer::CopyEntry* Writer::find_or_add_copy(const NamespaceSpec& spec,
         entry->generation = generation;
         entry->highest_generation = generation;
         entry->live = true;
+        entry->params_hash = 0;
+        entry->sources.clear();
+        entry->announced = false;
         return entry;
     }
     return add_copy(id, scope_id, generation_of(spec, scope) + 1U, true);
@@ -478,15 +489,15 @@ dstd::Expected<NamespaceId, dstd::Error> Writer::add_namespace(
 
 Batch Writer::batch(NamespaceId namespace_id, const ScopeKey& scope,
                     std::uint64_t params_hash,
-                    const dstd::Vector<ScopePath>* scope_paths) {
+                    const dstd::Vector<SourceStat>* sources) {
     Batch batch;
     batch.writer_ = this;
     batch.namespace_id_ = namespace_id;
     batch.scope_ = scope;
     batch.params_hash_ = params_hash;
-    if (scope_paths != nullptr) {
-        batch.signature_ = *scope_paths;
-        if (batch.signature_.size() != scope.paths.size()) {
+    if (sources != nullptr) {
+        batch.sources_ = *sources;
+        if (batch.sources_.size() != scope.paths.size()) {
             batch.record_error(dstd::Condition::InvalidArgument);
         }
     }
@@ -634,17 +645,26 @@ dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
     CopyEntry* copy_entry =
         find_or_add_copy(namespace_entry->spec, batch.namespace_id_,
                          batch.scope_, scope_entry->id);
+    if (copy_entry->announced) {
+        if (copy_entry->params_hash != batch.params_hash_ ||
+            !same_sources(copy_entry->sources, batch.sources_)) {
+            return invalid_error();
+        }
+    } else {
+        copy_entry->params_hash = batch.params_hash_;
+        copy_entry->sources = batch.sources_;
+        copy_entry->announced = true;
+    }
 
     pending.namespace_id = namespace_entry->id.value;
     pending.namespace_item =
         namespace_item(namespace_entry->spec, namespace_entry->id);
     pending.scope_id = scope_entry->id;
-    pending.scope_item =
-        scope_item(batch.scope_, scope_entry->id,
-                   batch.signature_.empty() ? nullptr : &batch.signature_);
+    pending.scope_item = scope_item(batch.scope_, scope_entry->id);
     pending.copy_item = copy_item(
         copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
-        batch.params_hash_, copy_entry->generation, CopyState::Ready);
+        copy_entry->params_hash, copy_entry->generation, CopyState::Ready,
+        copy_entry->sources);
     pending.durable = namespace_entry->spec.durable;
     return {};
 }
@@ -810,11 +830,11 @@ dstd::Expected<void, dstd::Error> Writer::fail(NamespaceId namespace_id,
         pending->namespace_item =
             namespace_item(namespace_entry->spec, namespace_entry->id);
         pending->scope_id = scope_entry->id;
-        pending->scope_item = scope_item(scope, scope_entry->id, nullptr);
+        pending->scope_item = scope_item(scope, scope_entry->id);
         // A failed copy is a new copy id, so it is announced on its own.
         pending->copy_item = copy_item(
             next_copy_id_++, namespace_entry->id.value, scope_entry->id,
-            params_hash, generation, CopyState::Failed);
+            params_hash, generation, CopyState::Failed, {});
         pending->durable = namespace_entry->spec.durable;
     }
     committer_.on_fail(pending);
@@ -866,7 +886,7 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
         pending->namespace_item =
             namespace_item(namespace_entry->spec, namespace_entry->id);
         pending->scope_id = scope_entry->id;
-        pending->scope_item = scope_item(scope, scope_entry->id, nullptr);
+        pending->scope_item = scope_item(scope, scope_entry->id);
         // A drop announces no copy: its generation is all the committer needs.
         pending->copy_item.local_id = 0;
         pending->copy_item.generation = generation;

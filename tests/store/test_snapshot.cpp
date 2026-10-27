@@ -2835,6 +2835,37 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, scope) == ScopeState::Absent);
     }
 
+    TEST_CASE("a closed file of many small extents opens through its end") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_small_extents_light");
+        const ScopeKey scope = file_scope("/traces/small.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        WriterOptions options = small_extents();
+        options.extent_size = 1U << 20U;
+        std::string path;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            // One flush per batch seals a small extent each time, so the file
+            // holds far more extents than its size in extent sizes.
+            for (int b = 0; b < 40; ++b) {
+                Batch batch = writer->batch(*id, scope, 0);
+                batch.put(view_of("k" + std::to_string(100 + b)),
+                          view_of(std::string("v")));
+                REQUIRE(writer->commit(std::move(batch)).has_value());
+                REQUIRE(flush_writer(*writer).has_value());
+            }
+            path = to_std(writer->path());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+        auto light = DataFileReader::open(path, store::FooterItems::Directory);
+        REQUIRE(light.has_value());
+        REQUIRE(light->index().tail.has_value());
+        REQUIRE(light->index().tail->extent_count >
+                std::filesystem::file_size(path) / (1U << 20U) + 1);
+        CHECK(light->records_read() == 1);
+    }
+
     TEST_CASE("a scope lookup skips the files whose filter rules it out") {
         dftu_utils_test::ScopedTestDir dir("snapshot_scope_filter");
         const NamespaceSpec spec = put_spec("dftu.test.put");

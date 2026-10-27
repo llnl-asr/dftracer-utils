@@ -428,6 +428,12 @@ std::string format_stats(const store::OpenStats& stats,
     return out.str();
 }
 
+std::string format_ms_value(double ms) {
+    std::ostringstream out;
+    out << std::setprecision(3) << ms;
+    return out.str();
+}
+
 std::string format_rate(std::uint64_t rows, std::uint64_t nanos) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(1)
@@ -1612,7 +1618,10 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
     query_rows.push_back(query_row(
         engine_name, "open", 1, open_nanos, cold_rss,
         "warm ms reported, cold=" + format_ms(cold_nanos) +
-            " ms, rss_growth of the cold open, " +
+            " ms (cold ms list=" + format_ms_value(cold->open_stats().ms_list) +
+            " files=" + format_ms_value(cold->open_stats().ms_open_files) +
+            " tables=" + format_ms_value(cold->open_stats().ms_tables) +
+            "), rss_growth of the cold open, " +
             format_stats(snapshot.open_stats(), snapshot.read_stats())));
     // The first get of the cold snapshot: it pays the reads of the commits
     // that hold the copy, which the open above did not make.

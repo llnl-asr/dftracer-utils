@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
@@ -351,6 +352,28 @@ struct ScopeGroup {
     std::uint64_t highest_generation = 0;
     bool dropped = false;
     std::size_t current = 0;
+};
+
+/// The groups the queries of a snapshot found, by directory key, so the next
+/// query of a scope skips the walk over the files. Thread-safe: a key hashes to
+/// one of SHARDS shards, each with its own mutex. The groups stay owned by the
+/// leaf blocks that published them.
+class GroupIndex {
+   public:
+    /// The group of `key`, or null when no query found it yet.
+    const ScopeGroup* find(const dstd::String& key) const;
+    void add(const dstd::String& key, const ScopeGroup* group) const;
+
+   private:
+    static constexpr std::size_t SHARDS = 16;
+    struct Shard {
+        std::mutex mutex;
+        dstd::HashMap<dstd::String, const ScopeGroup*> groups;
+    };
+
+    Shard& shard_of(const dstd::String& key) const;
+
+    mutable Shard shards_[SHARDS];
 };
 
 /// The groups of one leaf block's entries, one slot per entry, each set once
@@ -899,6 +922,8 @@ class Snapshot {
     dstd::UniquePtr<detail::ReadCounters> reads_;
     /// Behind a pointer for the same reason, and shared by every query.
     dstd::UniquePtr<PageCache> pages_;
+    /// Behind a pointer for the same reason.
+    dstd::UniquePtr<detail::GroupIndex> groups_;
 };
 
 }  // namespace dftracer::utils::store

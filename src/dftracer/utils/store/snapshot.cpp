@@ -132,6 +132,28 @@ dstd::Unexpected<dstd::Error> bad_extent_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
 }
 
+/// The bytes that name one directory key in the group index: each part with
+/// its length first, so no two keys give the same bytes.
+dstd::String group_key(dstd::StringView name, std::uint32_t version,
+                       ScopeKind kind, dstd::Span<const dstd::String> paths) {
+    dstd::String key;
+    const auto add_u32 = [&key](std::uint32_t value) {
+        char bytes[4];
+        write_u32_le(reinterpret_cast<std::uint8_t*>(bytes), value);
+        key.append(bytes, sizeof(bytes));
+    };
+    add_u32(static_cast<std::uint32_t>(name.size()));
+    key.append(name.data(), name.size());
+    add_u32(version);
+    add_u32(static_cast<std::uint32_t>(kind));
+    add_u32(static_cast<std::uint32_t>(paths.size()));
+    for (const dstd::String& path : paths) {
+        add_u32(static_cast<std::uint32_t>(path.size()));
+        key.append(path.data(), path.size());
+    }
+    return key;
+}
+
 /// The raw bytes [offset, offset + length) of an extent, decoded from `run`,
 /// the stored bytes of the extent from its offset `run_begin` on, into
 /// `owned`, which holds the whole pages they span. A Parse error when a page
@@ -588,6 +610,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         cache_bytes = static_cast<std::size_t>(*parsed);
     }
     pages_ = dstd::make_unique<PageCache>(cache_bytes);
+    groups_ = dstd::make_unique<detail::GroupIndex>();
     const auto start = std::chrono::steady_clock::now();
     const std::string dir_string(dir.data(), dir.size());
     std::vector<std::string> names;
@@ -1127,6 +1150,9 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                    ? status.error
                    : dstd::Error(dstd::Condition::Parse);
     };
+    const dstd::String key =
+        group_key(spec.name, spec.format_version, scope.kind, paths);
+    if (const detail::ScopeGroup* known = groups_->find(key)) return known;
     const std::uint64_t hash =
         scope_hash(spec.name, spec.format_version, scope.kind, paths);
     // The leaf block and the entry of one scope of one file, reading the
@@ -1208,6 +1234,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
     if (owner == files_.size()) return nullptr;
     if (const detail::ScopeGroup* known =
             owner_leaf->groups->get(owner_entry)) {
+        groups_->add(key, known);
         return known;
     }
 
@@ -1304,7 +1331,10 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                  dstd::Vector<std::uint8_t>(end, end + drop.end.size())});
         }
     }
-    return owner_leaf->groups->publish(owner_entry, std::move(group));
+    const detail::ScopeGroup* published =
+        owner_leaf->groups->publish(owner_entry, std::move(group));
+    groups_->add(key, published);
+    return published;
 }
 
 ScopeState Snapshot::state(const NamespaceSpec& spec,
@@ -2008,6 +2038,26 @@ dstd::Expected<detail::SegmentRun, dstd::Error> Snapshot::copy_segments(
     return detail::SegmentRun{held.segments,
                               static_cast<std::size_t>(begin - slots.begin()),
                               static_cast<std::size_t>(finish - slots.begin())};
+}
+
+detail::GroupIndex::Shard& detail::GroupIndex::shard_of(
+    const dstd::String& key) const {
+    return shards_[dstd::Hash<dstd::String>{}(key) % SHARDS];
+}
+
+const detail::ScopeGroup* detail::GroupIndex::find(
+    const dstd::String& key) const {
+    Shard& shard = shard_of(key);
+    std::lock_guard<std::mutex> locked(shard.mutex);
+    const auto found = shard.groups.find(key);
+    return found == shard.groups.end() ? nullptr : found->second;
+}
+
+void detail::GroupIndex::add(const dstd::String& key,
+                             const ScopeGroup* group) const {
+    Shard& shard = shard_of(key);
+    std::lock_guard<std::mutex> locked(shard.mutex);
+    shard.groups.emplace(key, group);
 }
 
 void detail::ExtentSlots::assign(std::size_t count) {

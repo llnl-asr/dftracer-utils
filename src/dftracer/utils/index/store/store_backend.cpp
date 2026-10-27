@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <mutex>
 #include <shared_mutex>
@@ -29,6 +30,10 @@ namespace {
 /// A copy with no entries announces none, so a Ready copy that holds no key
 /// carries this one entry instead: the inner key [0xFF], an empty value.
 constexpr std::string_view EMPTY_COPY_MARKER = "\xFF";
+/// The bytes the key arena of one write takes at first, and at most at a
+/// time: its chunks double from the first to the last.
+constexpr std::size_t ARENA_FIRST_CHUNK_BYTES = std::size_t{64} << 10;
+constexpr std::size_t ARENA_CHUNK_BYTES = std::size_t{1} << 20;
 
 std::string error_text(const dstd::Error& error) {
     const dstd::String text = error.format();
@@ -119,7 +124,7 @@ std::string root_key(const std::string& index_root) {
 
 /// The full key of a buffered inner key of (ext, kind, file_id).
 std::string full_key_of(layout::Ext ext, std::uint32_t file_id,
-                        const std::string& inner_key) {
+                        std::string_view inner_key) {
     std::string key = layout::file_prefix(
         ext, static_cast<std::uint8_t>(inner_key[0]), file_id);
     key.append(inner_key, 1, std::string::npos);
@@ -554,6 +559,73 @@ int StoreIndexWrite::file_id_for(std::string_view logical_path) {
 StoreIndexWrite::StoreIndexWrite(std::shared_ptr<StoreRoot> root)
     : root_(std::move(root)) {}
 
+const char* StoreIndexWrite::KeyArena::store(std::string_view key,
+                                             std::string_view value) {
+    const std::size_t need = key.size() + value.size();
+    if (need > left_) {
+        chunk_ = chunk_ == 0 ? ARENA_FIRST_CHUNK_BYTES
+                             : std::min(chunk_ * 2, ARENA_CHUNK_BYTES);
+        const std::size_t size = std::max(need, chunk_);
+        chunks_.push_back(std::make_unique<char[]>(size));
+        next_ = chunks_.back().get();
+        left_ = size;
+    }
+    char* at = next_;
+    if (!key.empty()) std::memcpy(at, key.data(), key.size());
+    if (!value.empty())
+        std::memcpy(at + key.size(), value.data(), value.size());
+    next_ += need;
+    left_ -= need;
+    return at;
+}
+
+void StoreIndexWrite::put_key(PendingCopy& copy, std::string_view key,
+                              std::string_view value) {
+    if (key.size() >= TOMBSTONE || value.size() >= TOMBSTONE) {
+        throw std::runtime_error("store index: a key or value is too large");
+    }
+    copy.keys.push_back({arena_.store(key, value),
+                         static_cast<std::uint32_t>(key.size()),
+                         static_cast<std::uint32_t>(value.size())});
+}
+
+void StoreIndexWrite::delete_key(PendingCopy& copy, std::string_view key) {
+    if (key.size() >= TOMBSTONE) {
+        throw std::runtime_error("store index: a key is too large");
+    }
+    copy.keys.push_back({arena_.store(key, {}),
+                         static_cast<std::uint32_t>(key.size()), TOMBSTONE});
+}
+
+std::vector<StoreIndexWrite::PendingKey> StoreIndexWrite::resolved_keys(
+    const PendingCopy& copy) {
+    const auto key_of = [](const PendingKey& entry) {
+        return std::string_view(entry.bytes, entry.key_length);
+    };
+    std::vector<std::uint32_t> order(copy.keys.size());
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        order[i] = static_cast<std::uint32_t>(i);
+    }
+    // Stable, so the writes of one key stay in the order they were made.
+    std::stable_sort(order.begin(), order.end(),
+                     [&](std::uint32_t a, std::uint32_t b) {
+                         return key_of(copy.keys[a]) < key_of(copy.keys[b]);
+                     });
+    std::vector<PendingKey> resolved;
+    resolved.reserve(order.size());
+    for (std::size_t at = 0; at < order.size();) {
+        std::size_t last = at;
+        while (last + 1 < order.size() && key_of(copy.keys[order[last + 1]]) ==
+                                              key_of(copy.keys[order[at]])) {
+            ++last;
+        }
+        const PendingKey& winner = copy.keys[order[last]];
+        if (winner.value_length != TOMBSTONE) resolved.push_back(winner);
+        at = last + 1;
+    }
+    return resolved;
+}
+
 kv::ScopeKey StoreIndexWrite::scope_of(std::uint32_t file_id) {
     if (file_id == layout::INDEX_WIDE) return kv::ScopeKey::root();
     auto path = root_->path_of(static_cast<int>(file_id));
@@ -752,8 +824,7 @@ void StoreIndexWrite::put(layout::Family, std::string_view key,
     }
     PendingCopy& copy = pending_copy(target->ext, target->file_id,
                                      target->plugin, target->meta);
-    copy.keys.insert_or_assign(std::move(target->inner_key),
-                               std::string(value));
+    put_key(copy, target->inner_key, value);
 }
 
 void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
@@ -789,14 +860,17 @@ void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
     erase_keys(*target, inner_bound_of(begin), inner_bound_of(end));
     auto at = pending_.find({name, scope});
     if (at == pending_.end()) return;
-    auto& keys = at->second.keys;
-    for (auto key = keys.begin(); key != keys.end();) {
-        const std::string full =
-            full_key_of(target->ext, target->file_id, key->first);
+    PendingCopy& copy = at->second;
+    // Every key written so far that falls in the range is deleted; a later
+    // put of it wins again.
+    const std::size_t written = copy.keys.size();
+    for (std::size_t i = 0; i < written; ++i) {
+        const PendingKey entry = copy.keys[i];
+        if (entry.value_length == TOMBSTONE) continue;
+        const std::string_view key(entry.bytes, entry.key_length);
+        const std::string full = full_key_of(target->ext, target->file_id, key);
         if (full.compare(begin) >= 0 && full.compare(end) < 0) {
-            key = keys.erase(key);
-        } else {
-            ++key;
+            delete_key(copy, key);
         }
     }
 }
@@ -826,7 +900,7 @@ void StoreIndexWrite::del(layout::Family, std::string_view key) {
     erase_keys(*target, target->inner_key, target->inner_key + '\0');
     auto at = pending_.find({name, scope});
     if (at == pending_.end()) return;
-    at->second.keys.erase(target->inner_key);
+    delete_key(at->second, target->inner_key);
 }
 
 void StoreIndexWrite::commit() {
@@ -847,7 +921,8 @@ void StoreIndexWrite::commit() {
         PendingCopy& copy = entry.second;
         const std::uint32_t version = copy.version;
         const kv::NamespaceId id = root_->namespace_id(copy.name, version);
-        const bool has_body = !copy.keys.empty() || copy.has_manifest;
+        const std::vector<PendingKey> keys = resolved_keys(copy);
+        const bool has_body = !keys.empty() || copy.has_manifest;
         dstd::Vector<kv::SourceStat> sources;
         const bool have_sources =
             has_body && root_->sources_of(copy.scope, file_stats_, sources);
@@ -885,11 +960,11 @@ void StoreIndexWrite::commit() {
         }
         kv::Batch batch = writer.batch(id, copy.scope, copy.params_hash,
                                        have_sources ? &sources : nullptr);
-        for (const auto& [key, value] : copy.keys) {
-            batch.put(ByteView(key.data(), key.size()),
-                      ByteView(value.data(), value.size()));
+        for (const PendingKey& key : keys) {
+            batch.put(ByteView(key.bytes, key.key_length),
+                      ByteView(key.bytes + key.key_length, key.value_length));
         }
-        if (copy.keys.empty()) {
+        if (keys.empty()) {
             batch.put(
                 ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
                 ByteView());

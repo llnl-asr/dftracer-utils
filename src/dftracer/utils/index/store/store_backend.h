@@ -228,6 +228,34 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     /// One copy a write is about to produce: the keys it holds, the state and
     /// the sources its manifest entry declares, and whether a delete cleared
     /// the whole copy.
+    ///
+    /// The keys are kept in the order written, as entries over bytes in the
+    /// write's arena: a build puts millions of small keys, and one node and
+    /// two strings for each fragment the heap. resolved_keys() sorts them once
+    /// at commit.
+    struct PendingKey {
+        /// The key, followed in the arena by its value.
+        const char* bytes = nullptr;
+        std::uint32_t key_length = 0;
+        /// TOMBSTONE for a delete of the key.
+        std::uint32_t value_length = 0;
+    };
+    static constexpr std::uint32_t TOMBSTONE = 0xFFFFFFFFU;
+
+    /// Holds the bytes of every pending key of this write in chunks that never
+    /// move, so an entry points into them until the write ends.
+    class KeyArena {
+       public:
+        /// `key` then `value`, stored next to each other.
+        const char* store(std::string_view key, std::string_view value);
+
+       private:
+        std::vector<std::unique_ptr<char[]>> chunks_;
+        char* next_ = nullptr;
+        std::size_t left_ = 0;
+        std::size_t chunk_ = 0;
+    };
+
     struct PendingCopy {
         std::string name;
         std::uint32_t version = 0;
@@ -241,8 +269,16 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
         bool has_manifest = false;
         bool failed = false;
         bool cleared = false;
-        std::map<std::string, std::string> keys;
+        std::vector<PendingKey> keys;
     };
+
+    /// The keys of `copy` a commit writes: each key once, in key order, with
+    /// the value its last put gave it; a key whose last write deleted it is
+    /// left out.
+    static std::vector<PendingKey> resolved_keys(const PendingCopy& copy);
+    void put_key(PendingCopy& copy, std::string_view key,
+                 std::string_view value);
+    void delete_key(PendingCopy& copy, std::string_view key);
 
     explicit StoreIndexWrite(std::shared_ptr<StoreRoot> root);
 
@@ -266,6 +302,7 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
                     std::string_view begin, std::string_view end);
 
     std::shared_ptr<StoreRoot> root_;
+    KeyArena arena_;
     std::map<std::pair<std::string, kv::ScopeKey>, PendingCopy> pending_;
     std::map<std::string, kv::SourceStat> file_stats_;
     /// A key range of a copy this root committed before, hidden at commit()

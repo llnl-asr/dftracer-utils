@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
@@ -103,6 +104,31 @@ struct FileIndex {
 dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
                             std::uint64_t random, dstd::StringView label);
 
+/// The file of a store directory that lists the footer of every closed data
+/// file, so a snapshot learns the directory of a file without opening it. A
+/// writer appends one entry when its close succeeds. The summary is a cache: a
+/// data file it does not list, through a lost, torn or missing entry, is read
+/// as if there were no summary.
+inline constexpr std::string_view SUMMARY_FILE_NAME = "summary.dfsum";
+
+/// One closed data file as the summary lists it.
+struct SummaryEntry {
+    /// The name of the data file in the directory.
+    dstd::String name;
+    /// The bytes the file holds at least: every block its tail names.
+    std::uint64_t needed_bytes = 0;
+    /// The sequence of its footer record.
+    std::uint64_t sequence = 0;
+    /// The namespaces and the tail its footer holds.
+    RecordItems footer;
+};
+
+/// Every entry of the summary of `dir`, in the order written, up to the first
+/// that does not verify. Empty when the directory has no summary; Io when it
+/// cannot be read.
+dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
+    dstd::StringView dir);
+
 class DataFileWriter {
    public:
     static dstd::Expected<DataFileWriter, dstd::Error> create(
@@ -169,6 +195,7 @@ class DataFileWriter {
     dstd::Error latched_result() const;
 
     int fd_ = -1;
+    dstd::String path_;
     std::uint32_t extent_size_ = 0;
     std::atomic<std::uint64_t> next_offset_{FILE_HEADER_BYTES};
     std::uint64_t last_sequence_ = 0;
@@ -207,6 +234,13 @@ class DataFileReader {
     /// `scopes`, `copies`, `drops` and commit summaries stay empty.
     static dstd::Expected<DataFileReader, dstd::Error> open(
         dstd::StringView path, FooterItems footer = FooterItems::All);
+    /// The reader of the closed file at `path` as its summary entry lists it,
+    /// as a light open would index it, with nothing read. The file opens on the
+    /// first read, which fails with Parse when the file is shorter than the
+    /// entry's needed bytes. Parse when the entry holds no tail or a tail this
+    /// reader cannot use.
+    static dstd::Expected<DataFileReader, dstd::Error> from_summary(
+        dstd::StringView path, const SummaryEntry& entry);
 
     DataFileReader(const DataFileReader&) = delete;
     DataFileReader& operator=(const DataFileReader&) = delete;
@@ -280,6 +314,16 @@ class DataFileReader {
    private:
     DataFileReader() = default;
 
+    /// The descriptor of the file, opened here on the first call of a reader
+    /// built from a summary entry.
+    dstd::Expected<int, dstd::Error> descriptor() const;
+    /// Indexes a closed file from the namespaces and the tail of its footer.
+    /// False when the footer holds no tail or one that `file_size` bytes
+    /// cannot hold.
+    dstd::Expected<bool, dstd::Error> apply_footer(const RecordItems& items,
+                                                   std::uint64_t sequence,
+                                                   std::uint64_t file_size);
+
     /// True when one read of the file end gave a footer with a FileTail: the
     /// header fields, the namespaces and the tail of it, and nothing else.
     /// False falls back to the full open of the chain. Unsupported when the
@@ -290,10 +334,13 @@ class DataFileReader {
     /// summary of the file.
     dstd::Expected<void, dstd::Error> apply_items_block();
 
-    int fd_ = -1;
+    mutable std::atomic<int> fd_{-1};
     std::uint64_t file_size_ = 0;
     std::size_t records_read_ = 0;
     FileIndex index_;
+    /// The path and the lock of a reader that opens its file on first use.
+    dstd::String path_;
+    dstd::UniquePtr<std::mutex> open_mutex_;
 };
 
 }  // namespace dftracer::utils::store

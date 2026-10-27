@@ -229,6 +229,26 @@ std::vector<std::uint8_t> without_footer(std::vector<std::uint8_t> bytes) {
     return bytes;
 }
 
+bool is_data_file(const std::filesystem::path& path) {
+    return path.extension() == ".dfs";
+}
+
+/// The one data file of `dir`, beside its summary.
+std::string only_data_file(const std::string& dir) {
+    std::vector<std::string> found;
+    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+        if (is_data_file(entry.path())) found.push_back(entry.path().string());
+    }
+    REQUIRE(found.size() == 1);
+    return found.front();
+}
+
+/// Removes the summary of `dir`, as a crash that loses it leaves the directory.
+void drop_summary(const std::string& dir) {
+    std::filesystem::remove(std::filesystem::path(dir) /
+                            std::string(store::SUMMARY_FILE_NAME));
+}
+
 /// The bytes of a closed data file with the format version of its footer
 /// tail set to `version`, the footer record encoded again in place.
 std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
@@ -2215,8 +2235,7 @@ TEST_SUITE("index store snapshot") {
                                               file_scope("/traces/b.pfw"),
                                               file_scope("/traces/c.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
 
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
@@ -2279,11 +2298,11 @@ TEST_SUITE("index store snapshot") {
             file_scope("/traces/a.pfw"), file_scope("/traces/b.pfw"),
             file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
         // Cut as a crash before the close leaves it, so each commit is checked
         // whole on its first touch.
         write_file(path, without_footer(read_file(path)));
+        drop_summary(dir.str());
         const std::string key_text = "b0-key-0000";
         const ByteView key = view_of(key_text);
 
@@ -2355,8 +2374,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(flush_writer(*writer).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         CHECK(reader->index().closed);
@@ -2593,6 +2611,7 @@ TEST_SUITE("index store snapshot") {
         }
         for (const auto& entry :
              std::filesystem::directory_iterator(dir.str())) {
+            if (!is_data_file(entry.path())) continue;
             const std::string path = entry.path().string();
             // A light open keeps the directory and leaves the scope items of
             // the footer unread; a full open reads them.
@@ -2695,8 +2714,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(flush_writer(*writer).has_value());
             REQUIRE(close_writer(*writer).has_value());
         }
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const auto& refs = extent_refs_of(*reader);
@@ -2761,8 +2779,7 @@ TEST_SUITE("index store snapshot") {
                                               file_scope("/traces/b.pfw"),
                                               file_scope("/traces/c.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 3);
@@ -2811,8 +2828,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const ScopeKey scope = file_scope("/traces/a.pfw");
         write_scopes_file(cut_dir, spec, {scope}, 4000, false);
-        const std::string copied =
-            std::filesystem::directory_iterator(cut_dir.str())->path().string();
+        const std::string copied = only_data_file(cut_dir.str());
         std::vector<std::uint8_t> bytes = read_file(copied);
         auto copied_reader = DataFileReader::open(copied);
         REQUIRE(copied_reader.has_value());
@@ -2864,6 +2880,173 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(light->index().tail->extent_count >
                 std::filesystem::file_size(path) / (1U << 20U) + 1);
         CHECK(light->records_read() == 1);
+    }
+
+    TEST_CASE("an open indexes closed files from the summary alone") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_summary_open");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        constexpr int FILES = 6;
+        std::vector<ScopeKey> scopes;
+        for (int f = 0; f < FILES; ++f) {
+            scopes.push_back(
+                file_scope("/traces/s" + std::to_string(f) + ".pfw"));
+            write_scoped_file(dir, spec, scopes.back(), 2, 40, true);
+        }
+        auto listed = store::read_summary(dir.str());
+        REQUIRE(listed.has_value());
+        CHECK(listed->size() == FILES);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->open_stats().files == FILES);
+        CHECK(snapshot->open_stats().files_summarized == FILES);
+        CHECK(snapshot->read_stats().read_calls == 0);
+        for (int f = 0; f < FILES; ++f) {
+            const ScopeKey& scope = scopes[static_cast<std::size_t>(f)];
+            auto found = snapshot->get(spec, scope, view_of("b1-" + key_of(9)));
+            REQUIRE(found.has_value());
+            REQUIRE(found->has_value());
+            CHECK(to_std((*found)->bytes()) == value_of(9));
+            auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+            CHECK(collect(cursor).size() == 80);
+        }
+        auto report = snapshot->check();
+        REQUIRE(report.has_value());
+        CHECK(report->bad_commits.empty());
+        CHECK(report->bad_segments.empty());
+    }
+
+    TEST_CASE("files the summary does not list open as before") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_summary_partial");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        std::vector<ScopeKey> scopes;
+        for (int f = 0; f < 4; ++f) {
+            scopes.push_back(
+                file_scope("/traces/p" + std::to_string(f) + ".pfw"));
+            write_scoped_file(dir, spec, scopes.back(), 1, 30, true);
+        }
+        const std::string summary = (std::filesystem::path(dir.str()) /
+                                     std::string(store::SUMMARY_FILE_NAME))
+                                        .string();
+        std::vector<std::uint8_t> bytes = read_file(summary);
+        auto listed = store::read_summary(dir.str());
+        REQUIRE(listed.has_value());
+        REQUIRE(listed->size() == 4);
+
+        const auto reads_all = [&](std::size_t summarized) {
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            CHECK(snapshot->open_stats().files == 4);
+            CHECK(snapshot->open_stats().files_summarized == summarized);
+            for (const ScopeKey& scope : scopes) {
+                auto cursor =
+                    snapshot->scan(spec, scope, ByteView{}, ByteView{});
+                CHECK(collect(cursor).size() == 30);
+            }
+        };
+        SUBCASE("a torn entry ends the summary") {
+            // A byte of the second entry, so its crc fails and the reader
+            // stops there.
+            const std::size_t first =
+                12 + dftracer::utils::read_u32_le(bytes.data() + 4);
+            bytes[first + 20] ^= 0xFFU;
+            write_file(summary, bytes);
+            reads_all(1);
+        }
+        SUBCASE("a cut entry ends the summary") {
+            bytes.resize(bytes.size() - 7);
+            write_file(summary, bytes);
+            reads_all(3);
+        }
+        SUBCASE("no summary") {
+            drop_summary(dir.str());
+            reads_all(0);
+        }
+    }
+
+    TEST_CASE("a summary entry of a file that is gone is passed over") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_summary_gone");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey kept = file_scope("/traces/kept.pfw");
+        const ScopeKey gone = file_scope("/traces/gone.pfw");
+        write_scoped_file(dir, spec, kept, 1, 20, true);
+        write_scoped_file(dir, spec, gone, 1, 20, true);
+        auto listed = store::read_summary(dir.str());
+        REQUIRE(listed.has_value());
+        REQUIRE(listed->size() == 2);
+        std::filesystem::remove(std::filesystem::path(dir.str()) /
+                                std::string(listed->back().name.data(),
+                                            listed->back().name.size()));
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->open_stats().files == 1);
+        CHECK(snapshot->open_stats().files_summarized == 1);
+        CHECK(snapshot->skipped().empty());
+        auto cursor = snapshot->scan(spec, kept, ByteView{}, ByteView{});
+        CHECK(collect(cursor).size() == 20);
+        CHECK(snapshot->state(spec, gone) == ScopeState::Absent);
+    }
+
+    TEST_CASE("a file shorter than its summary entry fails its queries") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_summary_short");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey scope = file_scope("/traces/short.pfw");
+        write_scoped_file(dir, spec, scope, 1, 20, true);
+        const std::string path = only_data_file(dir.str());
+        std::vector<std::uint8_t> bytes = read_file(path);
+        bytes.resize(store::FILE_HEADER_BYTES);
+        write_file(path, bytes);
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->open_stats().files_summarized == 1);
+        auto failed = snapshot->get(spec, scope, view_of("b0-" + key_of(3)));
+        REQUIRE_FALSE(failed.has_value());
+        CHECK(failed.error().is(dstd::Condition::Parse));
+    }
+
+    TEST_CASE("a summary entry holds when a crash loses the footer") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_summary_footer_lost");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        const ScopeKey scope = file_scope("/traces/lost.pfw");
+        write_scoped_file(dir, spec, scope, 3, 60, true);
+        const std::string path = only_data_file(dir.str());
+        write_file(path, without_footer(read_file(path)));
+
+        // The entry names blocks the close synced before its footer, so the
+        // file reads through them as a closed file.
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->open_stats().files_summarized == 1);
+        auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
+        CHECK(collect(cursor).size() == 180);
+        auto found = snapshot->get(spec, scope, view_of("b2-" + key_of(59)));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == value_of(59));
+    }
+
+    TEST_CASE("writers that close at once each add one whole summary entry") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_summary_threads");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+        constexpr int WRITERS = 8;
+        std::vector<std::thread> threads;
+        for (int w = 0; w < WRITERS; ++w) {
+            threads.emplace_back([&dir, &spec, w] {
+                write_scoped_file(
+                    dir, spec,
+                    file_scope("/traces/t" + std::to_string(w) + ".pfw"), 2, 50,
+                    true);
+            });
+        }
+        for (std::thread& thread : threads) thread.join();
+        auto listed = store::read_summary(dir.str());
+        REQUIRE(listed.has_value());
+        CHECK(listed->size() == WRITERS);
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->open_stats().files_summarized == WRITERS);
     }
 
     TEST_CASE("a scope lookup skips the files whose filter rules it out") {
@@ -3147,6 +3330,7 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir cut_dir("snapshot_lazy_threads_cut");
         for (const auto& entry :
              std::filesystem::directory_iterator(dir.str())) {
+            if (!is_data_file(entry.path())) continue;
             write_file(cut_dir.file(entry.path().filename().string()),
                        without_footer(read_file(entry.path().string())));
         }
@@ -3319,8 +3503,7 @@ TEST_SUITE("index store snapshot") {
         const NamespaceSpec spec = put_spec("dftu.test.put");
         write_scoped_file(dir, spec, scope, 3, 20, true);
 
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 3);
@@ -3745,8 +3928,7 @@ TEST_SUITE("index store snapshot") {
         const std::vector<ScopeKey> scopes = {file_scope("/traces/one.pfw")};
         write_many_commits(dir, spec, scopes, COMMITS);
 
-        const std::string path =
-            std::filesystem::directory_iterator(dir.str())->path().string();
+        const std::string path = only_data_file(dir.str());
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const ClosedSegments closed = closed_segments(*reader);

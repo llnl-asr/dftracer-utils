@@ -625,6 +625,14 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         if (error) return io_error();
     }
     std::sort(names.begin(), names.end());
+    // A summary that cannot be read only leaves every file to open as before.
+    auto summary = read_summary(dir);
+    dstd::HashMap<dstd::String, const SummaryEntry*> summarized;
+    if (summary) {
+        for (const SummaryEntry& entry : *summary) {
+            summarized.emplace(entry.name, &entry);
+        }
+    }
     const auto listed = std::chrono::steady_clock::now();
 
     // The phases run on the process-wide default runtime, one item per file and
@@ -636,9 +644,23 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
 
     std::vector<dstd::Optional<detail::FileData>> opened(names.size());
     std::vector<dstd::Optional<dstd::Error>> open_errors(names.size());
+    std::vector<std::uint8_t> from_summary(names.size(), 0);
     const auto open_one = [&](std::size_t index) {
-        auto reader = DataFileReader::open(path_string(dir, names[index]),
-                                           FooterItems::Directory);
+        const std::string path = path_string(dir, names[index]);
+        const auto listed_entry = summarized.find(dstring(names[index]));
+        if (listed_entry != summarized.end()) {
+            auto reader =
+                DataFileReader::from_summary(path, *listed_entry->second);
+            if (reader) {
+                detail::FileData& file =
+                    opened[index].emplace(std::move(*reader));
+                file.name = dstring(names[index]);
+                file.writer_random = file.reader.index().writer_random;
+                from_summary[index] = 1;
+                return;
+            }
+        }
+        auto reader = DataFileReader::open(path, FooterItems::Directory);
         if (!reader) {
             open_errors[index] = reader.error();
             return;
@@ -697,6 +719,8 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     reads_ = dstd::make_unique<detail::ReadCounters>();
     open_stats_ = OpenStats{};
     open_stats_.files = files_.size();
+    open_stats_.files_summarized = static_cast<std::size_t>(
+        std::count(from_summary.begin(), from_summary.end(), 1));
     for (const detail::FileData& file : files_) {
         open_stats_.commits += file.commits.size();
         open_stats_.extents += file.reader.index().extent_refs.size();

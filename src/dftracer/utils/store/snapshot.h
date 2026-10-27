@@ -705,13 +705,16 @@ class ScanCursor {
 struct OpenStats {
     /// The data files of the directory that were readable.
     std::size_t files = 0;
+    /// The closed files the summary of the directory lists, which the open
+    /// indexed from the summary without opening them.
+    std::size_t files_summarized = 0;
     /// The commits of those files.
     std::size_t commits = 0;
     /// The extent refs the record chains list themselves. A checkpoint or a
     /// footer lists a commit by summary, and its extent refs are read with its
     /// first query.
     std::size_t extents = 0;
-    double ms_list = 0;        ///< Listing the directory.
+    double ms_list = 0;  ///< Listing the directory and reading its summary.
     double ms_open_files = 0;  ///< Opening and indexing every data file.
     double ms_tables = 0;  ///< Grouping the commits and building the tables.
     double ms_total = 0;

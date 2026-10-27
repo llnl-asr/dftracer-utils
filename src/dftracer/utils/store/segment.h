@@ -4,7 +4,9 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/store/extent_codec.h>
 
@@ -32,7 +34,11 @@ using PlacerFn = BigRef (*)(void* context, ByteView value);
 
 class SegmentBuilder {
    public:
+    /// Copies `key` and `value` into the builder.
     void add(ByteView key, ByteView value);
+    /// Adds `key` and `value` without a copy: their bytes must stay valid and
+    /// unchanged until seal() returns and first_key() and last_key() are read.
+    void add_ref(ByteView key, ByteView value);
 
     // Granule offsets are relative to the first byte of the segment, and the
     // segment length includes the padding to SEGMENT_ALIGN. A big value with a
@@ -40,28 +46,59 @@ class SegmentBuilder {
     dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> seal(
         FoldFn fold, PlacerFn placer, void* placer_context);
 
+    /// The first half of seal(): sorts and folds the entries, places every big
+    /// value through `placer` and returns the exact bytes write_to() writes.
+    /// The same errors as seal().
+    dstd::Expected<std::size_t, dstd::Error> plan(FoldFn fold, PlacerFn placer,
+                                                  void* placer_context);
+    /// The second half: writes the segment plan() measured to `out`, which
+    /// has room for that many bytes. Never fails.
+    void write_to(std::uint8_t* out) const;
+
     std::uint64_t entry_count() const { return entry_count_; }
     ByteView first_key() const;
     ByteView last_key() const;
 
    private:
     struct Record {
-        std::size_t key_offset = 0;
-        std::size_t key_length = 0;
-        std::size_t value_offset = 0;
-        std::size_t value_length = 0;
+        ByteView key;
+        ByteView value;
         std::uint64_t ordinal = 0;
     };
 
-    ByteView view_at(std::size_t offset, std::size_t length) const;
+    /// One entry after plan(): its key, and its value in place, or in the
+    /// folded values, or as a big run.
+    struct PlannedEntry {
+        ByteView key;
+        ByteView value;
+        std::size_t value_offset = 0;
+        std::size_t value_length = 0;
+        BigRef big{};
+        bool folded = false;
+        bool is_big = false;
+    };
+    struct PlannedGroup {
+        std::size_t begin = 0;
+        std::size_t end = 0;
+        std::size_t bytes = 0;
+    };
+
+    /// `bytes` copied into the builder's arena, which never moves them.
+    ByteView keep(ByteView bytes);
+    ByteView value_of(const PlannedEntry& entry) const;
 
     dstd::Vector<Record> records_;
-    dstd::Vector<std::uint8_t> arena_;
+    /// Opened by the first add() that copies; add_ref() needs none. Behind a
+    /// pointer, so the builder moves.
+    dstd::UniquePtr<StringArena> arena_;
+    dstd::Vector<PlannedEntry> entries_;
+    dstd::Vector<PlannedGroup> groups_;
+    dstd::Vector<std::uint8_t> folded_values_;
+    std::size_t index_bytes_ = 0;
+    std::size_t planned_bytes_ = 0;
     std::uint64_t entry_count_ = 0;
-    std::size_t first_key_offset_ = 0;
-    std::size_t first_key_length_ = 0;
-    std::size_t last_key_offset_ = 0;
-    std::size_t last_key_length_ = 0;
+    ByteView first_key_;
+    ByteView last_key_;
 };
 
 class SegmentView {

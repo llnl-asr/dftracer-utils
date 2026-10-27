@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_STORE_STORE_BACKEND_H
 
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/store_layout.h>
@@ -242,20 +243,6 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     };
     static constexpr std::uint32_t TOMBSTONE = 0xFFFFFFFFU;
 
-    /// Holds the bytes of every pending key of this write in chunks that never
-    /// move, so an entry points into them until the write ends.
-    class KeyArena {
-       public:
-        /// `key` then `value`, stored next to each other.
-        const char* store(std::string_view key, std::string_view value);
-
-       private:
-        std::vector<std::unique_ptr<char[]>> chunks_;
-        char* next_ = nullptr;
-        std::size_t left_ = 0;
-        std::size_t chunk_ = 0;
-    };
-
     struct PendingCopy {
         std::string name;
         std::uint32_t version = 0;
@@ -279,6 +266,8 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     void put_key(PendingCopy& copy, std::string_view key,
                  std::string_view value);
     void delete_key(PendingCopy& copy, std::string_view key);
+    /// `key` then `value`, copied next to each other into the arena.
+    const char* keep(std::string_view key, std::string_view value);
 
     explicit StoreIndexWrite(std::shared_ptr<StoreRoot> root);
 
@@ -302,7 +291,9 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
                     std::string_view begin, std::string_view end);
 
     std::shared_ptr<StoreRoot> root_;
-    KeyArena arena_;
+    /// The bytes of every pending key of this write: a key and its value next
+    /// to each other, in place until the write ends.
+    StringArena arena_;
     std::map<std::pair<std::string, kv::ScopeKey>, PendingCopy> pending_;
     std::map<std::string, kv::SourceStat> file_stats_;
     /// A key range of a copy this root committed before, hidden at commit()

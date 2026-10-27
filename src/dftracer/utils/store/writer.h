@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -97,6 +98,9 @@ class Batch {
 
     /// InvalidArgument on a fold namespace, reported by commit.
     void put(ByteView key, ByteView value);
+    /// put() without a copy: the bytes of `key` and `value` must stay valid
+    /// and unchanged until the commit of this batch returns.
+    void put_ref(ByteView key, ByteView value);
     /// InvalidArgument on a non-fold namespace, and when a numeric fold gets a
     /// value that is not 8 bytes. Reported by commit.
     void fold(ByteView key, ByteView value);
@@ -105,15 +109,14 @@ class Batch {
     friend class Writer;
 
     struct Entry {
-        std::size_t key_offset = 0;
-        std::size_t key_length = 0;
-        std::size_t value_offset = 0;
-        std::size_t value_length = 0;
+        ByteView key;
+        ByteView value;
     };
 
     Batch() = default;
 
-    ByteView view_at(std::size_t offset, std::size_t length) const;
+    /// `bytes` copied into the batch's arena, which never moves them.
+    ByteView keep(ByteView bytes);
     void add(ByteView key, ByteView value);
     void record_error(dstd::Condition condition);
 
@@ -125,7 +128,9 @@ class Batch {
     FoldKind fold_ = FoldKind::None;
     dstd::Optional<dstd::Error> error_;
     dstd::Vector<Entry> entries_;
-    dstd::Vector<std::uint8_t> arena_;
+    /// Opened by the first put() that copies; put_ref() needs none. Behind a
+    /// pointer, so the batch moves.
+    dstd::UniquePtr<StringArena> arena_;
 };
 
 /// One data file of one process. Entries become visible at the group commit
@@ -265,8 +270,11 @@ class Writer {
                static_cast<std::uint64_t>(scope_id);
     }
 
+    /// A planned segment: its builder reads the batch in place and writes the
+    /// `length` bytes of the segment where the extent writer puts them.
     struct SegmentBytes {
-        dstd::Vector<std::uint8_t> bytes;
+        SegmentBuilder builder;
+        std::size_t length = 0;
         std::uint64_t entry_count = 0;
         dstd::Vector<std::uint8_t> first_key;
         dstd::Vector<std::uint8_t> last_key;

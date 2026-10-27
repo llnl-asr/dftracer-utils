@@ -29,6 +29,20 @@ struct StringArena {
         return {dst, len};
     }
 
+    /// `first` then `second`, next to each other.
+    std::string_view push(std::string_view first, std::string_view second) {
+        const std::size_t len = first.size() + second.size();
+        if (pos + len > blocks.back().size()) {
+            blocks.emplace_back(std::max(BLOCK_SIZE, len));
+            pos = 0;
+        }
+        char *dst = blocks.back().data() + pos;
+        if (!first.empty()) std::memcpy(dst, first.data(), first.size());
+        if (!second.empty())
+            std::memcpy(dst + first.size(), second.data(), second.size());
+        pos += len;
+        return {dst, len};
+    }
     void clear() {
         if (blocks.size() > 1) blocks.resize(1);
         pos = 0;

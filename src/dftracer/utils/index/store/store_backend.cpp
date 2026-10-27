@@ -30,10 +30,6 @@ namespace {
 /// A copy with no entries announces none, so a Ready copy that holds no key
 /// carries this one entry instead: the inner key [0xFF], an empty value.
 constexpr std::string_view EMPTY_COPY_MARKER = "\xFF";
-/// The bytes the key arena of one write takes at first, and at most at a
-/// time: its chunks double from the first to the last.
-constexpr std::size_t ARENA_FIRST_CHUNK_BYTES = std::size_t{64} << 10;
-constexpr std::size_t ARENA_CHUNK_BYTES = std::size_t{1} << 20;
 
 std::string error_text(const dstd::Error& error) {
     const dstd::String text = error.format();
@@ -559,24 +555,9 @@ int StoreIndexWrite::file_id_for(std::string_view logical_path) {
 StoreIndexWrite::StoreIndexWrite(std::shared_ptr<StoreRoot> root)
     : root_(std::move(root)) {}
 
-const char* StoreIndexWrite::KeyArena::store(std::string_view key,
-                                             std::string_view value) {
-    const std::size_t need = key.size() + value.size();
-    if (need > left_) {
-        chunk_ = chunk_ == 0 ? ARENA_FIRST_CHUNK_BYTES
-                             : std::min(chunk_ * 2, ARENA_CHUNK_BYTES);
-        const std::size_t size = std::max(need, chunk_);
-        chunks_.push_back(std::make_unique<char[]>(size));
-        next_ = chunks_.back().get();
-        left_ = size;
-    }
-    char* at = next_;
-    if (!key.empty()) std::memcpy(at, key.data(), key.size());
-    if (!value.empty())
-        std::memcpy(at + key.size(), value.data(), value.size());
-    next_ += need;
-    left_ -= need;
-    return at;
+const char* StoreIndexWrite::keep(std::string_view key,
+                                  std::string_view value) {
+    return arena_.push(key, value).data();
 }
 
 void StoreIndexWrite::put_key(PendingCopy& copy, std::string_view key,
@@ -584,7 +565,7 @@ void StoreIndexWrite::put_key(PendingCopy& copy, std::string_view key,
     if (key.size() >= TOMBSTONE || value.size() >= TOMBSTONE) {
         throw std::runtime_error("store index: a key or value is too large");
     }
-    copy.keys.push_back({arena_.store(key, value),
+    copy.keys.push_back({keep(key, value),
                          static_cast<std::uint32_t>(key.size()),
                          static_cast<std::uint32_t>(value.size())});
 }
@@ -593,8 +574,8 @@ void StoreIndexWrite::delete_key(PendingCopy& copy, std::string_view key) {
     if (key.size() >= TOMBSTONE) {
         throw std::runtime_error("store index: a key is too large");
     }
-    copy.keys.push_back({arena_.store(key, {}),
-                         static_cast<std::uint32_t>(key.size()), TOMBSTONE});
+    copy.keys.push_back(
+        {keep(key, {}), static_cast<std::uint32_t>(key.size()), TOMBSTONE});
 }
 
 std::vector<StoreIndexWrite::PendingKey> StoreIndexWrite::resolved_keys(
@@ -960,9 +941,12 @@ void StoreIndexWrite::commit() {
         }
         kv::Batch batch = writer.batch(id, copy.scope, copy.params_hash,
                                        have_sources ? &sources : nullptr);
+        // The arena of this write holds the bytes until the commit returns,
+        // so the batch takes them in place.
         for (const PendingKey& key : keys) {
-            batch.put(ByteView(key.bytes, key.key_length),
-                      ByteView(key.bytes + key.key_length, key.value_length));
+            batch.put_ref(
+                ByteView(key.bytes, key.key_length),
+                ByteView(key.bytes + key.key_length, key.value_length));
         }
         if (keys.empty()) {
             batch.put(

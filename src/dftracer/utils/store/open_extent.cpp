@@ -563,22 +563,38 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
 dstd::Expected<void, dstd::Error> ExtentWriter::append(
     std::uint32_t namespace_id, ByteView segment_bytes, ExtentSegment info,
     void* context, PageCodec codec) {
+    return append_with(
+        namespace_id, segment_bytes.size(), std::move(info), context, codec,
+        [](void* bytes, std::uint8_t* out) {
+            const ByteView& view = *static_cast<const ByteView*>(bytes);
+            std::memcpy(out, view.data(), view.size());
+        },
+        &segment_bytes);
+}
+
+dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
+    std::uint32_t namespace_id, std::size_t segment_length, ExtentSegment info,
+    void* context, PageCodec codec, SegmentWriteFn write, void* write_context) {
     const int latched = latched_errno_.load(std::memory_order_acquire);
     if (latched != 0) return dstd::Unexpected<dstd::Error>(latched_error());
-    if (segment_bytes.empty() ||
-        segment_bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
+    if (segment_length == 0 ||
+        segment_length > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
     // An extent's raw bytes keep room for the fixed header of its stored form.
     const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
-    if (segment_bytes.size() >= capacity) {
-        return append_run(namespace_id, segment_bytes, std::move(info), context,
-                          codec);
+    if (segment_length >= capacity) {
+        dstd::Vector<std::uint8_t> run(segment_length);
+        write(write_context, run.data());
+        return append_run(
+            namespace_id,
+            ByteView(reinterpret_cast<const std::byte*>(run.data()),
+                     run.size()),
+            std::move(info), context, codec);
     }
 
     NamespaceSlot* slot = find_slot(namespace_id, codec);
-    const std::uint32_t length =
-        static_cast<std::uint32_t>(segment_bytes.size());
+    const std::uint32_t length = static_cast<std::uint32_t>(segment_length);
     for (;;) {
         OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
         if (extent == nullptr) extent = publish_extent(*slot, nullptr);
@@ -596,8 +612,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append(
             if (extent->state.compare_exchange_weak(
                     state, state + length + OPEN_EXTENT_WRITER_ONE,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
-                std::memcpy(extent->buffer.data() + used, segment_bytes.data(),
-                            length);
+                write(write_context, extent->buffer.data() + used);
                 info.offset_in_extent = static_cast<std::uint32_t>(used);
                 info.length = length;
                 OpenSegment open;

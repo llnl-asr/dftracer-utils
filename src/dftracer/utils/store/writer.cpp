@@ -211,9 +211,12 @@ std::atomic<WriterTestHook::SpaceSealedFn>& space_sealed_hook() {
 
 }  // namespace
 
-ByteView Batch::view_at(std::size_t offset, std::size_t length) const {
-    if (length == 0) return {};
-    return {arena_.data() + offset, length};
+ByteView Batch::keep(ByteView bytes) {
+    if (bytes.empty()) return {};
+    if (!arena_) arena_ = dstd::make_unique<StringArena>();
+    const std::string_view kept =
+        arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
 }
 
 void Batch::record_error(dstd::Condition condition) {
@@ -221,20 +224,8 @@ void Batch::record_error(dstd::Condition condition) {
 }
 
 void Batch::add(ByteView key, ByteView value) {
-    Entry entry;
-    entry.key_offset = arena_.size();
-    entry.key_length = key.size();
-    if (!key.empty()) {
-        const auto* begin = reinterpret_cast<const std::uint8_t*>(key.data());
-        arena_.insert(arena_.end(), begin, begin + key.size());
-    }
-    entry.value_offset = arena_.size();
-    entry.value_length = value.size();
-    if (!value.empty()) {
-        const auto* begin = reinterpret_cast<const std::uint8_t*>(value.data());
-        arena_.insert(arena_.end(), begin, begin + value.size());
-    }
-    entries_.push_back(entry);
+    const ByteView kept_key = keep(key);
+    entries_.push_back(Entry{kept_key, keep(value)});
 }
 
 void Batch::put(ByteView key, ByteView value) {
@@ -244,6 +235,15 @@ void Batch::put(ByteView key, ByteView value) {
         return;
     }
     add(key, value);
+}
+
+void Batch::put_ref(ByteView key, ByteView value) {
+    if (error_) return;
+    if (fold_ != FoldKind::None) {
+        record_error(dstd::Condition::InvalidArgument);
+        return;
+    }
+    entries_.push_back(Entry{key, value});
 }
 
 void Batch::fold(ByteView key, ByteView value) {
@@ -542,22 +542,23 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
     if (batch.entries_.empty()) return segment;
 
     const auto key_of = [&batch](std::size_t index) {
-        const Batch::Entry& entry = batch.entries_[index];
-        return batch.view_at(entry.key_offset, entry.key_length);
+        return batch.entries_[index].key;
     };
     const auto value_of = [&batch](std::size_t index) {
-        const Batch::Entry& entry = batch.entries_[index];
-        return batch.view_at(entry.value_offset, entry.value_length);
+        return batch.entries_[index].value;
     };
 
     dstd::Vector<std::size_t> order(batch.entries_.size());
     for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
-    std::sort(order.begin(), order.end(),
-              [&key_of](std::size_t a, std::size_t b) {
-                  const int cmp = compare_bytes(key_of(a), key_of(b));
-                  if (cmp != 0) return cmp < 0;
-                  return a < b;
-              });
+    const auto before = [&key_of](std::size_t a, std::size_t b) {
+        const int cmp = compare_bytes(key_of(a), key_of(b));
+        if (cmp != 0) return cmp < 0;
+        return a < b;
+    };
+    // A caller that puts in key order needs no sort.
+    if (!std::is_sorted(order.begin(), order.end(), before)) {
+        std::sort(order.begin(), order.end(), before);
+    }
 
     dstd::Vector<KeyGroup> groups;
     for (std::size_t i = 0; i < order.size();) {
@@ -569,16 +570,16 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
         KeyGroup group;
         group.begin = i;
         group.end = end;
-        group.key_length = batch.entries_[order[i]].key_length;
+        group.key_length = batch.entries_[order[i]].key.size();
         if (batch.fold_ == FoldKind::Concat) {
             std::uint64_t total = 0;
             for (std::size_t at = i; at < end; ++at) {
-                total += batch.entries_[order[at]].value_length;
+                total += batch.entries_[order[at]].value.size();
             }
             group.value_length = total;
         } else if (batch.fold_ == FoldKind::None ||
                    batch.fold_ == FoldKind::Last) {
-            group.value_length = batch.entries_[order[end - 1U]].value_length;
+            group.value_length = batch.entries_[order[end - 1U]].value.size();
         } else {
             group.value_length = 8;
         }
@@ -607,12 +608,15 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
     }
 
     const FoldFn fold = fold_fn(batch.fold_);
-    SegmentBuilder builder;
+    // The batch outlives the commit, so the builder reads its bytes in place,
+    // in the order just sorted, and writes the segment straight into its
+    // extent.
+    SegmentBuilder& builder = segment.builder;
     for (std::size_t i = 0; i < order.size(); ++i) {
-        builder.add(key_of(order[i]), value_of(order[i]));
+        builder.add_ref(key_of(order[i]), value_of(order[i]));
     }
     BigPlacement placement{this, &segment.big_runs};
-    auto sealed = builder.seal(fold, &Writer::place_big, &placement);
+    auto sealed = builder.plan(fold, &Writer::place_big, &placement);
     if (auto error = latched()) {
         extent_bytes_.release(charged);
         return dstd::Unexpected<dstd::Error>(*error);
@@ -621,14 +625,14 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
         extent_bytes_.release(charged);
         return dstd::Unexpected<dstd::Error>(sealed.error());
     }
-    if (sealed->size() != charged) {
+    if (*sealed != charged) {
         extent_bytes_.release(charged);
         return dstd::Unexpected<dstd::Error>(
             dstd::Error(dstd::Condition::Internal,
                         "store segment size differs from its plan"));
     }
 
-    segment.bytes = std::move(*sealed);
+    segment.length = *sealed;
     segment.entry_count = builder.entry_count();
     segment.first_key = copy_bytes(builder.first_key());
     segment.last_key = copy_bytes(builder.last_key());
@@ -683,7 +687,7 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
         return dstd::Unexpected<dstd::Error>(segment.error());
     }
     const std::uint64_t segment_bytes =
-        static_cast<std::uint64_t>(segment->bytes.size());
+        static_cast<std::uint64_t>(segment->length);
     const bool charged = segment_bytes != 0;
 
     auto* pending = new PendingBatch;
@@ -718,10 +722,13 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
     info.first_key = std::move(segment->first_key);
     info.last_key = std::move(segment->last_key);
 
-    auto appended = extents_.append(
-        pending->namespace_id,
-        ByteView{segment->bytes.data(), segment->bytes.size()}, std::move(info),
-        pending, static_cast<PageCodec>(pending->namespace_item.codec));
+    auto appended = extents_.append_with(
+        pending->namespace_id, segment->length, std::move(info), pending,
+        static_cast<PageCodec>(pending->namespace_item.codec),
+        [](void* builder, std::uint8_t* out) {
+            static_cast<const SegmentBuilder*>(builder)->write_to(out);
+        },
+        &segment->builder);
     if (!appended) {
         extent_bytes_.release(segment_bytes);
         // The extent writer reports this error from every later append, so a

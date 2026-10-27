@@ -99,6 +99,18 @@ class ExtentWriter {
                                              ExtentSegment info, void* context,
                                              PageCodec codec = PageCodec::Zstd);
 
+    /// Writes `length` bytes of a sealed segment into its place, with no copy
+    /// of their own.
+    using SegmentWriteFn = void (*)(void* context, std::uint8_t* out);
+
+    /// append() for a segment that `write` writes straight into the open
+    /// extent, or into the buffer of its run, before this returns: `length`
+    /// bytes at `out`, called once.
+    dstd::Expected<void, dstd::Error> append_with(
+        std::uint32_t namespace_id, std::size_t length, ExtentSegment info,
+        void* context, PageCodec codec, SegmentWriteFn write,
+        void* write_context);
+
     /// Seals every open extent that holds bytes and starts its write, leaving a
     /// fresh open extent per namespace for later appends. An open extent with
     /// no bytes is left as it is, so repeated seals allocate nothing. No-op

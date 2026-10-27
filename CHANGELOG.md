@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Cut the peak memory of an index build on the store backend: the build keeps each key once until its commit and writes it into its extent without more copies, and page dictionaries train as tasks of the build's executor.
+  A cold `dftracer_index` of the 8,404 minife traces at 96 threads peaks at about 2.8 GB where it peaked at 3.6 GB.
 - Build each file of `distributed_index` on one worker, with that worker's threads, where a file larger than its share of the work was cut across workers.
   The `partition` argument keeps its values, and both place whole files.
 - Let a process that holds an index on the store backend see the files other processes wrote to it within 1 s, without a reopen.

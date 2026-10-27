@@ -76,16 +76,6 @@ std::size_t align_up(std::size_t value, std::size_t alignment) {
     return (value + alignment - 1U) & ~(alignment - 1U);
 }
 
-enum class ValueStorage : std::uint8_t { Arena, Folded };
-
-struct SealedEntry {
-    std::size_t key_offset = 0;
-    std::size_t key_length = 0;
-    std::size_t value_offset = 0;
-    std::size_t value_length = 0;
-    ValueStorage value_storage = ValueStorage::Arena;
-};
-
 }  // namespace
 
 bool SegmentView::parse_entry(ByteView bytes, std::size_t& at, std::size_t end,
@@ -125,225 +115,222 @@ bool SegmentView::parse_entry(ByteView bytes, std::size_t& at, std::size_t end,
     return true;
 }
 
-ByteView SegmentBuilder::view_at(std::size_t offset, std::size_t length) const {
-    return vector_view(arena_, offset, length);
-}
-
 ByteView SegmentBuilder::first_key() const {
     if (entry_count_ == 0) return {};
-    return view_at(first_key_offset_, first_key_length_);
+    return first_key_;
 }
 
 ByteView SegmentBuilder::last_key() const {
     if (entry_count_ == 0) return {};
-    return view_at(last_key_offset_, last_key_length_);
+    return last_key_;
+}
+
+ByteView SegmentBuilder::keep(ByteView bytes) {
+    if (bytes.empty()) return {};
+    if (!arena_) arena_ = dstd::make_unique<StringArena>();
+    const std::string_view kept =
+        arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
 }
 
 void SegmentBuilder::add(ByteView key, ByteView value) {
-    Record record;
-    record.key_offset = arena_.size();
-    if (!key.empty()) {
-        const auto* begin = byte_data(key);
-        arena_.insert(arena_.end(), begin, begin + key.size());
-    }
-    record.key_length = key.size();
-
-    record.value_offset = arena_.size();
-    if (!value.empty()) {
-        const auto* begin = byte_data(value);
-        arena_.insert(arena_.end(), begin, begin + value.size());
-    }
-    record.value_length = value.size();
-
-    record.ordinal = records_.size();
-    records_.push_back(record);
+    const ByteView kept_key = keep(key);
+    add_ref(kept_key, keep(value));
 }
 
-dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SegmentBuilder::seal(
-    FoldFn fold, PlacerFn placer, void* placer_context) {
-    std::sort(records_.begin(), records_.end(),
-              [this](const Record& a, const Record& b) {
-                  const int cmp =
-                      compare_bytes(view_at(a.key_offset, a.key_length),
-                                    view_at(b.key_offset, b.key_length));
-                  if (cmp != 0) return cmp < 0;
-                  return a.ordinal < b.ordinal;
-              });
+void SegmentBuilder::add_ref(ByteView key, ByteView value) {
+    records_.push_back(Record{key, value, records_.size()});
+}
 
-    dstd::Vector<SealedEntry> entries;
-    entries.reserve(records_.size());
-    dstd::Vector<std::uint8_t> folded_values;
+dstd::Expected<std::size_t, dstd::Error> SegmentBuilder::plan(
+    FoldFn fold, PlacerFn placer, void* placer_context) {
+    const auto before = [](const Record& a, const Record& b) {
+        const int cmp = compare_bytes(a.key, b.key);
+        if (cmp != 0) return cmp < 0;
+        return a.ordinal < b.ordinal;
+    };
+    // A caller that adds in key order, as the writer does, needs no sort.
+    if (!std::is_sorted(records_.begin(), records_.end(), before)) {
+        std::sort(records_.begin(), records_.end(), before);
+    }
+
+    entries_.clear();
+    groups_.clear();
+    folded_values_.clear();
+    entries_.reserve(records_.size());
     dstd::Vector<std::uint8_t> fold_out;
 
     for (std::size_t begin = 0; begin < records_.size();) {
         std::size_t end = begin + 1U;
         while (end < records_.size() &&
-               compare_bytes(view_at(records_[begin].key_offset,
-                                     records_[begin].key_length),
-                             view_at(records_[end].key_offset,
-                                     records_[end].key_length)) == 0) {
+               compare_bytes(records_[begin].key, records_[end].key) == 0) {
             ++end;
         }
 
-        SealedEntry entry;
-        entry.key_offset = records_[begin].key_offset;
-        entry.key_length = records_[begin].key_length;
+        PlannedEntry entry;
+        entry.key = records_[begin].key;
 
         if (fold != nullptr && end - begin > 1U) {
-            const std::size_t folded_offset = folded_values.size();
-            const ByteView first_value = view_at(records_[begin].value_offset,
-                                                 records_[begin].value_length);
-            append_bytes(folded_values, first_value);
+            const std::size_t folded_offset = folded_values_.size();
+            const ByteView first_value = records_[begin].value;
+            append_bytes(folded_values_, first_value);
             ByteView accumulated =
-                vector_view(folded_values, folded_offset, first_value.size());
+                vector_view(folded_values_, folded_offset, first_value.size());
 
             for (std::size_t i = begin + 1U; i < end; ++i) {
                 fold_out.clear();
-                fold(
-                    accumulated,
-                    view_at(records_[i].value_offset, records_[i].value_length),
-                    fold_out);
-                folded_values.resize(folded_offset);
-                append_bytes(folded_values,
+                fold(accumulated, records_[i].value, fold_out);
+                folded_values_.resize(folded_offset);
+                append_bytes(folded_values_,
                              vector_view(fold_out, 0, fold_out.size()));
-                accumulated = vector_view(folded_values, folded_offset,
-                                          folded_values.size() - folded_offset);
+                accumulated =
+                    vector_view(folded_values_, folded_offset,
+                                folded_values_.size() - folded_offset);
             }
 
             entry.value_offset = folded_offset;
-            entry.value_length = folded_values.size() - folded_offset;
-            entry.value_storage = ValueStorage::Folded;
+            entry.value_length = folded_values_.size() - folded_offset;
+            entry.folded = true;
         } else if (fold == nullptr && end - begin > 1U) {
-            entry.value_offset = records_[end - 1U].value_offset;
-            entry.value_length = records_[end - 1U].value_length;
+            entry.value = records_[end - 1U].value;
         } else {
-            entry.value_offset = records_[begin].value_offset;
-            entry.value_length = records_[begin].value_length;
+            entry.value = records_[begin].value;
         }
 
-        entries.push_back(entry);
+        entries_.push_back(entry);
         begin = end;
     }
 
-    const auto key_of_entry = [this](const SealedEntry& entry) {
-        return view_at(entry.key_offset, entry.key_length);
-    };
-    const auto value_of_entry = [&](const SealedEntry& entry) {
-        const dstd::Vector<std::uint8_t>& storage =
-            entry.value_storage == ValueStorage::Folded ? folded_values
-                                                        : arena_;
-        return vector_view(storage, entry.value_offset, entry.value_length);
-    };
-
-    if (placer == nullptr) {
-        for (const SealedEntry& entry : entries) {
-            if (value_of_entry(entry).size() > BIG_VALUE_BYTES) {
-                return invalid_error();
-            }
-        }
+    // Each big value goes to its own run now, so write_to() only writes.
+    for (PlannedEntry& entry : entries_) {
+        const ByteView value = value_of(entry);
+        if (value.size() <= BIG_VALUE_BYTES) continue;
+        if (placer == nullptr) return invalid_error();
+        entry.big = placer(placer_context, value);
+        entry.is_big = true;
     }
 
-    struct Group {
-        std::size_t begin = 0;
-        std::size_t end = 0;
-        std::size_t bytes = 0;
-    };
-
-    dstd::Vector<Group> groups;
     std::size_t group_begin = 0;
     std::size_t group_bytes = 0;
-    for (std::size_t i = 0; i < entries.size(); ++i) {
-        const std::size_t size = encoded_entry_size(key_of_entry(entries[i]),
-                                                    value_of_entry(entries[i]));
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        const std::size_t size =
+            encoded_entry_size(entries_[i].key, value_of(entries_[i]));
         if (group_bytes != 0 && group_bytes + size > GRANULE_BYTES) {
-            groups.push_back({group_begin, i, group_bytes});
+            groups_.push_back({group_begin, i, group_bytes});
             group_begin = i;
             group_bytes = 0;
         }
         group_bytes += size;
     }
-    if (!entries.empty()) {
-        groups.push_back({group_begin, entries.size(), group_bytes});
+    if (!entries_.empty()) {
+        groups_.push_back({group_begin, entries_.size(), group_bytes});
     }
 
-    std::size_t index_size = HEADER_BYTES;
-    for (const Group& group : groups) {
-        const ByteView first = key_of_entry(entries[group.begin]);
-        index_size += 8U + varint_size(first.size()) + first.size();
+    index_bytes_ = HEADER_BYTES;
+    for (const PlannedGroup& group : groups_) {
+        const ByteView first = entries_[group.begin].key;
+        index_bytes_ += 8U + varint_size(first.size()) + first.size();
     }
 
     std::size_t body_bytes = 0;
-    for (const Group& group : groups) body_bytes += group.bytes;
-    const std::size_t padded = align_up(index_size + body_bytes, SEGMENT_ALIGN);
+    for (const PlannedGroup& group : groups_) body_bytes += group.bytes;
+    planned_bytes_ = align_up(index_bytes_ + body_bytes, SEGMENT_ALIGN);
 
-    if (padded > std::numeric_limits<std::uint32_t>::max() ||
-        entries.size() > std::numeric_limits<std::uint32_t>::max() ||
-        groups.size() > std::numeric_limits<std::uint32_t>::max()) {
+    if (planned_bytes_ > std::numeric_limits<std::uint32_t>::max() ||
+        entries_.size() > std::numeric_limits<std::uint32_t>::max() ||
+        groups_.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
 
-    dstd::Vector<std::uint8_t> out;
-    out.reserve(padded);
-    out.insert(out.end(), SEGMENT_MAGIC.begin(), SEGMENT_MAGIC.end());
-    dftracer::utils::append_u32_le(out, static_cast<std::uint32_t>(padded));
-    dftracer::utils::append_u32_le(out,
-                                   static_cast<std::uint32_t>(entries.size()));
-    dftracer::utils::append_u32_le(out,
-                                   static_cast<std::uint32_t>(groups.size()));
-    out.push_back(0);
-    out.push_back(0);
-    out.push_back(0);
-    out.push_back(0);
+    entry_count_ = entries_.size();
+    if (entries_.empty()) {
+        first_key_ = {};
+        last_key_ = {};
+    } else {
+        first_key_ = entries_.front().key;
+        last_key_ = entries_.back().key;
+    }
+    return planned_bytes_;
+}
 
-    std::size_t granule_offset = index_size;
-    for (const Group& group : groups) {
-        const ByteView first = key_of_entry(entries[group.begin]);
-        dftracer::utils::append_u32_le(
-            out, static_cast<std::uint32_t>(granule_offset));
-        dftracer::utils::append_u32_le(out,
-                                       static_cast<std::uint32_t>(group.bytes));
-        encode_varint(out, first.size());
-        append_bytes(out, first);
+ByteView SegmentBuilder::value_of(const PlannedEntry& entry) const {
+    if (entry.folded) {
+        return vector_view(folded_values_, entry.value_offset,
+                           entry.value_length);
+    }
+    return entry.value;
+}
+
+void SegmentBuilder::write_to(std::uint8_t* out) const {
+    std::uint8_t* at = out;
+    const auto put_bytes = [&at](ByteView bytes) {
+        if (bytes.empty()) return;
+        std::memcpy(at, bytes.data(), bytes.size());
+        at += bytes.size();
+    };
+    const auto put_u32 = [&at](std::uint32_t value) {
+        dftracer::utils::write_u32_le(at, value);
+        at += 4;
+    };
+    const auto put_varint = [&at](std::uint64_t value) {
+        while (value >= 0x80U) {
+            *at++ = static_cast<std::uint8_t>(value | 0x80U);
+            value >>= 7U;
+        }
+        *at++ = static_cast<std::uint8_t>(value);
+    };
+
+    put_bytes(ByteView{reinterpret_cast<const std::byte*>(SEGMENT_MAGIC.data()),
+                       SEGMENT_MAGIC.size()});
+    put_u32(static_cast<std::uint32_t>(planned_bytes_));
+    put_u32(static_cast<std::uint32_t>(entries_.size()));
+    put_u32(static_cast<std::uint32_t>(groups_.size()));
+    put_u32(0);
+
+    std::size_t granule_offset = index_bytes_;
+    for (const PlannedGroup& group : groups_) {
+        const ByteView first = entries_[group.begin].key;
+        put_u32(static_cast<std::uint32_t>(granule_offset));
+        put_u32(static_cast<std::uint32_t>(group.bytes));
+        put_varint(first.size());
+        put_bytes(first);
         granule_offset += group.bytes;
     }
 
-    for (const Group& group : groups) {
+    for (const PlannedGroup& group : groups_) {
         for (std::size_t i = group.begin; i < group.end; ++i) {
-            const ByteView key = key_of_entry(entries[i]);
-            const ByteView value = value_of_entry(entries[i]);
-            const bool big = value.size() > BIG_VALUE_BYTES;
-            const std::size_t stored_value_bytes = big ? 20U : value.size();
+            const PlannedEntry& entry = entries_[i];
+            const ByteView value = value_of(entry);
+            const std::size_t stored_value_bytes =
+                entry.is_big ? 20U : value.size();
             const std::uint64_t value_code =
                 (static_cast<std::uint64_t>(stored_value_bytes) << 1U) |
-                (big ? 1U : 0U);
-            encode_varint(out, key.size());
-            encode_varint(out, value_code);
-            append_bytes(out, key);
-            if (big) {
-                const BigRef ref = placer(placer_context, value);
-                dftracer::utils::append_u64_le(out, ref.offset);
-                dftracer::utils::append_u64_le(out, ref.length);
-                dftracer::utils::append_u32_le(out, ref.crc);
+                (entry.is_big ? 1U : 0U);
+            put_varint(entry.key.size());
+            put_varint(value_code);
+            put_bytes(entry.key);
+            if (entry.is_big) {
+                dftracer::utils::write_u64_le(at, entry.big.offset);
+                dftracer::utils::write_u64_le(at + 8, entry.big.length);
+                dftracer::utils::write_u32_le(at + 16, entry.big.crc);
+                at += 20;
             } else {
-                append_bytes(out, value);
+                put_bytes(value);
             }
         }
     }
-
-    out.resize(padded, 0);
-
-    entry_count_ = entries.size();
-    if (entries.empty()) {
-        first_key_offset_ = 0;
-        first_key_length_ = 0;
-        last_key_offset_ = 0;
-        last_key_length_ = 0;
-    } else {
-        first_key_offset_ = entries.front().key_offset;
-        first_key_length_ = entries.front().key_length;
-        last_key_offset_ = entries.back().key_offset;
-        last_key_length_ = entries.back().key_length;
+    const std::size_t written = static_cast<std::size_t>(at - out);
+    if (written < planned_bytes_) {
+        std::memset(at, 0, planned_bytes_ - written);
     }
+}
+
+dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> SegmentBuilder::seal(
+    FoldFn fold, PlacerFn placer, void* placer_context) {
+    auto planned = plan(fold, placer, placer_context);
+    if (!planned) return dstd::Unexpected<dstd::Error>(planned.error());
+    dstd::Vector<std::uint8_t> out(*planned);
+    write_to(out.data());
     return out;
 }
 

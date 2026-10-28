@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Merge the rows of an aggregation query's file and chunk tasks into 64 stripes with a lock each, where every task merged into the result under one lock and the other workers waited on it.
+  A cold `dftracer_comparator` of the 14,117 minife traces against itself at 96 threads takes 30.9 s where it took 35.9 s, and a warm one 16.8 s where it took 21.1 s.
 - Keep the argument, field and schema-leaf lists of the events a scan buffers in shared chunks of their buffer, where each event held its own heap block for each list.
   A cold `dftracer_index` of the 14,117 minife traces peaks at 0.80 GB where it peaked at 0.92 GB at 16 threads and at 2.7 GB where it peaked at 3.1 GB at 96 threads, and takes 3 to 6% less CPU.
 - Commit each worker's index write once it holds 4 MiB instead of 32 MiB, as fast and with a 3% larger index.

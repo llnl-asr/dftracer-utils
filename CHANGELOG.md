@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make a store index commit in a view bootstrap or an index build wait for its writes without holding a worker, so the peak memory of a bootstrap stays flat as its files grow.
 - Run the whole process on one runtime: pipelines, directory scans, index builds, the store, the caches and Python all share it.
   `configure_default_runtime()`, Python `Runtime(threads=...)` and `dftu_runtime_new()` grow or shrink its threads in place while work runs, and only process exit stops it.
 - Make the store the default index backend.

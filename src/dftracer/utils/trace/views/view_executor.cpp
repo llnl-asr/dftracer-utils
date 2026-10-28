@@ -207,9 +207,10 @@ using SstArtifacts =
 // artifacts, bloom and row sets from the folds, each with its manifest entry.
 // A bloom fold with spill enabled writes its tier as sorted runs, which the
 // caller ingests after `w` commits, as the batch builder does, or on the store
-// into a staged write, which is published here.
+// into a staged write, which the caller publishes.
 struct BootstrapSpill {
     std::vector<SstArtifacts> runs;
+    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
 };
 
 BootstrapSpill write_bootstrap_index(
@@ -237,7 +238,7 @@ BootstrapSpill write_bootstrap_index(
         dftracer::utils::index::store::records::put_file_record(
             *staged, logical,
             {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-        staged->commit();
+        spill.staged = std::move(staged);
     } else if (bloom.writes_runs()) {
         spill.runs = bloom.finish_spilled(fid);
     } else {
@@ -365,15 +366,16 @@ struct BootstrapSink {
 // which hold whole files with their records, so the ingest is atomic over them.
 // Workers ingest at once; RocksDB runs the prepare step of each outside its
 // mutex and takes the ranges of the ingests one at a time.
-void commit_bootstrap_sink(BootstrapSink& open) {
-    if (!open.sink && !open.write && open.spilled.empty()) return;
+// On the store the commit waits for its writes without holding the worker.
+coro::CoroTask<void> commit_bootstrap_sink(BootstrapSink& open) {
+    if (!open.sink && !open.write && open.spilled.empty()) co_return;
     auto& counters = bootstrap_counters();
     if (open.write) {
         counters.ingest_calls.fetch_add(1, std::memory_order_relaxed);
-        open.write->commit();
+        co_await open.write->commit_async();
         open.write.reset();
         counters.sink_commits.fetch_add(1, std::memory_order_relaxed);
-        return;
+        co_return;
     }
     dftracer::utils::index::store::SstArtifactRegistry registry;
     if (open.sink) {
@@ -405,7 +407,7 @@ void commit_bootstrap_sink(BootstrapSink& open) {
 
 // Writes one built file into the sink, which commits once it holds
 // its limit: its SSTs then cover this block of file ids alone.
-void write_bootstrap_file(
+coro::CoroTask<void> write_bootstrap_file(
     BootstrapSink& open, const ViewFile& f, int file_id,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
     const dftracer::utils::index::RecordSchema& schema,
@@ -436,7 +438,9 @@ void write_bootstrap_file(
         dftracer::utils::index::store::internal::get_logical_path(f.file_path),
         f.file_path, arts, schema, bloom, rowsets, hash, file_id);
     if (!spill.runs.empty()) open.spilled.push_back(std::move(spill.runs));
-    if (sink.buffered_bytes() >= open.limit) commit_bootstrap_sink(open);
+    if (spill.staged) co_await spill.staged->commit_async();
+    if (sink.buffered_bytes() >= open.limit)
+        co_await commit_bootstrap_sink(open);
 }
 
 // Every batch is ingested by the worker that committed it, so the compactions
@@ -570,10 +574,11 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             &ok, std::size_t{0}, f.fd, &hash);
         if (!ok) co_return false;
         driver.seal();
-        write_bootstrap_file(open[slot_of.find(f.index_path)->second], f,
-                             stores.ids[i], arts, schema, bloom, rowsets, hash);
+        co_await write_bootstrap_file(open[slot_of.find(f.index_path)->second],
+                                      f, stores.ids[i], arts, schema, bloom,
+                                      rowsets, hash);
     }
-    for (auto& o : open) commit_bootstrap_sink(o);
+    for (auto& o : open) co_await commit_bootstrap_sink(o);
     resume_bootstrap(stores);
     co_return true;
 }
@@ -894,7 +899,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     read.events_scanned = arts.total_lines;
     counted(*plan, read);
     driver.seal();
-    write_bootstrap_file(*open, f, file_id, arts, schema, bloom, rowsets, hash);
+    co_await write_bootstrap_file(*open, f, file_id, arts, schema, bloom,
+                                  rowsets, hash);
     if (run->keep_state) out.state = agg.take_state();
     out.ok = true;
     co_return out;
@@ -929,7 +935,7 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 else
                     dataframe::agg_merge(*merged, *file.state);
             }
-            commit_bootstrap_sink(open);
+            co_await commit_bootstrap_sink(open);
         }
     } catch (...) {
         run->failed.store(true, std::memory_order_relaxed);

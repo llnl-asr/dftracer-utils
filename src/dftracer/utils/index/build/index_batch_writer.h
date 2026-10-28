@@ -47,6 +47,9 @@ struct ParsedIndexJob {
     /// The schema the file was decoded with; written with its members.
     const index::RecordSchema* schema = nullptr;
     std::string error_message;
+    /// The staged write a spill on the store left, which the caller publishes
+    /// once write_index_job returns.
+    std::unique_ptr<index::store::IndexDatabaseWrite> staged;
 };
 
 struct BatchWriterMetrics {
@@ -65,8 +68,8 @@ struct SpilledFile {
 
 /// Write `job` into `sink`, which the caller commits. A file whose bloom fold
 /// spilled writes its tier as runs instead: they are appended to `spilled`.
-/// On the store the spill is a staged write, published here, so a sink holds
-/// none of them.
+/// On the store the spill is a staged write, left in `job.staged` for the
+/// caller to publish before the next file, so a sink holds none of them.
 /// Returns false, with `job.error_message` set, when the write failed; what
 /// was already written for the file is left in the sink.
 inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
@@ -103,7 +106,7 @@ inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
             if (!job.logical_path.empty())
                 index::store::records::put_file_record(
                     *staged, job.logical_path, job.record);
-            staged->commit();
+            job.staged = std::move(staged);
         } else if (spills) {
             spilled.push_back(
                 {job.file_path, job.bloom_fold->finish_spilled(job.file_id)});

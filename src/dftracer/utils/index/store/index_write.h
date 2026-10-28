@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -61,6 +62,9 @@ class IndexDatabaseWrite : public IndexWrite {
     /// Makes every key of this write visible to later reads. A second call
     /// does nothing.
     virtual void commit() = 0;
+    /// commit() for a coroutine: a backend that can waits for its writes
+    /// without holding a worker; the default runs commit().
+    virtual coro::CoroTask<void> commit_async();
     /// A staged write (IndexDatabase::begin_staged_write) writes what it holds
     /// so far as part of what commit() publishes, and frees it, so a write of
     /// one file larger than memory lands in pieces that no reader sees until

@@ -16,7 +16,6 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
-#include <shared_mutex>
 #include <system_error>
 
 namespace dftracer::utils::index::cache {
@@ -241,7 +240,7 @@ void CacheStore::put(
         throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "cache write: the store is read-only");
     {
-        std::shared_lock<std::shared_mutex> gate(root_->gate_);
+        store::StoreRoot::WriterUse use(*root_);
         memory::Scope in_pool(root_->pool());
         kv::Writer& writer = root_->writer();
         const kv::ScopeKey scope = scope_of(sig);
@@ -274,7 +273,7 @@ void CacheStore::touch(std::uint64_t sig) {
     if (!*found || (**found).bytes().size() != USAGE_BYTES) return;
     const std::string usage =
         usage_value(u64_at((**found).bytes(), 0), now_micros());
-    std::shared_lock<std::shared_mutex> gate(root_->gate_);
+    store::StoreRoot::WriterUse use(*root_);
     memory::Scope in_pool(root_->pool());
     kv::Writer& writer = root_->writer();
     kv::Batch record = writer.batch(
@@ -294,7 +293,7 @@ void CacheStore::evict(std::uint64_t keep) {
               [](const Usage& a, const Usage& b) {
                   return a.last_used < b.last_used;
               });
-    std::shared_lock<std::shared_mutex> gate(root_->gate_);
+    store::StoreRoot::WriterUse use(*root_);
     memory::Scope in_pool(root_->pool());
     kv::Writer& writer = root_->writer();
     const kv::NamespaceId data_id =

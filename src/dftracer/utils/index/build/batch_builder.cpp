@@ -201,6 +201,9 @@ void ingest_spill_runs(
 struct BlockWriter {
     std::function<std::unique_ptr<index::store::IndexWrite>()> make_sink;
     std::function<void(index::store::IndexWrite&)> commit_sink;
+    /// The sinks are writes of an index this build holds, which a worker
+    /// commits with a co_await instead of commit_sink.
+    bool awaitable_sink = false;
     std::function<void(
         std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>)>
         commit_spill;
@@ -216,12 +219,19 @@ struct OpenSink {
     std::uint64_t write_ns = 0;
 };
 
-static void commit_open_sink(BlockWriter* writer, OpenSink& open,
-                             std::vector<IndexBuildResult>* results_ptr,
-                             const std::vector<PreparedFile>* prepared_ptr) {
+static coro::CoroTask<void> commit_open_sink(
+    BlockWriter* writer, OpenSink& open,
+    std::vector<IndexBuildResult>* results_ptr,
+    const std::vector<PreparedFile>* prepared_ptr) {
     const auto c0 = std::chrono::steady_clock::now();
     if (open.sink) {
-        writer->commit_sink(*open.sink);
+        if (writer->awaitable_sink) {
+            auto& write =
+                static_cast<index::store::IndexDatabaseWrite&>(*open.sink);
+            co_await write.commit_async();
+        } else {
+            writer->commit_sink(*open.sink);
+        }
         open.sink.reset();
     }
     for (auto& file : open.spilled) {
@@ -525,6 +535,22 @@ static coro::CoroTask<void> parse_and_write_worker(
                     (*results_ptr)[idx].success = false;
                     (*results_ptr)[idx].error_message = write_job.error_message;
                 }
+                if (write_job.staged) {
+                    std::string failed;
+                    try {
+                        co_await write_job.staged->commit_async();
+                    } catch (const std::exception& e) {
+                        failed = e.what();
+                    }
+                    write_job.staged.reset();
+                    if (!failed.empty()) {
+                        DFTRACER_UTILS_LOG_ERROR(
+                            "Failed to publish the spilled index of %s: %s",
+                            pf.file_path.c_str(), failed.c_str());
+                        (*results_ptr)[idx].success = false;
+                        (*results_ptr)[idx].error_message = failed;
+                    }
+                }
             }
             open.write_ns += static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -536,10 +562,11 @@ static coro::CoroTask<void> parse_and_write_worker(
             // the two sinks still do not overlap.
             if (open.sink &&
                 open.sink->buffered_bytes() >= admission->sink_limit)
-                commit_open_sink(writer, open, results_ptr, prepared_ptr);
+                co_await commit_open_sink(writer, open, results_ptr,
+                                          prepared_ptr);
         }
 
-        commit_open_sink(writer, open, results_ptr, prepared_ptr);
+        co_await commit_open_sink(writer, open, results_ptr, prepared_ptr);
     }
     co_return;
 }
@@ -639,6 +666,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
         block_writer.commit_spill = state->spill_commit;
     } else {
         auto* db = writer_db.get();
+        block_writer.awaitable_sink = true;
         block_writer.make_sink = [db] { return db->begin_write(); };
         block_writer.commit_sink = [](index::store::IndexWrite& sink) {
             static_cast<index::store::IndexDatabaseWrite&>(sink).commit();

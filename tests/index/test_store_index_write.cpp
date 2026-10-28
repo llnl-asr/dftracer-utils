@@ -908,3 +908,38 @@ TEST_CASE("a commit from the only worker of the writer's runtime finishes") {
     }
     dftracer::utils::configure_default_runtime({.threads = previous});
 }
+
+TEST_CASE("an awaited commit on a worker of the process runtime lands") {
+    dftu_test::ScopedTestDir dir("store_index_async_commit");
+    auto root = StoreRoot::get_or_open(dir.str());
+    const int file_id = root->file_id_for(std::string(TRACE));
+    dftracer::utils::default_runtime().run_blocking(
+        "store-async-commit",
+        [&](dftracer::utils::CoroScope&)
+            -> dftracer::utils::coro::CoroTask<void> {
+            auto write = root->begin_write();
+            records::put_file_record(*write, TRACE, file_record(file_id));
+            records::put_manifest(*write, file_id, layout::Ext::Members,
+                                  PARAMS);
+            co_await write->commit_async();
+        });
+    CHECK(root->snapshot()
+              ->copy_info(spec_of(layout::Ext::Members), file_scope(TRACE))
+              .state == store::ScopeState::Ready);
+    root->close();
+}
+
+TEST_CASE("an awaited commit driven from a plain thread lands") {
+    dftu_test::ScopedTestDir dir("store_index_loop_commit");
+    auto root = StoreRoot::get_or_open(dir.str());
+    const int file_id = root->file_id_for(std::string(TRACE));
+    auto write = root->begin_write();
+    records::put_file_record(*write, TRACE, file_record(file_id));
+    records::put_manifest(*write, file_id, layout::Ext::Members, PARAMS);
+    // get() drives the task on a private loop of this thread.
+    write->commit_async().get();
+    CHECK(root->snapshot()
+              ->copy_info(spec_of(layout::Ext::Members), file_scope(TRACE))
+              .state == store::ScopeState::Ready);
+    root->close();
+}

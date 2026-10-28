@@ -13,13 +13,13 @@
 #include <dftracer/utils/store/writer.h>
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
-#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -123,6 +123,18 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         std::uint32_t version = 0;
     };
 
+    /// One write's use of the writer, which close() waits out.
+    class WriterUse {
+       public:
+        explicit WriterUse(StoreRoot& root);
+        ~WriterUse();
+        WriterUse(const WriterUse&) = delete;
+        WriterUse& operator=(const WriterUse&) = delete;
+
+       private:
+        StoreRoot& root_;
+    };
+
     /// The copy this root committed for one (namespace, scope): the writer
     /// keeps the params hash and sources it announced for a copy, so a later
     /// commit that changes either replaces the copy instead.
@@ -193,15 +205,18 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
                     const std::map<std::string, kv::SourceStat>& stats,
                     dstd::Vector<kv::SourceStat>& sources);
     void bump_version();
-
     /// The pool of what the root keeps across queries: its snapshot and the
     /// blocks it loads, the writer, the file id table. Every call that grows
     /// them runs in it, never in the pool of the query that made the call.
     /// First, so it closes after every other member is gone.
     memory::PoolHandle pool_;
-    /// Held shared by a commit for its whole run and exclusively by close(),
-    /// so close() never frees the writer a commit uses. Taken before mutex_.
-    std::shared_mutex gate_;
+    /// Writes in flight, which close() waits out, and close() in progress,
+    /// which a write waits out before it starts. A count, not a lock, so a
+    /// write holds its use across a co_await and ends it on another thread.
+    std::mutex use_mutex_;
+    std::condition_variable use_cv_;
+    std::size_t uses_ = 0;
+    bool closing_ = false;
     mutable std::mutex mutex_;
     std::string index_root_;
     std::string store_dir_;
@@ -248,6 +263,10 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     /// store error. put() and the deletes throw when a data key names a file
     /// id the table does not bind.
     void commit() override;
+    /// commit() as a coroutine, which waits for the writer without holding a
+    /// worker when it runs on a worker of the process runtime, and blocks as
+    /// commit() does anywhere else.
+    coro::CoroTask<void> commit_async() override;
     /// A staged write: commits what it holds as building copies, which its
     /// commit() publishes. Throws std::logic_error on a write that is not
     /// staged, and std::runtime_error on a store error.
@@ -326,9 +345,11 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
         /// A stage committed a batch of it, so commit() publishes it.
         bool building = false;
     };
-    /// Commits the pending copies as building batches, under the gate the
-    /// caller holds.
-    void stage_locked(kv::Writer& writer);
+    /// Commits the pending copies as building batches, under the use of the
+    /// writer the caller holds.
+    coro::CoroTask<void> stage_body(kv::Writer& writer);
+    /// What commit() and commit_async() run.
+    coro::CoroTask<void> commit_body();
     bool building(const std::string& name, const kv::ScopeKey& scope) const;
     /// Puts into `batch` each key of the copy `foreign` holds that `copy`
     /// neither writes, deletes nor erases; returns how many.

@@ -16,7 +16,6 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
-#include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -65,6 +64,15 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_with_space(
         result = writer.commit(std::move(batch));
     }
     co_return result;
+}
+
+/// Runs `task` to its end on the process runtime and rethrows what it threw.
+/// From a worker of that runtime the wait hands off the worker's slot.
+void wait_for(coro::CoroTask<void> task) {
+    default_runtime().run_blocking("store index write",
+                                   [&task](CoroScope&) -> coro::CoroTask<void> {
+                                       co_await std::move(task);
+                                   });
 }
 
 kv::NamespaceSpec make_spec(const std::string& name,
@@ -580,9 +588,33 @@ void StoreRoot::close_locked() {
         throw_store_error("store index: close the store", closed.error());
 }
 
+StoreRoot::WriterUse::WriterUse(StoreRoot& root) : root_(root) {
+    std::unique_lock<std::mutex> lock(root_.use_mutex_);
+    root_.use_cv_.wait(lock, [this] { return !root_.closing_; });
+    ++root_.uses_;
+}
+
+StoreRoot::WriterUse::~WriterUse() {
+    std::lock_guard<std::mutex> lock(root_.use_mutex_);
+    if (--root_.uses_ == 0) root_.use_cv_.notify_all();
+}
+
 void StoreRoot::close() {
     memory::Scope in_pool(*pool_);
-    std::unique_lock<std::shared_mutex> gate(gate_);
+    {
+        std::unique_lock<std::mutex> lock(use_mutex_);
+        use_cv_.wait(lock, [this] { return !closing_; });
+        closing_ = true;
+        use_cv_.wait(lock, [this] { return uses_ == 0; });
+    }
+    struct Reopen {
+        StoreRoot& root;
+        ~Reopen() {
+            std::lock_guard<std::mutex> lock(root.use_mutex_);
+            root.closing_ = false;
+            root.use_cv_.notify_all();
+        }
+    } reopen{*this};
     std::lock_guard<std::mutex> lock(mutex_);
     close_locked();
 }
@@ -965,12 +997,12 @@ void StoreIndexWrite::stage() {
         throw std::logic_error("store index: only a staged write stages");
     }
     if (committed_) return;
-    std::shared_lock<std::shared_mutex> gate(root_->gate_);
+    StoreRoot::WriterUse use(*root_);
     memory::Scope in_pool(root_->pool());
-    stage_locked(root_->writer());
+    wait_for(stage_body(root_->writer()));
 }
 
-void StoreIndexWrite::stage_locked(kv::Writer& writer) {
+coro::CoroTask<void> StoreIndexWrite::stage_body(kv::Writer& writer) {
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =
             root_->namespace_id(erase.name, erase.version);
@@ -1006,8 +1038,9 @@ void StoreIndexWrite::stage_locked(kv::Writer& writer) {
                 ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
                 ByteView());
         }
-        check("store index: stage a copy",
-              root_->commit(writer, std::move(batch)));
+        const auto staged =
+            co_await commit_with_space(writer, std::move(batch));
+        check("store index: stage a copy", staged);
         known.building = true;
     }
     pending_.clear();
@@ -1051,15 +1084,31 @@ std::size_t StoreIndexWrite::carry_keys(const PendingCopy& copy,
 }
 
 void StoreIndexWrite::commit() {
-    if (committed_) return;
-    committed_ = true;
-    std::shared_lock<std::shared_mutex> gate(root_->gate_);
     memory::Scope in_pool(root_->pool());
+    wait_for(commit_body());
+}
+
+coro::CoroTask<void> StoreIndexWrite::commit_async() {
+    // The writer finishes its writes on the process runtime. Off a worker of
+    // it, as on a private loop that only runs what parks on it, the awaiting
+    // chain would see nothing to wait for, so the commit there blocks.
+    if (Executor::current() != default_runtime().executor())
+        return IndexDatabaseWrite::commit_async();
+    // The coroutine keeps the pool current at its creation.
+    memory::Scope in_pool(root_->pool());
+    return commit_body();
+}
+
+coro::CoroTask<void> StoreIndexWrite::commit_body() {
+    if (committed_) co_return;
+    committed_ = true;
+    StoreRoot::WriterUse use(*root_);
     kv::Writer& writer = root_->writer();
     if (staged_) {
-        stage_locked(writer);
+        co_await stage_body(writer);
         // Every batch is recorded before the records that publish them.
-        check("store index: flush the writer", root_->run(writer.flush()));
+        const auto recorded = co_await writer.flush();
+        check("store index: flush the writer", recorded);
         for (auto& entry : staged_copies_) {
             StagedCopy& copy = entry.second;
             const kv::NamespaceId id =
@@ -1087,9 +1136,10 @@ void StoreIndexWrite::commit() {
                                       nullptr);
             }
         }
-        check("store index: flush the writer", root_->run(writer.flush()));
+        const auto published = co_await writer.flush();
+        check("store index: flush the writer", published);
         root_->bump_version();
-        return;
+        co_return;
     }
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =
@@ -1185,12 +1235,13 @@ void StoreIndexWrite::commit() {
                 ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
                 ByteView());
         }
-        check("store index: commit a copy",
-              root_->commit(writer, std::move(batch)));
+        const auto done = co_await commit_with_space(writer, std::move(batch));
+        check("store index: commit a copy", done);
         root_->mark_committed(copy.name, copy.scope, copy.params_hash,
                               have_sources ? &sources : nullptr);
     }
-    check("store index: flush the writer", root_->run(writer.flush()));
+    const auto flushed = co_await writer.flush();
+    check("store index: flush the writer", flushed);
     root_->bump_version();
 }
 

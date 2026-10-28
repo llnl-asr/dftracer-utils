@@ -262,3 +262,12 @@ void del_agg_meta(IndexWrite& w, std::string_view name) {
 }
 
 }  // namespace dftracer::utils::index::store::records
+
+namespace dftracer::utils::index::store {
+
+coro::CoroTask<void> IndexDatabaseWrite::commit_async() {
+    commit();
+    co_return;
+}
+
+}  // namespace dftracer::utils::index::store

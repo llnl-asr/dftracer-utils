@@ -1547,21 +1547,9 @@ std::optional<std::string> AggRowReader::get_row(const IndexDatabase& db,
 }
 
 std::vector<std::uint32_t> AggRowReader::file_ids(const IndexDatabase& db) {
-    std::vector<std::uint32_t> out;
-    for (const std::uint8_t kind :
-         {layout::agg_kind::PARTIAL, layout::agg_kind::SYSTEM,
-          layout::agg_kind::DICT}) {
-        const auto prefix = layout::kind_prefix(layout::Ext::Agg, kind);
-        db.impl_->raw_scan(prefix, [&](std::string_view key, std::string_view) {
-            if (key.size() < layout::KEY_PREFIX_BYTES) return true;
-            const std::uint32_t file_id = layout::read_u32(key.substr(3, 4));
-            if (file_id != layout::INDEX_WIDE) out.push_back(file_id);
-            return true;
-        });
-    }
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
-    return out;
+    // The scope directory lists the files that hold an aggregation copy, so
+    // no row is decoded to find them.
+    return db.impl_->file_ids_of(ext_spec(layout::Ext::Agg));
 }
 
 }  // namespace dftracer::utils::index::store

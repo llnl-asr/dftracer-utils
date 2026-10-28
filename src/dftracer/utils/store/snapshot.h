@@ -227,7 +227,7 @@ struct SegmentSlot {
 /// pages it spans joined into a buffer of its own.
 struct PageHold {
     CachedPage page;
-    dstd::Vector<std::uint8_t> joined;
+    dstd::RawBuffer<std::uint8_t> joined;
 };
 
 /// The pages one segment spans and the view of the segment over them, owned by

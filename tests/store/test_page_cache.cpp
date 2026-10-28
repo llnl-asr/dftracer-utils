@@ -4,6 +4,7 @@
 #include <dftracer/utils/store/page_cache.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -17,8 +18,10 @@ namespace store = dftracer::utils::store;
 
 constexpr std::size_t PAGE = 32 * 1024;
 
-dstd::SharedPtr<dstd::Vector<std::uint8_t>> page_of(std::uint8_t fill) {
-    return dstd::make_shared<dstd::Vector<std::uint8_t>>(PAGE, fill);
+dstd::SharedPtr<dstd::RawBuffer<std::uint8_t>> page_of(std::uint8_t fill) {
+    auto page = dstd::make_shared<dstd::RawBuffer<std::uint8_t>>(PAGE);
+    std::fill(page->data(), page->data() + page->size(), fill);
+    return page;
 }
 
 }  // namespace

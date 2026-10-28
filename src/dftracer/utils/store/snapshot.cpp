@@ -56,6 +56,10 @@ ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {bytes.data(), bytes.size()};
 }
 
+ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
+    return {bytes.data(), bytes.size()};
+}
+
 dstd::String dstring(std::string_view value) {
     return dstd::String(value.data(), value.size());
 }
@@ -201,7 +205,7 @@ detail::LoadState read_table(const DataFileReader& reader, const ExtentRef& ref,
         slot.error = error;
         return detail::LoadState::Failed;
     };
-    dstd::Vector<std::uint8_t> head;
+    dstd::RawBuffer<std::uint8_t> head;
     auto read = reader.read_range(
         ref.offset, std::min<std::size_t>(ref.length, READ_RUN_BYTES), head,
         &reads);
@@ -1881,7 +1885,7 @@ Snapshot::page_dict(const detail::FileData& file, const DictRef& ref) const {
         }
     }
     BlockReads reads;
-    dstd::Vector<std::uint8_t> bytes;
+    dstd::RawBuffer<std::uint8_t> bytes;
     auto read = file.reader.read_range(ref.offset, ref.length, bytes, &reads);
     reads_->add_metadata(reads);
     if (!read) return dstd::Unexpected<dstd::Error>(read.error());
@@ -1952,7 +1956,7 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
         const std::uint64_t run_end =
             static_cast<std::uint64_t>(last.stored_offset) + last.stored_length;
         if (run_end < run_begin) return bad_extent_error();
-        dstd::Vector<std::uint8_t> run;
+        dstd::RawBuffer<std::uint8_t> run;
         auto read = file.reader.read_range(
             extent.ref.offset + run_begin,
             static_cast<std::size_t>(run_end - run_begin), run, &reads);
@@ -1974,8 +1978,9 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
                 reads_->add_pages(decoded, 0, reads);
                 return bad_extent_error();
             }
-            auto fresh =
-                dstd::make_shared<dstd::Vector<std::uint8_t>>(entry.raw_length);
+            // Uninitialized: the decode writes every byte.
+            auto fresh = dstd::make_shared<dstd::RawBuffer<std::uint8_t>>(
+                entry.raw_length);
             auto ok = ExtentPages::decode_page(
                 entry,
                 ByteView{run.data() + (entry.stored_offset - run_begin),
@@ -2002,7 +2007,8 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
     hold.joined.resize(static_cast<std::size_t>(last.raw_offset) +
                        last.raw_length - base);
     for (std::size_t page = covered.first; page < covered.second; ++page) {
-        const dstd::Vector<std::uint8_t>& bytes = *held[page - covered.first];
+        const dstd::RawBuffer<std::uint8_t>& bytes =
+            *held[page - covered.first];
         std::memcpy(hold.joined.data() + (pages.entry(page).raw_offset - base),
                     bytes.data(), bytes.size());
     }

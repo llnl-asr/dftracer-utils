@@ -120,6 +120,10 @@ ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
+ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
+    return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
+}
+
 std::uint64_t random_writer_id() {
     const auto now =
         std::chrono::steady_clock::now().time_since_epoch().count();
@@ -1498,8 +1502,8 @@ DataFileReader::read_extent(const ExtentRef& ref) const {
 }
 
 dstd::Expected<void, dstd::Error> DataFileReader::read_range(
-    std::uint64_t offset, std::size_t length, dstd::Vector<std::uint8_t>& out,
-    BlockReads* reads) const {
+    std::uint64_t offset, std::size_t length,
+    dstd::RawBuffer<std::uint8_t>& out, BlockReads* reads) const {
     auto fd = descriptor();
     if (!fd) return dstd::Unexpected<dstd::Error>(fd.error());
     if (offset > file_size_ || length > file_size_ - offset) {
@@ -1797,8 +1801,8 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
                      [](const IndexedExtentRef& a, const IndexedExtentRef& b) {
                          return a.ref.offset < b.ref.offset;
                      });
-    dstd::Vector<std::uint8_t> head;
-    dstd::Vector<std::uint8_t> table_bytes;
+    dstd::RawBuffer<std::uint8_t> head;
+    dstd::RawBuffer<std::uint8_t> table_bytes;
     dstd::Vector<DictRef> dicts;
     for (std::size_t at = 0; at < refs->size();) {
         const ExtentRefItem& item = (*refs)[at].ref;
@@ -1960,7 +1964,7 @@ dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
     std::stable_sort(scan.ranges.begin(), scan.ranges.end(),
                      space_range_before);
     const std::uint64_t file_bytes = scan.report.file_bytes;
-    dstd::Vector<std::uint8_t> head;
+    dstd::RawBuffer<std::uint8_t> head;
     std::uint64_t offset = FILE_HEADER_BYTES;
     while (offset <= file_bytes && file_bytes - offset >= RECORD_HEADER_BYTES) {
         const std::uint64_t covered = space_range_end_at(
@@ -2019,7 +2023,7 @@ dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
     // The trailer names the footer, so both are classified first: the records
     // must not take the footer record for one of theirs.
     std::uint64_t trailer_offset = scan.report.file_bytes - FILE_TRAILER_BYTES;
-    dstd::Vector<std::uint8_t> trailer;
+    dstd::RawBuffer<std::uint8_t> trailer;
     auto trailer_read = opened->read_range(trailer_offset, FILE_TRAILER_BYTES,
                                            trailer, nullptr);
     if (!trailer_read) {

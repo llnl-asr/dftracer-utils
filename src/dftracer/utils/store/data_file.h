@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -275,7 +276,7 @@ class DataFileReader {
     /// `reads` counts the call and its bytes.
     dstd::Expected<void, dstd::Error> read_range(
         std::uint64_t offset, std::size_t length,
-        dstd::Vector<std::uint8_t>& out, BlockReads* reads) const;
+        dstd::RawBuffer<std::uint8_t>& out, BlockReads* reads) const;
     /// Reads `length` bytes at `offset` in VERIFY_CHUNK_BYTES chunks and keeps
     /// none of them, so the operating system caches the range for the reads
     /// that follow. A range past the end of the file stops at the end. Io when

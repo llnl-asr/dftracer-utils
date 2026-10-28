@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
@@ -13,7 +14,7 @@ namespace dftracer::utils::store {
 
 /// The raw bytes of one decoded page, shared by the cache and every query that
 /// reads it: a page the cache drops lives until the last query lets go of it.
-using CachedPage = dstd::SharedPtr<const dstd::Vector<std::uint8_t>>;
+using CachedPage = dstd::SharedPtr<const dstd::RawBuffer<std::uint8_t>>;
 
 /// Decoded pages by the file they come from and the offset of their stored
 /// bytes in it, at most about `capacity` bytes of them, dropped by CLOCK: a

@@ -127,12 +127,10 @@ void write_u64_le_at(std::vector<std::uint8_t>& bytes, std::size_t offset,
 }
 
 std::size_t header_tail_field_offset(const std::vector<std::uint8_t>& file) {
-    const std::uint16_t host_length =
-        static_cast<std::uint16_t>(file[44]) |
-        (static_cast<std::uint16_t>(file[45]) << 8U);
-    const std::uint16_t label_length =
-        static_cast<std::uint16_t>(file[46]) |
-        (static_cast<std::uint16_t>(file[47]) << 8U);
+    const std::size_t host_length =
+        std::size_t{file[44]} | (std::size_t{file[45]} << 8U);
+    const std::size_t label_length =
+        std::size_t{file[46]} | (std::size_t{file[47]} << 8U);
     return 48U + host_length + label_length;
 }
 

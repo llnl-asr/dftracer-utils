@@ -1,4 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/yield.h>
@@ -50,7 +51,7 @@ TEST_SUITE("ExecutorWakeups") {
         // them the burst's own wake-ups.
         constexpr std::size_t THREADS = 32;
         constexpr int BURSTS = 20;
-        constexpr std::int64_t MAX_SWITCHES_PER_GAP = 120;
+        [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES_PER_GAP = 120;
 
         Runtime rt(THREADS);
         auto tiny = []() -> coro::CoroTask<void> { co_return; };
@@ -70,7 +71,11 @@ TEST_SUITE("ExecutorWakeups") {
         rt.shutdown();
 
         MESSAGE("context switches per gap: " << switches / BURSTS);
+#ifndef DFTRACER_UTILS_TSAN_ENABLED
+        // ThreadSanitizer adds switches of its own, so the count says nothing
+        // there; the bursts still run for its race checks.
         CHECK(switches / BURSTS < MAX_SWITCHES_PER_GAP);
+#endif
     }
     TEST_CASE("a worker blocked in get() parks while its task waits") {
         // Each round's task waits on a semaphore that this thread releases

@@ -272,6 +272,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftracer_split` writing no output on Lustre when an input gzip member is larger than a stripe; such a member now takes whole stripes of its own.
 - Fix a pipeline that times out or stops ending the work of every other pipeline on the same executor.
 - Fix a store index commit opening the whole store again to find sources it already held, which grew the peak memory of a view bootstrap with the number of files.
 - Fix a data race between `Runtime.get_progress()` and an elastic pool retiring a worker.

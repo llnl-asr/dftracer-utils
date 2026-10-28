@@ -11,6 +11,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -188,12 +189,31 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
     fs::remove(path);
 }
 
-TEST_CASE("PaddedStripedWriter - oversize chunk is rejected") {
+TEST_CASE(
+    "PaddedStripedWriter - a member larger than a stripe takes whole stripes") {
     std::string path = tmp_path("test_padded_oversize.gz");
     std::remove(path.c_str());
 
-    // Create a "payload" larger than one stripe (minus overhead).
-    std::vector<std::uint8_t> huge(STRIPE, 0xAA);
+    // Text that does not compress, so its member spans more than two stripes,
+    // as a member copied whole from an input file can.
+    std::string big_payload;
+    std::uint64_t x = 88172645463325252ULL;
+    while (big_payload.size() < 2 * STRIPE + STRIPE / 2) {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        big_payload.push_back(static_cast<char>(' ' + x % 94));
+    }
+    const std::string small0 = R"({"ev":0})"
+                               "\n";
+    const std::string small1 = R"({"ev":1})"
+                               "\n";
+    const std::string ftr_payload = "]\n";
+    const auto big = gzip_member(big_payload);
+    REQUIRE(big.size() > 2 * STRIPE);
+    const auto m0 = gzip_member(small0);
+    const auto m1 = gzip_member(small1);
+    const auto ftr = gzip_member(ftr_payload);
 
     Runtime runtime(2);
     int result = -1;
@@ -205,12 +225,30 @@ TEST_CASE("PaddedStripedWriter - oversize chunk is rejected") {
                        result = 1;
                        co_return;
                    }
-                   auto rc = co_await w->write_chunk(0, as_bv(huge));
-                   co_await w->close();
-                   result = rc == 0 ? 99 : 0;  // expect failure
+                   if (co_await w->write_chunk(0, as_bv(m0)) != 0) {
+                       result = 2;
+                       co_return;
+                   }
+                   if (co_await w->write_chunk(0, as_bv(big)) != 0) {
+                       result = 3;
+                       co_return;
+                   }
+                   if (co_await w->write_chunk(0, as_bv(m1)) != 0) {
+                       result = 4;
+                       co_return;
+                   }
+                   if (co_await w->write_footer(as_bv(ftr)) != 0) {
+                       result = 5;
+                       co_return;
+                   }
+                   result = co_await w->close() == 0 ? 0 : 6;
                })
         .get();
-    CHECK(result == 0);
+    REQUIRE(result == 0);
+
+    // [header][m0][big: three stripes][m1][footer].
+    CHECK(fs::file_size(path) == 6 * STRIPE + ftr.size());
+    CHECK(gunzip_all(path) == small0 + big_payload + small1 + ftr_payload);
     std::remove(path.c_str());
 }
 

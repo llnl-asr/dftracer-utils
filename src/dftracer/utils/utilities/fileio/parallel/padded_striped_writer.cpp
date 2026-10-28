@@ -66,7 +66,8 @@ void append_padding_member(std::vector<std::uint8_t>& out, std::uint16_t xlen) {
     std::memset(p + 12 + xlen + 5, 0, 8);
 }
 
-// Fill `out` with padding members until its size reaches exactly stripe_size.
+// Fill `out` with padding members until its size reaches exactly stripe_size
+// (the bytes of all the stripes `out` takes).
 // Callers leave at least PAD_MEMBER_FIXED_OVERHEAD bytes. Each member leaves
 // either nothing or at least that much, so the stripe ends in a whole member:
 // a few bytes too small for one would stay zero, and gzip stops at them.
@@ -166,15 +167,18 @@ struct PaddedStripedImpl {
             if (rc != 0 && final_rc == 0) final_rc = rc;
         };
 
+        // `stripes` consecutive stripes from `emit_idx`: one for packed
+        // members, more for a member larger than a stripe.
         auto launch_emit = [&](std::vector<std::uint8_t>&& payload,
-                               std::uint64_t emit_idx) -> coro::CoroTask<void> {
+                               std::uint64_t emit_idx,
+                               std::uint64_t stripes) -> coro::CoroTask<void> {
             while (in_flight.size() >= MAX_INFLIGHT_PWRITES) {
                 co_await await_one();
             }
             in_flight.push_back(parent_scope.spawn(
-                [this, p = std::move(payload),
-                 emit_idx](CoroScope&) mutable -> coro::CoroTask<int> {
-                    pad_to_stripe(p, stripe_size);
+                [this, p = std::move(payload), emit_idx,
+                 stripes](CoroScope&) mutable -> coro::CoroTask<int> {
+                    pad_to_stripe(p, stripes * stripe_size);
                     const auto offset = (emit_idx + 1) * stripe_size;
                     co_return co_await pwrite_bytes(p.data(), p.size(),
                                                     static_cast<off_t>(offset));
@@ -185,10 +189,43 @@ struct PaddedStripedImpl {
         for (;;) {
             auto chunk = co_await consumer.receive();
             if (!chunk) break;
+            const std::size_t need =
+                chunk->data.size() + PAD_MEMBER_FIXED_OVERHEAD;
+            if (need > stripe_size) {
+                // A member larger than a stripe, such as one copied whole
+                // from an input file, takes whole stripes of its own, so
+                // every stripe still starts on a member.
+                const std::uint64_t stripes =
+                    (need + stripe_size - 1) / stripe_size;
+                std::uint64_t first = current_stripe_idx;
+                if (!buf.empty()) {
+                    co_await launch_emit(std::move(buf), current_stripe_idx, 1);
+                    buf.clear();
+                    buf.reserve(stripe_size);
+                    first = next_stripe_idx.fetch_add(
+                        stripes, std::memory_order_relaxed);
+                } else {
+                    // The packer alone takes stripe numbers, so the ones
+                    // after the current stripe are free.
+                    next_stripe_idx.fetch_add(stripes - 1,
+                                              std::memory_order_relaxed);
+                }
+                if (chunk->ack) {
+                    ParallelWriter::MemberSpan span{
+                        (first + 1) * stripe_size,
+                        static_cast<std::uint64_t>(chunk->data.size())};
+                    co_await chunk->ack->send(std::move(span));
+                    chunk->ack->close();
+                }
+                co_await launch_emit(std::move(chunk->data), first, stripes);
+                current_stripe_idx =
+                    next_stripe_idx.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
             if (!buf.empty() &&
                 buf.size() + chunk->data.size() + PAD_MEMBER_FIXED_OVERHEAD >
                     stripe_size) {
-                co_await launch_emit(std::move(buf), current_stripe_idx);
+                co_await launch_emit(std::move(buf), current_stripe_idx, 1);
                 buf.clear();
                 buf.reserve(stripe_size);
                 current_stripe_idx =
@@ -203,9 +240,9 @@ struct PaddedStripedImpl {
             }
             buf.insert(buf.end(), chunk->data.begin(), chunk->data.end());
         }
-        if (!buf.empty()) {
-            co_await launch_emit(std::move(buf), current_stripe_idx);
-        }
+        // Written even when empty, as padding: the footer goes after it, and a
+        // stripe left unwritten would read as zeros, where gzip stops.
+        co_await launch_emit(std::move(buf), current_stripe_idx, 1);
 
         while (!in_flight.empty()) {
             co_await await_one();
@@ -305,12 +342,6 @@ class PaddedStripedWriter : public ParallelWriter {
         if (worker_idx >= s.producers.size()) {
             DFTRACER_UTILS_LOG_ERROR("padded writer: worker_idx %zu >= %zu",
                                      worker_idx, s.producers.size());
-            co_return -1;
-        }
-        if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > s.stripe_size) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "padded writer: chunk %zu + pad overhead exceeds stripe %zu",
-                data.size(), s.stripe_size);
             co_return -1;
         }
         Chunk c;

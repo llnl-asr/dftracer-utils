@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_STORE_STORE_BACKEND_H
 
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -225,8 +226,29 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::map<std::string, NamespaceEntry> namespaces_;
     std::map<std::string, int> ids_by_path_;
     std::map<int, std::string> paths_by_id_;
+    /// What this root committed or dropped for the scope of one bound file,
+    /// keyed by the index of the namespace's name in committed_names_ (high
+    /// half) and the file id: a build of many files holds one small entry per
+    /// file and namespace, not strings and a node.
+    struct FileCopy {
+        std::uint64_t params_hash = 0;
+        kv::SourceStat source;
+        bool has_source = false;
+        bool dropped = false;
+    };
+    std::vector<std::string> committed_names_;
+    dstd::HashMap<std::uint64_t, FileCopy> file_copies_;
+    /// The same for every other scope.
     std::map<std::pair<std::string, kv::ScopeKey>, CommittedCopy> committed_;
     std::set<std::pair<std::string, kv::ScopeKey>> dropped_;
+    /// The file_copies_ key of (name, scope), nullopt for a scope other than
+    /// one bound file.
+    std::optional<std::uint64_t> file_copy_key_locked(
+        const std::string& name, const kv::ScopeKey& scope);
+    /// Removes what committed_ and dropped_ hold for (name, scope), once the
+    /// scope's file is bound and file_copies_ tracks it.
+    void forget_scope_entry_locked(const std::string& name,
+                                   const kv::ScopeKey& scope);
     std::shared_ptr<const kv::Snapshot> snapshot_;
     /// What foreign_files_locked() found at the last look, and when.
     std::vector<std::pair<std::string, std::uint64_t>> foreign_seen_;

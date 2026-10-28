@@ -515,15 +515,50 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
     return true;
 }
 
+void StoreRoot::forget_scope_entry_locked(const std::string& name,
+                                          const kv::ScopeKey& scope) {
+    if (committed_.empty() && dropped_.empty()) return;
+    const std::pair<std::string, kv::ScopeKey> key{name, scope};
+    committed_.erase(key);
+    dropped_.erase(key);
+}
+
+std::optional<std::uint64_t> StoreRoot::file_copy_key_locked(
+    const std::string& name, const kv::ScopeKey& scope) {
+    if (scope.kind != kv::ScopeKind::File || scope.paths.size() != 1)
+        return std::nullopt;
+    const auto id = ids_by_path_.find(
+        std::string(scope.paths[0].data(), scope.paths[0].size()));
+    if (id == ids_by_path_.end() || id->second < 0) return std::nullopt;
+    std::size_t name_index = 0;
+    while (name_index < committed_names_.size() &&
+           committed_names_[name_index] != name)
+        ++name_index;
+    if (name_index == committed_names_.size()) committed_names_.push_back(name);
+    return (static_cast<std::uint64_t>(name_index) << 32U) |
+           static_cast<std::uint32_t>(id->second);
+}
+
 void StoreRoot::mark_committed(const std::string& name,
                                const kv::ScopeKey& scope,
                                std::uint64_t params_hash,
                                const dstd::Vector<kv::SourceStat>* sources) {
     memory::Scope in_pool(*pool_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (sources == nullptr || sources->size() <= 1) {
+        if (const auto key = file_copy_key_locked(name, scope)) {
+            forget_scope_entry_locked(name, scope);
+            FileCopy& copy = file_copies_[*key];
+            copy.params_hash = params_hash;
+            copy.has_source = sources != nullptr && !sources->empty();
+            copy.source = copy.has_source ? (*sources)[0] : kv::SourceStat{};
+            copy.dropped = false;
+            return;
+        }
+    }
     CommittedCopy committed;
     committed.params_hash = params_hash;
     if (sources != nullptr) committed.sources = *sources;
-    std::lock_guard<std::mutex> lock(mutex_);
     dropped_.erase({name, scope});
     committed_.insert_or_assign({name, scope}, std::move(committed));
 }
@@ -532,6 +567,11 @@ void StoreRoot::forget_committed(const std::string& name,
                                  const kv::ScopeKey& scope) {
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
+    if (const auto key = file_copy_key_locked(name, scope)) {
+        forget_scope_entry_locked(name, scope);
+        file_copies_[*key] = FileCopy{.dropped = true};
+        return;
+    }
     committed_.erase({name, scope});
     dropped_.insert({name, scope});
 }
@@ -539,12 +579,27 @@ void StoreRoot::forget_committed(const std::string& name,
 bool StoreRoot::was_committed(const std::string& name,
                               const kv::ScopeKey& scope) {
     std::lock_guard<std::mutex> lock(mutex_);
-    return committed_.find({name, scope}) != committed_.end();
+    if (const auto key = file_copy_key_locked(name, scope)) {
+        const auto at = file_copies_.find(*key);
+        if (at != file_copies_.end()) return !at->second.dropped;
+    }
+    return !committed_.empty() &&
+           committed_.find({name, scope}) != committed_.end();
 }
 
 std::optional<StoreRoot::CommittedCopy> StoreRoot::committed_copy(
     const std::string& name, const kv::ScopeKey& scope) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (const auto key = file_copy_key_locked(name, scope);
+        key && file_copies_.contains(*key)) {
+        const auto at = file_copies_.find(*key);
+        if (at->second.dropped) return std::nullopt;
+        CommittedCopy copy;
+        copy.params_hash = at->second.params_hash;
+        if (at->second.has_source) copy.sources.push_back(at->second.source);
+        return copy;
+    }
+    if (committed_.empty()) return std::nullopt;
     auto at = committed_.find({name, scope});
     if (at == committed_.end()) return std::nullopt;
     return at->second;
@@ -556,9 +611,13 @@ std::optional<StoreRoot::ForeignCopy> StoreRoot::foreign_copy(
     std::shared_ptr<const kv::Snapshot> held;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const std::pair<std::string, kv::ScopeKey> key{name, scope};
-        if (committed_.count(key) != 0 || dropped_.count(key) != 0)
-            return std::nullopt;
+        const auto file_key = file_copy_key_locked(name, scope);
+        if (file_key && file_copies_.contains(*file_key)) return std::nullopt;
+        if (!committed_.empty() || !dropped_.empty()) {
+            const std::pair<std::string, kv::ScopeKey> key{name, scope};
+            if (committed_.count(key) != 0 || dropped_.count(key) != 0)
+                return std::nullopt;
+        }
         refresh_if_changed_locked();
         held = snapshot_taken_ && snapshot_version_ >= refreshed_version_
                    ? snapshot_
@@ -581,6 +640,8 @@ void StoreRoot::close_locked() {
     writer_.reset();
     // Namespace ids and committed copies belong to the closed writer.
     namespaces_.clear();
+    committed_names_.clear();
+    file_copies_.clear();
     committed_.clear();
     dropped_.clear();
     ++version_;

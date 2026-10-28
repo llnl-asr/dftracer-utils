@@ -11,6 +11,7 @@
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/duql/term.h>
+#include <dftracer/utils/store/record.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 
@@ -42,6 +43,9 @@ constexpr std::size_t FOLD_EVENT_BUDGET = 152;
 constexpr std::size_t LOOKUP_BUDGET = 112 + 2 * STR;
 constexpr std::size_t ERROR_BUDGET = 16;
 constexpr std::size_t RESULT_VOID_BUDGET = 24;
+// A store data file writer keeps every item of a file until its footer, so the
+// largest item that is not the once-per-file tail sets the size.
+constexpr std::size_t RECORD_ITEM_BUDGET = 72;
 
 static_assert(within<dftu_series, SERIES_BUDGET, 8>());
 static_assert(within<df::DataType, DATA_TYPE_BUDGET, 8>());
@@ -56,6 +60,8 @@ static_assert(
     within<dftracer::utils::dstd::Error, ERROR_BUDGET, alignof(void*)>());
 static_assert(within<dftracer::utils::Result<void>, RESULT_VOID_BUDGET,
                      alignof(void*)>());
+static_assert(
+    within<dftracer::utils::store::RecordItem, RECORD_ITEM_BUDGET, 8>());
 
 }  // namespace
 
@@ -71,4 +77,5 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftracer::utils::duql::TLookup) <= LOOKUP_BUDGET);
     CHECK(sizeof(dftracer::utils::dstd::Error) <= ERROR_BUDGET);
     CHECK(sizeof(dftracer::utils::Result<void>) <= RESULT_VOID_BUDGET);
+    CHECK(sizeof(dftracer::utils::store::RecordItem) <= RECORD_ITEM_BUDGET);
 }

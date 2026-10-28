@@ -363,8 +363,8 @@ void apply_record(FileIndex& index, const Record& record) {
         } else if (const auto* commit_ref_item =
                        std::get_if<CommitRefItem>(&item)) {
             index.commit_refs.push_back(*commit_ref_item);
-        } else if (const auto* file_tail = std::get_if<FileTail>(&item)) {
-            index.tail = *file_tail;
+        } else if (const auto* file_tail = std::get_if<FileTailPtr>(&item)) {
+            index.tail = **file_tail;
         }
     }
     index.last_sequence = record.sequence;
@@ -1175,7 +1175,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     for (const RecordItem& item : items) {
         if (std::holds_alternative<NamespaceItem>(item)) footer.push_back(item);
     }
-    footer.push_back(std::move(*tail));
+    footer.push_back(dstd::make_shared<FileTail>(std::move(*tail)));
     auto record = write_record(RecordKind::Footer, footer);
     if (!record) return record;
 
@@ -1384,8 +1384,8 @@ dstd::Expected<bool, dstd::Error> DataFileReader::apply_footer(
     for (const RecordItem& item : items) {
         if (const auto* namespace_item = std::get_if<NamespaceItem>(&item)) {
             index_.namespaces.push_back(*namespace_item);
-        } else if (const auto* file_tail = std::get_if<FileTail>(&item)) {
-            tail = file_tail;
+        } else if (const auto* file_tail = std::get_if<FileTailPtr>(&item)) {
+            tail = file_tail->get();
         }
     }
     if (tail == nullptr) return false;

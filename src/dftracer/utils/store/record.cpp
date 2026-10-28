@@ -447,7 +447,7 @@ dstd::Vector<std::uint8_t> encode_items(const RecordItems& items) {
             encode_commit_ref(payload, *commit_ref_item);
             append_item(body, 6, payload);
         } else {
-            encode_file_tail(payload, std::get<FileTail>(item));
+            encode_file_tail(payload, *std::get<FileTailPtr>(item));
             append_item(body, 8, payload);
         }
     }
@@ -512,7 +512,7 @@ dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body) {
             case 8: {
                 auto item = decode_file_tail(item_bytes);
                 if (!item) return parse_error();
-                items.push_back(std::move(*item));
+                items.push_back(dstd::make_shared<FileTail>(std::move(*item)));
                 break;
             }
             default:

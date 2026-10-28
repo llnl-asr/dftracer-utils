@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
@@ -166,9 +167,13 @@ struct FileTail {
     dstd::Vector<std::uint8_t> scope_filter;
 };
 
+/// The tail goes in once per file, behind a pointer, so it does not size
+/// every item: a writer keeps each item of a file until its footer.
+using FileTailPtr = dstd::SharedPtr<FileTail>;
+
 using RecordItem =
     std::variant<NamespaceItem, ScopeItem, CopyItem, DropItem, EraseItem,
-                 ExtentRefItem, CommitRefItem, FileTail>;
+                 ExtentRefItem, CommitRefItem, FileTailPtr>;
 
 using RecordItems = dstd::Vector<RecordItem>;
 

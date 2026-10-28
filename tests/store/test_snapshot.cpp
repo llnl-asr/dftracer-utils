@@ -268,8 +268,8 @@ std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
     REQUIRE(footer.has_value());
     bool found = false;
     for (store::RecordItem& item : footer->items) {
-        if (auto* tail = std::get_if<store::FileTail>(&item)) {
-            tail->format_version = version;
+        if (auto* tail = std::get_if<store::FileTailPtr>(&item)) {
+            (*tail)->format_version = version;
             found = true;
         }
     }

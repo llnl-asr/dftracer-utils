@@ -148,6 +148,18 @@ class TaskExecutor : public Executor {
     /// Task the calling worker is running, -1 when not on a worker thread.
     virtual TaskIndex current_worker_task_id() const = 0;
 
+    /// Moves the running cap to `threads` (0 = hardware_concurrency) while
+    /// work runs: a larger cap lets more tasks run at once, a smaller one lets
+    /// fewer start until the running ones finish. `eager` set spawns the full
+    /// pool (true) or lets it grow on demand from one worker (false); unset
+    /// keeps the current mode. Thread safe.
+    virtual void set_threads(std::size_t threads,
+                             std::optional<bool> eager) = 0;
+    /// Raises the I/O threads to `threads`; a smaller count changes nothing.
+    virtual void grow_io_threads(std::size_t threads) = 0;
+    /// The stall after which is_responsive() reports a deadlock.
+    virtual void set_deadlock_timeout(std::chrono::seconds timeout) = 0;
+
     virtual bool is_responsive() const = 0;
     virtual ExecutorProgress get_progress() const = 0;
 };

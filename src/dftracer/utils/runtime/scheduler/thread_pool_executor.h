@@ -81,11 +81,17 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::atomic<std::size_t> next_worker_id_{0};  // monotonic ids, churn-safe
 
     std::atomic<bool> running_{false};
-    std::size_t num_threads_;                     // the running cap
-    std::size_t min_workers_;  // elastic floor; == num_threads_ means eager
+    std::atomic<std::size_t> num_threads_{0};     // the running cap
+    // Elastic floor; == num_threads_ when eager.
+    std::atomic<std::size_t> min_workers_{0};
+    // The full pool up front (true) or grown on demand from the floor; kept
+    // apart from the floor, which is also the cap of an elastic pool of one.
+    std::atomic<bool> eager_{true};
     // Live-thread ceiling for blocking-handoff replacements; the permit gate
     // still bounds RUNNING threads. A backstop, not a working bound.
-    std::size_t max_live_;
+    std::atomic<std::size_t> max_live_{0};
+    // Serializes set_threads, grow_io_threads and start.
+    std::mutex resize_mutex_;
 
     static constexpr int BLK_NONE = 0;
     static constexpr int BLK_SYSCALL = 1;
@@ -132,7 +138,7 @@ class ThreadPoolExecutor : public TaskExecutor {
 
     // Responsiveness timeout thresholds
     std::chrono::seconds idle_timeout_;
-    std::chrono::seconds deadlock_timeout_;
+    std::atomic<std::chrono::seconds::rep> deadlock_timeout_s_;
     // Elastic idle-retire delay (monitor_loop). Longer = warmer pool.
     std::chrono::milliseconds keepalive_;
     TimerService timer_service_;
@@ -184,7 +190,7 @@ class ThreadPoolExecutor : public TaskExecutor {
         std::make_shared<std::atomic<bool>>(false);
 
     // Configuration (stored from ExecutorConfig)
-    std::size_t io_pool_size_ = 0;
+    std::atomic<std::size_t> io_pool_size_{0};
     io::IoBackendType io_backend_type_ = io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 16;
 
@@ -232,7 +238,13 @@ class ThreadPoolExecutor : public TaskExecutor {
         return shutdown_token_;
     }
 
-    std::size_t get_num_threads() const override { return num_threads_; }
+    std::size_t get_num_threads() const override {
+        return num_threads_.load(std::memory_order_acquire);
+    }
+
+    void set_threads(std::size_t threads, std::optional<bool> eager) override;
+    void grow_io_threads(std::size_t threads) override;
+    void set_deadlock_timeout(std::chrono::seconds timeout) override;
 
     /// Live worker threads right now (floats under num_threads_ once the
     /// elastic policy is driving add_worker/retire_worker); num_threads_ is the
@@ -250,7 +262,9 @@ class ThreadPoolExecutor : public TaskExecutor {
         return blocked_workers_.load(std::memory_order_acquire);
     }
 
-    std::size_t get_io_pool_size() const override { return io_pool_size_; }
+    std::size_t get_io_pool_size() const override {
+        return io_pool_size_.load(std::memory_order_acquire);
+    }
 
     bool has_io_backend() const noexcept override {
         return io_backend_ != nullptr;

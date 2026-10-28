@@ -117,6 +117,13 @@ class IoBackend {
     /// Returns number of operations flushed.
     virtual int flush() { return 0; }
 
+    /// Grows the threads that run blocking operations to `threads`; a smaller
+    /// count changes nothing. False for a backend with no such threads.
+    virtual bool grow_threads(std::size_t threads) {
+        (void)threads;
+        return false;
+    }
+
     /// File operations still in flight. The executor waits for zero before it
     /// stops, so a read that finishes after the workers are gone does not
     /// resume into a destroyed queue.

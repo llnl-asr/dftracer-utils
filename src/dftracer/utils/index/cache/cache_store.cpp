@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/store/store_backend.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
 
@@ -98,17 +97,11 @@ std::uint64_t now_micros() {
             .count());
 }
 
-/// Threads of the runtime the cache writers run on.
-constexpr std::size_t CACHE_RUNTIME_THREADS = 2;
-
 /// The roots this process opened, kept open so each folder gets one data file
-/// per process, not one per write. Their writers run on a runtime of their
-/// own, which no caller shuts down while a writer still needs it; the roots
-/// close before it goes.
+/// per process, not one per write. They close before the process runtime
+/// stops, since their writers wait on it to close.
 struct CacheRoots {
     std::mutex mutex;
-    std::shared_ptr<Runtime> runtime =
-        std::make_shared<Runtime>(CACHE_RUNTIME_THREADS);
     std::map<std::string, std::shared_ptr<store::StoreRoot>> roots;
 
     ~CacheRoots() {
@@ -170,7 +163,7 @@ std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
                 }
                 held.reset();
             }
-            if (!held) held = store::StoreRoot::get_or_open(path, all.runtime);
+            if (!held) held = store::StoreRoot::get_or_open(path);
             root = held;
         }
         return std::make_shared<CacheStore>(std::move(root), writable);

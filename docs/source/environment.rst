@@ -26,8 +26,9 @@ Runtime and scheduler
      - Effect
    * - ``DFTRACER_UTILS_THREADS``
      - hardware concurrency
-     - Fixes the compute worker-thread count of a new ``Runtime`` (e.g. ``1``
-       for a single-threaded async loop). Any value ``> 0`` overrides the
+     - Fixes the compute worker-thread count of the process runtime (e.g.
+       ``1`` for a single-threaded async loop), also over every later
+       request to change it. Any value ``> 0`` overrides the
        requested/detected count; non-positive or unparsable values are
        ignored.
    * - ``DFTRACER_UTILS_IO_THREADS``
@@ -49,8 +50,9 @@ Runtime and scheduler
    * - ``DFTRACER_UTILS_ELASTIC``
      - enabled
      - Set to ``0``, ``false``, or ``off`` to disable elastic (work-stealing,
-       load-scaled) scheduling for a default ``Runtime``. Any other value, or
-       leaving it unset, keeps elastic scheduling on.
+       load-scaled) scheduling when the process runtime is made. A pipeline or
+       ``Runtime`` that asks for eager or elastic changes it later. Any other
+       value, or leaving it unset, keeps elastic scheduling on.
 
 Memory and kernels
 -------------------

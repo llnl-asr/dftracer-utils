@@ -16,6 +16,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -44,6 +45,28 @@ struct ParallelRegionGuard {
 };
 
 }  // namespace detail
+
+/// What configure_default_runtime() applies. A field left at its default keeps
+/// what the runtime has, or takes the default when the runtime is new.
+struct RuntimeSettings {
+    /// Worker cap; 0 keeps it (hardware_concurrency for a new runtime).
+    /// DFTRACER_UTILS_THREADS, when set, wins over it.
+    std::size_t threads = 0;
+    /// I/O threads; 0 keeps them. A runtime only grows them.
+    /// DFTRACER_UTILS_IO_THREADS, when set, wins over it.
+    std::size_t io_threads = 0;
+    /// Spawn the full pool at once (true) or grow it on demand (false);
+    /// unset keeps the mode (elastic for a new runtime, unless
+    /// DFTRACER_UTILS_ELASTIC is off).
+    std::optional<bool> eager;
+    /// The stall after which the executor reports a deadlock.
+    std::optional<std::chrono::seconds> deadlock_timeout;
+    /// Fixed when the runtime is made: a later different value keeps the
+    /// runtime's and logs a warning.
+    io::IoBackendType io_backend = io::IoBackendType::Auto;
+    /// Fixed when the runtime is made, as io_backend; 0 is the default.
+    unsigned io_batch_threshold = 0;
+};
 
 /// Lightweight wrapper around Executor + Watchdog for running coroutines
 /// on a thread pool without Pipeline/Scheduler/DAG overhead.
@@ -181,7 +204,14 @@ class Runtime {
     void set_global_timeout(std::chrono::milliseconds timeout);
     void set_default_task_timeout(std::chrono::milliseconds timeout);
 
+    /// Stops the executor. A no-op on the process runtime, which only the
+    /// exit hook stops.
     void shutdown();
+    /// Applies `settings` in place, while work runs. Thread safe.
+    void configure(const RuntimeSettings& settings);
+    /// Stops the process runtime, for exit handlers only: nothing may submit
+    /// work after it. Registered as an exit hook when the runtime is made.
+    static void stop_at_exit();
     std::size_t threads() const;
     std::size_t io_threads() const;
     TaskExecutor* executor() { return executor_.get(); }
@@ -190,41 +220,42 @@ class Runtime {
    private:
     void cleanup_completed_futures();
 
+    friend std::shared_ptr<Runtime> default_runtime_shared();
+    friend Runtime& configure_default_runtime(const RuntimeSettings& settings);
+    /// Marks this the process runtime and registers stop_at_exit, once.
+    void become_process_runtime();
+    void stop();
+
     std::unique_ptr<TaskExecutor> executor_;
     std::unique_ptr<Watchdog> watchdog_;
-    std::size_t threads_;
+    std::atomic<std::size_t> threads_;
+    io::IoBackendType io_backend_ = io::IoBackendType::Auto;
+    unsigned io_batch_threshold_ = 0;
+    /// The process runtime, which shutdown() leaves running.
+    bool process_runtime_ = false;
     std::atomic<bool> shutdown_called_{false};
     std::atomic<uint64_t> task_name_counter_{0};
     std::vector<std::shared_future<void>> outstanding_futures_;
     std::mutex futures_mutex_;
 };
 
-/// The process-wide default Runtime.
-/// `default_runtime()`/`default_runtime_shared` lazily create one
-/// (hardware_concurrency) on first use; `peek_default_runtime` returns the
-/// current one or null without creating; `set_default_runtime` installs an
-/// explicit one (null resets to lazy). One shared default across the stack - a
-/// caller wanting thread control installs or passes its own Runtime.
+/// The process runtime: one per process, made on first use under a lock and
+/// never replaced, so every caller in any order and from any thread gets the
+/// same one. Only process exit stops it. The child of a fork makes its own on
+/// first use, since the copy it inherits has no threads.
 Runtime& default_runtime();
 std::shared_ptr<Runtime> default_runtime_shared();
+
+/// Makes the process runtime with `settings`, or applies them to it in place.
+/// Never makes a second runtime.
+Runtime& configure_default_runtime(const RuntimeSettings& settings);
 
 /// Whether elastic pools are enabled: true unless DFTRACER_UTILS_ELASTIC is a
 /// false value ("0"/"false"/"off"). The master switch the test suites flip to
 /// force eager, deterministic pools.
 bool elastic_default_enabled();
+/// The process runtime, or null before its first use.
 std::shared_ptr<Runtime> peek_default_runtime();
-void set_default_runtime(std::shared_ptr<Runtime> rt);
-
-/// Install `rt` as the default only if no default is set or the current
-/// default is the lazily-created fallback; a user-installed default (set here
-/// or via set_default_runtime) is left in place. Returns true if `rt` became
-/// the default.
-bool try_install_default_runtime(std::shared_ptr<Runtime> rt);
-
-/// Clear the default runtime if it is currently `rt` (identity check),
-/// reverting later NULL-means-default lookups to the lazy fallback. No-op if
-/// `rt` is not the current default.
-void clear_default_runtime_if(Runtime* rt);
 
 template <typename T>
 TypedTaskHandle<T> Runtime::submit(coro::CoroTask<T> task, std::string name) {

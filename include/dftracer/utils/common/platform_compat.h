@@ -135,4 +135,13 @@ extern "C" void __tsan_release(void *);
 #define DFTRACER_UTILS_TSAN_RELEASE(addr) ((void)0)
 #endif
 
+// Turns off clang's -Wthread-safety for one function that takes a lock and
+// leaves it to another, such as the prepare and child handlers of a fork.
+#if defined(__clang__)
+#define DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS \
+    __attribute__((no_thread_safety_analysis))
+#else
+#define DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS
+#endif
+
 #endif  // DFTRACER_UTILS_COMMON_PLATFORM_COMPAT_H

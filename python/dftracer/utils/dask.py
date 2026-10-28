@@ -47,11 +47,7 @@ except ImportError:
     dask = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     dd = None  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
-from dftracer.utils import (
-    Runtime,
-    peek_default_runtime,
-    set_default_runtime,
-)
+from dftracer.utils import Runtime
 from dftracer.utils._units import coerce_bytes, coerce_duration
 from dftracer.utils.dask_frame import DaskFrame
 from dftracer.utils.dataframe import DataFrame, PhaseArg, TimeUnitArg
@@ -70,24 +66,18 @@ __all__ = [
 if WorkerPlugin is not None:
 
     class DFTracerUtilsDaskWorkerPlugin(WorkerPlugin):  # ty: ignore[unsupported-base]
-        """Creates a persistent Runtime per Dask worker."""
+        """Configures the process runtime of each Dask worker."""
 
         def __init__(self, threads=0, io_threads=0):
             self.threads = threads
             self.io_threads = io_threads
 
         def setup(self, worker):
-            # peek (do not create): forcing get_default_runtime here would
-            # spin up an unused hardware_concurrency-thread runtime per worker.
-            worker._dftracer_prev_runtime = peek_default_runtime()
-            rt = Runtime(threads=self.threads, io_threads=self.io_threads)
-            worker.dftracer_utils_runtime = rt
-            set_default_runtime(rt)
+            worker.dftracer_utils_runtime = Runtime(
+                threads=self.threads, io_threads=self.io_threads
+            )
 
         def teardown(self, worker):
-            if hasattr(worker, "_dftracer_prev_runtime"):
-                set_default_runtime(worker._dftracer_prev_runtime)
-                del worker._dftracer_prev_runtime
             if hasattr(worker, "dftracer_utils_runtime"):
                 # wait=False: don't block on pending tasks during teardown.
                 # Dask may be tearing down because of timeout/cancel, and a

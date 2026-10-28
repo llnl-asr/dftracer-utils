@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/open_extent.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
 #include <testing_utilities.h>
@@ -35,6 +36,10 @@ constexpr std::size_t SINK_LIMIT = std::size_t{256} << 10;
 // Small, so the blocks RocksDB caches as each file's index is read do not
 // grow the peak with the file count; the store, not the bootstrap, owns them.
 constexpr std::size_t BLOCK_CACHE_LIMIT = std::size_t{1} << 20;
+// Small, so the pages the store collects to train its page dictionaries do not
+// grow the peak with the data written; the store, not the bootstrap, owns
+// them, and they stop at their size.
+constexpr std::size_t DICT_SAMPLE_LIMIT = std::size_t{256} << 10;
 // What a worker may hold to parse a file, whatever the file.
 constexpr std::size_t PER_WORKER_BUDGET = std::size_t{24} << 20;
 // What the whole bootstrap holds at PEAK_WORKERS, whatever the files.
@@ -128,11 +133,10 @@ TEST_SUITE("BootstrapPeak") {
 
         const auto limit = build::g_max_sink_bytes.exchange(SINK_LIMIT);
         dataframe::DataFrame few_df, many_df;
-        set_default_runtime(std::make_shared<Runtime>(FEW_WORKERS));
+        configure_default_runtime({.threads = FEW_WORKERS, .eager = true});
         const auto few_peak = peak_live(
             [&] { few_df = count_by_name(files, env.get_dir() + "/idx_few"); });
-        set_default_runtime(nullptr);
-        set_default_runtime(std::make_shared<Runtime>(PEAK_WORKERS));
+        configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         const auto many_peak = peak_live([&] {
             many_df = count_by_name(files, env.get_dir() + "/idx_many");
         });
@@ -146,7 +150,6 @@ TEST_SUITE("BootstrapPeak") {
               few_peak + (PEAK_WORKERS - FEW_WORKERS) * PER_WORKER_BUDGET);
         CHECK(counts(few_df) == counts(many_df));
         CHECK(total_of(many_df) == PEAK_FILES * BIG_EVENTS);
-        set_default_runtime(nullptr);
         CHECK_FALSE(memory::Manager::get().leaked());
     }
 
@@ -163,11 +166,11 @@ TEST_SUITE("BootstrapPeak") {
             files.push_back(write_big_trace(env.get_dir(), i));
         build::g_max_sink_bytes.store(SINK_LIMIT);
         index::store::g_block_cache_bytes.store(BLOCK_CACHE_LIMIT);
-        set_default_runtime(std::make_shared<Runtime>(PEAK_WORKERS));
+        dftracer::utils::store::g_dict_sample_bytes.store(DICT_SAMPLE_LIMIT);
+        configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         dataframe::DataFrame df;
         const auto peak = peak_live(
             [&] { df = count_by_name(files, env.get_dir() + "/idx"); });
-        set_default_runtime(nullptr);
         std::fprintf(stderr, "PEAK %zu EVENTS %lld\n", peak,
                      static_cast<long long>(total_of(df)));
     }

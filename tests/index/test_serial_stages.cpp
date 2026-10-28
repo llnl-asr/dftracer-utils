@@ -175,7 +175,7 @@ struct ViewRun {
     ViewRun() : env(10) {
         files = write_view_traces(env.get_dir(), VIEW_FILES);
         many_dir = env.get_dir() + "/many";
-        set_default_runtime(std::make_shared<Runtime>(VIEW_WORKERS));
+        configure_default_runtime({.threads = VIEW_WORKERS, .eager = true});
         auto& counters = views::detail::bootstrap_counters();
         counters.reset();
         {
@@ -186,7 +186,6 @@ struct ViewRun {
         during_parse = counters.ingests_during_parse.load();
         most_at_once = counters.max_ingests_in_flight.load();
         sink_commits = counters.sink_commits.load();
-        set_default_runtime(nullptr);
     }
 
     dftu_utils_test::TestEnvironment env;
@@ -360,7 +359,7 @@ TEST_SUITE("SerialStages") {
         auto files = run.files;
         files.push_back(write_corrupt_trace(run.env.get_dir(), VIEW_FILES));
         const auto index_dir = run.env.get_dir() + "/failed";
-        set_default_runtime(std::make_shared<Runtime>(2));
+        configure_default_runtime({.threads = 2, .eager = true});
         {
             SinkLimit limit(TINY_SINK);
             try {
@@ -368,7 +367,6 @@ TEST_SUITE("SerialStages") {
             } catch (const std::exception&) {
             }
         }
-        set_default_runtime(nullptr);
 
         const auto root = view_index_root(files.front(), index_dir);
         store::RocksDBManager::instance().reset(root);
@@ -400,7 +398,7 @@ TEST_SUITE("SerialStages") {
             dftracer::utils::index::store::IndexBackend::RocksDb);
         const auto& run = view_run();
         const auto one_dir = run.env.get_dir() + "/one";
-        set_default_runtime(std::make_shared<Runtime>(VIEW_WORKERS));
+        configure_default_runtime({.threads = VIEW_WORKERS, .eager = true});
         auto& counters = views::detail::bootstrap_counters();
         {
             SinkLimit limit(HUGE_SINK);
@@ -408,7 +406,6 @@ TEST_SUITE("SerialStages") {
             cold_count(run.files, one_dir);
         }
         const auto one_ingests = counters.ingest_calls.load();
-        set_default_runtime(nullptr);
         REQUIRE(run.ingest_calls > 1);
         REQUIRE(one_ingests < run.ingest_calls);
 

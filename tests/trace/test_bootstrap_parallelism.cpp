@@ -120,7 +120,7 @@ TEST_SUITE("BootstrapParallelism") {
             files.push_back(write_trace(env.get_dir(), i));
         const auto index_dir = env.get_dir() + "/idx";
 
-        set_default_runtime(std::make_shared<Runtime>(WORKERS));
+        configure_default_runtime({.threads = WORKERS, .eager = true});
         REQUIRE(default_runtime().threads() == WORKERS);
 
         trace::views::detail::bootstrap_counters().reset();
@@ -138,8 +138,6 @@ TEST_SUITE("BootstrapParallelism") {
         std::int64_t total = 0;
         for (const auto& [name, n] : counts(cold)) total += n;
         CHECK(total == FILES * EVENTS);
-
-        set_default_runtime(nullptr);
     }
 
     TEST_CASE("an export bootstrap commits its sink at the sink limit") {
@@ -147,7 +145,7 @@ TEST_SUITE("BootstrapParallelism") {
         std::vector<std::string> files;
         for (int i = 0; i < FILES; ++i)
             files.push_back(write_trace(env.get_dir(), i));
-        set_default_runtime(std::make_shared<Runtime>(WORKERS));
+        configure_default_runtime({.threads = WORKERS, .eager = true});
 
         trace::views::detail::bootstrap_counters().reset();
         const auto lines = export_lines(files, env.get_dir() + "/idx");
@@ -156,8 +154,6 @@ TEST_SUITE("BootstrapParallelism") {
             trace::views::detail::bootstrap_counters().sink_commits.load();
         CHECK(commits >= 1);
         CHECK(commits < FILES / 8);
-
-        set_default_runtime(nullptr);
     }
 
     TEST_CASE("the SST count does not grow with the files") {
@@ -169,7 +165,7 @@ TEST_SUITE("BootstrapParallelism") {
             files.push_back(write_trace(env.get_dir(), i));
         const std::vector<std::string> few(files.begin(), files.begin() + 64);
 
-        set_default_runtime(std::make_shared<Runtime>(WORKERS));
+        configure_default_runtime({.threads = WORKERS, .eager = true});
         const auto small_dir = env.get_dir() + "/idx64";
         const auto large_dir = env.get_dir() + "/idx256";
         count_by_name(few, small_dir);
@@ -185,7 +181,6 @@ TEST_SUITE("BootstrapParallelism") {
         CHECK(large_ssts <= WORKERS * MAX_PREFIXES);
         CHECK(large_ssts <= small_ssts);
         CHECK_FALSE(memory::Manager::get().leaked());
-        set_default_runtime(nullptr);
     }
 
     TEST_CASE("a read-only open of more SSTs than the descriptor limit works") {
@@ -202,7 +197,7 @@ TEST_SUITE("BootstrapParallelism") {
             files.push_back(write_trace(env.get_dir(), i));
         const auto index_dir = env.get_dir() + "/idx";
 
-        set_default_runtime(std::make_shared<Runtime>(WORKERS));
+        configure_default_runtime({.threads = WORKERS, .eager = true});
         count_by_name(files, index_dir);
         const auto root = index_root_of(files.front(), index_dir);
         store::RocksDBManager::instance().reset(root);
@@ -224,7 +219,6 @@ TEST_SUITE("BootstrapParallelism") {
         }
         REQUIRE(::setrlimit(RLIMIT_NOFILE, &before) == 0);
         CHECK(opened);
-        set_default_runtime(nullptr);
     }
 
     TEST_CASE(
@@ -235,7 +229,7 @@ TEST_SUITE("BootstrapParallelism") {
             files.push_back(write_trace(env.get_dir(), i));
         const auto index_dir = env.get_dir() + "/idx";
 
-        set_default_runtime(std::make_shared<Runtime>(WORKERS));
+        configure_default_runtime({.threads = WORKERS, .eager = true});
         const auto opens_before = store::IndexDatabase::read_write_opens();
         const auto cold = export_lines(files, index_dir);
         const auto opens =
@@ -247,6 +241,5 @@ TEST_SUITE("BootstrapParallelism") {
         CHECK(cold == warm);
         CHECK(counts(count_by_name(files, index_dir)).size() == 7);
         CHECK_FALSE(memory::Manager::get().leaked());
-        set_default_runtime(nullptr);
     }
 }

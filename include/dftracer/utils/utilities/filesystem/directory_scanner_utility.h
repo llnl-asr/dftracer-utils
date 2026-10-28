@@ -279,15 +279,14 @@ template <class Scanner, class Input>
 std::vector<FileEntry> scan_on_pool(std::size_t executor_threads,
                                     std::size_t io_threads, Input input) {
     std::vector<FileEntry> entries;
-    ExecutorConfig config;
-    config.num_threads = executor_threads;
-    config.min_workers = 1;
-    config.io_pool_size = io_threads;
-    Runtime pool(config, /*enable_watchdog=*/false);
-    pool.run_blocking("scan trace files", [&](CoroScope& scope) {
-        return scan_on_pool_task<Scanner, Input>(scope, std::move(input),
-                                                 &entries);
-    });
+    RuntimeSettings settings;
+    settings.threads = executor_threads;
+    settings.io_threads = io_threads;
+    configure_default_runtime(settings).run_blocking(
+        "scan trace files", [&](CoroScope& scope) {
+            return scan_on_pool_task<Scanner, Input>(scope, std::move(input),
+                                                     &entries);
+        });
     return entries;
 }
 

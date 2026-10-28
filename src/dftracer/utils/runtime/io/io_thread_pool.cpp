@@ -12,10 +12,24 @@ void IoThreadPool::start() {
     if (running_.load()) return;
     cancelling_.store(false, std::memory_order_release);
     running_ = true;
-    threads_.reserve(num_threads_);
-    for (std::size_t i = 0; i < num_threads_; ++i) {
+    const std::size_t count = num_threads_.load(std::memory_order_acquire);
+    threads_.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
         threads_.emplace_back(&IoThreadPool::worker_loop, this);
     }
+}
+
+void IoThreadPool::grow(std::size_t threads) {
+    // Under the lock stop() takes to clear running_, so a pool that stops
+    // either joins the new threads or never gets them.
+    std::lock_guard<std::mutex> lock(mutex_);
+    const std::size_t count = num_threads_.load(std::memory_order_acquire);
+    if (threads <= count) return;
+    if (running_.load()) {
+        for (std::size_t i = count; i < threads; ++i)
+            threads_.emplace_back(&IoThreadPool::worker_loop, this);
+    }
+    num_threads_.store(threads, std::memory_order_release);
 }
 
 void IoThreadPool::stop() {
@@ -74,7 +88,8 @@ std::size_t IoThreadPool::flush() {
 void IoThreadPool::wake(std::size_t items) {
     // A woken worker drains the queue, so waking the whole pool per flush just
     // thunders it; wake only as many workers as pending items.
-    const std::size_t n = items < num_threads_ ? items : num_threads_;
+    const std::size_t pool = num_threads_.load(std::memory_order_relaxed);
+    const std::size_t n = items < pool ? items : pool;
     for (std::size_t i = 0; i < n; ++i) {
         cv_.notify_one();
     }

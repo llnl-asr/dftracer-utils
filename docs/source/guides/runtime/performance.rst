@@ -59,15 +59,18 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
          rt = Runtime(threads=8, io_threads=8, python_threads=4)
          tv = TraceViewer("./traces", runtime=rt)  # view execution uses rt's pool
 
-      - ``threads``: C++ executor worker threads (0 = hardware_concurrency).
-      - ``io_threads``: C++ I/O thread pool (0 = hardware_concurrency).
+      - ``threads``: C++ executor worker threads (0 keeps the current count,
+        the hardware concurrency for a new runtime).
+      - ``io_threads``: C++ I/O threads, which only grow (0 keeps the count).
       - ``python_threads``: a ``ThreadPoolExecutor`` size for
         ``rt.submit(python_callable)`` (0 = ``min(32, threads)``); it does not
         affect C++-side scan/aggregation work.
 
-      Without an explicit ``runtime=``, a viewer runs on a process-wide
-      default runtime. Pass a ``Runtime`` explicitly when you need a
-      non-default thread count or want several viewers to share one pool.
+      A process has one runtime, and every viewer, pipeline and index build
+      runs on it. ``Runtime(threads=...)`` sets its thread count in place,
+      while work runs, and the new count holds for everything after; leaving
+      a ``with`` block does not stop the runtime, which runs until the
+      process exits.
 
 Data-parallel loops: parallel_for / parallel_reduce
 ---------------------------------------------------------

@@ -51,12 +51,10 @@ class StoreIndexWrite;
 class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
    public:
     /// The root of `index_root`, opened on its first write or snapshot. Its
-    /// writer runs on `runtime`, or on the default runtime when it is null; a
-    /// root that is already open keeps its own. Throws std::runtime_error when
-    /// the store directory cannot be created.
+    /// writer runs on the process runtime. Throws std::runtime_error when the
+    /// store directory cannot be created.
     static std::shared_ptr<StoreRoot> get_or_open(
-        const std::string& index_root,
-        std::shared_ptr<Runtime> runtime = nullptr);
+        const std::string& index_root);
 
     /// Closes the writer of every root this process holds, as close() does.
     /// Runs while the runtime the writers wait on still runs, so a root that
@@ -133,7 +131,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         dstd::Vector<kv::SourceStat> sources;
     };
 
-    StoreRoot(std::string index_root, std::shared_ptr<Runtime> runtime);
+    explicit StoreRoot(std::string index_root);
 
     void ensure_dir_locked();
     void ensure_writer_locked();
@@ -208,8 +206,6 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::string index_root_;
     std::string store_dir_;
     std::shared_ptr<Runtime> runtime_;
-    /// The runtime get_or_open() was given; null for the default runtime.
-    std::shared_ptr<Runtime> own_runtime_;
     std::unique_ptr<kv::Writer> writer_;
     std::map<std::string, NamespaceEntry> namespaces_;
     std::map<std::string, int> ids_by_path_;

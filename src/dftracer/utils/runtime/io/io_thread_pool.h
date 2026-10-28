@@ -36,6 +36,10 @@ class IoThreadPool {
     /// Stop and join all threads.
     void stop();
 
+    /// Raise the thread count to `threads`, starting the new threads at once
+    /// when the pool runs; a smaller count changes nothing.
+    void grow(std::size_t threads);
+
     /// Submit work. When batch_threshold > 0, queues without waking
     /// and auto-flushes at threshold.  Thread-safe.
     void submit(std::function<void()> fn);
@@ -71,7 +75,7 @@ class IoThreadPool {
     void worker_loop();
     void wake(std::size_t items);
 
-    std::size_t num_threads_;
+    std::atomic<std::size_t> num_threads_;
     unsigned batch_threshold_;
     // Written under mutex_; atomic so flush() can skip the lock when empty.
     std::atomic<unsigned> unflushed_count_{0};

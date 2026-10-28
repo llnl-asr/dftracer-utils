@@ -51,27 +51,18 @@ static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
     }
 
     try {
-        dftracer::utils::ExecutorConfig config;
-        config.num_threads = static_cast<std::size_t>(threads);
-        config.io_pool_size = static_cast<std::size_t>(io_threads);
-        self->runtime =
-            std::make_shared<dftracer::utils::Runtime>(config, true);
+        // The process has one runtime: this configures it and holds it.
+        dftracer::utils::RuntimeSettings settings;
+        settings.threads = static_cast<std::size_t>(threads);
+        settings.io_threads = static_cast<std::size_t>(io_threads);
+        dftracer::utils::configure_default_runtime(settings);
+        self->runtime = dftracer::utils::default_runtime_shared();
     } catch (const std::exception &e) {
         dftracer::utils::python::set_typed_py_error(e);
         return -1;
     }
 
     return 0;
-}
-
-static PyObject *Runtime_shutdown(RuntimeObject *self,
-                                  PyObject *Py_UNUSED(ignored)) {
-    if (!self->runtime) {
-        PyErr_SetString(PyExc_RuntimeError, "Runtime not initialized");
-        return NULL;
-    }
-    Py_BEGIN_ALLOW_THREADS self->runtime->shutdown();
-    Py_END_ALLOW_THREADS Py_RETURN_NONE;
 }
 
 static bool set_size(PyObject *d, const char *key, std::size_t val) {
@@ -297,11 +288,7 @@ static PyObject *Runtime_enter(RuntimeObject *self,
     return (PyObject *)self;
 }
 
-static PyObject *Runtime_exit(RuntimeObject *self, PyObject *) {
-    if (self->runtime) {
-        Py_BEGIN_ALLOW_THREADS self->runtime->shutdown();
-        Py_END_ALLOW_THREADS
-    }
+static PyObject *Runtime_exit(RuntimeObject *Py_UNUSED(self), PyObject *) {
     Py_RETURN_NONE;
 }
 
@@ -347,31 +334,7 @@ static PyObject *peek_default_runtime_py(PyObject *Py_UNUSED(module),
     return (PyObject *)obj;
 }
 
-static PyObject *set_default_runtime_py(PyObject *Py_UNUSED(module),
-                                        PyObject *args) {
-    PyObject *arg;
-    if (!PyArg_ParseTuple(args, "O", &arg)) return NULL;
-
-    if (arg == Py_None) {
-        dftracer::utils::set_default_runtime(nullptr);
-        Py_RETURN_NONE;
-    }
-
-    if (!PyObject_TypeCheck(arg, &RuntimeType)) {
-        PyErr_SetString(PyExc_TypeError, "Expected Runtime or None");
-        return NULL;
-    }
-
-    dftracer::utils::set_default_runtime(((RuntimeObject *)arg)->runtime);
-    Py_RETURN_NONE;
-}
-
 static PyMethodDef Runtime_methods[] = {
-    {"shutdown", DFTU_PYCFUNCTION(Runtime_shutdown), METH_NOARGS,
-     "shutdown()\n"
-     "--\n"
-     "\n"
-     "Shut down the runtime.\n"},
     {"get_progress", DFTU_PYCFUNCTION(Runtime_get_progress), METH_NOARGS,
      "Return progress dict with keys: total, completed, running,\n"
      "queued, failed."},
@@ -395,7 +358,7 @@ static PyMethodDef Runtime_methods[] = {
     {"__enter__", DFTU_PYCFUNCTION(Runtime_enter), METH_NOARGS,
      "Enter context manager."},
     {"__exit__", DFTU_PYCFUNCTION(Runtime_exit), METH_VARARGS,
-     "Exit context manager (calls shutdown)."},
+     "Exit context manager. The process runtime keeps running."},
     {NULL}};
 
 static PyObject *Runtime_get_io_threads(RuntimeObject *self, void *) {
@@ -436,45 +399,42 @@ PyTypeObject RuntimeType = {
     "Runtime(threads: int = 0, io_threads: int = 0)\n"
     "--\n"
     "\n"
-    "Coroutine runtime backed by a thread pool.\n"
+    "A handle to the process runtime, the one thread pool every part of\n"
+    "the library runs on. Making one configures that runtime in place;\n"
+    "it runs until the process exits.\n"
     "\n"
     "Args:\n"
-    "    threads (int): Number of worker threads. 0 (default) uses\n"
-    "        the hardware concurrency.\n"
-    "    io_threads (int): Number of I/O threads. 0 (default) uses\n"
-    "        the hardware concurrency.\n", /* tp_doc */
-    0,                                     /* tp_traverse */
-    0,                                     /* tp_clear */
-    0,                                     /* tp_richcompare */
-    0,                                     /* tp_weaklistoffset */
-    0,                                     /* tp_iter */
-    0,                                     /* tp_iternext */
-    Runtime_methods,                       /* tp_methods */
-    0,                                     /* tp_members */
-    Runtime_getsetters,                    /* tp_getset */
-    0,                                     /* tp_base */
-    0,                                     /* tp_dict */
-    0,                                     /* tp_descr_get */
-    0,                                     /* tp_descr_set */
-    0,                                     /* tp_dictoffset */
-    (initproc)Runtime_init,                /* tp_init */
-    0,                                     /* tp_alloc */
-    Runtime_new,                           /* tp_new */
+    "    threads (int): Worker threads. 0 (default) keeps the current\n"
+    "        count (the hardware concurrency for a new runtime).\n"
+    "    io_threads (int): I/O threads, which only grow. 0 (default)\n"
+    "        keeps the current count.\n", /* tp_doc */
+    0,                                    /* tp_traverse */
+    0,                                    /* tp_clear */
+    0,                                    /* tp_richcompare */
+    0,                                    /* tp_weaklistoffset */
+    0,                                    /* tp_iter */
+    0,                                    /* tp_iternext */
+    Runtime_methods,                      /* tp_methods */
+    0,                                    /* tp_members */
+    Runtime_getsetters,                   /* tp_getset */
+    0,                                    /* tp_base */
+    0,                                    /* tp_dict */
+    0,                                    /* tp_descr_get */
+    0,                                    /* tp_descr_set */
+    0,                                    /* tp_dictoffset */
+    (initproc)Runtime_init,               /* tp_init */
+    0,                                    /* tp_alloc */
+    Runtime_new,                          /* tp_new */
 };
 
 // Module-level function table (registered via PyModule_AddFunctions or
 // appended to the module's method table in init_runtime).
 static PyMethodDef runtime_module_methods[] = {
     {"get_default_runtime", get_default_runtime_py, METH_NOARGS,
-     "Return the module-level default Runtime (lazy-created)."},
+     "Return the process runtime (made on first use)."},
     {"peek_default_runtime", peek_default_runtime_py, METH_NOARGS,
-     "Return the current default Runtime, or None if none exists yet "
-     "(never creates one)."},
-    {"set_default_runtime", set_default_runtime_py, METH_VARARGS,
-     "Replace the module-level default Runtime (pass None to clear).\n"
-     "\n"
-     "Args:\n"
-     "    runtime (Runtime or None): New default runtime.\n"},
+     "Return the process runtime, or None before its first use "
+     "(never makes one)."},
     {NULL}};
 
 // Runs during interpreter finalization. Stop the default runtime's worker and
@@ -485,9 +445,7 @@ static PyMethodDef runtime_module_methods[] = {
 static void dftracer_utils_atexit_cleanup() {
     // A store writer waits on the runtime to close, so it closes first.
     dftracer::utils::index::store::close_index_writers();
-    if (auto rt = dftracer::utils::peek_default_runtime()) {
-        rt->shutdown();
-    }
+    dftracer::utils::Runtime::stop_at_exit();
     dftracer::utils::index::store::mark_process_exiting_for_rocksdb();
 }
 

@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Run the whole process on one runtime: pipelines, directory scans, index builds, the store, the caches and Python all share it.
+  `configure_default_runtime()`, Python `Runtime(threads=...)` and `dftu_runtime_new()` grow or shrink its threads in place while work runs, and only process exit stops it.
 - Make the store the default index backend.
   Each backend builds again an index that the other one built, so set `DFTRACER_UTILS_INDEX_BACKEND=rocksdb` to keep using a RocksDB index.
 - Keep the rollup and lookup caches in `.dftindex-cache` on the store, so several processes can write one cache folder.
@@ -246,6 +248,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove `set_default_runtime()`, `try_install_default_runtime()` and `clear_default_runtime_if()` from C++, `dftracer.utils.set_default_runtime()` from Python and `dftu_set_default_runtime()` from the C ABI.
+  Configure the one runtime with `configure_default_runtime()`, `Runtime(threads=...)` or `dftu_runtime_new()` instead.
+- Remove the native `Runtime.shutdown()` from Python, so `Runtime.shutdown()` and leaving a `with` block release the handle and leave the runtime running.
 - Remove `plan_work_units`, `enumerate_gzip_members` and the `file_slices` argument of `build_sst_batch` from the Python bindings, since `distributed_index` no longer cuts a file across workers.
 - Remove the `DFTRACER_UTILS_ENABLE_ZSTD` and `DFTRACER_UTILS_ENABLE_LZ4` CMake options, and with them LZ4 compression of the RocksDB index.
   Every build links zstd, so spill files and Arrow IPC files can always compress with zstd.
@@ -266,6 +271,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a pipeline that times out or stops ending the work of every other pipeline on the same executor.
+- Fix a store index commit opening the whole store again to find sources it already held, which grew the peak memory of a view bootstrap with the number of files.
+- Fix a data race between `Runtime.get_progress()` and an elastic pool retiring a worker.
 - Fix a store index write from a worker of the default runtime hanging, as when a view builds its index.
 - Fix a store index write that changes part of a file's data losing the rest of it when another process wrote that data.
 - Fix `merge_shard_set` on the store backend, which kept no file of the merged index.

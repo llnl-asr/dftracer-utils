@@ -3,9 +3,10 @@
 Runtime Module
 ==============
 
-The ``Runtime`` manages a thread pool for executing coroutines and Python
-callables. It wraps the C++ ``Executor`` and ``Watchdog`` without
-Pipeline/DAG overhead.
+The ``Runtime`` is a handle to the process runtime, the one thread pool that
+every part of the library runs on. It runs coroutines and Python callables
+over the C++ ``Executor`` without Pipeline/DAG overhead. Making a ``Runtime``
+configures the process runtime in place; it runs until the process exits.
 
 Runtime Class
 -------------
@@ -23,11 +24,12 @@ How the runtime types relate:
    :show-inheritance:
    :special-members: __enter__, __exit__
 
-``threads`` sizes the C++ compute pool; ``io_threads`` sizes a separate pool
-dedicated to blocking I/O tasks; ``python_threads`` sizes the Python
-``ThreadPoolExecutor`` that runs Python callables submitted to ``submit()``
-(default ``min(32, threads)``). All three default to ``0``, which lets the
-runtime auto-size based on the host.
+``threads`` sets the C++ compute pool, up or down, while work runs;
+``io_threads`` grows the pool dedicated to blocking I/O tasks;
+``python_threads`` sizes this handle's Python ``ThreadPoolExecutor`` that runs
+Python callables submitted to ``submit()`` (default ``min(32, threads)``).
+``0`` keeps the current count of the process runtime, which a new runtime
+sizes from the host.
 
 TaskHandle Class
 ----------------
@@ -43,8 +45,6 @@ Module-level Functions
 .. autofunction:: dftracer.utils.get_default_runtime
 
 .. autofunction:: dftracer.utils.peek_default_runtime
-
-.. autofunction:: dftracer.utils.set_default_runtime
 
 Submitting Tasks
 ----------------

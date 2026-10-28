@@ -28,6 +28,11 @@ class Executor;
 
 namespace dftracer::utils::store {
 
+/// The raw page bytes a namespace collects before it trains a dictionary,
+/// read at each page. A test lowers it so its peaks measure our code, not
+/// this buffer, which fills with what a namespace writes up to this size.
+inline std::atomic<std::size_t> g_dict_sample_bytes{std::size_t{8} << 20};
+
 /// One written block of a data file: an extent of segments, or the run of a
 /// segment that does not fit in an extent, in its stored form (extent_codec.h).
 /// `length` is the stored length rounded up to 4096 and is what the file holds

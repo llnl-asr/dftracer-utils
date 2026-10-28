@@ -5,9 +5,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
-#include <map>
 #include <memory>
-#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -56,38 +54,13 @@ coro::CoroTask<void> await_any(std::vector<coro::CoroTask<void>> inner) {
 
 }  // namespace dftracer::utils
 
-using dftracer::utils::clear_default_runtime_if;
+using dftracer::utils::configure_default_runtime;
 using dftracer::utils::CoroScope;
 using dftracer::utils::default_runtime;
-using dftracer::utils::ExecutorConfig;
 using dftracer::utils::Runtime;
-using dftracer::utils::set_default_runtime;
+using dftracer::utils::RuntimeSettings;
 using dftracer::utils::task_to_abi;
-using dftracer::utils::try_install_default_runtime;
 using dftracer::utils::coro::CoroTask;
-
-namespace {
-std::size_t normalize_thread_count(std::int32_t v) {
-    return v > 0 ? static_cast<std::size_t>(v) : 0;
-}
-
-// The strong reference the C ABI itself holds for each dftu_runtime_new. The
-// runtime is shared: default_runtime_shared() hands copies out, and the Python
-// Runtime object stores one that outlives the call. So free() drops THIS
-// reference rather than deleting, and the object lives until the last holder
-// releases it. A non-owning shared_ptr here would let dftu_runtime_free leave
-// every other holder pointing at freed memory while their refcount still said
-// the object was alive.
-std::mutex& abi_runtime_mutex() {
-    static std::mutex m;
-    return m;
-}
-std::map<Runtime*, std::shared_ptr<Runtime>>& abi_runtimes() {
-    static std::map<Runtime*, std::shared_ptr<Runtime>> m;
-    return m;
-}
-
-}  // namespace
 
 extern "C" {
 
@@ -96,42 +69,15 @@ dftu_runtime* dftu_default_runtime(void) {
 }
 
 dftu_runtime* dftu_runtime_new(int32_t threads, int32_t io_threads) {
-    ExecutorConfig cfg;
-    cfg.num_threads = normalize_thread_count(threads);
-    cfg.io_pool_size = normalize_thread_count(io_threads);
-    auto rt = std::make_shared<Runtime>(cfg);
-    Runtime* raw = rt.get();
-    {
-        std::lock_guard<std::mutex> lock(abi_runtime_mutex());
-        abi_runtimes().emplace(raw, rt);
-    }
-    try_install_default_runtime(rt);
-    return reinterpret_cast<dftu_runtime*>(raw);
+    RuntimeSettings settings;
+    settings.threads = threads > 0 ? static_cast<std::size_t>(threads) : 0;
+    settings.io_threads =
+        io_threads > 0 ? static_cast<std::size_t>(io_threads) : 0;
+    return reinterpret_cast<dftu_runtime*>(
+        &configure_default_runtime(settings));
 }
 
-void dftu_runtime_free(dftu_runtime* rt) {
-    if (!rt) return;
-    auto* runtime = reinterpret_cast<Runtime*>(rt);
-    clear_default_runtime_if(runtime);
-    std::shared_ptr<Runtime> dropped;  // released outside the lock
-    {
-        std::lock_guard<std::mutex> lock(abi_runtime_mutex());
-        auto it = abi_runtimes().find(runtime);
-        if (it != abi_runtimes().end()) {
-            dropped = std::move(it->second);
-            abi_runtimes().erase(it);
-        }
-    }
-}
-
-void dftu_set_default_runtime(dftu_runtime* rt) {
-    if (!rt) {
-        set_default_runtime(nullptr);
-        return;
-    }
-    auto* runtime = reinterpret_cast<Runtime*>(rt);
-    set_default_runtime(std::shared_ptr<Runtime>(runtime, [](Runtime*) {}));
-}
+void dftu_runtime_free(dftu_runtime* rt) { (void)rt; }
 
 int dftu_task_run(dftu_runtime* rt, dftu_task* t) {
     if (!t) return -1;

@@ -13,30 +13,26 @@ Pipeline::Pipeline(const PipelineConfig& config)
     : name_(config.name),
       error_policy_(config.error_policy),
       error_handler_(config.error_handler) {
-    ExecutorConfig exec_cfg;
-    exec_cfg.num_threads = config.executor_threads;
-    // Explicit config wins; unset resolves from the env default (elastic unless
-    // DFTRACER_UTILS_ELASTIC is off), so tests can pin either path.
-    exec_cfg.min_workers = config.min_workers.has_value()
-                               ? *config.min_workers
-                               : (elastic_default_enabled() ? 1 : 0);
-    exec_cfg.elastic_keepalive = config.elastic_keepalive;
-    exec_cfg.idle_timeout = config.executor_idle_timeout;
-    exec_cfg.deadlock_timeout = config.executor_deadlock_timeout;
-    exec_cfg.io_pool_size = config.io_thread_count;
-    exec_cfg.io_backend_type = config.io_backend_type;
-    exec_cfg.io_batch_threshold = config.io_batch_threshold;
+    // The settings this pipeline asks for apply to the process runtime; one
+    // it leaves unset keeps what the runtime has.
+    RuntimeSettings settings;
+    settings.threads = config.executor_threads;
+    settings.io_threads = config.io_thread_count;
+    if (config.min_workers) settings.eager = *config.min_workers == 0;
+    settings.deadlock_timeout = config.executor_deadlock_timeout;
+    settings.io_backend = config.io_backend_type;
+    settings.io_batch_threshold = config.io_batch_threshold;
+    configure_default_runtime(settings);
+    runtime_ = default_runtime_shared();
 
-    std::unique_ptr<Watchdog> watchdog;
     if (config.enable_watchdog) {
-        watchdog = std::make_unique<Watchdog>(
+        watchdog_ = std::make_unique<Watchdog>(
             config.watchdog_interval, config.global_timeout,
             config.default_task_timeout, config.long_task_warning_threshold);
+        watchdog_->set_executor(runtime_->executor());
     }
-
-    runtime_ = std::make_unique<Runtime>(exec_cfg, std::move(watchdog));
     scheduler_ = std::make_unique<Scheduler>(runtime_->executor(),
-                                             runtime_->watchdog(), config);
+                                             watchdog_.get(), config);
 
     DFTRACER_UTILS_LOG_DEBUG(
         "Pipeline '%s' created with config: executor_threads=%zu, "
@@ -47,9 +43,9 @@ Pipeline::Pipeline(const PipelineConfig& config)
 
 Pipeline::~Pipeline() {
     DFTRACER_UTILS_LOG_DEBUG("Pipeline '%s' destroyed", name_.c_str());
-    // The scheduler waits for its tasks, which need the runtime running.
+    // The scheduler waits for its tasks; the process runtime keeps running.
     scheduler_.reset();
-    runtime_->shutdown();
+    if (watchdog_) watchdog_->stop();
 }
 
 void Pipeline::set_source(std::shared_ptr<Task> source) {

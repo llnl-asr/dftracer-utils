@@ -21,6 +21,7 @@ namespace dftracer::utils {
 class Task;
 class Executor;
 class Scheduler;
+class Watchdog;
 
 /// DAG container and orchestrator: holds source/destination tasks, validates
 /// the DAG (reachability, types, cycles), and delegates execution to the
@@ -32,7 +33,10 @@ class Pipeline {
 
     std::vector<std::shared_ptr<Task>> all_tasks_;
 
-    std::unique_ptr<Runtime> runtime_;
+    /// The process runtime, configured from the pipeline's settings.
+    std::shared_ptr<Runtime> runtime_;
+    /// This pipeline's own hang detection, when enabled.
+    std::unique_ptr<Watchdog> watchdog_;
     std::unique_ptr<Scheduler> scheduler_;
 
     std::string name_;
@@ -47,7 +51,8 @@ class Pipeline {
 
     ~Pipeline();
 
-    /// The Runtime backing this pipeline, for progress and pool introspection.
+    /// The process runtime this pipeline runs on, for progress and pool
+    /// introspection.
     const Runtime& runtime() const { return *runtime_; }
 
     Pipeline(const Pipeline&) = delete;

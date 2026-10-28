@@ -129,11 +129,10 @@ std::string full_key_of(layout::Ext ext, std::uint32_t file_id,
 
 }  // namespace
 
-StoreRoot::StoreRoot(std::string index_root, std::shared_ptr<Runtime> runtime)
+StoreRoot::StoreRoot(std::string index_root)
     : pool_(memory::Manager::get().root().child("index.store",
                                                 memory::PoolKind::Results)),
-      index_root_(std::move(index_root)),
-      own_runtime_(std::move(runtime)) {
+      index_root_(std::move(index_root)) {
     if (!pool_) {
         throw std::runtime_error("store index: the pool table is full");
     }
@@ -141,7 +140,7 @@ StoreRoot::StoreRoot(std::string index_root, std::shared_ptr<Runtime> runtime)
 }
 
 std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
-    const std::string& index_root, std::shared_ptr<Runtime> runtime) {
+    const std::string& index_root) {
     const std::string key = root_key(index_root);
     std::lock_guard<std::mutex> lock(root_registry_mutex());
     auto& roots = root_registry();
@@ -152,8 +151,7 @@ std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
     // A root outlives the query that opened it, so neither it nor its entry
     // here is charged to that query's pool.
     memory::Scope general(memory::Manager::get().general());
-    auto created =
-        std::shared_ptr<StoreRoot>(new StoreRoot(key, std::move(runtime)));
+    auto created = std::shared_ptr<StoreRoot>(new StoreRoot(key));
     roots.insert_or_assign(key, created);
     return created;
 }
@@ -201,7 +199,7 @@ void StoreRoot::ensure_dir_locked() {
 void StoreRoot::ensure_writer_locked() {
     if (writer_) return;
     ensure_dir_locked();
-    runtime_ = own_runtime_ ? own_runtime_ : default_runtime_shared();
+    runtime_ = default_runtime_shared();
     auto created = kv::Writer::create(store_dir_, *runtime_->executor());
     if (!created)
         throw_store_error("store index: open the writer", created.error());
@@ -478,8 +476,12 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
                            dstd::Vector<kv::SourceStat>& sources) {
     memory::Scope in_pool(*pool_);
     if (scope.kind != kv::ScopeKind::File) return false;
-    const auto held = snapshot();
-    if (!held) return false;
+    // The write's own records and the Members copies this root committed
+    // answer most paths; a snapshot, which a commit makes stale, only the
+    // rest.
+    const std::string members =
+        store_layout::namespace_name(layout::Ext::Members);
+    std::shared_ptr<const kv::Snapshot> held;
     dstd::Vector<kv::SourceStat> found;
     for (const dstd::String& path : scope.paths) {
         const std::string key(path.data(), path.size());
@@ -488,8 +490,15 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
             found.push_back(at->second);
             continue;
         }
-        const kv::CopyInfo info =
-            held->copy_info(members_spec(), kv::ScopeKey::file(key));
+        const kv::ScopeKey file = kv::ScopeKey::file(key);
+        if (const auto own = committed_copy(members, file);
+            own && own->sources.size() == 1) {
+            found.push_back(own->sources[0]);
+            continue;
+        }
+        if (!held) held = snapshot();
+        if (!held) return false;
+        const kv::CopyInfo info = held->copy_info(members_spec(), file);
         if (info.sources.size() != 1) return false;
         found.push_back(info.sources[0]);
     }

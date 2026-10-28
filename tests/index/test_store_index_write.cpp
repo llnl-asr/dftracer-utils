@@ -885,8 +885,8 @@ TEST_CASE("a file record the store already holds writes no copy") {
 
 TEST_CASE("a commit from the only worker of the writer's runtime finishes") {
     dftu_test::ScopedTestDir dir("store_index_worker_commit");
-    dftracer::utils::set_default_runtime(
-        std::make_shared<dftracer::utils::Runtime>(1));
+    const std::size_t previous = dftracer::utils::default_runtime().threads();
+    dftracer::utils::configure_default_runtime({.threads = 1});
     {
         auto root = StoreRoot::get_or_open(dir.str());
         const int file_id = root->file_id_for(std::string(TRACE));
@@ -906,5 +906,5 @@ TEST_CASE("a commit from the only worker of the writer's runtime finishes") {
                   .state == store::ScopeState::Ready);
         root->close();
     }
-    dftracer::utils::set_default_runtime(nullptr);
+    dftracer::utils::configure_default_runtime({.threads = previous});
 }

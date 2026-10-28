@@ -6,6 +6,7 @@
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
+#include <pthread.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -50,7 +51,7 @@ std::size_t resolve_io_threads(std::size_t requested) {
 Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     unwrap(configure_memory_from_env());
     ExecutorConfig config;
-    config.num_threads = threads_;
+    config.num_threads = threads_.load(std::memory_order_relaxed);
     config.io_pool_size = resolve_io_threads(config.io_pool_size);
     executor_ = make_task_executor(config);
     executor_->start();
@@ -60,10 +61,12 @@ Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
 }
 
 Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
-    : threads_(resolve_threads(config.num_threads)) {
+    : threads_(resolve_threads(config.num_threads)),
+      io_backend_(config.io_backend_type),
+      io_batch_threshold_(config.io_batch_threshold) {
     unwrap(configure_memory_from_env());
     ExecutorConfig cfg = config;
-    cfg.num_threads = threads_;
+    cfg.num_threads = threads_.load(std::memory_order_relaxed);
     cfg.io_pool_size = resolve_io_threads(config.io_pool_size);
     executor_ = make_task_executor(cfg);
     executor_->start();
@@ -76,9 +79,11 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
 
 Runtime::Runtime(const ExecutorConfig& config,
                  std::unique_ptr<Watchdog> watchdog)
-    : threads_(resolve_threads(config.num_threads)) {
+    : threads_(resolve_threads(config.num_threads)),
+      io_backend_(config.io_backend_type),
+      io_batch_threshold_(config.io_batch_threshold) {
     ExecutorConfig cfg = config;
-    cfg.num_threads = threads_;
+    cfg.num_threads = threads_.load(std::memory_order_relaxed);
     cfg.io_pool_size = resolve_io_threads(config.io_pool_size);
     executor_ = make_task_executor(cfg);
     executor_->start();
@@ -89,7 +94,7 @@ Runtime::Runtime(const ExecutorConfig& config,
     }
 }
 
-Runtime::~Runtime() { shutdown(); }
+Runtime::~Runtime() { stop(); }
 
 TaskHandle Runtime::submit(coro::CoroTask<void> task, std::string name) {
     if (shutdown_called_.load(std::memory_order_acquire)) {
@@ -189,6 +194,43 @@ void Runtime::set_default_task_timeout(std::chrono::milliseconds timeout) {
 }
 
 void Runtime::shutdown() {
+    if (process_runtime_) {
+        DFTRACER_UTILS_LOG_DEBUG(
+            "%s",
+            "shutdown() of the process runtime ignored; it stops at exit");
+        return;
+    }
+    stop();
+}
+
+void Runtime::configure(const RuntimeSettings& settings) {
+    if (settings.io_backend != io::IoBackendType::Auto &&
+        settings.io_backend != io_backend_) {
+        DFTRACER_UTILS_LOG_WARN("%s",
+                                "runtime: the I/O backend is fixed when the "
+                                "runtime is made; the request is ignored");
+    }
+    if (settings.io_batch_threshold != 0 &&
+        settings.io_batch_threshold != io_batch_threshold_) {
+        DFTRACER_UTILS_LOG_WARN(
+            "%s",
+            "runtime: the I/O batch threshold is fixed when "
+            "the runtime is made; the request is ignored");
+    }
+    if (settings.threads != 0 || settings.eager.has_value()) {
+        const std::size_t threads =
+            settings.threads != 0 ? resolve_threads(settings.threads)
+                                  : threads_.load(std::memory_order_acquire);
+        executor_->set_threads(threads, settings.eager);
+        threads_.store(executor_->get_num_threads(), std::memory_order_release);
+    }
+    if (settings.io_threads != 0)
+        executor_->grow_io_threads(resolve_io_threads(settings.io_threads));
+    if (settings.deadlock_timeout)
+        executor_->set_deadlock_timeout(*settings.deadlock_timeout);
+}
+
+void Runtime::stop() {
     bool expected = false;
     if (!shutdown_called_.compare_exchange_strong(expected, true)) return;
     if (watchdog_) watchdog_->stop();
@@ -197,7 +239,9 @@ void Runtime::shutdown() {
     outstanding_futures_.clear();
 }
 
-std::size_t Runtime::threads() const { return threads_; }
+std::size_t Runtime::threads() const {
+    return threads_.load(std::memory_order_acquire);
+}
 
 std::size_t Runtime::io_threads() const {
     return executor_ ? executor_->get_io_pool_size() : 0;
@@ -206,25 +250,59 @@ std::size_t Runtime::io_threads() const {
 namespace {
 std::mutex g_default_mtx;
 std::shared_ptr<Runtime> g_default_runtime;
-bool g_default_is_lazy = false;
 
-// The memory exit check runs from atexit, which can come before this global is
-// destroyed; stopping the default runtime first lets its workers free their
-// last frames before the check reads.
-void shutdown_default_runtime() {
+// A fork copies the process runtime without its threads. The child drops the
+// copy unused, never touching its executor, and makes its own on first use.
+DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS void lock_default_for_fork() {
+    g_default_mtx.lock();
+}
+DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS void unlock_default_after_fork() {
+    g_default_mtx.unlock();
+}
+DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS void drop_inherited_default() {
+    if (g_default_runtime) {
+        static auto* inherited = new std::vector<std::shared_ptr<Runtime>>();
+        inherited->push_back(std::move(g_default_runtime));
+    }
+    g_default_mtx.unlock();
+}
+
+[[maybe_unused]] const bool FORK_HANDLER_REGISTERED =
+    ::pthread_atfork(lock_default_for_fork, unlock_default_after_fork,
+                     drop_inherited_default) == 0;
+
+ExecutorConfig config_of(const RuntimeSettings& settings) {
+    ExecutorConfig cfg;
+    cfg.num_threads = settings.threads;
+    cfg.io_pool_size = settings.io_threads;
+    const bool eager = settings.eager.value_or(!elastic_default_enabled());
+    cfg.min_workers = eager ? 0 : 1;
+    if (settings.deadlock_timeout)
+        cfg.deadlock_timeout = *settings.deadlock_timeout;
+    cfg.io_backend_type = settings.io_backend;
+    if (settings.io_batch_threshold != 0)
+        cfg.io_batch_threshold = settings.io_batch_threshold;
+    return cfg;
+}
+}  // namespace
+
+void Runtime::become_process_runtime() {
+    process_runtime_ = true;
+    [[maybe_unused]] static const bool hooked =
+        (memory::add_exit_hook(&Runtime::stop_at_exit), true);
+}
+
+void Runtime::stop_at_exit() {
     std::shared_ptr<Runtime> rt;
     {
         std::lock_guard<std::mutex> lock(g_default_mtx);
         rt = g_default_runtime;
     }
-    if (rt) rt->shutdown();
+    // The memory exit check runs from atexit, which can come before this
+    // global is destroyed; stopping first lets the workers free their last
+    // frames before the check reads.
+    if (rt) rt->stop();
 }
-
-void hook_default_runtime_exit() {
-    [[maybe_unused]] static const bool hooked =
-        (memory::add_exit_hook(&shutdown_default_runtime), true);
-}
-}  // namespace
 
 bool elastic_default_enabled() {
     if (auto e = Env::get<std::string_view>("DFTRACER_UTILS_ELASTIC");
@@ -237,48 +315,28 @@ bool elastic_default_enabled() {
 std::shared_ptr<Runtime> default_runtime_shared() {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     if (!g_default_runtime) {
-        // Elastic (grow on demand) so a mostly-idle shared default - a CLI
-        // between queries, a Python session - does not squat hardware_
-        // concurrency threads on a shared node. Latency-sensitive consumers
-        // (the server) build their own eager runtime.
-        ExecutorConfig cfg;
-        cfg.min_workers = elastic_default_enabled() ? 1 : 0;
-        g_default_runtime = std::make_shared<Runtime>(cfg);
-        g_default_is_lazy = true;
-        hook_default_runtime_exit();
+        g_default_runtime = std::make_shared<Runtime>(config_of({}));
+        g_default_runtime->become_process_runtime();
     }
     return g_default_runtime;
 }
 
 Runtime& default_runtime() { return *default_runtime_shared(); }
 
+Runtime& configure_default_runtime(const RuntimeSettings& settings) {
+    std::lock_guard<std::mutex> lock(g_default_mtx);
+    if (!g_default_runtime) {
+        g_default_runtime = std::make_shared<Runtime>(config_of(settings));
+        g_default_runtime->become_process_runtime();
+        return *g_default_runtime;
+    }
+    g_default_runtime->configure(settings);
+    return *g_default_runtime;
+}
+
 std::shared_ptr<Runtime> peek_default_runtime() {
     std::lock_guard<std::mutex> lock(g_default_mtx);
     return g_default_runtime;
-}
-
-void set_default_runtime(std::shared_ptr<Runtime> rt) {
-    std::lock_guard<std::mutex> lock(g_default_mtx);
-    g_default_runtime = std::move(rt);
-    g_default_is_lazy = false;
-    hook_default_runtime_exit();
-}
-
-bool try_install_default_runtime(std::shared_ptr<Runtime> rt) {
-    std::lock_guard<std::mutex> lock(g_default_mtx);
-    if (g_default_runtime && !g_default_is_lazy) return false;
-    g_default_runtime = std::move(rt);
-    g_default_is_lazy = false;
-    hook_default_runtime_exit();
-    return true;
-}
-
-void clear_default_runtime_if(Runtime* rt) {
-    std::lock_guard<std::mutex> lock(g_default_mtx);
-    if (g_default_runtime.get() == rt) {
-        g_default_runtime.reset();
-        g_default_is_lazy = false;
-    }
 }
 
 }  // namespace dftracer::utils

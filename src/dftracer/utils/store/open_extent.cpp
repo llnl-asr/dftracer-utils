@@ -28,8 +28,6 @@ constexpr std::uint64_t OPEN_EXTENT_MAX_WRITERS = 0xFFFFULL;
 /// Bit 63: no appender may reserve space in the extent any more.
 constexpr std::uint64_t OPEN_EXTENT_SEALED = 1ULL << 63U;
 
-/// The raw page bytes a namespace collects before it trains a dictionary.
-constexpr std::size_t DICT_SAMPLE_BYTES = std::size_t{8} << 20;
 /// After the first dictionary, one page in this many goes to the sample of the
 /// second, so it learns from a wider stretch of the data at the same cost.
 constexpr std::uint64_t DICT_RETRAIN_STRIDE = 8;
@@ -209,9 +207,10 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
             must_finish = slot.sealed_while_training >= DICT_WAIT_BYTES;
         } else {
             if (slot.dict_stage >= DICT_STAGES) return slot.dict;
+            const std::size_t sample_bytes =
+                g_dict_sample_bytes.load(std::memory_order_relaxed);
             for (std::size_t i = 0;
-                 i < starts.size() && slot.sample.size() < DICT_SAMPLE_BYTES;
-                 ++i) {
+                 i < starts.size() && slot.sample.size() < sample_bytes; ++i) {
                 const std::uint32_t begin = starts[i];
                 const std::uint32_t end =
                     i + 1 < starts.size() ? starts[i + 1] : used;
@@ -226,12 +225,12 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
                 if (need > slot.sample.capacity()) {
                     slot.sample.reserve(
                         std::min(std::max(need, slot.sample.capacity() * 2),
-                                 DICT_SAMPLE_BYTES + PAGE_BYTES));
+                                 sample_bytes + PAGE_BYTES));
                 }
                 slot.sample.insert(slot.sample.end(), raw + begin, raw + end);
                 slot.sample_sizes.push_back(end - begin);
             }
-            if (slot.sample.size() < DICT_SAMPLE_BYTES) return slot.dict;
+            if (slot.sample.size() < sample_bytes) return slot.dict;
             // Training takes a fraction of a second, so it runs as a task of
             // the writer's executor and the extents sealed meanwhile keep the
             // dictionary they had. It only trains: the seal that finds it done

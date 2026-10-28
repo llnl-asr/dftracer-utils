@@ -536,14 +536,16 @@ struct WatchdogArgs : CliSchema {
 
 // A CLI's run coroutine is driven by CoroTask::get() on main, whose RunLoop is
 // one thread, so work it awaits outside its Pipeline runs serially. A heavy
-// step there runs here instead, on the CLI's threads, and blocks until done.
+// step there runs here instead, on the process runtime configured from the
+// CLI's thread flags, and blocks until done.
 template <typename Func>
 void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
-    ExecutorConfig config;
-    config.num_threads = pipeline.executor_threads;
-    config.io_pool_size = pipeline.io_threads;
-    Runtime pool(config, /*enable_watchdog=*/false);
-    pool.run_blocking(name, std::forward<Func>(func));
+    RuntimeSettings settings;
+    settings.threads = pipeline.executor_threads;
+    settings.io_threads = pipeline.io_threads;
+    if (pipeline.eager) settings.eager = true;
+    configure_default_runtime(settings).run_blocking(name,
+                                                     std::forward<Func>(func));
 }
 
 inline PipelineConfig build_pipeline_config(const std::string& name,

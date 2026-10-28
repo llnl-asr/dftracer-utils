@@ -19,39 +19,42 @@
 namespace dftracer::utils {
 
 ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
-    : num_threads_(config.num_threads == 0 ? hardware_concurrency()
-                                           : config.num_threads),
-      last_progress_ns_(
+    : last_progress_ns_(
           std::chrono::steady_clock::now().time_since_epoch().count()),
       idle_timeout_(config.idle_timeout),
-      deadlock_timeout_(config.deadlock_timeout),
+      deadlock_timeout_s_(config.deadlock_timeout.count()),
       keepalive_(config.elastic_keepalive),
-      io_pool_size_(config.io_pool_size == 0 ? hardware_concurrency()
-                                             : config.io_pool_size),
       io_backend_type_(config.io_backend_type),
       io_batch_threshold_(config.io_batch_threshold) {
-    if (num_threads_ == 0) {
-        num_threads_ = 2;
+    std::size_t threads =
+        config.num_threads == 0 ? hardware_concurrency() : config.num_threads;
+    if (threads == 0) {
+        threads = 2;
     }
-    if (io_pool_size_ == 0) {
-        io_pool_size_ = 2;
+    std::size_t io_threads =
+        config.io_pool_size == 0 ? hardware_concurrency() : config.io_pool_size;
+    if (io_threads == 0) {
+        io_threads = 2;
     }
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
     // Per-Executor thread churn dominates runtime when Valgrind serializes and
     // instruments every thread, so cap the pools.
-    if (num_threads_ > 2) num_threads_ = 2;
-    if (io_pool_size_ > 2) io_pool_size_ = 2;
+    if (threads > 2) threads = 2;
+    if (io_threads > 2) io_threads = 2;
 #endif
-    min_workers_ =
-        (config.min_workers == 0 || config.min_workers > num_threads_)
-            ? num_threads_
-            : config.min_workers;
-    max_live_ = num_threads_ + MAX_BLOCKING_REPLACEMENTS;
+    io_pool_size_.store(io_threads, std::memory_order_relaxed);
+    num_threads_.store(threads, std::memory_order_relaxed);
+    const bool eager = config.min_workers == 0 || config.min_workers > threads;
+    eager_.store(eager, std::memory_order_relaxed);
+    min_workers_.store(eager ? threads : config.min_workers,
+                       std::memory_order_relaxed);
+    max_live_.store(threads + MAX_BLOCKING_REPLACEMENTS,
+                    std::memory_order_relaxed);
     DFTRACER_UTILS_LOG_DEBUG(
         "Executor created with %zu threads, idle_timeout=%lld s, "
         "deadlock_timeout=%lld s",
-        num_threads_, static_cast<long long>(idle_timeout_.count()),
-        static_cast<long long>(deadlock_timeout_.count()));
+        threads, static_cast<long long>(idle_timeout_.count()),
+        static_cast<long long>(config.deadlock_timeout.count()));
 }
 
 ThreadPoolExecutor::~ThreadPoolExecutor() {
@@ -65,25 +68,28 @@ void ThreadPoolExecutor::start() {
         return;
     }
 
+    std::lock_guard<std::mutex> resize(resize_mutex_);
     running_ = true;
     shutdown_token_->store(false, std::memory_order_release);
+    const std::size_t threads = num_threads_.load(std::memory_order_acquire);
+    const std::size_t floor = min_workers_.load(std::memory_order_acquire);
     workers_.clear();
-    workers_.reserve(num_threads_);
-    permits_.store(static_cast<std::ptrdiff_t>(num_threads_),
+    workers_.reserve(threads);
+    permits_.store(static_cast<std::ptrdiff_t>(threads),
                    std::memory_order_release);
 
     timer_service_.start();
 
     // Create and start I/O backend before workers so workers
     // can use it immediately.
-    io_backend_ = io::create_io_backend(*this, io_pool_size_, io_backend_type_,
-                                        io_batch_threshold_);
+    io_backend_ = io::create_io_backend(*this, io_pool_size_.load(),
+                                        io_backend_type_, io_batch_threshold_);
     io_backend_->start();
 
     // Spawn the floor (== the cap in eager mode). The elastic monitor grows the
     // rest on demand. Contexts first so workers_ is stable before any worker
     // thread can iterate it.
-    for (std::size_t i = 0; i < min_workers_; ++i) {
+    for (std::size_t i = 0; i < floor; ++i) {
         auto worker = std::make_unique<WorkerContext>(
             next_worker_id_.fetch_add(1, std::memory_order_relaxed));
         worker->last_activity = std::chrono::steady_clock::now();
@@ -99,7 +105,7 @@ void ThreadPoolExecutor::start() {
 
     // Elastic mode only: a monitor drives grow/shrink between the floor and
     // cap.
-    if (min_workers_ < num_threads_) {
+    if (floor < threads) {
         monitor_thread_ = std::thread(&ThreadPoolExecutor::monitor_loop, this);
     }
 
@@ -107,8 +113,7 @@ void ThreadPoolExecutor::start() {
     sysmon_thread_ = std::thread(&ThreadPoolExecutor::sysmon_loop, this);
 
     DFTRACER_UTILS_LOG_DEBUG(
-        "Executor started with %zu worker threads (cap %zu)", min_workers_,
-        num_threads_);
+        "Executor started with %zu worker threads (cap %zu)", floor, threads);
 }
 
 void ThreadPoolExecutor::shutdown() {
@@ -123,7 +128,11 @@ void ThreadPoolExecutor::shutdown() {
     wake_all_workers();
 
     coord_cv_.notify_all();
-    if (monitor_thread_.joinable()) monitor_thread_.join();
+    {
+        // set_threads may start the monitor; it checks running_ under this.
+        std::lock_guard<std::mutex> resize(resize_mutex_);
+        if (monitor_thread_.joinable()) monitor_thread_.join();
+    }
 
     {
         std::lock_guard<std::mutex> lock(sysmon_mutex_);
@@ -139,9 +148,13 @@ void ThreadPoolExecutor::shutdown() {
         }
     }
 
-    if (io_backend_) {
-        io_backend_->stop();
-        io_backend_.reset();
+    {
+        // grow_io_threads reads io_backend_ under this.
+        std::lock_guard<std::mutex> resize(resize_mutex_);
+        if (io_backend_) {
+            io_backend_->stop();
+            io_backend_.reset();
+        }
     }
 
     drain_destroy_queue();
@@ -248,7 +261,8 @@ bool ThreadPoolExecutor::spawn_worker(std::size_t cap, bool best_effort) {
 }
 
 void ThreadPoolExecutor::add_worker() {
-    spawn_worker(num_threads_, /*best_effort=*/false);
+    spawn_worker(num_threads_.load(std::memory_order_acquire),
+                 /*best_effort=*/false);
 }
 
 void ThreadPoolExecutor::retire_worker() {
@@ -283,7 +297,9 @@ bool ThreadPoolExecutor::acquire_permit(WorkerContext* ctx) {
             return false;
         }
         permit_waiters_.fetch_add(1, std::memory_order_acq_rel);
-        permits_.wait(0, std::memory_order_acquire);
+        // On the value read: a shrink can leave it below zero, and a wait on
+        // zero would then return at once and spin.
+        permits_.wait(c, std::memory_order_acquire);
         permit_waiters_.fetch_sub(1, std::memory_order_acq_rel);
         c = permits_.load(std::memory_order_acquire);
     }
@@ -304,9 +320,11 @@ void ThreadPoolExecutor::ensure_running_worker() {
         return;
     }
     const std::size_t justified =
-        num_threads_ + blocked_workers_.load(std::memory_order_acquire);
+        num_threads_.load(std::memory_order_acquire) +
+        blocked_workers_.load(std::memory_order_acquire);
     if (live_workers_.load(std::memory_order_acquire) < justified) {
-        spawn_worker(max_live_, /*best_effort=*/true);
+        spawn_worker(max_live_.load(std::memory_order_acquire),
+                     /*best_effort=*/true);
     }
 }
 
@@ -390,6 +408,58 @@ void ThreadPoolExecutor::sysmon_loop() {
     }
 }
 
+void ThreadPoolExecutor::set_threads(std::size_t threads,
+                                     std::optional<bool> eager) {
+    if (threads == 0) threads = hardware_concurrency();
+    if (threads == 0) threads = 2;
+#ifdef DFTRACER_UTILS_VALGRIND_MODE
+    if (threads > 2) threads = 2;
+#endif
+    std::lock_guard<std::mutex> resize(resize_mutex_);
+    const std::size_t old = num_threads_.load(std::memory_order_acquire);
+    const bool was_eager = eager_.load(std::memory_order_acquire);
+    const bool now_eager = eager.value_or(was_eager);
+    eager_.store(now_eager, std::memory_order_release);
+    // An elastic pool keeps its floor; one that turns elastic starts at one.
+    const std::size_t old_floor = min_workers_.load(std::memory_order_acquire);
+    const std::size_t floor =
+        now_eager ? threads
+                  : std::min(was_eager ? std::size_t{1} : old_floor, threads);
+    // The floor first when shrinking and the cap first when growing, so the
+    // monitor never sees a floor above the cap.
+    if (threads < old) min_workers_.store(floor, std::memory_order_release);
+    num_threads_.store(threads, std::memory_order_release);
+    max_live_.store(threads + MAX_BLOCKING_REPLACEMENTS,
+                    std::memory_order_release);
+    min_workers_.store(floor, std::memory_order_release);
+    // A shrink leaves permits below zero until running workers release them.
+    permits_.fetch_add(
+        static_cast<std::ptrdiff_t>(threads) - static_cast<std::ptrdiff_t>(old),
+        std::memory_order_acq_rel);
+    if (threads > old) permits_.notify_all();
+    if (!running_.load(std::memory_order_acquire)) return;
+    if (floor < threads && !monitor_thread_.joinable()) {
+        monitor_thread_ = std::thread(&ThreadPoolExecutor::monitor_loop, this);
+    }
+    while (live_workers_.load(std::memory_order_acquire) < floor &&
+           spawn_worker(floor, /*best_effort=*/false)) {
+    }
+    DFTRACER_UTILS_LOG_DEBUG("Executor threads %zu -> %zu (floor %zu)", old,
+                             threads, floor);
+}
+
+void ThreadPoolExecutor::grow_io_threads(std::size_t threads) {
+    std::lock_guard<std::mutex> resize(resize_mutex_);
+    if (threads <= io_pool_size_.load(std::memory_order_acquire)) return;
+    // A backend with no thread pool keeps its size.
+    if (io_backend_ && io_backend_->grow_threads(threads))
+        io_pool_size_.store(threads, std::memory_order_release);
+}
+
+void ThreadPoolExecutor::set_deadlock_timeout(std::chrono::seconds timeout) {
+    deadlock_timeout_s_.store(timeout.count(), std::memory_order_relaxed);
+}
+
 void ThreadPoolExecutor::monitor_loop() {
     using clock = std::chrono::steady_clock;
     const auto keepalive = keepalive_;
@@ -417,12 +487,14 @@ void ThreadPoolExecutor::monitor_loop() {
         // Grow: spawn until the backlog is covered or we hit the cap - all at
         // once, so a burst reaches full parallelism in one wake.
         while (run_queue_.size_approx() > 0 &&
-               live_workers_.load(std::memory_order_acquire) < num_threads_) {
+               live_workers_.load(std::memory_order_acquire) <
+                   num_threads_.load(std::memory_order_acquire)) {
             add_worker();
         }
         // Shrink: one worker per keep-alive of sustained idle, down to the
         // floor (gentle, so a brief lull does not thrash the pool).
-        if (live_workers_.load(std::memory_order_acquire) > min_workers_ &&
+        if (live_workers_.load(std::memory_order_acquire) >
+                min_workers_.load(std::memory_order_acquire) &&
             clock::now() - last_busy >= keepalive) {
             retire_worker();
             last_busy = clock::now();
@@ -450,6 +522,12 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     }
 
     while (running_ && !context->retire.load(std::memory_order_acquire)) {
+        // A cap that shrank below the permits held leaves the count below
+        // zero: a holder gives its permit back before its next task.
+        if (context->holds_permit &&
+            permits_.load(std::memory_order_relaxed) < 0) {
+            release_permit(context);
+        }
         // Hold a permit to run; a surplus thread (live > cap) parks for a slot.
         if (!context->holds_permit) {
             if (!acquire_permit(context)) break;
@@ -635,8 +713,9 @@ void ThreadPoolExecutor::schedule_coroutine_resumption(
 void ThreadPoolExecutor::signal_global_work() {
     work_signal_.fetch_add(1, std::memory_order_acq_rel);
     wake_one_worker();
-    if (min_workers_ >= num_threads_ ||
-        live_workers_.load(std::memory_order_relaxed) >= num_threads_) {
+    const std::size_t cap = num_threads_.load(std::memory_order_relaxed);
+    if (min_workers_.load(std::memory_order_relaxed) >= cap ||
+        live_workers_.load(std::memory_order_relaxed) >= cap) {
         return;
     }
     // A woken worker counts as idle until it runs, so a burst sent before it
@@ -716,11 +795,12 @@ bool ThreadPoolExecutor::is_responsive() const {
         now - std::chrono::steady_clock::time_point(
                   std::chrono::steady_clock::duration(
                       last_progress_ns_.load(std::memory_order_relaxed)));
-    if (stalled > deadlock_timeout_) {
+    if (stalled > std::chrono::seconds(
+                      deadlock_timeout_s_.load(std::memory_order_relaxed))) {
         DFTRACER_UTILS_LOG_WARN(
             "Executor appears deadlocked: %zu threads, work pending, nothing "
             "resumed for %lld ms",
-            num_threads_,
+            num_threads_.load(std::memory_order_relaxed),
             static_cast<long long>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(stalled)
                     .count()));
@@ -764,11 +844,6 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
         }
     }
 
-    for (std::size_t i = 0; i < workers_.size(); ++i) {
-        // No per-worker local queues anymore; report 0.
-        progress.worker_queue_depths.push_back(0);
-    }
-
     // Build task trees (find root tasks)
     std::unordered_set<TaskIndex> processed;
     for (const auto& [task_id, info] : task_registry_) {
@@ -796,6 +871,8 @@ ExecutorProgress ThreadPoolExecutor::get_progress() const {
             status.local_queue_depth = 0;
 
             progress.workers.push_back(status);
+            // No per-worker local queues anymore; report 0.
+            progress.worker_queue_depths.push_back(0);
         }
     }
 

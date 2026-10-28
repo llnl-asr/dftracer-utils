@@ -806,9 +806,9 @@ class Snapshot {
     /// is built in memory. No extent, directory block or segment block of a
     /// closed file is read here; a query reads and checks each block it needs
     /// the first time it needs it. Listing, opening and indexing run in
-    /// parallel on the process-wide default runtime, which is created if none
-    /// is installed; a caller wanting thread control installs its own runtime
-    /// with set_default_runtime. The phases run serially on the calling thread
+    /// parallel on the process runtime, which is made if none exists yet; a
+    /// caller wanting thread control configures it with
+    /// configure_default_runtime. The phases run serially on the calling thread
     /// when a fork-join on that runtime could not finish: on a worker of the
     /// runtime itself, inside one of its parallel regions, and in the child of
     /// a fork, whose copy of an inherited runtime has no workers.

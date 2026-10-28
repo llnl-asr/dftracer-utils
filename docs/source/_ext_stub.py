@@ -138,9 +138,6 @@ def install_extension_stub() -> None:
             self._threads = threads
             self._io_threads = io_threads
 
-        def shutdown(self) -> None:
-            return None
-
         def wait_all(self) -> None:
             return None
 
@@ -521,10 +518,6 @@ def install_extension_stub() -> None:
         """Return the process-wide default runtime."""
         return Runtime()
 
-    def set_default_runtime(runtime: Runtime | None = None) -> None:
-        """Replace or clear the process-wide default runtime."""
-        return None
-
     def peek_default_runtime() -> Runtime | None:
         """Return the process-wide default runtime without creating one."""
         return None
@@ -734,7 +727,6 @@ def install_extension_stub() -> None:
         "plan_lpt_partition",
         "read_arrow_files_parallel",
         "scan_files",
-        "set_default_runtime",
         "set_log_color",
         "set_log_level",
         "vec_eval",

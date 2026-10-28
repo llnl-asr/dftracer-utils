@@ -368,26 +368,26 @@ std::string concat_value(int index) {
     return "concat-" + std::string(10 - digits.size(), '0') + digits;
 }
 
-/// Installs a runtime with `threads` threads as the process-wide default, so an
-/// open under it reads its files in parallel, and puts the runtime it found
-/// back at the end of the scope.
+/// Sets the process runtime to `threads` threads, so an open under it reads
+/// its files in parallel, and puts its thread count back at the end of the
+/// scope.
 class ScopedDefaultRuntime {
    public:
     explicit ScopedDefaultRuntime(std::size_t threads)
-        : previous_(dftracer::utils::peek_default_runtime()) {
-        dftracer::utils::set_default_runtime(
-            std::make_shared<Runtime>(threads));
+        : previous_(dftracer::utils::default_runtime().threads()) {
+        dftracer::utils::configure_default_runtime(
+            {.threads = threads, .eager = true});
     }
 
     ~ScopedDefaultRuntime() {
-        dftracer::utils::set_default_runtime(std::move(previous_));
+        dftracer::utils::configure_default_runtime({.threads = previous_});
     }
 
     ScopedDefaultRuntime(const ScopedDefaultRuntime&) = delete;
     ScopedDefaultRuntime& operator=(const ScopedDefaultRuntime&) = delete;
 
    private:
-    std::shared_ptr<Runtime> previous_;
+    std::size_t previous_;
 };
 
 /// What one open of a root read, and a text of every scope state and every row,

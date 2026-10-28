@@ -52,12 +52,11 @@ struct PipelineConfig {
     std::string name = "";
     std::size_t executor_threads =
         0;  ///< 0 = hardware_concurrency (compute threads)
-    /// Elastic floor: workers to start with, growing toward executor_threads on
-    /// backlog and idle-retiring back down. 0 = eager (full pool up front, no
-    /// resizing). Unset = resolve from the DFTRACER_UTILS_ELASTIC env default
-    /// at construction; an explicit value
-    /// (with_eager/with_elastic/with_min_workers) always wins, so a test can
-    /// pin either path regardless of the env.
+    /// The mode the pipeline sets on the process runtime: 0 = eager (full
+    /// pool up front), any other value = elastic (one worker, growing toward
+    /// executor_threads on backlog and idle-retiring back down). Unset keeps
+    /// the runtime's mode, which DFTRACER_UTILS_ELASTIC picks when the
+    /// runtime is made.
     std::optional<std::size_t> min_workers;
     std::chrono::milliseconds elastic_keepalive{250};
     ErrorPolicy error_policy = ErrorPolicy::FailFast;
@@ -94,8 +93,8 @@ struct PipelineConfig {
     }
 
     /**
-     * Pin the elastic floor (workers to start with, growing to
-     * executor_threads on demand). 0 = eager. Overrides the env default.
+     * 0 sets an eager pool; any other value an elastic one, which starts at
+     * one worker and grows to executor_threads on demand.
      */
     PipelineConfig& with_min_workers(std::size_t workers) {
         min_workers = workers;
@@ -103,9 +102,7 @@ struct PipelineConfig {
     }
 
     /**
-     * Pin an elastic pool: start at one worker and grow on demand. Overrides
-     * the env default, so a test can exercise the elastic path
-     * deterministically.
+     * Set an elastic pool: one worker, growing on demand.
      */
     PipelineConfig& with_elastic() {
         min_workers = 1;
@@ -113,8 +110,8 @@ struct PipelineConfig {
     }
 
     /**
-     * Pin an eager pool: full pool up front, never resized. Overrides the env
-     * default. For a latency-sensitive service, or to test the eager path.
+     * Set an eager pool: the full pool up front. For a latency-sensitive
+     * service, or to test the eager path.
      */
     PipelineConfig& with_eager() {
         min_workers = 0;

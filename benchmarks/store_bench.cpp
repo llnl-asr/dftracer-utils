@@ -1263,15 +1263,14 @@ void Bench::print_fold_row(const FoldRow& row) {
 bool Bench::report_single_thread_open(const std::string& dir,
                                       const std::string& prefix,
                                       bool print_now) {
-    const std::shared_ptr<Runtime> previous =
-        dftracer::utils::peek_default_runtime();
-    dftracer::utils::set_default_runtime(std::make_shared<Runtime>(1));
+    const std::size_t previous = dftracer::utils::default_runtime().threads();
+    dftracer::utils::configure_default_runtime({.threads = 1});
     const std::uint64_t rss = dftu::bench::peak_heap_bytes();
     const auto started = std::chrono::steady_clock::now();
     auto opened = Snapshot::open(dir);
     const std::uint64_t nanos =
         nanos_between(started, std::chrono::steady_clock::now());
-    dftracer::utils::set_default_runtime(previous);
+    dftracer::utils::configure_default_runtime({.threads = previous});
     if (!opened) {
         fail("one-thread snapshot of " + dir + ": " + to_std(opened.error()));
         return false;

@@ -103,6 +103,11 @@ class ThreadPoolFileOps : public IoBackend {
 
     std::size_t in_flight() const override { return pool_.tracked(); }
 
+    bool grow_threads(std::size_t threads) override {
+        pool_.grow(threads);
+        return true;
+    }
+
     /// Reads, accepts and sends that wait on a peer complete with -ECANCELED;
     /// operations that finish by themselves run to the end.
     void cancel_pending() override { pool_.cancel(); }

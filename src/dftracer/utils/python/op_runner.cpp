@@ -77,12 +77,11 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);
                 if (task) {
                     Py_BEGIN_ALLOW_THREADS;
-                    Runtime rt(1);
-                    rt.scope("jit-op", [&](CoroScope&) -> coro::CoroTask<void> {
-                          co_await *reinterpret_cast<coro::CoroTask<void>*>(
-                              task);
-                      }).wait();
-                    rt.shutdown();
+                    default_runtime().run_blocking(
+                        "jit-op", [&](CoroScope&) -> coro::CoroTask<void> {
+                            co_await *reinterpret_cast<coro::CoroTask<void>*>(
+                                task);
+                        });
                     Py_END_ALLOW_THREADS;
                 }
                 ran = true;

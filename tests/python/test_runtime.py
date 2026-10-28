@@ -42,13 +42,17 @@ class TestRuntimeCreation:
         rt = dftu_utils.get_default_runtime()
         assert isinstance(rt, dftu_utils.Runtime)
 
-    def test_set_default_runtime(self):
-        original = dftu_utils.get_default_runtime()
-        rt = dftu_utils.Runtime(threads=4)
-        dftu_utils.set_default_runtime(rt)
+    def test_every_runtime_is_the_process_runtime(self):
         default = dftu_utils.get_default_runtime()
+        dftu_utils.Runtime(threads=4)
         assert default.threads == 4
-        dftu_utils.set_default_runtime(original)
+        dftu_utils.Runtime(threads=3)
+        assert default.threads == 3
+
+    def test_leaving_a_with_block_keeps_the_runtime_running(self):
+        with dftu_utils.Runtime(threads=2):
+            pass
+        assert dftu_utils.get_default_runtime().is_responsive() is True
 
 
 class TestRuntimeProgress:
@@ -70,21 +74,20 @@ class TestRuntimeProgress:
             assert key in p
         rt.shutdown()
 
-    def test_progress_starts_at_zero(self):
+    def test_progress_counts_are_consistent(self):
+        # The process runtime is shared, so its counts include earlier work.
         rt = dftu_utils.Runtime(threads=2)
         p = rt.get_progress()
-        assert p["total"] == 0
-        assert p["completed"] == 0
-        assert p["failed"] == 0
-        assert p["tasks"] == []
-        assert p["errors"] == []
+        assert p["completed"] + p["failed"] <= p["total"]
+        assert isinstance(p["tasks"], list)
+        assert isinstance(p["errors"], list)
         rt.shutdown()
 
     def test_progress_workers_present(self):
         rt = dftu_utils.Runtime(threads=2)
         p = rt.get_progress()
         assert isinstance(p["workers"], list)
-        assert len(p["workers"]) == 2
+        assert len(p["workers"]) >= 1
         for w in p["workers"]:
             assert "id" in w
             assert "idle" in w

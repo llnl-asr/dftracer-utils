@@ -900,8 +900,7 @@ void StoreIndexWrite::erase_keys(const store_layout::KeyTarget& target,
                                    std::string(end)});
 }
 
-void StoreIndexWrite::put(layout::Family, std::string_view key,
-                          std::string_view value) {
+void StoreIndexWrite::put(std::string_view key, std::string_view value) {
     note_bytes(key.size() + value.size());
     if (auto host = store_layout::host_target_of(key)) {
         host_put(*host, value);
@@ -916,7 +915,7 @@ void StoreIndexWrite::put(layout::Family, std::string_view key,
     put_key(copy, target->inner_key, value);
 }
 
-void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
+void StoreIndexWrite::delete_range(std::string_view begin,
                                    std::string_view end) {
     note_bytes(begin.size() + end.size());
     if (auto host = store_layout::host_target_of(begin)) {
@@ -964,7 +963,7 @@ void StoreIndexWrite::delete_range(layout::Family, std::string_view begin,
     }
 }
 
-void StoreIndexWrite::del(layout::Family, std::string_view key) {
+void StoreIndexWrite::del(std::string_view key) {
     note_bytes(key.size());
     if (auto host = store_layout::host_target_of(key)) {
         host_delete(*host);

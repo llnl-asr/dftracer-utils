@@ -15,19 +15,6 @@
 // these bytes.
 namespace dftracer::utils::index::store::layout {
 
-enum class Family : std::uint8_t {
-    Registry,
-    Members,
-    Granule,
-    Blob,
-    Postings,
-    SystemMetrics,
-};
-
-inline constexpr std::size_t FAMILY_COUNT = 6;
-
-std::string_view family_name(Family family);
-
 using Ext = IndexExtension;
 
 std::string_view ext_name(Ext ext);
@@ -110,13 +97,10 @@ inline constexpr std::uint32_t INDEX_WIDE = 0xFFFFFFFFU;
 struct KindSpec {
     Ext ext;
     std::uint8_t kind;
-    Family family;
 };
 
-/// Every (ext, kind) of index data with its family.
+/// Every (ext, kind) of index data.
 std::span<const KindSpec> kinds();
-
-Family family_of(Ext ext, std::uint8_t kind);
 
 /// Code version of each extension's data; a manifest entry with another
 /// version is stale.

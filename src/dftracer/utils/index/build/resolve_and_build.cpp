@@ -407,13 +407,13 @@ coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
 
 namespace {
 
+// The aggregation tier's own message for data it cannot read.
 bool mentions_corruption(std::string_view text) {
-    return text.find("Corruption") != std::string_view::npos ||
-           text.find("is corrupt") != std::string_view::npos;
+    return text.find("is corrupt") != std::string_view::npos;
 }
 
-// Corruption outside what the build can repair, or corruption the repair did
-// not cure: name the index directories and say what to do.
+// Corruption the repair did not cure: name the index directories and say what
+// to do.
 [[noreturn]] void throw_corrupt(const std::set<std::string>& roots,
                                 const std::string& cause, bool tier_cleared,
                                 ErrorCode code) {
@@ -424,9 +424,8 @@ bool mentions_corruption(std::string_view text) {
 }  // namespace
 
 // A corrupt aggregation tier is the one failure the build repairs itself: the
-// tier holds only data derived from the traces, so it is cleared (a range
-// delete, which never runs the merge operator) and aggregated again, once.
-// Corruption anywhere else, or corruption the repair did not cure, reaches the
+// tier holds only data derived from the traces, so it is cleared and
+// aggregated again, once. Corruption the repair did not cure reaches the
 // caller with the index directories named. Any other error is passed on.
 coro::CoroTask<ResolverResult> resolve_and_build_index(
     CoroScope* scope, ResolveAndBuildInput input) {
@@ -444,10 +443,6 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         if (!mentions_corruption(e.what())) throw;
         failure = e.what();
     }
-    // The tier's own message says "is corrupt"; other column families say
-    // only "Corruption" and cannot be repaired by clearing the tier.
-    if (failure.find("is corrupt") == std::string::npos)
-        throw_corrupt(roots, failure, false, ErrorCode::Indexer);
     DFTRACER_UTILS_LOG_WARN(
         "the aggregation tier of %zu index(es) is corrupt (%s); clearing it "
         "and aggregating again",

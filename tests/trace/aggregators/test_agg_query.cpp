@@ -757,8 +757,7 @@ TEST_SUITE("AggQuery") {
             const auto begin =
                 layout::file_prefix(layout::Ext::Agg, layout::agg_kind::PARTIAL,
                                     static_cast<std::uint32_t>(fid));
-            w->delete_range(layout::Family::Blob, begin,
-                            layout::prefix_end(begin));
+            w->delete_range(begin, layout::prefix_end(begin));
             w->commit();
         }
         SUBCASE("no window") {

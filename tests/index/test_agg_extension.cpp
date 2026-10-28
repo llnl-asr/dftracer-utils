@@ -167,7 +167,7 @@ TEST_SUITE("AggExtension") {
             auto key = layout::file_prefix(
                 layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
             key.append("config");
-            w->put(layout::Family::Blob, key, "garbage");
+            w->put(key, "garbage");
             w->commit();
         }
         {

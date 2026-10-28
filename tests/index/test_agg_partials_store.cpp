@@ -267,8 +267,7 @@ TEST_SUITE("AggPartialsStore") {
                 const auto begin = layout::file_prefix(
                     layout::Ext::Agg, layout::agg_kind::PARTIAL,
                     static_cast<std::uint32_t>(id));
-                w->delete_range(layout::Family::Blob, begin,
-                                layout::prefix_end(begin));
+                w->delete_range(begin, layout::prefix_end(begin));
             }
             w->commit();
         }
@@ -322,12 +321,12 @@ TEST_SUITE("AggPartialsStore") {
             auto config = layout::file_prefix(
                 layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
             config.append("config");
-            w->del(layout::Family::Blob, config);
+            w->del(config);
             auto old_key =
                 layout::file_prefix(layout::Ext::Agg, layout::agg_kind::PARTIAL,
                                     static_cast<std::uint32_t>(ids[0]));
             old_key.append(12, '\0');
-            w->put(layout::Family::Blob, old_key,
+            w->put(old_key,
                    layout::with_header(layout::Ext::Agg,
                                        layout::agg_kind::PARTIAL, "old"));
             w->commit();

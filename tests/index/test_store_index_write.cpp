@@ -100,18 +100,14 @@ class RecordingWrite final : public IndexWrite {
    public:
     explicit RecordingWrite(IndexWrite& inner) : inner_(inner) {}
 
-    void put(layout::Family family, std::string_view key,
-             std::string_view value) override {
+    void put(std::string_view key, std::string_view value) override {
         puts.emplace_back(std::string(key), std::string(value));
-        inner_.put(family, key, value);
+        inner_.put(key, value);
     }
-    void delete_range(layout::Family family, std::string_view begin,
-                      std::string_view end) override {
-        inner_.delete_range(family, begin, end);
+    void delete_range(std::string_view begin, std::string_view end) override {
+        inner_.delete_range(begin, end);
     }
-    void del(layout::Family family, std::string_view key) override {
-        inner_.del(family, key);
-    }
+    void del(std::string_view key) override { inner_.del(key); }
 
     std::vector<std::pair<std::string, std::string>> puts;
 

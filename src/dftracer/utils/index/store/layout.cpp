@@ -10,33 +10,33 @@ namespace dftracer::utils::index::store::layout {
 namespace {
 
 constexpr std::array<KindSpec, 27> KINDS = {{
-    {Ext::Members, members::MEMBER, Family::Members},
-    {Ext::Members, members::METADATA, Family::Registry},
-    {Ext::Members, members::RESTART, Family::Blob},
-    {Ext::Zonemap, path_kind::PATHS, Family::Registry},
-    {Ext::Zonemap, path_kind::DATA, Family::Granule},
-    {Ext::Bloom, path_kind::PATHS, Family::Registry},
-    {Ext::Bloom, path_kind::DATA, Family::Blob},
-    {Ext::Bloom, path_kind::FILE, Family::Blob},
-    {Ext::Counts, path_kind::PATHS, Family::Registry},
-    {Ext::Counts, path_kind::DATA, Family::Granule},
-    {Ext::Postings, path_kind::PATHS, Family::Registry},
-    {Ext::Postings, path_kind::IN_FILE, Family::Postings},
-    {Ext::Postings, path_kind::IN_GRANULE, Family::Postings},
-    {Ext::Stats, stats_kind::CHUNK_STATS, Family::Blob},
-    {Ext::Stats, stats_kind::FILE_SCALAR_STATS, Family::Blob},
-    {Ext::Stats, stats_kind::FILE_PID_TID_COUNTS, Family::Blob},
-    {Ext::Catalog, catalog_kind::PATH, Family::Registry},
-    {Ext::Profile, profile_kind::ID, Family::Registry},
-    {Ext::Metadata, metadata_kind::CHUNK, Family::Granule},
-    {Ext::Plugin, path_kind::PATHS, Family::Registry},
-    {Ext::Plugin, path_kind::DATA, Family::Blob},
-    {Ext::Plugin, path_kind::FILE, Family::Blob},
-    {Ext::Rowset, rowset_kind::FRAME, Family::Blob},
-    {Ext::Agg, agg_kind::PARTIAL, Family::Blob},
-    {Ext::Agg, agg_kind::META, Family::Blob},
-    {Ext::Agg, agg_kind::DICT, Family::Blob},
-    {Ext::Agg, agg_kind::SYSTEM, Family::SystemMetrics},
+    {Ext::Members, members::MEMBER},
+    {Ext::Members, members::METADATA},
+    {Ext::Members, members::RESTART},
+    {Ext::Zonemap, path_kind::PATHS},
+    {Ext::Zonemap, path_kind::DATA},
+    {Ext::Bloom, path_kind::PATHS},
+    {Ext::Bloom, path_kind::DATA},
+    {Ext::Bloom, path_kind::FILE},
+    {Ext::Counts, path_kind::PATHS},
+    {Ext::Counts, path_kind::DATA},
+    {Ext::Postings, path_kind::PATHS},
+    {Ext::Postings, path_kind::IN_FILE},
+    {Ext::Postings, path_kind::IN_GRANULE},
+    {Ext::Stats, stats_kind::CHUNK_STATS},
+    {Ext::Stats, stats_kind::FILE_SCALAR_STATS},
+    {Ext::Stats, stats_kind::FILE_PID_TID_COUNTS},
+    {Ext::Catalog, catalog_kind::PATH},
+    {Ext::Profile, profile_kind::ID},
+    {Ext::Metadata, metadata_kind::CHUNK},
+    {Ext::Plugin, path_kind::PATHS},
+    {Ext::Plugin, path_kind::DATA},
+    {Ext::Plugin, path_kind::FILE},
+    {Ext::Rowset, rowset_kind::FRAME},
+    {Ext::Agg, agg_kind::PARTIAL},
+    {Ext::Agg, agg_kind::META},
+    {Ext::Agg, agg_kind::DICT},
+    {Ext::Agg, agg_kind::SYSTEM},
 }};
 
 constexpr std::uint8_t PAYLOAD_VERSION = 0;
@@ -48,24 +48,6 @@ std::uint16_t type_id(Ext ext, std::uint8_t kind) {
 }
 
 }  // namespace
-
-std::string_view family_name(Family family) {
-    switch (family) {
-        case Family::Registry:
-            return "default";
-        case Family::Members:
-            return "members";
-        case Family::Granule:
-            return "granule";
-        case Family::Blob:
-            return "blob";
-        case Family::Postings:
-            return "postings";
-        case Family::SystemMetrics:
-            return "system_metrics";
-    }
-    return "default";
-}
 
 std::string_view ext_name(Ext ext) {
     switch (ext) {
@@ -118,12 +100,6 @@ std::optional<IndexExtension> parse_extension(std::string_view name) {
 namespace dftracer::utils::index::store::layout {
 
 std::span<const KindSpec> kinds() { return KINDS; }
-
-Family family_of(Ext ext, std::uint8_t kind) {
-    for (const auto& k : KINDS)
-        if (k.ext == ext && k.kind == kind) return k.family;
-    return Family::Registry;
-}
 
 // Every extension is at version 0 until the first release: stored formats
 // change freely before then, and a development index is deleted, not migrated.

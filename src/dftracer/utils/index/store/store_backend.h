@@ -243,20 +243,15 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
 /// One write to the store of a StoreRoot, buffered until commit(): the data
 /// keys of a copy are collected per namespace and scope, host keys bind file
 /// ids and the copy state, and a delete it cannot express throws.
-///
-/// The family of the seam is not part of the mapping: a key's extension names
-/// its namespace.
 class StoreIndexWrite final : public IndexDatabaseWrite {
    public:
     StoreIndexWrite(const StoreIndexWrite&) = delete;
     StoreIndexWrite& operator=(const StoreIndexWrite&) = delete;
     ~StoreIndexWrite() override = default;
 
-    void put(layout::Family family, std::string_view key,
-             std::string_view value) override;
-    void delete_range(layout::Family family, std::string_view begin,
-                      std::string_view end) override;
-    void del(layout::Family family, std::string_view key) override;
+    void put(std::string_view key, std::string_view value) override;
+    void delete_range(std::string_view begin, std::string_view end) override;
+    void del(std::string_view key) override;
 
     /// Writes the pending copies in namespace and scope order and flushes the
     /// writer. A second call does nothing. Throws std::runtime_error on a

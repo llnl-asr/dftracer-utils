@@ -24,12 +24,10 @@ namespace dftracer::utils::index::store {
 class IndexWrite {
    public:
     virtual ~IndexWrite() = default;
-    virtual void put(layout::Family family, std::string_view key,
-                     std::string_view value) = 0;
-    virtual void delete_range(layout::Family family, std::string_view begin,
-                              std::string_view end) = 0;
+    virtual void put(std::string_view key, std::string_view value) = 0;
+    virtual void delete_range(std::string_view begin, std::string_view end) = 0;
     /// Removes exactly `key`.
-    virtual void del(layout::Family family, std::string_view key) = 0;
+    virtual void del(std::string_view key) = 0;
 
     /// Marks `file_id` as reserved by this build: the index holds no data for
     /// it, so the clears of `records` write nothing for it. -1 marks none.

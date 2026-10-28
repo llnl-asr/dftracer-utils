@@ -8,14 +8,12 @@ namespace dftracer::utils::index::store::records {
 namespace enc = internal::encoding;
 using layout::Ext;
 namespace sk = layout::stats_kind;
-using layout::Family;
 
 namespace {
 
 void put_value(IndexWrite& w, Ext ext, std::uint8_t kind, std::string_view key,
                std::string_view body) {
-    w.put(layout::family_of(ext, kind), key,
-          layout::with_header(ext, kind, body));
+    w.put(key, layout::with_header(ext, kind, body));
 }
 
 std::uint32_t fid(int file_id) { return static_cast<std::uint32_t>(file_id); }
@@ -29,12 +27,11 @@ std::uint32_t granule(std::uint64_t checkpoint_idx) {
 void clear_file(IndexWrite& w, Ext ext, int file_id) {
     if (w.is_fresh_file(file_id)) return;
     const auto manifest = layout::manifest_key(fid(file_id), ext);
-    w.delete_range(layout::Family::Registry, manifest,
-                   layout::prefix_end(manifest));
+    w.delete_range(manifest, layout::prefix_end(manifest));
     for (const auto& k : layout::kinds()) {
         if (k.ext != ext) continue;
         const auto begin = layout::file_prefix(ext, k.kind, fid(file_id));
-        w.delete_range(k.family, begin, layout::prefix_end(begin));
+        w.delete_range(begin, layout::prefix_end(begin));
     }
 }
 
@@ -45,17 +42,17 @@ void clear_path(IndexWrite& w, Ext ext, int file_id, std::string_view path) {
         if (k.kind == layout::path_kind::FILE && ext != Ext::Postings) {
             auto key = layout::file_prefix(ext, k.kind, fid(file_id));
             key.append(path);
-            w.del(k.family, key);
+            w.del(key);
             continue;
         }
         const auto begin = layout::path_prefix(ext, k.kind, fid(file_id), path);
-        w.delete_range(k.family, begin, layout::prefix_end(begin));
+        w.delete_range(begin, layout::prefix_end(begin));
     }
 }
 
 void put_manifest(IndexWrite& w, int file_id, Ext ext,
                   std::uint64_t params_hash, layout::ExtStatus status) {
-    w.put(layout::Family::Registry, layout::manifest_key(fid(file_id), ext),
+    w.put(layout::manifest_key(fid(file_id), ext),
           layout::encode_manifest(
               {layout::ext_version(ext), params_hash, status}));
 }
@@ -63,29 +60,27 @@ void put_manifest(IndexWrite& w, int file_id, Ext ext,
 void put_plugin_manifest(IndexWrite& w, int file_id, std::string_view name,
                          std::uint32_t version, std::uint64_t params_hash,
                          layout::ExtStatus status) {
-    w.put(layout::Family::Registry,
-          layout::plugin_manifest_key(fid(file_id), name),
+    w.put(layout::plugin_manifest_key(fid(file_id), name),
           layout::encode_manifest({version, params_hash, status}));
 }
 
 void clear_plugin(IndexWrite& w, int file_id, std::string_view name) {
     if (w.is_fresh_file(file_id)) return;
     const auto manifest = layout::plugin_manifest_key(fid(file_id), name);
-    w.delete_range(layout::Family::Registry, manifest,
-                   layout::prefix_end(manifest));
+    w.delete_range(manifest, layout::prefix_end(manifest));
     clear_path(w, Ext::Plugin, file_id, name);
     auto listed = layout::file_prefix(Ext::Plugin, layout::path_kind::PATHS,
                                       fid(file_id));
     listed.append(name);
-    w.del(layout::family_of(Ext::Plugin, layout::path_kind::PATHS), listed);
+    w.del(listed);
 }
 
 void put_file_record(IndexWrite& w, std::string_view logical_path,
                      const layout::FileRecord& record) {
-    w.put(layout::Family::Registry, layout::file_by_path_key(logical_path),
+    w.put(layout::file_by_path_key(logical_path),
           layout::encode_file_record(record));
     w.put(
-        layout::Family::Registry, layout::file_by_id_key(record.file_id),
+        layout::file_by_id_key(record.file_id),
         layout::with_header(Ext::Host, layout::host::FILE_BY_ID, logical_path));
 }
 
@@ -119,7 +114,7 @@ void put_restart_window(IndexWrite& w, int file_id, std::uint64_t member_idx,
 void put_path(IndexWrite& w, Ext ext, int file_id, std::string_view path) {
     auto key = layout::file_prefix(ext, layout::path_kind::PATHS, fid(file_id));
     key.append(path);
-    w.put(layout::family_of(ext, layout::path_kind::PATHS), key, {});
+    w.put(key, {});
 }
 
 void put_path_granule(IndexWrite& w, Ext ext, int file_id,
@@ -143,7 +138,7 @@ void put_posting(IndexWrite& w, int file_id, std::string_view path,
     auto key = layout::path_prefix(Ext::Postings, layout::path_kind::IN_FILE,
                                    fid(file_id), path);
     append_u64_be(key, value_hash);
-    w.put(Family::Postings, key, {});
+    w.put(key, {});
 }
 
 void put_posting_granule(IndexWrite& w, int file_id, std::string_view path,
@@ -152,7 +147,7 @@ void put_posting_granule(IndexWrite& w, int file_id, std::string_view path,
                                    fid(file_id), path);
     append_u64_be(key, value_hash);
     append_u32_be(key, granule(granule_idx));
-    w.put(Family::Postings, key, {});
+    w.put(key, {});
 }
 
 void put_chunk_statistics(IndexWrite& w, int file_id,
@@ -258,7 +253,7 @@ void del_agg_meta(IndexWrite& w, std::string_view name) {
     auto key = layout::file_prefix(Ext::Agg, layout::agg_kind::META,
                                    layout::INDEX_WIDE);
     key.append(name);
-    w.del(layout::family_of(Ext::Agg, layout::agg_kind::META), key);
+    w.del(key);
 }
 
 }  // namespace dftracer::utils::index::store::records

@@ -175,9 +175,6 @@ if(NOT DFTRACER_UTILS_SINGLE_LIBRARY)
              ${CMAKE_SOURCE_DIR}/scripts/layering/baseline.sh ${CMAKE_BINARY_DIR}
              ${CMAKE_SOURCE_DIR})
 endif()
-add_test(NAME agg_families
-         COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
-                 ${CMAKE_SOURCE_DIR}/cmake/scripts/check_agg_families.cmake)
 add_test(NAME long_lived_scopes
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_long_lived_scopes.cmake)

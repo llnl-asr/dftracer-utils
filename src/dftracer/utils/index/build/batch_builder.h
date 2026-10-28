@@ -47,8 +47,9 @@ namespace dftracer::utils::index::build {
 using dftracer::utils::CoroScope;
 
 /// Bytes of memory, reserved capacity included, a sink holds before its worker
-/// commits it.
-inline constexpr std::size_t MAX_SINK_BYTES = std::size_t{32} << 20;
+/// commits it. Every worker holds one: on the 14,117 minife traces 32 MiB held
+/// 0.5 GB at 16 threads, and 4 MiB builds as fast with a 3% larger index.
+inline constexpr std::size_t MAX_SINK_BYTES = std::size_t{4} << 20;
 
 /// The limit a build applies; tests lower it to make small inputs commit.
 inline std::atomic<std::size_t> g_max_sink_bytes{MAX_SINK_BYTES};

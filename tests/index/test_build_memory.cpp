@@ -137,6 +137,13 @@ memory::Status ask_for_budget() {
 TEST_SUITE("IndexBuildMemory") {
     TEST_CASE("files are admitted by the bytes they hold, not one per worker") {
         dftu_utils_test::TestEnvironment env(10);
+        // Sinks of 32 MiB leave the tight budget room for fewer files than
+        // workers.
+        struct SinkLimit {
+            std::size_t previous =
+                build::g_max_sink_bytes.exchange(std::size_t{32} << 20);
+            ~SinkLimit() { build::g_max_sink_bytes.store(previous); }
+        } sink_limit;
         std::vector<std::string> files;
         for (int i = 0; i < 4; ++i)
             files.push_back(

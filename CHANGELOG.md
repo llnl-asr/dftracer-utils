@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Commit each worker's index write once it holds 4 MiB instead of 32 MiB, as fast and with a 3% larger index.
+  A cold `dftracer_index` of the 14,117 minife traces peaks at 0.98 GB where it peaked at 1.4 GB at 16 threads, and at 3.1 GB where it peaked at 3.6 GB at 96 threads.
 - Make a store index commit in a view bootstrap or an index build wait for its writes without holding a worker, so the peak memory of a bootstrap stays flat as its files grow.
 - Run the whole process on one runtime: pipelines, directory scans, index builds, the store, the caches and Python all share it.
   `configure_default_runtime()`, Python `Runtime(threads=...)` and `dftu_runtime_new()` grow or shrink its threads in place while work runs, and only process exit stops it.

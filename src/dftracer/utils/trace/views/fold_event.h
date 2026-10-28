@@ -38,6 +38,9 @@ class ChunkArena {
     static_assert(std::is_trivially_destructible_v<T>);
 
    public:
+    /// The first chunk holds MIN_CHUNK_ENTRIES and each new one twice the one
+    /// before, up to CHUNK_ENTRIES, so a buffer of a few events stays small.
+    static constexpr std::size_t MIN_CHUNK_ENTRIES = 64;
     static constexpr std::size_t CHUNK_ENTRIES = 4096;
     /// Chunks reset() keeps for the next batch; the rest are freed.
     static constexpr std::size_t RETAIN_CHUNKS = 16;
@@ -53,7 +56,11 @@ class ChunkArena {
             ++current_;
             used_ = 0;
         }
-        const std::size_t capacity = std::max(n, CHUNK_ENTRIES);
+        const std::size_t step =
+            chunks_.empty()
+                ? MIN_CHUNK_ENTRIES
+                : std::min(CHUNK_ENTRIES, chunks_.back().capacity * 2);
+        const std::size_t capacity = std::max(n, step);
         chunks_.push_back(Chunk{std::make_unique<T[]>(capacity), capacity});
         current_ = chunks_.size() - 1;
         used_ = n;

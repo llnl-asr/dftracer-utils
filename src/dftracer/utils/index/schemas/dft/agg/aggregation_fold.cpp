@@ -80,14 +80,66 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
         last_kind_ = kind;
     }
     Slot& slot = slots_[at];
+    if (!partial_holds(acc)) return;
+    TimeBin* bin = nullptr;
+    if (config_.time_interval_us != 0) {
+        // The bin of compute_time_bucket, with one division.
+        std::uint64_t ts = acc.ts();
+        if (config_.use_relative_time) ts -= config_.reference_timestamp;
+        bin =
+            &bin_of(slot, acc.pid(), acc.tid(), ts / config_.time_interval_us);
+    }
     auto id_of = [this](std::string_view k) { return arg_id(k); };
-    if (update_partial(slot.partial, acc, config_, id_of)) slot.used = true;
+    fold_into_partial(slot.partial, acc, config_, id_of, bin);
+    slot.used = true;
+}
+
+TimeBin& AggregationFold::bin_of(Slot& slot, std::uint64_t pid,
+                                 std::uint64_t tid, std::uint64_t bin) {
+    // Events of a thread come mostly in time order, so each thread keeps its
+    // newest bin. An event of an older bin looks back a few bins and else
+    // adds a second bin of that key, which normalize_bins adds up.
+    constexpr std::size_t LOOK_BACK = 8;
+    auto& bins = slot.partial.bins;
+    slot.partial.bin_interval = config_.time_interval_us;
+    std::uint32_t t = slot.last_thread;
+    if (t >= slot.threads.size() || slot.threads[t].pid != pid ||
+        slot.threads[t].tid != tid) {
+        t = 0;
+        while (t < slot.threads.size() &&
+               (slot.threads[t].pid != pid || slot.threads[t].tid != tid))
+            ++t;
+        if (t == slot.threads.size()) {
+            slot.threads.push_back(
+                {pid, tid, static_cast<std::uint32_t>(bins.size())});
+            bins.push_back(TimeBin{pid, tid, bin});
+            slot.last_thread = t;
+            return bins.back();
+        }
+        slot.last_thread = t;
+    }
+    ThreadBin& thread = slot.threads[t];
+    TimeBin& newest = bins[thread.at];
+    if (newest.bin == bin) return newest;
+    if (bin > newest.bin) {
+        thread.at = static_cast<std::uint32_t>(bins.size());
+        bins.push_back(TimeBin{pid, tid, bin});
+        return bins.back();
+    }
+    const std::size_t stop =
+        bins.size() > LOOK_BACK ? bins.size() - LOOK_BACK : 0;
+    for (std::size_t i = bins.size(); i-- > stop;)
+        if (bins[i].bin == bin && bins[i].pid == pid && bins[i].tid == tid)
+            return bins[i];
+    bins.push_back(TimeBin{pid, tid, bin});
+    return bins.back();
 }
 
 void AggregationFold::close_chunk() {
     for (Slot& slot : slots_) {
         if (!slot.used) continue;
         const std::size_t offset = arena_.size();
+        slot.partial.normalize_bins();
         slot.partial.serialize_into(arena_);
         closed_.push_back({chunk_, offset, arena_.size() - offset, slot.key});
         referenced_.push_back(slot.key.cat);
@@ -97,6 +149,8 @@ void AggregationFold::close_chunk() {
         for (const ArgStat& arg : slot.partial.args)
             referenced_.push_back(arg.id);
         slot.partial.clear();
+        slot.threads.clear();
+        slot.last_thread = 0;
         slot.used = false;
     }
 }

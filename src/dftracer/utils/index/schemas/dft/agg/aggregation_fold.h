@@ -241,11 +241,20 @@ class AggregationFold : public trace::views::detail::Fold {
         }
     };
 
+    /// The newest bin of one thread in a slot's partial.
+    struct ThreadBin {
+        std::uint64_t pid;
+        std::uint64_t tid;
+        std::uint32_t at;
+    };
+
     /// The partial being built for one (category, name, host) of the current
     /// chunk; a slot is reused by every chunk and holds nothing until `used`.
     struct Slot {
         AggPartial partial;
+        dftracer::utils::dstd::Vector<ThreadBin> threads;
         SlotKey key;
+        std::uint32_t last_thread = 0;
         bool used = false;
 
         Slot(double accuracy, SlotKey k) : partial(accuracy), key(k) {}
@@ -266,6 +275,9 @@ class AggregationFold : public trace::views::detail::Fold {
 
     void add_to_partial(const trace::views::detail::FoldEvent& ev,
                         const PodAccessor& acc);
+    /// The bin of `slot` for the thread and bin of an event.
+    TimeBin& bin_of(Slot& slot, std::uint64_t pid, std::uint64_t tid,
+                    std::uint64_t bin);
     /// The root-dictionary id of the string with `build_id` (lower-cased for
     /// `lower`), cached by that id.
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,

@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Keep per-thread time bins (count, duration sum and size sum per bin of the aggregation interval) in each stored aggregation partial, so `dftracer_comparator` reads its per-thread windows from the index and parses no trace when the index is warm.
+  A warm comparator of the 8,404 minife traces against itself at 96 threads takes 11 s where it took 16 s and 87 CPU seconds where it took 505, the 7,742-trace set takes 59 s where it took 77 s, and the index build time and size do not change.
+  Indexes built before this change rebuild their aggregation data once.
 - Merge the rows of an aggregation query's file and chunk tasks into 64 stripes with a lock each, where every task merged into the result under one lock and the other workers waited on it.
   A cold `dftracer_comparator` of the 14,117 minife traces against itself at 96 threads takes 30.9 s where it took 35.9 s, and a warm one 16.8 s where it took 21.1 s.
 - Keep the argument, field and schema-leaf lists of the events a scan buffers in shared chunks of their buffer, where each event held its own heap block for each list.

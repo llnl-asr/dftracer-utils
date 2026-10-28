@@ -102,6 +102,21 @@ struct PidSpan {
     std::uint64_t last = 0;
 };
 
+/// The sums of the events of one thread that start in one time bin of the
+/// build's interval: bin `bin` spans [bin * interval, (bin + 1) * interval)
+/// of the bucketed time (see compute_time_bucket). Durations and sizes are
+/// whole numbers, so the sums are exact.
+struct TimeBin {
+    std::uint64_t pid = 0;
+    std::uint64_t tid = 0;
+    std::uint64_t bin = 0;
+    std::uint64_t count = 0;
+    std::uint64_t duration_n = 0;
+    std::uint64_t duration_sum = 0;
+    std::uint64_t size_n = 0;
+    std::uint64_t size_sum = 0;
+};
+
 /// The stats of one numeric arg, keyed by the arg name's per-root id.
 struct ArgStat {
     dataframe::FieldStat stat;
@@ -161,6 +176,13 @@ struct AggPartial {
 
     dstd::Vector<PidSpan> pid_spans;  ///< sorted by pid
     dstd::Vector<ArgStat> args;       ///< sorted by id
+    /// The count, duration and size sums per thread and time bin, sorted by
+    /// (pid, tid, bin) with no key twice once normalize_bins ran. Empty when
+    /// the build had no interval. A merge drops them: they answer a split
+    /// of one stored partial, not of a merged row.
+    dstd::Vector<TimeBin> bins;
+    /// The bin length in microseconds; 0 when the partial has no bins.
+    std::uint64_t bin_interval = 0;
     double accuracy;
 
     explicit AggPartial(
@@ -180,8 +202,10 @@ struct AggPartial {
     ArgStat& arg(std::uint32_t id);
 
     /// Merges `other` in place; `other` must not be `*this`. Both must use
-    /// one quantile accuracy.
+    /// one quantile accuracy. Drops the bins of both.
     void merge(const AggPartial& other);
+    /// Sorts the bins by (pid, tid, bin) and adds up those with one key.
+    void normalize_bins();
 
     /// True when a distinct count is an estimate.
     bool has_estimate() const noexcept {
@@ -189,9 +213,10 @@ struct AggPartial {
                !pid_tids.is_exact() || !pid_files.is_exact();
     }
 
-    /// Appends the partial to `buf`. Integers are varints (ids and pid spans
-    /// delta coded), doubles are IEEE bit patterns, the FieldStat keeps its
-    /// domain and exact sums with their carry.
+    /// Appends the partial to `buf`. Integers are varints (ids, pid spans and
+    /// bins delta coded), doubles are IEEE bit patterns, the FieldStat keeps
+    /// its domain and exact sums with their carry. The bins must be
+    /// normalized.
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
 
     /// What deserialize keeps of the stored partial. A part left out is
@@ -199,6 +224,7 @@ struct AggPartial {
     struct Fields {
         bool quantiles = true;  ///< the duration, size and offset stores
         bool args = true;       ///< the per-arg stats
+        bool bins = true;       ///< the time bins
     };
 
     /// Parses exactly `bytes`; a truncated, malformed or over-long input is

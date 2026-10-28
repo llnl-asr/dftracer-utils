@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <exception>
 #include <functional>
 #include <memory>
@@ -298,6 +299,12 @@ class Task {
 
     void take_partial(std::uint32_t chunk, const Group& group,
                       std::span<const std::uint8_t> bytes);
+    /// Whether the time bins of `p` can answer a split of it by pid, tid
+    /// and window.
+    bool bins_answer(const agg::AggPartial& p) const;
+    /// Adds the bins of `p` to the rows, under `key` with the pid, tid and
+    /// window of each bin.
+    void take_bins(const agg::AggPartial& p, AggKey key);
 
     coro::CoroTask<void> whole_file_chunks(const std::string& path,
                                            std::size_t chunk_count,
@@ -427,6 +434,7 @@ void Runner::merge(Task& task) {
     s.partials_merged += t.partials_merged;
     s.partials_pruned += t.partials_pruned;
     s.partials_reread += t.partials_reread;
+    s.partials_binned += t.partials_binned;
     s.chunks_reread += t.chunks_reread;
     s.unanswered += t.unanswered;
     s.events_read += t.events_read;
@@ -648,6 +656,7 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
     agg::AggPartial::Fields keep;
     keep.quantiles = r_.q.quantiles && !r_.reread_only;
     keep.args = r_.q.args && !r_.reread_only;
+    keep.bins = r_.q.sums_only && !r_.reread_only;
     auto parsed = agg::AggPartial::deserialize(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
         r_.q.config.sketch_accuracy, keep);
@@ -686,28 +695,32 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
     if (r_.q.by_host) key.host = group.host;
     if (r_.q.by_extra) key.extra = group.extra;
     if (r_.q.by_kind) key.kind = group.kind;
+    bool split = false;
     if (r_.q.by_pid) {
         const auto ids = p.pids.ids();
-        if (!p.pids.is_exact() || ids.size() != 1) {
-            queue_reread(chunk, group);
-            return;
-        }
-        key.pid = ids[0];
+        if (!p.pids.is_exact() || ids.size() != 1)
+            split = true;
+        else
+            key.pid = ids[0];
     }
     if (r_.q.by_tid) {
         const auto ids = p.tids.ids();
-        if (!p.tids.is_exact() || ids.size() != 1) {
-            queue_reread(chunk, group);
-            return;
-        }
-        key.tid = ids[0];
+        if (!p.tids.is_exact() || ids.size() != 1)
+            split = true;
+        else
+            key.tid = ids[0];
     }
     if (r_.q.window_us != 0) {
         key.window = r_.bucket(p.ts);
-        if (r_.bucket(p.ts_last_start) != key.window) {
+        if (r_.bucket(p.ts_last_start) != key.window) split = true;
+    }
+    if (split) {
+        if (!bins_answer(p)) {
             queue_reread(chunk, group);
             return;
         }
+        take_bins(p, key);
+        return;
     }
 
     if (r_.q.args && !p.args.empty()) {
@@ -723,6 +736,42 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
         rows.emplace(key, std::move(p));
     else
         it->second.merge(p);
+}
+
+bool Task::bins_answer(const agg::AggPartial& p) const {
+    if (!r_.q.sums_only || r_.q.quantiles || r_.q.args) return false;
+    if (p.bin_interval == 0 || p.bins.empty()) return false;
+    return r_.q.window_us == 0 || r_.q.window_us % p.bin_interval == 0;
+}
+
+void Task::take_bins(const agg::AggPartial& p, AggKey key) {
+    const auto stat_of = [](std::uint64_t n, std::uint64_t sum) {
+        dataframe::FieldStat s;
+        if (n == 0) return s;
+        s.n = n;
+        s.sum = static_cast<double>(sum);
+        s.domain = dataframe::FieldStatDomain::U64;
+        s.esum = std::bit_cast<std::int64_t>(sum);
+        return s;
+    };
+    for (const agg::TimeBin& b : p.bins) {
+        if (r_.q.by_pid) key.pid = b.pid;
+        if (r_.q.by_tid) key.tid = b.tid;
+        if (r_.q.window_us != 0)
+            key.window =
+                (b.bin * p.bin_interval / r_.q.window_us) * r_.q.window_us;
+        auto it = rows.find(key);
+        if (it == rows.end())
+            it = rows.emplace(key, agg::AggPartial(r_.q.config.sketch_accuracy))
+                     .first;
+        agg::AggPartial& row = it->second;
+        row.count += b.count;
+        row.duration.merge(stat_of(b.duration_n, b.duration_sum));
+        row.size.merge(stat_of(b.size_n, b.size_sum));
+        row.duration_values += b.duration_n;
+        row.size_values += b.size_n;
+    }
+    ++stats.partials_binned;
 }
 
 coro::CoroTask<std::shared_ptr<utilities::reader::internal::Reader>>

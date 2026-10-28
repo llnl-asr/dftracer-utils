@@ -95,8 +95,9 @@ struct AggregationConfig {
             text(be.output_name);
         }
         h.update_value(track_process_parents);
-        // An aggregation built without chunk partials is stale.
-        text("partials");
+        // An aggregation built without chunk partials or their time bins is
+        // stale.
+        text("partials+bins");
         return h.finish();
     }
 };

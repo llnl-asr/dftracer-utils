@@ -572,6 +572,7 @@ coro::CoroTask<Result<SideAggregate>> aggregate_side(
         fine.window_us = window_us;
         fine.quantiles = false;
         fine.args = false;
+        fine.sums_only = true;
         coarse.quantiles = true;
         coarse.args = false;
 

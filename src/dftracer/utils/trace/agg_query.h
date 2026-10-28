@@ -109,6 +109,13 @@ struct AggQuery {
     bool quantiles = false;
     /// The per-arg stats of the rows.
     bool args = true;
+    /// The rows need only the count and the n and sum of duration and size,
+    /// so means come out exact. A partial that a split by pid, tid or window
+    /// would re-read is then split by its time bins when the window is a
+    /// multiple of the bin interval of the build; its rows have no times,
+    /// minima, maxima, moments or distinct ids. Takes effect only without
+    /// quantiles and args.
+    bool sums_only = false;
 
     /// False reads no chunk: a partial or a file that only a re-read could
     /// answer is counted in AggQueryStats::unanswered and left out.
@@ -163,6 +170,9 @@ struct AggQueryStats {
     std::size_t partials_pruned = 0;
     /// Answered by a re-read of their chunk.
     std::size_t partials_reread = 0;
+    /// Split by pid, tid or window through their time bins (see
+    /// AggQuery::sums_only).
+    std::size_t partials_binned = 0;
     /// Chunk reads; a chunk with several re-read partials is read once.
     std::size_t chunks_reread = 0;
     /// Partials and files that needed a re-read the query did not allow.

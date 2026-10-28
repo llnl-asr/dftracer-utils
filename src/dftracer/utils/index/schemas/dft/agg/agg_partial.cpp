@@ -24,7 +24,8 @@ constexpr std::uint8_t HAS_TIMES = 1;
 constexpr std::uint8_t HAS_DURATION = 2;
 constexpr std::uint8_t HAS_SIZE = 4;
 constexpr std::uint8_t HAS_OFFSET = 8;
-constexpr std::uint8_t KNOWN_FLAGS = 15;
+constexpr std::uint8_t HAS_BINS = 16;
+constexpr std::uint8_t KNOWN_FLAGS = 31;
 
 constexpr std::uint8_t STAT_DOMAIN_MASK = 3;
 constexpr std::uint8_t STAT_MOMENTS = 4;
@@ -349,6 +350,8 @@ void AggPartial::clear() {
     pid_files = DistinctIds();
     pid_spans.clear();
     args.clear();
+    bins.clear();
+    bin_interval = 0;
 }
 
 void AggPartial::observe(std::uint64_t pid, std::uint64_t tid,
@@ -387,6 +390,8 @@ ArgStat& AggPartial::arg(std::uint32_t id) {
 }
 
 void AggPartial::merge(const AggPartial& other) {
+    bins.clear();
+    bin_interval = 0;
     count += other.count;
     ts = std::min(ts, other.ts);
     te = std::max(te, other.te);
@@ -483,12 +488,39 @@ void AggPartial::merge(const AggPartial& other) {
     }
 }
 
+void AggPartial::normalize_bins() {
+    const auto key_less = [](const TimeBin& a, const TimeBin& b) {
+        if (a.pid != b.pid) return a.pid < b.pid;
+        if (a.tid != b.tid) return a.tid < b.tid;
+        return a.bin < b.bin;
+    };
+    if (!std::is_sorted(bins.begin(), bins.end(), key_less))
+        std::sort(bins.begin(), bins.end(), key_less);
+    std::size_t out = 0;
+    for (std::size_t i = 0; i < bins.size(); ++i) {
+        if (out != 0 && bins[out - 1].pid == bins[i].pid &&
+            bins[out - 1].tid == bins[i].tid &&
+            bins[out - 1].bin == bins[i].bin) {
+            TimeBin& to = bins[out - 1];
+            to.count += bins[i].count;
+            to.duration_n += bins[i].duration_n;
+            to.duration_sum += bins[i].duration_sum;
+            to.size_n += bins[i].size_n;
+            to.size_sum += bins[i].size_sum;
+            continue;
+        }
+        bins[out++] = bins[i];
+    }
+    bins.resize(out);
+}
+
 void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     std::uint8_t flags = 0;
     if (ts <= te) flags |= HAS_TIMES;
     if (duration.n != 0) flags |= HAS_DURATION;
     if (size.n != 0) flags |= HAS_SIZE;
     if (offset.n != 0) flags |= HAS_OFFSET;
+    if (bin_interval != 0 && !bins.empty()) flags |= HAS_BINS;
     buf.push_back(flags);
     append_varint(buf, count);
     if ((flags & HAS_TIMES) != 0) {
@@ -534,6 +566,27 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
         put_quantiles(buf, a.quantiles);
         append_varint(buf, a.values);
         prev_id = a.id;
+    }
+
+    if ((flags & HAS_BINS) == 0) return;
+    // Per bin: the pid delta, then the tid (a delta within one pid), then the
+    // bin (a delta within one thread), the count, the events without a
+    // duration, the duration sum, the size count and the size sum.
+    append_varint(buf, bin_interval);
+    append_varint(buf, bins.size());
+    const TimeBin* prev_bin = nullptr;
+    for (const TimeBin& b : bins) {
+        const bool same_pid = prev_bin != nullptr && prev_bin->pid == b.pid;
+        const bool same_tid = same_pid && prev_bin->tid == b.tid;
+        append_varint(buf, prev_bin == nullptr ? b.pid : b.pid - prev_bin->pid);
+        append_varint(buf, same_pid ? b.tid - prev_bin->tid : b.tid);
+        append_varint(buf, same_tid ? b.bin - prev_bin->bin : b.bin);
+        append_varint(buf, b.count);
+        append_varint(buf, b.count - b.duration_n);
+        append_varint(buf, b.duration_sum);
+        append_varint(buf, b.size_n);
+        append_varint(buf, b.size_sum);
+        prev_bin = &b;
     }
 }
 
@@ -627,6 +680,42 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
             return bad();
         }
         p.args.push_back(std::move(a));
+    }
+
+    if ((flags & HAS_BINS) != 0) {
+        std::uint64_t interval = 0;
+        if (!get_varint(r, interval) || interval == 0 ||
+            !get_count(r, UINT64_MAX, n) || n == 0) {
+            return bad();
+        }
+        if (keep.bins) {
+            p.bin_interval = interval;
+            p.bins.reserve(n);
+        }
+        TimeBin prev_bin;
+        for (std::uint64_t i = 0; i < n; ++i) {
+            std::uint64_t dp = 0, t = 0, b = 0, missing = 0;
+            TimeBin bin;
+            if (!get_varint(r, dp) || !get_varint(r, t) || !get_varint(r, b) ||
+                !get_varint(r, bin.count) || !get_varint(r, missing) ||
+                !get_varint(r, bin.duration_sum) ||
+                !get_varint(r, bin.size_n) || !get_varint(r, bin.size_sum) ||
+                missing > bin.count) {
+                return bad();
+            }
+            const bool same_pid = i > 0 && dp == 0;
+            if (i > 0 && dp > UINT64_MAX - prev_bin.pid) return bad();
+            bin.pid = i == 0 ? dp : prev_bin.pid + dp;
+            if (same_pid && t > UINT64_MAX - prev_bin.tid) return bad();
+            bin.tid = same_pid ? prev_bin.tid + t : t;
+            const bool same_tid = same_pid && t == 0;
+            if (same_tid && (b == 0 || b > UINT64_MAX - prev_bin.bin))
+                return bad();
+            bin.bin = same_tid ? prev_bin.bin + b : b;
+            bin.duration_n = bin.count - missing;
+            prev_bin = bin;
+            if (keep.bins) p.bins.push_back(bin);
+        }
     }
     if (r.remaining() != 0) return bad();
     return p;

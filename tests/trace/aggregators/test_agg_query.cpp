@@ -472,10 +472,12 @@ struct Fixture {
 // Builds the index of the FILES traces under `interval_us`.
 std::unique_ptr<Fixture> build(std::uint64_t interval_us,
                                const std::string& tag,
-                               bool cut_mid_line = false) {
+                               bool cut_mid_line = false,
+                               bool reversed = false) {
     auto fx = std::make_unique<Fixture>();
     for (int i = 0; i < FILES; ++i) {
         auto events = make_events(1000 + static_cast<std::uint64_t>(i));
+        if (reversed) std::reverse(events.begin(), events.end());
         fx->files.push_back(
             write_trace(fx->env.get_dir(), i, events, cut_mid_line));
         fx->events.insert(fx->events.end(), events.begin(), events.end());
@@ -689,6 +691,63 @@ TEST_SUITE("AggQuery") {
             const auto r = check(*fx, ask, ONE_SECOND_US, "1 s window");
             CHECK(r.stats.chunks_reread > 0);
             CHECK(r.stats.partials_merged > 0);
+        }
+    }
+
+    TEST_CASE("sums only splits partials by their time bins") {
+        // Rows keep only the count and the n and sum of duration and size.
+        const auto check_sums =
+            [](const Fixture& fx, const Ask& ask,
+               std::uint64_t interval_us) -> AggQueryResult {
+            AggQuery q = make_query(fx, ask, interval_us);
+            q.args = false;
+            q.sums_only = true;
+            AggQueryResult r = run(q);
+            const auto truth =
+                reference(fx.events, ask, make_config(interval_us));
+            REQUIRE(r.rows.size() == truth.size());
+            for (const auto& [k, p] : r.rows) {
+                const Key key = row_key(r, k);
+                const auto t = truth.find(key);
+                REQUIRE(t != truth.end());
+                const agg::AggregationMetrics& ref = t->second.metrics;
+                CHECK(p.count == ref.count);
+                CHECK(p.duration.n == ref.duration.stat.n);
+                CHECK(p.duration.sum == ref.duration.stat.sum);
+                CHECK(p.size.n == ref.size.stat.n);
+                CHECK(p.size.sum == ref.size.stat.sum);
+            }
+            return r;
+        };
+        SUBCASE("pid, tid and 5 s windows over 1 s bins read no chunk") {
+            auto fx = build(ONE_SECOND_US, "one");
+            Ask ask;
+            ask.by_pid = true;
+            ask.by_tid = true;
+            ask.window = FIVE_SECONDS_US;
+            const auto r = check_sums(*fx, ask, ONE_SECOND_US);
+            CHECK(r.stats.partials_binned > 0);
+            CHECK(r.stats.chunks_reread == 0);
+            CHECK(r.stats.events_read == 0);
+        }
+        SUBCASE("events out of time order fill the same bins") {
+            auto fx = build(ONE_SECOND_US, "reversed", false, true);
+            Ask ask;
+            ask.by_pid = true;
+            ask.by_tid = true;
+            ask.window = FIVE_SECONDS_US;
+            const auto r = check_sums(*fx, ask, ONE_SECOND_US);
+            CHECK(r.stats.partials_binned > 0);
+            CHECK(r.stats.chunks_reread == 0);
+        }
+        SUBCASE("a window that is not a multiple of the bins re-reads") {
+            auto fx = build(FIVE_SECONDS_US, "five");
+            Ask ask;
+            ask.by_tid = true;
+            ask.window = 2 * ONE_SECOND_US;
+            const auto r = check_sums(*fx, ask, FIVE_SECONDS_US);
+            CHECK(r.stats.partials_binned == 0);
+            CHECK(r.stats.chunks_reread > 0);
         }
     }
 

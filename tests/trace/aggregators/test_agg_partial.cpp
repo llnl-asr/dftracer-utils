@@ -571,6 +571,70 @@ TEST_SUITE("AggPartial") {
                         .has_value());
     }
 
+    TEST_CASE("time bins add up by key and survive the wire") {
+        AggPartial p;
+        p.count = 6;
+        p.bin_interval = 1'000'000;
+        // Out of order, with (7, 2, 4) twice.
+        p.bins.push_back(TimeBin{7, 2, 4, 1, 1, 10, 0, 0});
+        p.bins.push_back(TimeBin{3, 9, 1, 2, 1, 20, 2, 4096});
+        p.bins.push_back(TimeBin{7, 1, 9, 1, 1, 5, 1, 8});
+        p.bins.push_back(TimeBin{7, 2, 4, 1, 1, 30, 1, 16});
+        p.bins.push_back(TimeBin{7, 2, 2, 1, 0, 0, 0, 0});
+        p.normalize_bins();
+        REQUIRE(p.bins.size() == 4);
+        CHECK(p.bins[0].pid == 3);
+        CHECK(p.bins[1].tid == 1);
+        CHECK(p.bins[2].bin == 2);
+        const TimeBin& added = p.bins[3];
+        CHECK(added.pid == 7);
+        CHECK(added.tid == 2);
+        CHECK(added.bin == 4);
+        CHECK(added.count == 2);
+        CHECK(added.duration_n == 2);
+        CHECK(added.duration_sum == 40);
+        CHECK(added.size_n == 1);
+        CHECK(added.size_sum == 16);
+
+        Vector<std::uint8_t> bytes;
+        p.serialize_into(bytes);
+        const AggPartial back = round_trip(p);
+        CHECK(back.bin_interval == p.bin_interval);
+        REQUIRE(back.bins.size() == p.bins.size());
+        for (std::size_t i = 0; i < p.bins.size(); ++i) {
+            CHECK(back.bins[i].pid == p.bins[i].pid);
+            CHECK(back.bins[i].tid == p.bins[i].tid);
+            CHECK(back.bins[i].bin == p.bins[i].bin);
+            CHECK(back.bins[i].count == p.bins[i].count);
+            CHECK(back.bins[i].duration_n == p.bins[i].duration_n);
+            CHECK(back.bins[i].duration_sum == p.bins[i].duration_sum);
+            CHECK(back.bins[i].size_n == p.bins[i].size_n);
+            CHECK(back.bins[i].size_sum == p.bins[i].size_sum);
+        }
+
+        AggPartial::Fields no_bins;
+        no_bins.bins = false;
+        auto skipped = AggPartial::deserialize(Span<const std::uint8_t>(bytes),
+                                               p.accuracy, no_bins);
+        REQUIRE(skipped.has_value());
+        CHECK(skipped->bins.empty());
+        CHECK(skipped->bin_interval == 0);
+        CHECK(skipped->count == p.count);
+
+        for (std::size_t len = 0; len < bytes.size(); ++len) {
+            INFO("prefix length: ", len);
+            CHECK_FALSE(AggPartial::deserialize(
+                            Span<const std::uint8_t>(bytes.data(), len))
+                            .has_value());
+        }
+
+        AggPartial merged = round_trip(p);
+        merged.merge(back);
+        CHECK(merged.count == 2 * p.count);
+        CHECK(merged.bins.empty());
+        CHECK(merged.bin_interval == 0);
+    }
+
     TEST_CASE("the exact sum keeps its carry through merge and the wire") {
         AggPartial a, b;
         a.size.add(UINT64_MAX);

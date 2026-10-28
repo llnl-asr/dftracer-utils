@@ -216,13 +216,13 @@ TEST_CASE("concurrent external adds lose no bytes") {
 }
 
 TEST_CASE("external slots are listed by name and freed on detach") {
-    ExternalSlot a = attach_external("rocksdb memtables");
+    ExternalSlot a = attach_external("index memtables");
     ExternalSlot b = attach_external(std::string(100, 'x'));
     a.set(3);
     b.set(4);
     std::size_t seen = 0;
     for (const ExternalStats& e : external_stats()) {
-        if (e.name == "rocksdb memtables") {
+        if (e.name == "index memtables") {
             CHECK(e.bytes == 3);
             ++seen;
         } else if (e.name == std::string(47, 'x')) {
@@ -234,7 +234,7 @@ TEST_CASE("external slots are listed by name and freed on detach") {
     a.detach();
     CHECK(a.bytes() == 0);
     for (const ExternalStats& e : external_stats()) {
-        CHECK(e.name != "rocksdb memtables");
+        CHECK(e.name != "index memtables");
     }
 }
 

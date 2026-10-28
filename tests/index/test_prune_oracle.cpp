@@ -12,8 +12,6 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -24,7 +22,6 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
-#include <rocksdb/iterator.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -540,7 +537,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     spill.memory_budget = 64 * 1024;
     index::Indexer::open(corpus.traces, spill).build();
     auto contents = [](const std::string& index_path) {
-        store::RocksDBManager::instance().reset(index_path);
+        store::release_index(index_path);
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
         std::vector<std::pair<std::string, std::string>> out;
         db.for_each_record(

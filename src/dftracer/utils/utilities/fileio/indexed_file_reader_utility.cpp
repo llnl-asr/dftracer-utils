@@ -2,7 +2,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
@@ -34,11 +34,10 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     if (need_build) {
         // Remove old index if forcing rebuild
         if (input.force_rebuild && input_exists(normalized_index_path)) {
-            // Force rebuild must discard the manager-owned DB instance
-            // before removing the root directory so the next open is a
-            // true reopen, not a reuse of the previous live handle.
-            dftracer::utils::index::store::RocksDBManager::instance().reset(
-                normalized_index_path);
+            // Force rebuild drops the handle this process keeps before
+            // removing the root directory, so the next open reads the new
+            // directory.
+            dftracer::utils::index::store::release_index(normalized_index_path);
             fs::remove_all(normalized_index_path);
             forget_input(normalized_index_path);
         }

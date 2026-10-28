@@ -5,7 +5,6 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -25,7 +24,6 @@ static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
     IndexDatabase idx_db(index_path);
     auto writer = idx_db.begin_write();
-    writer->init_schema();
 
     int fid = dftu_utils_test::register_test_file(
         *writer, get_logical_path(file_path), 12345);

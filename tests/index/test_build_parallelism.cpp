@@ -1,10 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -96,65 +93,5 @@ TEST_SUITE("IndexBuildParallelism") {
             CHECK(a[i].chunks_processed == b[i].chunks_processed);
             CHECK(a[i].events_processed == b[i].events_processed);
         }
-    }
-
-    TEST_CASE("the SSTs of the batches ingest below level 0") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        for (int i = 0; i < FILES; ++i)
-            files.push_back(write_small_trace(env.get_dir(), i));
-        const auto index_dir = env.get_dir() + "/idx";
-        const auto staging = env.get_dir() + "/staging";
-
-        store::SstArtifactRegistry registry;
-        build::IndexBuildBatchResult result;
-        {
-            Runtime rt(WORKERS);
-            auto counter = std::make_shared<std::atomic<std::size_t>>(0);
-            auto task = run_coro_scope(
-                rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    auto config =
-                        std::make_shared<build::IndexBuildBatchConfig>();
-                    config->file_paths = files;
-                    config->index_dir = index_dir;
-                    config->parallelism = WORKERS;
-                    config->sink_factory = [&staging, counter] {
-                        return std::make_unique<
-                            store::IndexDatabaseSstWriterContext>(
-                            staging,
-                            "batch_" + std::to_string(counter->fetch_add(1)));
-                    };
-                    config->sink_commit = [&registry](store::IndexWrite& sink) {
-                        registry.append(
-                            static_cast<store::IndexDatabaseSstWriterContext&>(
-                                sink)
-                                .commit());
-                    };
-                    result = co_await build::BatchBuilder::process(
-                        &scope, std::move(config));
-                });
-            rt.submit(std::move(task), "build-levels").wait();
-            rt.shutdown();
-        }
-        REQUIRE(result.indexed == FILES);
-
-        const auto index_path =
-            trace::internal::determine_index_path(files[0], index_dir);
-        store::IndexDatabase db(index_path);
-        db.init_schema();
-        db.bulk_ingest(registry, {});
-        std::size_t level0 = 0;
-        std::size_t ingested = 0;
-        for (const auto& cf : store::RocksDatabase::default_column_families()) {
-            level0 += db.db()->files_at_level(cf, 0);
-            for (int level = 0; level < 7; ++level)
-                ingested += db.db()->files_at_level(cf, level);
-        }
-        MESSAGE("SST files " << ingested << ", at level 0: " << level0);
-        CHECK(ingested > 0);
-        // The one file is the flush of the schema written before the ingest.
-        CHECK(level0 <= 1);
     }
 }

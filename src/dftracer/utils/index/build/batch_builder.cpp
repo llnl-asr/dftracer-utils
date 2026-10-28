@@ -17,9 +17,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -117,12 +115,9 @@ struct Admission {
     /// Bytes a sink holds before its worker commits it.
     std::size_t sink_limit;
     FileAdmission files;
-    /// Where a file's spill runs go; empty when files do not spill or stage.
-    std::string spill_root;
-    /// Files spill into a staged write of the index on the store.
+    /// Files spill into a staged write of the index.
     bool spill_staged = false;
-    /// The index the staged writes go to when this build holds it open; null
-    /// opens it for each file.
+    /// The index the staged writes go to.
     index::store::IndexDatabase* staged_db = nullptr;
     /// RecordSchema id for every file; empty detects each file's.
     std::string schema;
@@ -148,12 +143,8 @@ struct BatchWriteState {
     bool build_bloom = true;
     bool tier_only = false;
     std::uint64_t memory_budget = 0;
-    std::string spill_dir;
     std::string schema;
     IndexBuildBatchConfig::AggFoldFactory agg_fold_factory;
-    IndexBuildBatchConfig::SinkFactory sink_factory;
-    IndexBuildBatchConfig::SinkCommitFn sink_commit;
-    IndexBuildBatchConfig::SpillCommitFn spill_commit;
     IndexBuildBatchConfig::ProgressFn progress;
 };
 
@@ -162,91 +153,26 @@ static std::string basename_of(const std::string& path) {
     return pos == std::string::npos ? path : path.substr(pos + 1);
 }
 
-static fs::path spill_runs_dir(
-    const std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>&
-        runs) {
-    for (const auto& run : runs)
-        for (const auto& paths : run.sst)
-            if (!paths.empty())
-                return fs::path(paths.front()).parent_path().parent_path();
-    return {};
-}
-
-void remove_spill_runs(
-    const std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>&
-        runs) {
-    const fs::path dir = spill_runs_dir(runs);
-    std::error_code ec;
-    if (!dir.empty()) fs::remove_all(dir, ec);
-}
-
-void ingest_spill_runs(
-    index::store::IndexDatabase& db,
-    std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts> runs) {
-    const fs::path dir = spill_runs_dir(runs);
-    struct Cleanup {
-        const fs::path& dir;
-        ~Cleanup() {
-            std::error_code ec;
-            if (!dir.empty()) fs::remove_all(dir, ec);
-        }
-    } cleanup{dir};
-    index::store::SstArtifactRegistry registry;
-    for (auto& run : runs) registry.append(std::move(run));
-    db.bulk_ingest(registry);
-}
-
-// Where files are written: a sink per run of a worker's block, committed when
-// the run ends so its SSTs cover its file ids and no other worker's.
+// Where files are written: a write of the index per run of a worker's block,
+// committed when the run ends.
 struct BlockWriter {
-    std::function<std::unique_ptr<index::store::IndexWrite>()> make_sink;
-    std::function<void(index::store::IndexWrite&)> commit_sink;
-    /// The sinks are writes of an index this build holds, which a worker
-    /// commits with a co_await instead of commit_sink.
-    bool awaitable_sink = false;
-    std::function<void(
-        std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>)>
-        commit_spill;
+    index::store::IndexDatabase* db = nullptr;
     index::build::BatchWriterMetrics* metrics = nullptr;
 };
 
-// The sink a worker is filling and what it holds: spill runs to ingest after
-// it commits, and the files written into it.
+// The write a worker is filling and the files written into it.
 struct OpenSink {
-    std::unique_ptr<index::store::IndexWrite> sink;
-    std::vector<index::build::SpilledFile> spilled;
+    std::unique_ptr<index::store::IndexDatabaseWrite> sink;
     std::vector<std::size_t> written;
     std::uint64_t write_ns = 0;
 };
 
-static coro::CoroTask<void> commit_open_sink(
-    BlockWriter* writer, OpenSink& open,
-    std::vector<IndexBuildResult>* results_ptr,
-    const std::vector<PreparedFile>* prepared_ptr) {
+static coro::CoroTask<void> commit_open_sink(BlockWriter* writer,
+                                             OpenSink& open) {
     const auto c0 = std::chrono::steady_clock::now();
     if (open.sink) {
-        if (writer->awaitable_sink) {
-            auto& write =
-                static_cast<index::store::IndexDatabaseWrite&>(*open.sink);
-            co_await write.commit_async();
-        } else {
-            writer->commit_sink(*open.sink);
-        }
+        co_await open.sink->commit_async();
         open.sink.reset();
-    }
-    for (auto& file : open.spilled) {
-        try {
-            writer->commit_spill(std::move(file.runs));
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Failed to ingest the spilled index of %s: %s",
-                file.file_path.c_str(), e.what());
-            for (auto idx : open.written)
-                if ((*prepared_ptr)[idx].file_path == file.file_path) {
-                    (*results_ptr)[idx].success = false;
-                    (*results_ptr)[idx].error_message = e.what();
-                }
-        }
     }
     open.write_ns += static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -357,20 +283,11 @@ static coro::CoroTask<void> parse_and_write_worker(
                         job.bloom_fold->set_file_bytes(pf.file_size);
                         if (admission->spill_staged) {
                             auto staged =
-                                admission->staged_db
-                                    ? admission->staged_db->begin_staged_write()
-                                    : index::store::IndexDatabase(pf.index_path)
-                                          .begin_staged_write();
+                                admission->staged_db->begin_staged_write();
                             // Its runs come before the file's record.
                             staged->bind_file(pf.logical_path, pf.file_id);
                             job.bloom_fold->enable_spill(
                                 ticket.elastic_bytes(), std::move(staged),
-                                pf.file_id, pf.fresh_id);
-                        } else if (!admission->spill_root.empty()) {
-                            job.bloom_fold->enable_spill(
-                                ticket.elastic_bytes(),
-                                admission->spill_root + "/file_" +
-                                    std::to_string(pf.file_id),
                                 pf.file_id, pf.fresh_id);
                         }
                         fold_ptrs.push_back(job.bloom_fold.get());
@@ -527,9 +444,8 @@ static coro::CoroTask<void> parse_and_write_worker(
                 // The file's state goes into the sink and is freed here, so a
                 // worker holds one file's state and the serialized rest of
                 // its block.
-                if (!open.sink) open.sink = writer->make_sink();
-                if (index::build::write_index_job(*open.sink, write_job,
-                                                  open.spilled)) {
+                if (!open.sink) open.sink = writer->db->begin_write();
+                if (index::build::write_index_job(*open.sink, write_job)) {
                     open.written.push_back(idx);
                 } else {
                     (*results_ptr)[idx].success = false;
@@ -558,15 +474,13 @@ static coro::CoroTask<void> parse_and_write_worker(
                     .count());
             ticket = {};
             // A sink that has grown past the budget commits and the next file
-            // opens another: the ids of a block are consecutive, so the SSTs of
-            // the two sinks still do not overlap.
+            // opens another.
             if (open.sink &&
                 open.sink->buffered_bytes() >= admission->sink_limit)
-                co_await commit_open_sink(writer, open, results_ptr,
-                                          prepared_ptr);
+                co_await commit_open_sink(writer, open);
         }
 
-        co_await commit_open_sink(writer, open, results_ptr, prepared_ptr);
+        co_await commit_open_sink(writer, open);
     }
     co_return;
 }
@@ -597,14 +511,12 @@ dstd::Vector<std::size_t> cut_blocks(std::size_t files,
 // files, parses them one after another, writes each into a sink as it finishes
 // and commits the sink at the end of the block, or sooner when it has grown
 // past the sink limit. A file's state is freed as soon as it is written, so
-// memory grows with the workers, not the files, and the file ids of a block
-// are consecutive, so its SSTs overlap no other block's.
+// memory grows with the workers, not the files.
 static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                                                    BatchWriteState* state) {
     std::size_t parse_workers = std::max<std::size_t>(1, state->parallelism);
-    // One block of consecutive files per worker, so a worker's SSTs cover one
-    // run of file ids and the ingest has about one SST per worker and key
-    // prefix. Blocks hold about equal work, so the workers finish together.
+    // One block of consecutive files per worker. Blocks hold about equal work,
+    // so the workers finish together.
     const auto block_starts = dstd::make_shared<dstd::Vector<std::size_t>>(
         cut_blocks(state->num_files, state->file_costs, parse_workers));
     DFTRACER_UTILS_LOG_INFO(
@@ -614,15 +526,8 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
 
     auto writer_metrics = std::make_shared<index::build::BatchWriterMetrics>();
 
-    // Only open the RocksDB-backed DB when no external sink factory is
-    // provided. The distributed SST path routes writes through caller-owned
-    // SstWriterContext instances and must not hold a process-exclusive
-    // RocksDB handle on the target index dir.
-    std::shared_ptr<index::store::IndexDatabase> writer_db;
-    if (!state->sink_factory) {
-        writer_db =
-            std::make_shared<index::store::IndexDatabase>(state->index_path);
-    }
+    auto writer_db =
+        std::make_shared<index::store::IndexDatabase>(state->index_path);
 
     // The workers' sinks hold up to their limit each, so the budget sets the
     // workers and the limit, and the files get what is left.
@@ -638,17 +543,10 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto admission = std::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
-    // A spilled file is runs of SSTs to ingest on RocksDB, and stages of one
-    // write on the store.
-    if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit)) {
-        if (index::store::index_backend() ==
-            index::store::IndexBackend::Store) {
-            admission->spill_staged = true;
-            admission->staged_db = writer_db.get();
-        } else
-            admission->spill_root = state->spill_dir.empty()
-                                        ? state->index_path + ".spill"
-                                        : state->spill_dir;
+    // A spilled file is stages of one write.
+    if (budget != NO_BUDGET) {
+        admission->spill_staged = true;
+        admission->staged_db = writer_db.get();
     }
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
@@ -660,22 +558,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
 
     BlockWriter block_writer;
     block_writer.metrics = writer_metrics.get();
-    if (state->sink_factory) {
-        block_writer.make_sink = state->sink_factory;
-        block_writer.commit_sink = state->sink_commit;
-        block_writer.commit_spill = state->spill_commit;
-    } else {
-        auto* db = writer_db.get();
-        block_writer.awaitable_sink = true;
-        block_writer.make_sink = [db] { return db->begin_write(); };
-        block_writer.commit_sink = [](index::store::IndexWrite& sink) {
-            static_cast<index::store::IndexDatabaseWrite&>(sink).commit();
-        };
-        block_writer.commit_spill =
-            [db](std::vector<
-                 index::store::IndexDatabaseSstWriterContext::Artifacts>
-                     runs) { ingest_spill_runs(*db, std::move(runs)); };
-    }
+    block_writer.db = writer_db.get();
     auto* writer_ptr = &block_writer;
 
     const auto* block_starts_ptr = block_starts.get();
@@ -720,10 +603,6 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     };
     co_await scope->scope(pipeline_scope);
 
-    if (!admission->spill_root.empty()) {
-        std::error_code ec;
-        fs::remove(admission->spill_root, ec);
-    }
     state->metrics.parse_ns = parse_ns->load(std::memory_order_relaxed);
 
     state->metrics.files_parsed = state->num_files;
@@ -755,9 +634,7 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     state->build_bloom = config.build_bloom;
     state->tier_only = config.tier_only;
     state->memory_budget = config.memory_budget;
-    state->spill_dir = config.spill_dir;
     state->schema = config.schema;
-    state->spill_commit = config.spill_commit;
     state->progress = config.progress;
     state->bloom_dims = std::make_shared<std::vector<std::string>>(
         config.bloom_dimensions.empty()
@@ -803,16 +680,6 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
     if (config.agg_fold_factory) {
         state->agg_fold_factory = std::move(config.agg_fold_factory);
     }
-    state->sink_factory = std::move(config.sink_factory);
-    state->sink_commit = std::move(config.sink_commit);
-    if (static_cast<bool>(state->sink_factory) !=
-        static_cast<bool>(state->sink_commit)) {
-        throw index::store::IndexerError(
-            index::store::IndexerError::Type::InvalidArgument,
-            "IndexBuildBatchConfig: sink_factory and sink_commit must be set "
-            "together (either both null for the default RocksDB path, or "
-            "both non-null for the distributed SST path).");
-    }
     return state;
 }
 
@@ -850,114 +717,11 @@ static coro::CoroTask<IndexBuildBatchResult> run_single_batch(
     co_return partial;
 }
 
-static void merge_partial_into(IndexBuildBatchResult& out,
-                               IndexBuildBatchResult partial) {
-    for (auto& r : partial.results) {
-        out.results.push_back(std::move(r));
-    }
-    out.indexed += partial.indexed;
-    out.skipped += partial.skipped;
-    out.failed += partial.failed;
-    out.total_events += partial.total_events;
-    out.metrics.parse_ns += partial.metrics.parse_ns;
-    out.metrics.write_ns += partial.metrics.write_ns;
-    out.metrics.schema_ns += partial.metrics.schema_ns;
-    out.metrics.files_enqueued += partial.metrics.files_enqueued;
-    out.metrics.files_parsed += partial.metrics.files_parsed;
-    out.metrics.files_written += partial.metrics.files_written;
-    out.metrics.files_spilled += partial.metrics.files_spilled;
-    out.metrics.max_spill_runs =
-        std::max(out.metrics.max_spill_runs, partial.metrics.max_spill_runs);
-    out.metrics.max_files_in_flight = std::max(
-        out.metrics.max_files_in_flight, partial.metrics.max_files_in_flight);
-    for (auto& ao : partial.agg_outputs) {
-        out.agg_outputs.push_back(std::move(ao));
-    }
-}
-
 static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
     CoroScope* scope, std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
-    const std::size_t flush_every = config_ptr->flush_every_files;
-    const std::size_t total = config_ptr->file_paths.size();
-    const std::size_t chunk_size =
-        (flush_every > 0 && flush_every < total) ? flush_every : total;
-
-    IndexBuildBatchResult result;
-    const auto index_path = determine_index_path(config_ptr->file_paths.front(),
-                                                 config_ptr->index_dir);
-
-    const std::size_t num_sub_batches = (total + chunk_size - 1) / chunk_size;
-    std::size_t sub_batch_idx = 0;
-    for (std::size_t start = 0; start < total; start += chunk_size) {
-        const std::size_t end = std::min(start + chunk_size, total);
-        DFTRACER_UTILS_LOG_INFO(
-            "IndexBatch: sub-batch %zu/%zu begin (files %zu..%zu of %zu)",
-            sub_batch_idx + 1, num_sub_batches, start, end - 1, total);
-        IndexBuildBatchConfig chunk_config;
-        chunk_config.file_paths.assign(
-            config_ptr->file_paths.begin() + static_cast<std::ptrdiff_t>(start),
-            config_ptr->file_paths.begin() + static_cast<std::ptrdiff_t>(end));
-        if (!config_ptr->preassigned_file_ids.empty()) {
-            chunk_config.preassigned_file_ids.assign(
-                config_ptr->preassigned_file_ids.begin() +
-                    static_cast<std::ptrdiff_t>(start),
-                config_ptr->preassigned_file_ids.begin() +
-                    static_cast<std::ptrdiff_t>(end));
-        }
-        if (!config_ptr->input_fds.empty()) {
-            chunk_config.input_fds.assign(
-                std::make_move_iterator(config_ptr->input_fds.begin() +
-                                        static_cast<std::ptrdiff_t>(start)),
-                std::make_move_iterator(config_ptr->input_fds.begin() +
-                                        static_cast<std::ptrdiff_t>(end)));
-        }
-        if (!config_ptr->file_costs.empty()) {
-            chunk_config.file_costs.assign(
-                config_ptr->file_costs.begin() +
-                    static_cast<std::ptrdiff_t>(start),
-                config_ptr->file_costs.begin() +
-                    static_cast<std::ptrdiff_t>(end));
-        }
-        chunk_config.first_fresh_file_id = config_ptr->first_fresh_file_id;
-        chunk_config.sink_factory = config_ptr->sink_factory;
-        chunk_config.sink_commit = config_ptr->sink_commit;
-        chunk_config.index_dir = config_ptr->index_dir;
-        chunk_config.checkpoint_size = config_ptr->checkpoint_size;
-        chunk_config.parallelism = config_ptr->parallelism;
-        chunk_config.force_rebuild = config_ptr->force_rebuild;
-        chunk_config.build_bloom = config_ptr->build_bloom;
-        chunk_config.tier_only = config_ptr->tier_only;
-        chunk_config.memory_budget = config_ptr->memory_budget;
-        chunk_config.spill_dir = config_ptr->spill_dir;
-        chunk_config.schema = config_ptr->schema;
-        chunk_config.spill_commit = config_ptr->spill_commit;
-        chunk_config.bloom_config = config_ptr->bloom_config;
-        chunk_config.bloom_dimensions = config_ptr->bloom_dimensions;
-        chunk_config.agg_fold_factory = config_ptr->agg_fold_factory;
-        if (config_ptr->progress) {
-            // Sub-batch `done` restarts at 0; offset it so the callback always
-            // reports global (files_done, total) across the whole batch.
-            auto user_progress = config_ptr->progress;
-            const std::size_t offset = start;
-            chunk_config.progress = [user_progress, offset, total](
-                                        std::size_t done, std::size_t) {
-                user_progress(offset + done, total);
-            };
-        }
-
-        auto partial =
-            co_await run_single_batch(scope, std::move(chunk_config));
-        DFTRACER_UTILS_LOG_INFO(
-            "IndexBatch: sub-batch %zu/%zu complete (indexed=%zu skipped=%zu "
-            "failed=%zu)",
-            sub_batch_idx + 1, num_sub_batches, partial.indexed,
-            partial.skipped, partial.failed);
-        merge_partial_into(result, std::move(partial));
-        ++sub_batch_idx;
-    }
-
+    IndexBuildBatchConfig config = std::move(*config_ptr);
     config_ptr.reset();
-
+    auto result = co_await run_single_batch(scope, std::move(config));
     co_return result;
 }
 
@@ -968,19 +732,17 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
         co_return IndexBuildBatchResult{};
     }
     // The pipeline writes one index; files whose indexes live in different
-    // roots build one root at a time, each into its own. A sink routes the
-    // writes itself.
+    // roots build one root at a time, each into its own.
     const IndexBuildBatchConfig& config = *config_ptr;
     std::vector<std::string> roots;
     std::vector<std::size_t> root_of(config.file_paths.size());
-    if (!config.sink_factory)
-        for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
-            const std::string root =
-                determine_index_path(config.file_paths[i], config.index_dir);
-            auto it = std::find(roots.begin(), roots.end(), root);
-            root_of[i] = static_cast<std::size_t>(it - roots.begin());
-            if (it == roots.end()) roots.push_back(root);
-        }
+    for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
+        const std::string root =
+            determine_index_path(config.file_paths[i], config.index_dir);
+        auto it = std::find(roots.begin(), roots.end(), root);
+        root_of[i] = static_cast<std::size_t>(it - roots.begin());
+        if (it == roots.end()) roots.push_back(root);
+    }
     if (roots.size() <= 1)
         co_return co_await run_batch_write_pipeline(scope,
                                                     std::move(config_ptr));

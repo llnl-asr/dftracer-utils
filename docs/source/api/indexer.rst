@@ -85,15 +85,15 @@ CheckpointIndexer Class
    :show-inheritance:
    :special-members: __enter__, __exit__
 
-Distributed Index (SST-based)
------------------------------
+Distributed Index
+-----------------
 
-The distributed-index path lets a coordinator assign file ids, fan one
-indexing task per Dask worker, and bulk-ingest worker-produced SST artifacts
-back into the unified ``.dftindex`` store. The public entry point is
-:func:`~dftracer.utils.dask.distributed_index`; it assigns file ids on the
-coordinator, fans one indexing task per worker, and ingests the resulting SSTs. The scan,
-LPT-partition, and SST-registry primitives it drives are internal to the
+The distributed-index path lets a coordinator fan one indexing task per Dask
+worker, and each worker writes its files straight into the unified
+``.dftindex`` store. The public entry point is
+:func:`~dftracer.utils.dask.distributed_index`; it assigns the file-to-worker
+split on the coordinator and lets every worker number and write its own files.
+The scan and LPT-partition primitives it drives are internal to the
 native extension and have no public Python path.
 
 .. autofunction:: dftracer.utils.dask.distributed_index

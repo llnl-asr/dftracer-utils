@@ -4,16 +4,12 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <doctest/doctest.h>
-#include <rocksdb/db.h>
 #include <trace/views/test_view_common.h>
 
 #include <cmath>
@@ -193,26 +189,6 @@ df::DataFrame scan_events(const Fixture& fx, std::vector<GroupKey> keys,
     return scan_only(scan::agg(p, specs()));
 }
 
-std::vector<std::string> column_families_of(const std::string& db_path) {
-    std::vector<std::string> names;
-    const auto status = ::rocksdb::DB::ListColumnFamilies(
-        ::rocksdb::DBOptions(), db_path, &names);
-    REQUIRE_MESSAGE(status.ok(), status.ToString());
-    return names;
-}
-
-bool has_family(const std::vector<std::string>& names,
-                std::string_view family) {
-    return std::find(names.begin(), names.end(), family) != names.end();
-}
-
-// The path of the RocksDB database behind the index of `gz`.
-std::string db_path_of(const std::string& gz) {
-    ix::store::IndexDatabase db(determine_index_path(gz, ""),
-                                ix::store::IndexOpenMode::ReadOnly);
-    return db.db()->path();
-}
-
 }  // namespace
 
 TEST_SUITE("ViewPartials") {
@@ -356,71 +332,6 @@ TEST_SUITE("ViewPartials") {
         CHECK(r->stats.chunks_reread == 0);
         CHECK(r->stats.unanswered > 0);
         CHECK(r->rows.empty());
-    }
-
-    TEST_CASE("a fresh index build writes no aggregation column family") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        Fixture fx;
-        for (const auto& g : fx.gz) {
-            const auto names = column_families_of(db_path_of(g));
-            CHECK_FALSE(has_family(names, ix::store::cf::LEGACY_AGGREGATION));
-            CHECK(has_family(names, ix::store::cf::SYSTEM_METRICS));
-        }
-    }
-
-    TEST_CASE("an index with the legacy aggregation column family answers") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        Fixture fx;
-        const std::string path = db_path_of(fx.gz[0]);
-        ix::store::RocksDBManager::instance().reset(path);
-        {
-            // What an index of an earlier build holds: the per-key tier's
-            // column family with rows in it.
-            auto names = column_families_of(path);
-            names.emplace_back(ix::store::cf::LEGACY_AGGREGATION);
-            std::vector<::rocksdb::ColumnFamilyDescriptor> descriptors;
-            for (const auto& n : names)
-                descriptors.emplace_back(n, ::rocksdb::ColumnFamilyOptions());
-            ::rocksdb::DBOptions options;
-            options.create_missing_column_families = true;
-            std::vector<::rocksdb::ColumnFamilyHandle*> handles;
-            std::unique_ptr<::rocksdb::DB> db;
-            const auto opened =
-                ::rocksdb::DB::Open(options, path, descriptors, &handles, &db);
-            REQUIRE_MESSAGE(opened.ok(), opened.ToString());
-            REQUIRE(db->Put(::rocksdb::WriteOptions(), handles.back(), "key",
-                            "value")
-                        .ok());
-            for (auto* h : handles) db->DestroyColumnFamilyHandle(h);
-        }
-        REQUIRE(has_family(column_families_of(path),
-                           ix::store::cf::LEGACY_AGGREGATION));
-
-        // A read-only open leaves it, and the aggregate is the partials'.
-        const df::DataFrame got = View::from_files({fx.files()[0]})
-                                      .group_by({GroupKey::name()})
-                                      .agg({{AggOp::Count, "", "n"}})
-                                      .collect()
-                                      .get();
-        const Rows rows = rows_of(got, {"name"});
-        CHECK(rows.at("read|").at("n") == READS);
-        CHECK(rows.at("fwrite|").at("n") == WRITES);
-
-        // A read-write open drops it; the index still answers.
-        {
-            ix::store::IndexDatabase db(determine_index_path(fx.gz[0], ""));
-        }
-        ix::store::RocksDBManager::instance().reset(path);
-        CHECK_FALSE(has_family(column_families_of(path),
-                               ix::store::cf::LEGACY_AGGREGATION));
-        const df::DataFrame again = View::from_files({fx.files()[0]})
-                                        .group_by({GroupKey::name()})
-                                        .agg({{AggOp::Count, "", "n"}})
-                                        .collect()
-                                        .get();
-        CHECK(rows_of(again, {"name"}).at("read|").at("n") == READS);
     }
 
     TEST_CASE("profiles and aggregates group by extra keys without reads") {

@@ -19,8 +19,8 @@
 
 namespace dftracer::utils::index::store {
 
-/// One atomic write to an index database: a RocksDB batch or a set of SSTs
-/// ingested in one call. Nothing is visible until the owner commits it.
+/// One atomic write to an index database. Nothing is visible until the owner
+/// commits it.
 class IndexWrite {
    public:
     virtual ~IndexWrite() = default;
@@ -53,8 +53,8 @@ class IndexWrite {
     std::size_t buffered_bytes_ = 0;
 };
 
-/// One write to an index database, whichever backend holds it, with what a
-/// build asks the database itself.
+/// One write to an index database, with what a build asks the database
+/// itself.
 class IndexDatabaseWrite : public IndexWrite {
    public:
     ~IndexDatabaseWrite() override = default;
@@ -62,7 +62,7 @@ class IndexDatabaseWrite : public IndexWrite {
     /// Makes every key of this write visible to later reads. A second call
     /// does nothing.
     virtual void commit() = 0;
-    /// commit() for a coroutine: a backend that can waits for its writes
+    /// commit() for a coroutine: a write that can waits for its writes
     /// without holding a worker; the default runs commit().
     virtual coro::CoroTask<void> commit_async();
     /// A staged write (IndexDatabase::begin_staged_write) writes what it holds
@@ -79,8 +79,6 @@ class IndexDatabaseWrite : public IndexWrite {
     /// are global to the index.
     virtual void bind_file(std::string_view /*logical_path*/, int /*file_id*/) {
     }
-    /// Creates what an empty index root needs to hold a build's writes.
-    virtual void init_schema() = 0;
 };
 
 /// Record writers. Each value gets the layout header of its (ext, kind).

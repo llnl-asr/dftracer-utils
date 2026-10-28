@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/runtime/coro/task.h>
 
@@ -47,30 +46,15 @@ namespace dftracer::utils::index::build {
 
 using dftracer::utils::CoroScope;
 
-/// Removes the directory of one file's BloomFold spill runs, for a write that
-/// failed before it could ingest them.
-void remove_spill_runs(
-    const std::vector<store::IndexDatabaseSstWriterContext::Artifacts>& runs);
-
-/// Ingests one file's BloomFold spill runs into `db` as one ingest, in run
-/// order, then removes their directory, also when the ingest throws.
-void ingest_spill_runs(
-    store::IndexDatabase& db,
-    std::vector<store::IndexDatabaseSstWriterContext::Artifacts> runs);
-
 /// Bytes of memory, reserved capacity included, a sink holds before its worker
-/// commits it. Each commit writes one SST per key prefix, so the limit also
-/// sets the SST count: on 8,404 small files at 48 workers, 16 MiB left two SSTs
-/// per worker and prefix and 32 MiB left one.
+/// commits it.
 inline constexpr std::size_t MAX_SINK_BYTES = std::size_t{32} << 20;
 
 /// The limit a build applies; tests lower it to make small inputs commit.
 inline std::atomic<std::size_t> g_max_sink_bytes{MAX_SINK_BYTES};
 
 /// Where the blocks of consecutive files start, then the end: about `workers`
-/// blocks of equal cost (equal file counts when `costs` is empty). A worker
-/// that writes one block into its own sinks leaves SSTs that overlap no other
-/// block's.
+/// blocks of equal cost (equal file counts when `costs` is empty).
 dstd::Vector<std::size_t> cut_blocks(std::size_t files,
                                      std::span<const std::uint64_t> costs,
                                      std::size_t workers);
@@ -116,12 +100,6 @@ struct IndexBuildBatchConfig {
     /// RecordSchema id every file is decoded with; empty detects each file's.
     std::string schema;
 
-    /// If > 0, process files in sub-batches of this size, flushing parsed
-    /// artifacts to the write phase between sub-batches. Bounds peak memory
-    /// to ~flush_every_files worth of ParsedBloomJob state. 0 = no flush
-    /// (all files parsed before any write).
-    std::size_t flush_every_files = 0;
-
     /// Factory for the aggregation-tier fold, created once per file with the
     /// fused-scan intern that produced its events and the file's id. When set,
     /// the batch build steps an AggregationFold in the same single parse as
@@ -138,9 +116,7 @@ struct IndexBuildBatchConfig {
     ProgressFn progress;
 
     /// If non-empty, parallel to `file_paths`: use these file_ids instead
-    /// of allocating via `get_or_create_file_info`. Used by the distributed
-    /// indexer where the coordinator pre-registers all files. When set,
-    /// the write phase skips the DEFAULT-CF registry open/write step.
+    /// of allocating them in the build.
     std::vector<int> preassigned_file_ids;
     /// With preassigned ids: the ids from this one up were reserved by this
     /// build, so the index holds no data for them and their tiers need no
@@ -159,30 +135,6 @@ struct IndexBuildBatchConfig {
     /// and the runs are cut to hold about equal work. Empty cuts them to
     /// equal file counts.
     std::vector<std::uint64_t> file_costs;
-
-    /// Optional write factory. If set, the write phase constructs a fresh
-    /// IndexWrite per batch via this factory instead of opening the
-    /// RocksDB-backed writer on `index_dir`. Used by the distributed (SST)
-    /// pipeline to route writes to per-worker SstWriterContext instances.
-    /// `sink_commit` must also be set and is responsible for finalising
-    /// each write (RocksDB path: call .commit(); SST path: flush + route
-    /// Artifacts to a registry).
-    using SinkFactory =
-        std::function<std::unique_ptr<index::store::IndexWrite>()>;
-    using SinkCommitFn = std::function<void(index::store::IndexWrite&)>;
-    SinkFactory sink_factory;
-    SinkCommitFn sink_commit;
-
-    /// Commits a file whose build spilled: its runs, which must be ingested
-    /// in this order in one ingest, and are owned by the callee. Required
-    /// with sink_factory for files to spill; without a sink the builder
-    /// ingests them itself.
-    using SpillCommitFn = std::function<void(
-        std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>)>;
-    SpillCommitFn spill_commit;
-    /// Where spill runs go; empty puts them beside the index as
-    /// "<index>.spill".
-    std::string spill_dir;
 };
 
 struct IndexBuildBatchMetrics {

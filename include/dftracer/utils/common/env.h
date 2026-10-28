@@ -12,8 +12,6 @@ class Env {
    public:
     template <typename T = std::string_view>
     static std::optional<T> get(std::string_view name);
-
-    static int rocksdb_max_open_files();
 };
 
 template <typename T>

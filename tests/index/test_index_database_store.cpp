@@ -1,5 +1,4 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -19,10 +18,8 @@ namespace {
 
 namespace index_store = dftracer::utils::index::store;
 
-using index_store::IndexBackend;
 using index_store::IndexDatabase;
 using index_store::IndexExtension;
-using index_store::ScopedIndexBackend;
 namespace records = dftu_utils_test::index_records;
 
 constexpr std::size_t CHECKPOINT = 4096;
@@ -57,7 +54,7 @@ void note(std::string& out, std::string_view what, std::uint64_t value) {
     out += '\n';
 }
 
-/// Bytes a backend stores as they are, so the dump stays text.
+/// Bytes the store keeps as they are, so the dump stays text.
 void note_bytes(std::string& out, const char* what, std::string_view bytes) {
     static constexpr char HEX[] = "0123456789abcdef";
     out += what;
@@ -79,14 +76,13 @@ std::vector<std::string_view> sorted_keys(const Map& map) {
     return keys;
 }
 
-/// One file of the registry: its logical path and the id this backend gave it.
+/// One file of the registry: its logical path and its id.
 struct RegisteredFile {
     std::string path;
     int file_id;
 };
 
-/// The registry in logical path order. Two backends number the same files
-/// differently, so nothing that is compared here carries a file id.
+/// The registry in logical path order. File ids are not compared.
 std::vector<RegisteredFile> registered_files(std::string& out,
                                              const IndexDatabase& db) {
     std::vector<RegisteredFile> files;
@@ -286,9 +282,7 @@ std::string dump_index(const std::string& index_path,
 
 /// Builds `traces` into the index root of `dir`, in the order given.
 std::string build_into(const std::string& dir,
-                       const std::vector<std::string>& traces,
-                       IndexBackend backend) {
-    ScopedIndexBackend guard(backend);
+                       const std::vector<std::string>& traces) {
     const auto index_path = dir + "/.dftindex";
     for (const auto& trace : traces)
         REQUIRE(dftu_utils_test::build_index(trace, index_path, CHECKPOINT));
@@ -297,9 +291,7 @@ std::string build_into(const std::string& dir,
 
 /// Writes what a plugin build writes for the plugin extension of every file.
 void put_plugin_extension(const std::string& index_path,
-                          const std::vector<std::string>& traces,
-                          IndexBackend backend) {
-    ScopedIndexBackend guard(backend);
+                          const std::vector<std::string>& traces) {
     IndexDatabase db(index_path);
     auto write = db.begin_write();
     for (const auto& trace : traces) {
@@ -332,30 +324,18 @@ std::vector<std::string> create_unsorted_traces(
 
 }  // namespace
 
-TEST_CASE("index_database answers the same on both backends") {
+TEST_CASE("index_database answers fresh, then stale, from the store") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
     const std::filesystem::path root(env.get_dir());
-    const auto rocks_dir = root / "rocks";
-    const auto store_dir = root / "store";
-    std::filesystem::create_directories(rocks_dir);
-    std::filesystem::create_directories(store_dir);
+    std::filesystem::create_directories(root);
 
     const auto traces = create_unsorted_traces(env, root);
     REQUIRE(traces.size() == 3);
 
-    const auto rocks_index =
-        build_into(rocks_dir.string(), traces, IndexBackend::RocksDb);
-    const auto store_index =
-        build_into(store_dir.string(), traces, IndexBackend::Store);
-    put_plugin_extension(rocks_index, traces, IndexBackend::RocksDb);
-    put_plugin_extension(store_index, traces, IndexBackend::Store);
+    const auto index_path = build_into(root.string(), traces);
+    put_plugin_extension(index_path, traces);
 
-    const auto dump_on = [&](IndexBackend backend,
-                             const std::string& index_path) {
-        ScopedIndexBackend guard(backend);
-        return dump_index(index_path, traces);
-    };
     const std::string fresh_line =
         std::string("fresh=") +
         std::to_string(static_cast<int>(IndexDatabase::Freshness::Fresh));
@@ -363,32 +343,23 @@ TEST_CASE("index_database answers the same on both backends") {
         std::string("fresh=") +
         std::to_string(static_cast<int>(IndexDatabase::Freshness::Stale));
 
-    const std::string fresh_rocks = dump_on(IndexBackend::RocksDb, rocks_index);
-    const std::string fresh_store = dump_on(IndexBackend::Store, store_index);
-    INFO("rocksdb (fresh):\n" << fresh_rocks);
-    INFO("store (fresh):\n" << fresh_store);
-    CHECK(fresh_rocks.find(stale_line) == std::string::npos);
-    CHECK(fresh_rocks.find(fresh_line) != std::string::npos);
-    CHECK(fresh_store == fresh_rocks);
+    const std::string fresh = dump_index(index_path, traces);
+    INFO("store (fresh):\n" << fresh);
+    CHECK(fresh.find(stale_line) == std::string::npos);
+    CHECK(fresh.find(fresh_line) != std::string::npos);
 
-    // One trace changes on disk: it alone is then stale on both backends.
+    // One trace changes on disk: it alone is then stale.
     std::filesystem::last_write_time(
         traces[1],
         std::filesystem::last_write_time(traces[1]) + std::chrono::hours(48));
 
-    const std::string stale_rocks = dump_on(IndexBackend::RocksDb, rocks_index);
-    const std::string stale_store = dump_on(IndexBackend::Store, store_index);
-    INFO("rocksdb (stale):\n" << stale_rocks);
-    INFO("store (stale):\n" << stale_store);
-    CHECK_FALSE(stale_rocks.empty());
-    CHECK(stale_rocks.find(stale_line) != std::string::npos);
-    CHECK(stale_rocks.find("stale.changed=" + traces[1] + "\n") !=
-          std::string::npos);
-    CHECK(stale_rocks.find("stale.changed=" + traces[0] + "\n") ==
-          std::string::npos);
-    CHECK(stale_rocks.find("stale.changed=" + traces[2] + "\n") ==
-          std::string::npos);
-    CHECK(stale_store == stale_rocks);
+    const std::string stale = dump_index(index_path, traces);
+    INFO("store (stale):\n" << stale);
+    CHECK_FALSE(stale.empty());
+    CHECK(stale.find(stale_line) != std::string::npos);
+    CHECK(stale.find("stale.changed=" + traces[1] + "\n") != std::string::npos);
+    CHECK(stale.find("stale.changed=" + traces[0] + "\n") == std::string::npos);
+    CHECK(stale.find("stale.changed=" + traces[2] + "\n") == std::string::npos);
 }
 
 TEST_CASE("store index sees a commit after the write") {
@@ -397,7 +368,6 @@ TEST_CASE("store index sees a commit after the write") {
     const std::string trace = env.create_dft_test_gzip_file(50);
     REQUIRE_FALSE(trace.empty());
 
-    ScopedIndexBackend guard(IndexBackend::Store);
     const auto index_path = std::string(env.get_dir()) + "/.dftindex";
     {
         IndexDatabase db(index_path);
@@ -414,7 +384,6 @@ TEST_CASE("a read-only index root without a store reads nothing") {
     dftu_utils_test::TestEnvironment env;
     REQUIRE(env.is_valid());
 
-    ScopedIndexBackend guard(IndexBackend::Store);
     const auto root = std::filesystem::path(env.get_dir()) / "empty";
     std::filesystem::create_directories(root);
     const auto index_path = (root / ".dftindex").string();

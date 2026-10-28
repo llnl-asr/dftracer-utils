@@ -7,16 +7,12 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
-#include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -158,73 +154,6 @@ TEST_SUITE("AggExtension") {
                   .needs_work.empty());
     }
 
-    TEST_CASE(
-        "a tier stored under another version is rebuilt without double "
-        "counting") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        namespace layout = dftracer::utils::index::store::layout;
-        TestEnvironment env(10);
-        const auto gz = write_trace(env.get_dir(), "old", 50, 1000);
-        auto ix = Indexer::open({gz}, with_aggregation(1000000));
-        ix.build();
-        const auto built = agg_entry(ix, gz);
-        REQUIRE(built);
-        CHECK(built->current);
-        const std::uint32_t stale = built->version + 1;
-        // Store the entry under a number the code does not use.
-        {
-            const int fid = file_id(gz);
-            IndexDatabase db(index_of(gz));
-            auto w = db.begin_write();
-            w->put(layout::Family::Registry,
-                   layout::manifest_key(static_cast<std::uint32_t>(fid),
-                                        layout::Ext::Agg),
-                   layout::encode_manifest(
-                       {stale, built->params_hash, layout::ExtStatus::Ready}));
-            w->commit();
-        }
-        auto reopened = Indexer::open({gz}, with_aggregation(1000000));
-        const auto old = agg_entry(reopened, gz);
-        REQUIRE(old);
-        CHECK(old->version == stale);
-        CHECK_FALSE(old->current);
-        CHECK(reopened.status().needs_work == std::vector<std::string>{gz});
-        reopened.build();
-        const auto fresh = agg_entry(reopened, gz);
-        REQUIRE(fresh);
-        CHECK(fresh->version == built->version);
-        CHECK(fresh->current);
-        CHECK(count_reads({gz}) == 50);
-    }
-
-    TEST_CASE(
-        "two files share one tier and each is counted once after a rebuild") {
-        namespace layout = dftracer::utils::index::store::layout;
-        TestEnvironment env(10);
-        const auto a = write_trace(env.get_dir(), "a", 50, 1000);
-        const auto b = write_trace(env.get_dir(), "b", 50, 5000);
-        auto ix = Indexer::open({a, b}, with_aggregation(1000000));
-        ix.build();
-        const auto built = agg_entry(ix, a);
-        REQUIRE(built);
-        {
-            const int fid = file_id(a);
-            IndexDatabase db(index_of(a));
-            auto w = db.begin_write();
-            w->put(
-                layout::Family::Registry,
-                layout::manifest_key(static_cast<std::uint32_t>(fid),
-                                     layout::Ext::Agg),
-                layout::encode_manifest({built->version + 1, built->params_hash,
-                                         layout::ExtStatus::Ready}));
-            w->commit();
-        }
-        auto reopened = Indexer::open({a, b}, with_aggregation(1000000));
-        reopened.build();
-        CHECK(count_reads({a, b}) == 100);
-    }
-
     TEST_CASE("an unreadable aggregation config is built again") {
         namespace layout = dftracer::utils::index::store::layout;
         TestEnvironment env(10);
@@ -299,7 +228,7 @@ TEST_SUITE("AggExtension") {
         CHECK(count_reads({a, b}) == 50);
         plant_sentinel(a);
 
-        index::store::RocksDBManager::instance().reset(index_of(a));
+        index::store::release_index(index_of(a));
         write_trace(env.get_dir(), "b", 45, 500'000, true);
         fs::last_write_time(b,
                             fs::last_write_time(b) + std::chrono::seconds(10));

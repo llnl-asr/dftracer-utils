@@ -12,9 +12,6 @@ on:
       shards:
         type: number
         required: true
-      rocksdb_version:
-        type: string
-        required: true
 
 jobs:
   # One build per OS; the shards below download it and only run tests, so
@@ -25,7 +22,6 @@ jobs:
       actions: write
     name: build (${{ inputs.os }})
     env:
-      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CMAKE_C_COMPILER_LAUNCHER: sccache
       CMAKE_CXX_COMPILER_LAUNCHER: sccache
@@ -48,23 +44,6 @@ jobs:
         uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
-
-      - name: Prepare deps dir
-        run: |
-          sudo mkdir -p /opt/dftracer-deps
-          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
-
-      - name: Restore RocksDB
-        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
-
-      - name: Use prebuilt RocksDB
-        run: |
-          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
-          if [ -x "${prefix}/bin/ldb" ]; then
-            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
-          else
-            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
-          fi
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -139,7 +118,6 @@ jobs:
       actions: write
     name: test (${{ inputs.os }}, shard ${{ matrix.shard }}/${{ inputs.shards }})
     env:
-      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
       CMAKE_POLICY_VERSION_MINIMUM: 3.5
       CMAKE_C_COMPILER_LAUNCHER: sccache
       CMAKE_CXX_COMPILER_LAUNCHER: sccache
@@ -168,23 +146,6 @@ jobs:
         uses: actions/setup-python@v6.1.0
         with:
           python-version: "3.12"
-
-      - name: Prepare deps dir
-        run: |
-          sudo mkdir -p /opt/dftracer-deps
-          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
-
-      - name: Restore RocksDB
-        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
-
-      - name: Use prebuilt RocksDB
-        run: |
-          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
-          if [ -x "${prefix}/bin/ldb" ]; then
-            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
-          else
-            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
-          fi
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@v0.0.11

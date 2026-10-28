@@ -7,7 +7,6 @@
 
 namespace dftracer::utils::index::store {
 class IndexDatabase;
-class SstArtifactRegistry;
 }  // namespace dftracer::utils::index::store
 
 typedef struct {

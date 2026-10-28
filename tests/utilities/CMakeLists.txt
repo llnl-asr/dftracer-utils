@@ -29,12 +29,9 @@ set(UTILITIES_TEST_SOURCES
     common/statistics/test_field_stat.cpp
 
     # Indexer
-    indexer/test_rocksdb_storage.cpp
-    indexer/test_scan_prefix.cpp
     indexer/test_index_database.cpp
     indexer/test_index_builder.cpp
     indexer/test_hash_table_aggregation.cpp
-    indexer/test_sst_ingest_spike.cpp
 
     # Compression
     compression/test_libdeflate_gzip.cpp
@@ -282,14 +279,6 @@ foreach(test_file ${UTILITIES_TEST_SOURCES})
   add_test(NAME utilities/${bin_exec} COMMAND ${target_name})
   set_tests_properties(utilities/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
-
-  # The same test on the RocksDB backend of this process.
-  if(bin_exec STREQUAL "indexer/test_index_database")
-    add_test(NAME "utilities/${bin_exec}[rocksdb]" COMMAND ${target_name})
-    set_tests_properties("utilities/${bin_exec}[rocksdb]" PROPERTIES
-                         WORKING_DIRECTORY "${test_working_directory}"
-                         ENVIRONMENT "DFTRACER_UTILS_INDEX_BACKEND=rocksdb")
-  endif()
 endforeach()
 
 # +++++++++++++++++++++++++++++++++++++++++

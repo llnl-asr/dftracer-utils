@@ -8,7 +8,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
@@ -36,8 +36,6 @@ class BloomFold : public trace::views::detail::Fold {
     explicit BloomFold(
         dftracer::utils::dstd::StringIntern& intern,
         index::schemas::dft::BloomCore::ChunkIndexerConfig config = {});
-    /// Removes the spill runs unless finish_spilled handed them off.
-    ~BloomFold() override;
     BloomFold(const BloomFold&) = delete;
     BloomFold& operator=(const BloomFold&) = delete;
 
@@ -67,27 +65,20 @@ class BloomFold : public trace::views::detail::Fold {
     /// which must be observed by then. The observe() calls of one checkpoint
     /// run in order, each after its open().
     static constexpr std::uint64_t SPILL_LAG = 16;
-    /// finish_spilled writes the chunks and absence entries it has left into
-    /// up to FINISH_PARTS runs of at least FINISH_PART_CHUNKS chunks each.
-    static constexpr std::uint64_t FINISH_PARTS = 8;
-    static constexpr std::uint64_t FINISH_PART_CHUNKS = 256;
     class Lane;
     Lane open(const trace::views::detail::FoldBatch& batch);
     void observe(const Lane& lane,
                  const trace::views::detail::FoldBatch& batch);
-    bool spills() const { return !spill_dir_.empty() || staged_ != nullptr; }
-    /// Whether finish_spilled writes the tier rather than write(): the file
+    bool spills() const { return staged_ != nullptr; }
+    /// Whether finish_staged writes the tier rather than write(): the file
     /// spilled while it was parsed. A file that fit its share goes through
-    /// the shared write, so many small files share SSTs rather than each
-    /// writing, syncing and ingesting runs of its own.
+    /// the shared write, so many small files share one write rather than
+    /// each publishing a staged write of its own.
     bool writes_runs() const {
         if (!spills() || files_.empty()) return false;
         const auto& sp = files_.begin()->second.spill;
-        return !sp.runs.empty() || sp.open != nullptr || sp.staged_runs > 0 ||
-               sp.staged_bytes > 0;
+        return sp.staged_runs > 0 || sp.staged_bytes > 0;
     }
-    /// Whether the runs go to a staged write (the store) rather than SSTs.
-    bool stages() const { return staged_ != nullptr; }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
     void merge(trace::views::detail::Fold& slice) override;
@@ -114,13 +105,10 @@ class BloomFold : public trace::views::detail::Fold {
 
     /// Bounds the streaming build of one file whose chunks arrive in order:
     /// once the finished chunks held pass `share` bytes, they are written to
-    /// sorted runs under `dir` (created as needed) for `file_id`.
-    /// A fresh `file_id` was reserved by this build, so its runs clear nothing.
-    void enable_spill(std::uint64_t share, std::string dir, int file_id,
-                      bool fresh_id = false);
-    /// The same bound for an index on the store: each run is a stage() of
-    /// `staged` (IndexDatabase::begin_staged_write), whose commit publishes
-    /// the tier whole; finish_staged hands it back.
+    /// a run, a stage() of `staged` (IndexDatabase::begin_staged_write) for
+    /// `file_id`, whose commit publishes the tier whole; finish_staged hands
+    /// it back. A fresh `file_id` was reserved by this build, so its runs
+    /// clear nothing.
     void enable_spill(std::uint64_t share,
                       std::unique_ptr<index::store::IndexDatabaseWrite> staged,
                       int file_id, bool fresh_id = false);
@@ -130,23 +118,14 @@ class BloomFold : public trace::views::detail::Fold {
     /// Bytes the open run of a file that has written @p runs runs holds before
     /// it is committed, for a spill @p share. It never falls under
     /// MIN_SPILL_RUN_BYTES and doubles every SPILL_RUNS_PER_DOUBLING runs, so
-    /// a tiny budget writes few large runs, not many small ones: every run is
-    /// SSTs that overlap in L0, and a family with more of them than
-    /// descriptors cannot be scanned.
+    /// a tiny budget writes few large runs, not many small ones.
     static std::uint64_t run_limit(std::uint64_t share,
                                    std::size_t runs) noexcept;
     /// Runs written so far; 0 means the file is still wholly in memory.
     std::size_t spill_runs() const;
     /// For a file with spill enabled, with or without runs so far: writes the
-    /// rest of its tier and its manifest entries to more runs and returns
-    /// every run in ingest order. They commit only as one ingest in that
-    /// order, since the range deletes of the first new run drop the evidence
-    /// of the runs before it that the selection did not keep. The caller owns
-    /// the files from here on.
-    std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
-    finish_spilled(int file_id);
-    /// finish_spilled for a fold that stages: writes the rest of the tier and
-    /// its manifest entries into the staged write and returns it. Its commit()
+    /// rest of the tier and its manifest entries into the staged write and
+    /// returns it. Its commit()
     /// publishes the tier; the caller adds the file's record first, so the
     /// tier carries the file's sources.
     std::unique_ptr<index::store::IndexDatabaseWrite> finish_staged(
@@ -235,17 +214,10 @@ class BloomFold : public trace::views::detail::Fold {
         /// Each spilled chunk's data events and own auto keys.
         std::vector<SpilledChunk> keys;
         ankerl::unordered_dense::set<std::uint32_t> key_union;
-        std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
-            runs;
-        /// The run being filled; it commits once it holds run_limit() bytes.
-        std::unique_ptr<index::store::IndexDatabaseSstWriterContext> open;
-        /// Estimated bytes `open` holds.
-        std::uint64_t buffered = 0;
         /// Stages committed, and the bytes the staged write holds since the
         /// last one.
         std::size_t staged_runs = 0;
         std::uint64_t staged_bytes = 0;
-        bool handed_off = false;
     };
 
     using SchemaLeaf = std::pair<std::uint32_t, std::uint8_t>;
@@ -311,8 +283,6 @@ class BloomFold : public trace::views::detail::Fold {
     std::uint64_t resident_bytes(const FileState& fs, std::uint64_t cp) const;
     void chunk_started(FileState& fs, std::uint64_t cp);
     void spill(FileState& fs, std::uint64_t upto);
-    /// spill() into the staged write of a fold on the store.
-    void spill_staged(FileState& fs, std::uint64_t upto);
 
     StringViewMap<FileState> files_;
     // The file the last open() found, until files_ gains or loses a file.
@@ -320,7 +290,6 @@ class BloomFold : public trace::views::detail::Fold {
     FileState* last_state_ = nullptr;
     std::uint64_t catalog_observations_ = 0;
     std::uint64_t spill_share_ = 0;
-    std::string spill_dir_;
     std::unique_ptr<index::store::IndexDatabaseWrite> staged_;
     int spill_file_id_ = -1;
     bool spill_fresh_ = false;

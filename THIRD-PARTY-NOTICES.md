@@ -15,7 +15,6 @@ notices here cover only the third-party dependencies.
 | Component | License (SPDX) | Homepage |
 |---|---|---|
 | Highway | `Apache-2.0 OR BSD-3-Clause` | https://github.com/google/highway |
-| RocksDB | `Apache-2.0 OR GPL-2.0-only` | https://github.com/facebook/rocksdb |
 | simdjson | `Apache-2.0 OR MIT` | https://github.com/simdjson/simdjson |
 | Apache Arrow nanoarrow | `Apache-2.0` | https://github.com/apache/arrow-nanoarrow |
 | zlib-ng | `Zlib` | https://github.com/zlib-ng/zlib-ng |
@@ -44,7 +43,7 @@ test suite.
 
 ## Notes
 
-- Dual-licensed components (Highway, RocksDB, simdjson, Zstandard) are used under
+- Dual-licensed components (Highway, simdjson, Zstandard) are used under
   the permissive option listed first (Apache-2.0 / BSD-3-Clause), never the GPL
   option.
 - moodycamel's queues embed Jeff Preshing's semaphore implementation, which

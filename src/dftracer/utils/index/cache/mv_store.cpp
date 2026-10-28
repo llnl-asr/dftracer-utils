@@ -317,7 +317,7 @@ std::vector<std::string> view_trace_files(const std::string& dir) {
 // All part files of an MV as ViewFiles, each paired with the index that covers
 // it. Parts written directly in `dir` share `dir/.dftindex`; a distributed
 // materialize puts each rank's parts in a subdir with its own index.
-// `.dftindex` subdirs (RocksDB dirs, not parts) are skipped.
+// `.dftindex` subdirs (index roots, not parts) are skipped.
 std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
     namespace dfti = trace::internal;
     std::vector<trace::views::ViewFile> out;

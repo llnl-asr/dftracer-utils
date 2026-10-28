@@ -7,7 +7,6 @@ from typing import (
     Callable,
     Dict,
     Generic,
-    Iterable,
     Iterator,
     List,
     Literal,
@@ -294,11 +293,7 @@ class CheckpointIndexer:
         ...
 
     def close(self) -> None:
-        """Release this Python wrapper's native indexer handle.
-
-        This does not force-close the shared RocksDB instance for the same
-        ``.dftindex`` path.
-        """
+        """Release this Python wrapper's native indexer handle."""
         ...
 
     @property
@@ -331,11 +326,7 @@ class CheckpointIndexer:
         exc_val: Optional[BaseException],
         exc_tb: Optional[TracebackType],
     ) -> None:
-        """Release this Python wrapper on context exit.
-
-        This does not force-close the shared RocksDB instance for the same
-        ``.dftindex`` path.
-        """
+        """Release this Python wrapper on context exit."""
         ...
 
 class TaskHandle(Generic[_T]):
@@ -392,14 +383,13 @@ def get_default_runtime() -> Runtime: ...
 def peek_default_runtime() -> Optional[Runtime]: ...
 
 class IndexDatabase:
-    """Handle to a .dftindex RocksDB store.
+    """Handle to a .dftindex index store.
 
-    Used by the distributed indexer coordinator to assign file ids,
-    reserve file_id ranges and bulk-ingest worker-produced SSTs.
+    Used by the distributed indexer coordinator to assign file ids, reserve
+    file_id ranges and record the aggregation of a distributed build.
     """
 
     def __init__(self, index_path: str) -> None: ...
-    def init_schema(self) -> None: ...
     def close_writer(self) -> None: ...
     def refresh(self) -> None: ...
     def assign_file_ids(self, paths: List[str]) -> List[int]:
@@ -418,26 +408,10 @@ class IndexDatabase:
         """Atomically reserve `count` contiguous file_ids; return first."""
         ...
 
-    def bulk_ingest(
-        self,
-        registry: "SstArtifactRegistry",
-        skip_cfs: Optional[Iterable[str]] = None,
-    ) -> None:
-        """Ingest all SSTs collected in the registry.
-
-        skip_cfs is an optional iterable of CF names whose SSTs are left
-        outside the unified DB. Distributed builds pass
-        {"aggregation", "system_metrics"} to keep per-worker AGG/SYS SSTs
-        addressable via `agg_manifest.json` for parallel reads at analyze
-        time. See `dftracer.utils.dask.consolidate_index` to fold them
-        back into the unified DB later.
-        """
-        ...
-
     def write_agg_config(self, aggregation_config: Any) -> None:
         """Record the aggregation config a distributed build aggregated its
         files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
-        file's ``dftracer.agg`` entry comes with its SSTs."""
+        file's ``dftracer.agg`` entry comes with its data."""
         ...
 
     def write_aggregation_tracker(self, blobs: List[bytes]) -> None:
@@ -445,36 +419,22 @@ class IndexDatabase:
         to the aggregation tier."""
         ...
 
-class SstArtifactRegistry:
-    """Thread-safe collector for SST artifact paths produced by workers."""
-
-    def __init__(self) -> None: ...
-    def append(self, artifacts_dict: Dict[str, List[str]]) -> None:
-        """Add a per-batch Artifacts dict as returned by `build_sst_batch`."""
-        ...
-
-def build_sst_batch(
+def build_index_batch(
     files: List[str],
-    file_ids: List[int],
-    staging_dir: str,
-    batch_id: str,
-    index_dir: str = "",
+    index_dir: str,
     checkpoint_size: int = 33554432,
     force_rebuild: bool = False,
     build_bloom: bool = True,
     bloom_dimensions: Optional[List[str]] = None,
     parallelism: int = 0,
-    flush_every_files: int = 0,
     runtime: Optional[Union[Runtime, object]] = None,
     aggregation_config: Optional[object] = None,
     progress: Optional[Callable[[int, int], None]] = None,
-) -> Tuple[List[Dict[str, List[str]]], bytes]:
-    """Run the indexer pipeline with an SST sink. Returns
-    `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
-    merged AssociationTracker for the batch (empty bytes when
-    `aggregation_config` is None). On the store backend the batch writes the
-    index itself and returns no artifacts: `file_ids` are not used and
-    `staging_dir` is unused."""
+) -> bytes:
+    """Run the indexer pipeline on `files` into the index at `index_dir`,
+    which this worker writes directly and numbers its own files in. Returns
+    the serialized merged AssociationTracker of the batch (empty bytes when
+    `aggregation_config` is None)."""
     ...
 
 def plan_lpt_partition(
@@ -1036,19 +996,9 @@ def scan_files(
     files matching the patterns."""
     ...
 
-def index_backend() -> str:
-    """The backend that holds the indexes this process opens: "rocksdb" or
-    "store", as DFTRACER_UTILS_INDEX_BACKEND chose it."""
-    ...
-
 def enable_aggregation_deterministic_ids() -> None:
     """Flip the global aggregation StringIntern into deterministic-id mode
     so the same string maps to the same 32-bit id in every worker process."""
-    ...
-
-def move_artifacts(artifacts: Dict[str, List[str]], dest_dir: str) -> Dict[str, List[str]]:
-    """Move every populated SST in `artifacts` into `dest_dir` via the
-    C++ rename/copy helper, returning a fresh dict with the new paths."""
     ...
 
 def set_log_level(

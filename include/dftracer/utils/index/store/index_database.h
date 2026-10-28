@@ -16,20 +16,13 @@
 #include <vector>
 
 namespace dftracer::utils::index::store {
-class RocksDatabase;
-}
-
-namespace dftracer::utils::index::store {
 
 class IndexDatabaseWrite;
-class SstArtifactRegistry;
-/// Reads the aggregation extension's records by index key on either backend;
-/// defined in the index library.
+/// Reads the aggregation extension's records by index key; defined in the
+/// index library.
 class AggRowReader;
 
-/// How an index database is opened. Mapped to the RocksDB open mode inside the
-/// implementation; kept RocksDB-free here so the public header does not pull in
-/// the RocksDB layer.
+/// How an index database is opened.
 enum class IndexOpenMode { ReadOnly, ReadWrite };
 
 /// The type a column reports in a schema, derived from the path catalog.
@@ -54,14 +47,19 @@ ColumnType merge_column_type(ColumnType a, ColumnType b);
 const char* column_type_name(ColumnType t);
 
 /// The index database: the read/query surface plus the write/ingest/format
-/// surface over one on-disk `.dftindex`. The backend that holds it, RocksDB or
-/// the store, and all mutable state live behind an opaque `Impl`. Reads are
-/// `const`; a `const IndexDatabase&` is therefore a read-only handle.
+/// surface over one on-disk `.dftindex`. The store that holds it and all
+/// mutable state live behind an opaque `Impl`. Reads are `const`; a
+/// `const IndexDatabase&` is therefore a read-only handle.
 /// Closes the store writer of every index this process holds, so each data
 /// file is complete. Call it at process exit while the runtime still runs: a
 /// writer left open then waits on stopped threads. Logs a close that fails.
-/// Nothing to do on RocksDB.
 void close_index_writers();
+
+/// Drops the handle this process keeps of the index at `index_path` after a
+/// read-only open, which closes its writer when nothing else holds the index.
+/// Call it before the index directory is removed, so a later open reads the
+/// directory again rather than the removed one.
+void release_index(const std::string& index_path);
 
 class IndexDatabase {
    public:
@@ -78,13 +76,6 @@ class IndexDatabase {
     IndexDatabase(IndexDatabase&&) noexcept;
     IndexDatabase& operator=(IndexDatabase&&) noexcept;
     ~IndexDatabase();
-
-    /// The underlying RocksDB handle. Throws std::runtime_error when the store
-    /// holds the index. Internal callers only; external users should stay on
-    /// the typed query/write API.
-    std::shared_ptr<index::store::RocksDatabase> db() const;
-    /// Whether RocksDB holds the index, so db() has a handle.
-    bool has_rocksdb() const noexcept;
 
     /// The manifest entry of `ext` for `file_id`; nullopt when never built.
     std::optional<ExtensionState> extension_state(int file_id,
@@ -263,34 +254,21 @@ class IndexDatabase {
     std::optional<std::string> rowset(int file_id, std::string_view name) const;
 
     /// Every record the index holds, for checks and tools that compare two
-    /// indexes. RocksDB gives `family|key` in family then key order. The store
-    /// gives, per current copy in namespace then scope order, a `#copy` record
-    /// with its state and params hash and then `namespace|scope|key` for each
-    /// of its keys; a scope is named by its paths, so two indexes of the same
-    /// files compare equal whatever ids they gave them. The two backends'
-    /// forms differ. Throws std::runtime_error on a read error.
+    /// indexes: per current copy in namespace then scope order, a `#copy`
+    /// record with its state and params hash and then `namespace|scope|key`
+    /// for each of its keys. A scope is named by its paths, so two indexes of
+    /// the same files compare equal whatever ids they gave them. Throws
+    /// std::runtime_error on a read error.
     void for_each_record(
         const std::function<void(std::string_view key, std::string_view value)>&
             fn) const;
 
-    /// One write to this index, on whichever backend holds it.
+    /// One write to this index.
     std::unique_ptr<IndexDatabaseWrite> begin_write();
     /// A write whose stage() calls land its keys in pieces that no reader sees
     /// until its commit() publishes them all, replacing what the index held for
-    /// the copies it wrote. The store only; throws std::runtime_error on
-    /// RocksDB.
+    /// the copies it wrote.
     std::unique_ptr<IndexDatabaseWrite> begin_staged_write();
-
-    /// Ingest, in one atomic call, the SSTs of `IndexDatabaseSstWriterContext`
-    /// instances with disjoint file ids. No-op on an empty registry. Throws
-    /// std::runtime_error when the store holds the index.
-    ///
-    /// `skip_cfs` optionally holds CF names (e.g. `cf::SYSTEM_METRICS`) whose
-    /// SSTs must be left outside the unified DB. Distributed builds use this
-    /// to keep per-worker SYSTEM_METRICS SSTs addressable by
-    /// manifest for parallel reads at analyze time.
-    void bulk_ingest(const SstArtifactRegistry& registry,
-                     const StringViewSet& skip_cfs = {});
 
     /// Atomically reserve `count` contiguous file_ids, returning the first
     /// id in the range `[first, first + count)`. Intended for the
@@ -304,24 +282,18 @@ class IndexDatabase {
     std::vector<int> assign_file_ids(
         const std::vector<std::string>& file_paths);
 
-    /// Writes the format version and extension registry when absent; does
-    /// nothing when the store holds the index.
-    void init_schema();
-
-    /// The store: closes this process's writer of the index, so its data file
-    /// is complete for other processes, and a later write opens a new writer
-    /// that sees every generation written so far. RocksDB: nothing to do.
-    /// Throws std::runtime_error on a store error.
+    /// Closes this process's writer of the index, so its data file is
+    /// complete for other processes, and a later write opens a new writer
+    /// that sees every generation written so far. Throws std::runtime_error
+    /// on a store error.
     void close_writer();
 
-    /// The store: later reads through any handle of this index in this
-    /// process see the data files other processes wrote since. File ids
-    /// handed out so far keep their paths. RocksDB: nothing to do, since an
-    /// open handle sees every write.
+    /// Later reads through any handle of this index in this process see the
+    /// data files other processes wrote since. File ids handed out so far
+    /// keep their paths.
     void refresh();
 
-    /// Read-write opens of an index store by this process so far; each runs
-    /// init_schema.
+    /// Read-write opens of an index store by this process so far.
     static std::uint64_t read_write_opens() noexcept;
 
    private:

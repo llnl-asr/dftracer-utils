@@ -80,20 +80,11 @@ runs:
         mkdir -p .deps
         scripts/ci/deps_cache.sh restore wheel .deps
 
-    - name: Build the RocksDB install (macOS)
+    - name: Install build tools (macOS)
       if: runner.os == 'macOS'
       shell: bash
-      env:
-        MACOSX_DEPLOYMENT_TARGET: "11.0"
-        DEPS_BUILD_TYPE: Release
-        ZSTD_STATIC: "1"
       run: |
         for f in cmake ninja; do brew list --versions "$f" >/dev/null || brew install "$f"; done
-        ROCKSDB_PREFIX="$GITHUB_WORKSPACE/.deps/rocksdb-$(scripts/ci/rocksdb_version.sh)" scripts/ci/build_rocksdb.sh
-
-    - name: Resolve the RocksDB version
-      shell: bash
-      run: echo "ROCKSDB_VERSION=$(scripts/ci/rocksdb_version.sh)" >> "$GITHUB_ENV"
 
     - name: Build and test wheel
       uses: pypa/cibuildwheel@v3.3.0
@@ -103,21 +94,19 @@ runs:
         # build-dir is fixed, not build/{wheel_tag}: the path appears in the
         # compiler input, so one per Python version would never hit.
         CIBW_CONFIG_SETTINGS: "cmake.define.DFTRACER_UTILS_LOCAL_PACKAGES=OFF cmake.define.DFTRACER_UTILS_DEPS_BUILD_TYPE=Release build-dir=build/ci"
-        CIBW_BEFORE_ALL_LINUX: "sh /project/scripts/ci/install_sccache.sh && sh /project/scripts/ci/prebuild_wheel_deps.sh /deps"
+        CIBW_BEFORE_ALL_LINUX: "sh /project/scripts/ci/install_sccache.sh"
         CIBW_CONTAINER_ENGINE: "docker; create_args: --volume=${{ github.workspace }}/.deps:/deps"
         # The container does not inherit the host env, so the version and the
         # cache settings must be passed in.
-        CIBW_ENVIRONMENT_PASS_LINUX: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS ROCKSDB_VERSION SCCACHE_BUCKET SCCACHE_ENDPOINT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+        CIBW_ENVIRONMENT_PASS_LINUX: SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS SCCACHE_BUCKET SCCACHE_ENDPOINT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
         CIBW_ENVIRONMENT_LINUX: >-
           SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS
           CMAKE_C_COMPILER_LAUNCHER=sccache CMAKE_CXX_COMPILER_LAUNCHER=sccache CMAKE_ASM_COMPILER_LAUNCHER=sccache
           SCCACHE_REGION=auto SCCACHE_S3_USE_SSL=true DFTRACER_UTILS_DEPS_PREFIX=/deps
-          DFTRACER_UTILS_ROCKSDB_PREFIX=/deps/rocksdb-$ROCKSDB_VERSION
         CIBW_ENVIRONMENT_MACOS: >-
           SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS=$SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DFTRACER_UTILS
           CMAKE_C_COMPILER_LAUNCHER=sccache CMAKE_CXX_COMPILER_LAUNCHER=sccache CMAKE_ASM_COMPILER_LAUNCHER=sccache
           SCCACHE_REGION=auto SCCACHE_S3_USE_SSL=true DFTRACER_UTILS_DEPS_PREFIX=$GITHUB_WORKSPACE/.deps
-          DFTRACER_UTILS_ROCKSDB_PREFIX=$GITHUB_WORKSPACE/.deps/rocksdb-$ROCKSDB_VERSION
         SCCACHE_BUCKET: ${{ inputs.sccache-bucket }}
         SCCACHE_ENDPOINT: ${{ inputs.sccache-endpoint }}
         AWS_ACCESS_KEY_ID: ${{ inputs.sccache-access-key-id }}

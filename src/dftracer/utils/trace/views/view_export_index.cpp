@@ -7,7 +7,7 @@
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/runtime/coro/channel.h>

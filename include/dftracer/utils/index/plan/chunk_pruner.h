@@ -17,10 +17,9 @@ using duql::Query;
 /// Input for chunk pruning: index path, file path, query, optional cache.
 ///
 /// If `external_db` is non-null the utility reuses that handle instead of
-/// opening the RocksDB at `index_path` itself. This lets callers that
-/// prune many files against the same directory-level index amortize the
-/// (expensive) RocksDB open cost to once per batch rather than once per
-/// file.
+/// opening the index at `index_path` itself. This lets callers that prune
+/// many files against the same directory-level index open it once per batch
+/// rather than once per file.
 struct ChunkPrunerInput {
     std::string index_path;  ///< Path to the `.dftindex` store.
     std::string file_path;   ///< Path to trace file.

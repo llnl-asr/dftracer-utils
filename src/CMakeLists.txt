@@ -7,7 +7,6 @@ add_rpath()
 need_zlib()
 need_libdeflate()
 need_zstd()
-need_rocksdb()
 need_argparse()
 need_ghc_filesystem()
 need_simdjson()
@@ -108,7 +107,6 @@ set(DFTRACER_UTILS_RUNTIME_SOURCES
     # Tasks
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/task.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/runtime/tasks/task_result.cpp
-    # RocksDB
 )
 
 # Conditionally add io_uring backend sources
@@ -170,19 +168,12 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
 )
 
 set(DFTRACER_UTILS_INDEX_SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/database.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/db_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/filesystem.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database_sst_writer_context.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database_writer_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_write.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/index_encoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/statistics_codec.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/key_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/shard_manifest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/store_backend.cpp
@@ -1173,19 +1164,7 @@ foreach(variant objects shared static)
   dftu_variant_target(VARIANT_TARGET dftracer_utils_utilities ${variant})
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
-    link_rocksdb(${VARIANT_TARGET} ${VARIANT_UPPER})
     link_zlib(${VARIANT_TARGET})
-
-    # RocksDB is a static archive linked into this .so. Without this its
-    # symbols are re-exported into ELF's flat namespace, where they can bind
-    # against a different RocksDB loaded in the same process.
-    if(variant STREQUAL "shared"
-       AND ROCKSDB_IS_STATIC
-       AND NOT APPLE
-       AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-      target_link_options(${VARIANT_TARGET} PRIVATE
-                          "LINKER:--exclude-libs,librocksdb.a")
-    endif()
 
     # Link tl::expected for C++20/23 expected shim
     link_tl_expected(${VARIANT_TARGET})
@@ -1235,7 +1214,7 @@ foreach(variant objects shared static)
     # libdeflate: one-shot gzip/deflate codec for member-at-a-time decode.
     link_libdeflate(${VARIANT_TARGET})
 
-    # The Arrow IPC writer and the RocksDB index compress with zstd.
+    # The Arrow IPC writer compresses with zstd.
     link_zstd(${VARIANT_TARGET})
 
     # Lustre stripe query (optional). The config header carries the
@@ -1973,7 +1952,6 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_line_writer_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/gzip_crc_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_bench.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/index_diff.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_eval_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/duql_mask_bench.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks/prefilter_bench.cpp
@@ -2099,8 +2077,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/sst_distribution.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/sst_distribution.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/distribution.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/distribution.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series_detail.h

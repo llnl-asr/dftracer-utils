@@ -1,4 +1,3 @@
-#include <concurrentqueue.h>
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
@@ -6,9 +5,7 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -18,10 +15,8 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <numeric>
 #include <optional>
 
@@ -185,8 +180,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const auto executor_threads = cli->pipeline.executor_threads;
-    // When --index-dir is not provided, place coord/staging/ingest DBs next to
-    // the input data so they line up with each file's per-file index_path
+    // When --index-dir is not provided, place the index next to the input
+    // data so it lines up with each file's per-file index_path
     // (which determine_index_path(file, "") resolves to
     // <file_parent>/.dftindex). The top-level scanner is non-recursive, so all
     // input files share log_dir.
@@ -321,7 +316,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     }
 
     // Files in logical path order get file ids in that order, so a run of ids
-    // is a run of paths and the index's SSTs of different runs do not overlap.
+    // is a run of paths.
     {
         std::vector<std::string> logical(input_files.size());
         for (std::size_t i = 0; i < input_files.size(); ++i)
@@ -355,32 +350,15 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     Pipeline pipeline(pipeline_config);
 
-    // The store takes the build's writes as they commit: one handle is held
-    // from the id assignment to the close, with no staged SSTs to ingest.
-    const bool on_store = dftracer::utils::index::store::index_backend() ==
-                          dftracer::utils::index::store::IndexBackend::Store;
-    std::vector<int> preassigned_file_ids;
-    int first_fresh_file_id = 0;
-    std::optional<IndexDatabase> store_db;
-    {
-        std::optional<IndexDatabase> coord_db;
-        IndexDatabase& db = on_store ? store_db.emplace(index_dir)
-                                     : coord_db.emplace(index_dir);
-        db.init_schema();
-        // Ids come from a counter that only grows, so one at or past it
-        // before the assignment was never used in this index.
-        first_fresh_file_id = db.reserve_file_id_range(0);
-        preassigned_file_ids = db.assign_file_ids(input_files);
-    }
+    // The build's writes commit as they come: one handle is held from the id
+    // assignment to the close.
+    IndexDatabase store_db(index_dir);
+    // Ids come from a counter that only grows, so one at or past it before the
+    // assignment was never used in this index.
+    const int first_fresh_file_id = store_db.reserve_file_id_range(0);
+    std::vector<int> preassigned_file_ids =
+        store_db.assign_file_ids(input_files);
     log_stage("assign_ids");
-
-    const std::string staging_root =
-        (fs::path(index_dir) / ".dftindex_staging").string();
-    if (!on_store) fs::create_directories(staging_root);
-
-    auto artifacts_queue = std::make_shared<moodycamel::ConcurrentQueue<
-        IndexDatabaseSstWriterContext::Artifacts>>();
-    auto batch_counter = std::make_shared<std::atomic<std::size_t>>(0);
 
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(input_files);
@@ -395,33 +373,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->bloom_dimensions = all_dimensions;
     batch_config->memory_budget = cli->memory_budget;
     batch_config->schema = cli->record_schema;
-
-    // A spilled file's runs stay in order: its last run's range deletes must
-    // ingest after the others.
-    auto spilled = std::make_shared<std::pair<
-        std::mutex,
-        std::vector<std::vector<IndexDatabaseSstWriterContext::Artifacts>>>>();
-    if (!on_store) {
-        batch_config->sink_factory =
-            [staging_root, batch_counter]() -> std::unique_ptr<IndexWrite> {
-            const std::size_t idx =
-                batch_counter->fetch_add(1, std::memory_order_relaxed);
-            return std::make_unique<IndexDatabaseSstWriterContext>(
-                staging_root, "batch_" + std::to_string(idx));
-        };
-        batch_config->spill_dir = staging_root + "/spill";
-        batch_config->spill_commit =
-            [spilled](
-                std::vector<IndexDatabaseSstWriterContext::Artifacts> runs) {
-                std::lock_guard<std::mutex> lock(spilled->first);
-                spilled->second.push_back(std::move(runs));
-            };
-        batch_config->sink_commit = [artifacts_queue](IndexWrite& sink) {
-            auto& sst = static_cast<IndexDatabaseSstWriterContext&>(sink);
-            auto a = sst.commit();
-            if (!a.empty()) artifacts_queue->enqueue(std::move(a));
-        };
-    }
 
     IndexBuildBatchResult batch_result;
     auto streaming_task = make_task(
@@ -442,35 +393,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         static_cast<double>(batch_result.metrics.schema_ns) / 1e6,
         static_cast<double>(batch_result.metrics.write_ns) / 1e6);
 
-    if (store_db) {
-        store_db->close_writer();
-        log_stage("close_writer");
-    } else {
-        SstArtifactRegistry registry;
-        {
-            IndexDatabaseSstWriterContext::Artifacts a;
-            while (artifacts_queue->try_dequeue(a)) {
-                registry.append(std::move(a));
-            }
-            for (auto& runs : spilled->second)
-                for (auto& run : runs) registry.append(std::move(run));
-        }
-        {
-            log_stage("collect_artifacts");
-            IndexDatabase ingest_db(index_dir);
-            log_stage("open_ingest_db");
-            auto t0 = std::chrono::high_resolution_clock::now();
-            ingest_db.bulk_ingest(registry, {});
-            auto t1 = std::chrono::high_resolution_clock::now();
-            DFTRACER_UTILS_LOG_INFO(
-                "dftracer_index: bulk_ingest=%.2fms",
-                std::chrono::duration<double, std::milli>(t1 - t0).count());
-            log_stage("ingest");
-        }
-
-        std::error_code ec;
-        fs::remove_all(staging_root, ec);
-    }
+    store_db.close_writer();
+    log_stage("close_writer");
     log_stage("close");
 
     auto end_time = std::chrono::high_resolution_clock::now();

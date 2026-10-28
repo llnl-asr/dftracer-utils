@@ -252,9 +252,7 @@ whose events are in the partials, rebuilds the partials of the files it
 touches, and leaves the other extensions in place. Until the next build,
 queries the partials cannot answer read the traces instead. An index directory
 is cheap to rebuild, so this needs no action from you beyond letting the next
-build run. An index built before the partials replaced the per-key aggregation
-column family still holds that column family; the first read-write open drops
-it.
+build run.
 
 The aggregation keeps one partial per chunk, category, name and host: counts,
 sums, extremes, moments, quantile stores, per-argument statistics and the
@@ -568,9 +566,9 @@ Each worker also keeps at least 8 MiB of output it has not committed, in half of
 budget, so a budget of 64 MB or less runs at most 4 workers.
 Workers that have no file help the files that run: they parse pieces of a file
 at the same time, as many as there are free workers and room for. A file
-whose evidence outgrows its share writes its finished chunks to sorted runs
-beside the index (``<index>.spill``) and commits them with the rest of the
-file in one atomic ingest. A run is never smaller than 4 MiB, so even a budget of
+whose evidence outgrows its share writes its finished chunks in runs to a
+staged write of the index, which no reader sees until the rest of the file
+publishes it. A run is never smaller than 4 MiB, so even a budget of
 1 MiB writes a few runs and not thousands. A file larger than the budget runs alone, with a
 quarter of the budget left for its pieces.
 The index holds the same data whatever the budget, the worker count or the

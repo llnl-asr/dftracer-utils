@@ -50,7 +50,7 @@ build dirs land under ``build/build-<preset>/``).
 The build produces six layered component libraries, each as shared and static:
 
 - ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
-  pipelines, RocksDB wrappers, common primitives).
+  pipelines, common primitives).
 - ``dftracer_utils_store``, the key-value store engine (data files, writer, snapshot).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
@@ -217,7 +217,7 @@ The sanitizer, coverage, and test toggles all have matching presets (``asan``,
 ``ubsan``, ``tsan``, ``asan-ubsan``, ``tests``), prefer those over setting the
 options by hand.
 
-Dependencies (RocksDB, simdjson, nanoarrow, Highway, zstd, and others) are
+Dependencies (simdjson, nanoarrow, Highway, zstd, and others) are
 vendored via CPM and cached under ``.cpmsource/``; see the
 `THIRD-PARTY-NOTICES <https://github.com/llnl-asr/dftracer-utils/blob/develop/THIRD-PARTY-NOTICES.md>`_
 for the full list and licenses.

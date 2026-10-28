@@ -4,11 +4,8 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
-#include <dftracer/utils/index/store/index_write.h>
-#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -17,23 +14,15 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
-#include <dftracer/utils/python/sst_distribution.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <new>
-#include <optional>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 using dftracer::utils::Runtime;
@@ -41,172 +30,11 @@ using dftracer::utils::index::build::BatchBuilder;
 using dftracer::utils::index::build::IndexBuildBatchConfig;
 using dftracer::utils::index::build::IndexBuildBatchResult;
 using dftracer::utils::index::build::plan_lpt_partition;
-using dftracer::utils::index::store::IndexDatabaseSstWriterContext;
-using dftracer::utils::index::store::IndexWrite;
-using dftracer::utils::index::store::SstArtifactRegistry;
 using dftracer::utils::python::parse_string_seq;
 using dftracer::utils::utilities::filesystem::FileEntry;
 using dftracer::utils::utilities::filesystem::PatternDirectoryScannerUtility;
 using dftracer::utils::utilities::filesystem::
     PatternDirectoryScannerUtilityInput;
-
-// ---------------------------------------------------------------------------
-// SstArtifactRegistry type
-// ---------------------------------------------------------------------------
-
-typedef struct {
-    PyObject_HEAD std::shared_ptr<SstArtifactRegistry> registry;
-} SstArtifactRegistryObject;
-
-static void SstArtifactRegistry_dealloc(SstArtifactRegistryObject *self) {
-    self->registry.~shared_ptr<SstArtifactRegistry>();
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static PyObject *SstArtifactRegistry_new(PyTypeObject *type,
-                                         PyObject * /*args*/,
-                                         PyObject * /*kwds*/) {
-    auto *self = (SstArtifactRegistryObject *)type->tp_alloc(type, 0);
-    if (!self) return NULL;
-    new (&self->registry) std::shared_ptr<SstArtifactRegistry>(
-        std::make_shared<SstArtifactRegistry>());
-    return (PyObject *)self;
-}
-
-namespace {
-
-// Artifacts dicts map "<family>_sst" to an SST path (or None), one entry per
-// layout::Family.
-std::string artifact_field(std::size_t family) {
-    return std::string(dftracer::utils::index::store::layout::family_name(
-               static_cast<dftracer::utils::index::store::layout::Family>(
-                   family))) +
-           "_sst";
-}
-
-/// Convert a Python artifacts dict to the C++ Artifacts struct. Missing
-/// or None entries and empty strings are dropped. Returns false on type
-/// errors (exception set).
-bool artifacts_from_dict(PyObject *dict,
-                         IndexDatabaseSstWriterContext::Artifacts *out) {
-    if (!PyDict_Check(dict)) {
-        PyErr_SetString(PyExc_TypeError, "artifacts must be a dict");
-        return false;
-    }
-    for (std::size_t f = 0; f < out->sst.size(); ++f) {
-        const auto field = artifact_field(f);
-        PyObject *val = PyDict_GetItemString(dict, field.c_str());  // borrowed
-        if (!val || val == Py_None) continue;
-        if (!PyList_Check(val)) {
-            PyErr_Format(PyExc_TypeError,
-                         "artifacts['%s'] must be a list of str or None",
-                         field.c_str());
-            return false;
-        }
-        for (Py_ssize_t i = 0; i < PyList_GET_SIZE(val); ++i) {
-            PyObject *item = PyList_GET_ITEM(val, i);  // borrowed
-            if (!PyUnicode_Check(item)) {
-                PyErr_Format(PyExc_TypeError,
-                             "artifacts['%s'] must be a list of str",
-                             field.c_str());
-                return false;
-            }
-            const char *s = as_utf8(item);
-            if (!s) return false;
-            if (s[0] != '\0') out->sst[f].emplace_back(s);
-        }
-    }
-    return true;
-}
-
-PyObject *artifacts_to_dict(const IndexDatabaseSstWriterContext::Artifacts &a) {
-    PyObject *dict = PyDict_New();
-    if (!dict) return NULL;
-    for (std::size_t f = 0; f < a.sst.size(); ++f) {
-        PyObject *v = PyList_New(static_cast<Py_ssize_t>(a.sst[f].size()));
-        for (std::size_t i = 0; v && i < a.sst[f].size(); ++i) {
-            PyObject *item = PyUnicode_FromString(a.sst[f][i].c_str());
-            if (!item) {
-                Py_CLEAR(v);
-                break;
-            }
-            PyList_SET_ITEM(v, static_cast<Py_ssize_t>(i), item);
-        }
-        if (!v ||
-            PyDict_SetItemString(dict, artifact_field(f).c_str(), v) != 0) {
-            Py_XDECREF(v);
-            Py_DECREF(dict);
-            return NULL;
-        }
-        Py_DECREF(v);
-    }
-    return dict;
-}
-
-}  // namespace
-
-static PyObject *SstArtifactRegistry_append(SstArtifactRegistryObject *self,
-                                            PyObject *args) {
-    PyObject *dict;
-    if (!PyArg_ParseTuple(args, "O", &dict)) return NULL;
-    IndexDatabaseSstWriterContext::Artifacts a;
-    if (!artifacts_from_dict(dict, &a)) return NULL;
-    self->registry->append(std::move(a));
-    Py_RETURN_NONE;
-}
-
-static PyMethodDef SstArtifactRegistry_methods[] = {
-    {"append", DFTU_PYCFUNCTION(SstArtifactRegistry_append), METH_VARARGS,
-     "append(artifacts_dict) -> None\n"
-     "Add a per-batch Artifacts dict (as returned by build_sst_batch or "
-     "IndexDatabaseSstWriterContext.commit) to the registry."},
-    {NULL}};
-
-static PyTypeObject SstArtifactRegistryType = {
-    PyVarObject_HEAD_INIT(NULL, 0) "dftracer_utils_ext.SstArtifactRegistry",
-    sizeof(SstArtifactRegistryObject),
-    0,
-    (destructor)SstArtifactRegistry_dealloc,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    Py_TPFLAGS_DEFAULT,
-    "Thread-safe collector for SST artifact paths.",
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    SstArtifactRegistry_methods,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    SstArtifactRegistry_new,
-};
-
-SstArtifactRegistry *dftracer::utils::python::sst_artifact_registry_get(
-    PyObject *obj) {
-    if (!PyObject_TypeCheck(obj, &SstArtifactRegistryType)) return nullptr;
-    return ((SstArtifactRegistryObject *)obj)->registry.get();
-}
 
 // ---------------------------------------------------------------------------
 // scan_files: parallel directory scan with size info
@@ -346,48 +174,32 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
 }
 
 // ---------------------------------------------------------------------------
-// build_sst_batch: run the indexer pipeline with an SST sink and return
-// the merged Artifacts dict.
+// build_index_batch: run the indexer pipeline into the index of this worker
 // ---------------------------------------------------------------------------
 
-static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
-                                    PyObject *kwds) {
-    static const char *kwlist[] = {"files",
-                                   "file_ids",
-                                   "staging_dir",
-                                   "batch_id",
-                                   "index_dir",
-                                   "checkpoint_size",
-                                   "force_rebuild",
-                                   "build_bloom",
-                                   "bloom_dimensions",
-                                   "parallelism",
-                                   "flush_every_files",
-                                   "runtime",
-                                   "aggregation_config",
-                                   "progress",
-                                   NULL};
+static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
+                                      PyObject *kwds) {
+    static const char *kwlist[] = {
+        "files",         "index_dir",   "checkpoint_size",
+        "force_rebuild", "build_bloom", "bloom_dimensions",
+        "parallelism",   "runtime",     "aggregation_config",
+        "progress",      NULL};
     PyObject *files_obj;
-    PyObject *file_ids_obj;
-    const char *staging_dir;
-    const char *batch_id;
-    const char *index_dir = "";
+    const char *index_dir;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
         dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
     int force_rebuild = 0;
     int build_bloom = 1;
     PyObject *bloom_dims_obj = NULL;
     Py_ssize_t parallelism = 0;
-    Py_ssize_t flush_every_files = 0;
     PyObject *runtime_arg = NULL;
     PyObject *aggregation_config_obj = NULL;
     PyObject *progress_obj = NULL;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "OOss|snppOnnOOO", const_cast<char **>(kwlist),
-            &files_obj, &file_ids_obj, &staging_dir, &batch_id, &index_dir,
-            &checkpoint_size, &force_rebuild, &build_bloom, &bloom_dims_obj,
-            &parallelism, &flush_every_files, &runtime_arg,
+            args, kwds, "Os|nppOnOOO", const_cast<char **>(kwlist), &files_obj,
+            &index_dir, &checkpoint_size, &force_rebuild, &build_bloom,
+            &bloom_dims_obj, &parallelism, &runtime_arg,
             &aggregation_config_obj, &progress_obj)) {
         return NULL;
     }
@@ -398,34 +210,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         if (!parse_string_seq(files_obj, "files must be a sequence", files))
             return NULL;
     }
-    if (files.empty()) {
-        return PyDict_New();
-    }
-
-    // Unpack file_ids, parallel to files.
-    std::vector<int> file_ids;
-    {
-        PyObject *seq =
-            PySequence_Fast(file_ids_obj, "file_ids must be a sequence");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        if (static_cast<std::size_t>(n) != files.size()) {
-            Py_DECREF(seq);
-            PyErr_SetString(PyExc_ValueError,
-                            "file_ids must have the same length as files");
-            return NULL;
-        }
-        file_ids.reserve(n);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            long v = PyLong_AsLong(PySequence_Fast_GET_ITEM(seq, i));
-            if (v == -1 && PyErr_Occurred()) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            file_ids.push_back(static_cast<int>(v));
-        }
-        Py_DECREF(seq);
-    }
+    if (files.empty()) return PyBytes_FromStringAndSize(nullptr, 0);
 
     // Optional bloom dimensions override.
     std::vector<std::string> bloom_dims;
@@ -456,15 +241,6 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         rt = dftracer::utils::python::get_default_runtime();
     }
 
-    // Build config + sink factory shared state.
-    struct SharedArtifacts {
-        std::mutex mu;
-        std::vector<IndexDatabaseSstWriterContext::Artifacts> list;
-    };
-    auto artifacts = std::make_shared<SharedArtifacts>();
-    auto staging = std::string(staging_dir);
-    auto batch = std::string(batch_id);
-
     // Optional aggregation config, extracted from the Python dataclass.
     std::shared_ptr<
         dftracer::utils::index::schemas::dft::agg::AggregationConfig>
@@ -475,16 +251,8 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::python::agg_config_from_py(
                 aggregation_config_obj));
 
-    // The store takes each worker's writes directly: no staged SSTs, and the
-    // worker numbers its own files, since a file id is a label inside one
-    // process there.
-    const bool on_store = dftracer::utils::index::store::index_backend() ==
-                          dftracer::utils::index::store::IndexBackend::Store;
-    if (on_store) file_ids.clear();
-
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(files);
-    batch_config->preassigned_file_ids = std::move(file_ids);
     batch_config->index_dir = index_dir;
     batch_config->build_bloom = build_bloom != 0;
     batch_config->checkpoint_size = static_cast<std::size_t>(checkpoint_size);
@@ -493,8 +261,6 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     batch_config->parallelism =
         parallelism > 0 ? static_cast<std::size_t>(parallelism)
                         : (rt ? std::max<std::size_t>(rt->threads(), 1) : 1);
-    batch_config->flush_every_files =
-        static_cast<std::size_t>(flush_every_files);
 
     // The build runs with the GIL released; re-acquire it per call. The
     // GIL-holding deleter drops the ref safely after the build.
@@ -524,9 +290,6 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         auto agg_intern =
             dftracer::utils::index::schemas::dft::agg::intern_for_index(
                 index_dir);
-        // The fold writes aggregation SSTs through the batch build's own SST
-        // sink (routed to blob.sst / system_metrics.sst), so they land
-        // in `artifacts->list` with bloom/dict - no separate per-file sink.
         batch_config->agg_fold_factory =
             [agg_config_ptr, agg_intern](
                 dftracer::utils::dstd::StringIntern &build_intern, int file_id)
@@ -538,37 +301,15 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         };
     }
 
-    // Atomic: write phase calls sink_factory from N coroutines concurrently.
-    auto batch_counter = std::make_shared<std::atomic<std::size_t>>(0);
-    if (!on_store) {
-        batch_config->sink_factory =
-            [staging, batch, batch_counter]() -> std::unique_ptr<IndexWrite> {
-            const std::size_t idx =
-                batch_counter->fetch_add(1, std::memory_order_relaxed);
-            std::string sub_batch = batch + "_" + std::to_string(idx);
-            return std::make_unique<IndexDatabaseSstWriterContext>(staging,
-                                                                   sub_batch);
-        };
-        batch_config->sink_commit = [artifacts](IndexWrite &sink) {
-            auto &sst = static_cast<IndexDatabaseSstWriterContext &>(sink);
-            auto batch_artifacts = sst.commit();
-            std::lock_guard<std::mutex> lock(artifacts->mu);
-            if (!batch_artifacts.empty()) {
-                artifacts->list.push_back(std::move(batch_artifacts));
-            }
-        };
-    }
-    // Held across the build, so the builder shares this process's writer of
-    // the index, which then closes and leaves a complete data file.
-    std::optional<dftracer::utils::index::store::IndexDatabase> store_db;
-    if (on_store) {
-        store_db.emplace(index_dir);
-        // A worker process may hold this index from an earlier task.
-        store_db->refresh();
-    }
-
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
+            // Held across the build, so the builder shares this process's
+            // writer of the index, which then closes and leaves a complete
+            // data file. Each worker writes the index directly and numbers its
+            // own files, since a file id is a label inside one process.
+            dftracer::utils::index::store::IndexDatabase store_db(index_dir);
+            // A worker process may hold this index from an earlier task.
+            store_db.refresh();
             rt->submit(dftracer::utils::run_coro_scope(
                            rt->executor(),
                            [](dftracer::utils::CoroScope &scope,
@@ -579,9 +320,9 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
                                    &scope, std::move(cfg));
                            },
                            batch_config, &result),
-                       "build-sst-batch")
+                       "build-index-batch")
                 .get();
-            if (store_db) store_db->close_writer();
+            store_db.close_writer();
         })) {
         return NULL;
     }
@@ -596,24 +337,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
         }
     }
 
-    // One dict per committed sink + per-file aggregation below.
-    PyObject *out_list = PyList_New(0);
-    if (!out_list) return NULL;
-    {
-        std::lock_guard<std::mutex> lock(artifacts->mu);
-        for (const auto &a : artifacts->list) {
-            PyObject *main_dict = artifacts_to_dict(a);
-            if (!main_dict || PyList_Append(out_list, main_dict) < 0) {
-                Py_XDECREF(main_dict);
-                Py_DECREF(out_list);
-                return NULL;
-            }
-            Py_DECREF(main_dict);
-        }
-    }
-    // The fold wrote its aggregation SSTs through the batch build's sink, so
-    // they are already in `artifacts->list` above (no separate per-visitor
-    // harvest). Combine the per-file trackers the folds produced out-of-band.
+    // Combine the per-file trackers the folds produced out-of-band.
     using dftracer::utils::index::schemas::dft::agg::AssociationTracker;
     AssociationTracker combined;
     bool any_tracker = false;
@@ -633,22 +357,7 @@ static PyObject *build_sst_batch_fn(PyObject * /*self*/, PyObject *args,
     } else {
         tracker_bytes = PyBytes_FromStringAndSize(nullptr, 0);
     }
-    if (!tracker_bytes) {
-        Py_DECREF(out_list);
-        return NULL;
-    }
-    PyObject *ret = PyTuple_Pack(2, out_list, tracker_bytes);
-    Py_DECREF(out_list);
-    Py_DECREF(tracker_bytes);
-    return ret;
-}
-
-static PyObject *index_backend_fn(PyObject * /*self*/, PyObject * /*args*/) {
-    using dftracer::utils::index::store::IndexBackend;
-    return PyUnicode_FromString(
-        dftracer::utils::index::store::index_backend() == IndexBackend::Store
-            ? dftracer::utils::constants::indexer::INDEX_BACKEND_STORE
-            : dftracer::utils::constants::indexer::INDEX_BACKEND_ROCKSDB);
+    return tracker_bytes;
 }
 
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
@@ -658,40 +367,19 @@ static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
     Py_RETURN_NONE;
 }
 
-static PyObject *move_artifacts_fn(PyObject * /*self*/, PyObject *args,
-                                   PyObject *kwds) {
-    static const char *kwlist[] = {"artifacts", "dest_dir", NULL};
-    PyObject *dict = NULL;
-    const char *dest_dir = NULL;
-    if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "Os", const_cast<char **>(kwlist), &dict, &dest_dir)) {
-        return NULL;
-    }
-    IndexDatabaseSstWriterContext::Artifacts a;
-    if (!artifacts_from_dict(dict, &a)) return NULL;
-    IndexDatabaseSstWriterContext::Artifacts moved;
-    if (!run_blocking_r([&] { return std::move(a).move_to(dest_dir); }, moved))
-        return NULL;
-    return artifacts_to_dict(moved);
-}
-
-// LPT (longest-processing-time) work assignment for balanced SST distribution.
-// so the Dask backend produces identical work distribution to MPI.
 // ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
-static PyMethodDef SstDistributionMethods[] = {
-    {"build_sst_batch", DFTU_PYCFUNCTION(build_sst_batch_fn),
+static PyMethodDef DistributionMethods[] = {
+    {"build_index_batch", DFTU_PYCFUNCTION(build_index_batch_fn),
      METH_VARARGS | METH_KEYWORDS,
-     "build_sst_batch(files, file_ids, staging_dir, batch_id, ...) "
-     "-> (list[dict], bytes)\n"
-     "Run the indexer pipeline with an SST sink and return "
-     "(artifact_dicts, tracker_blob). The tracker blob is the serialized "
-     "merged AssociationTracker from this batch's aggregation visitors "
-     "(empty bytes when no aggregation_config was passed). On the store "
-     "backend the batch writes the index itself and returns no artifacts: "
-     "file_ids are not used and staging_dir is unused."},
+     "build_index_batch(files, index_dir, ...) -> bytes\n"
+     "Run the indexer pipeline on `files` into the index at `index_dir`, "
+     "which this worker writes directly and numbers its own files in. "
+     "Returns the serialized merged AssociationTracker of the batch's "
+     "aggregation folds (empty bytes when no aggregation_config was "
+     "passed)."},
     {"plan_lpt_partition", DFTU_PYCFUNCTION(plan_lpt_partition_fn),
      METH_VARARGS,
      "plan_lpt_partition(entries, num_workers) -> list[list[(path, size)]]\n"
@@ -704,10 +392,6 @@ static PyMethodDef SstDistributionMethods[] = {
      "-> list[(path, size)]\n"
      "Parallel directory scan returning (path, size) tuples for regular "
      "files matching the patterns."},
-    {"index_backend", DFTU_PYCFUNCTION(index_backend_fn), METH_NOARGS,
-     "index_backend() -> str\n"
-     "The backend that holds the indexes this process opens: \"rocksdb\" or "
-     "\"store\", as DFTRACER_UTILS_INDEX_BACKEND chose it."},
     {"enable_aggregation_deterministic_ids",
      DFTU_PYCFUNCTION(enable_aggregation_deterministic_ids_fn), METH_NOARGS,
      "enable_aggregation_deterministic_ids() -> None\n"
@@ -715,18 +399,9 @@ static PyMethodDef SstDistributionMethods[] = {
      "mode "
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},
-    {"move_artifacts", DFTU_PYCFUNCTION(move_artifacts_fn),
-     METH_VARARGS | METH_KEYWORDS,
-     "move_artifacts(artifacts, dest_dir) -> dict\n"
-     "Move every populated SST in `artifacts` (as returned by "
-     "`build_sst_batch`) into `dest_dir` via the C++ rename/copy helper, "
-     "returning a fresh dict with the new paths. Single GIL release, no "
-     "per-file Python shutil.move overhead."},
     {NULL, NULL, 0, NULL}};
 
-int dftracer::utils::python::init_sst_distribution(PyObject *m) {
-    if (register_type(m, &SstArtifactRegistryType, "SstArtifactRegistry") < 0)
-        return -1;
-    if (PyModule_AddFunctions(m, SstDistributionMethods) < 0) return -1;
+int dftracer::utils::python::init_distribution(PyObject *m) {
+    if (PyModule_AddFunctions(m, DistributionMethods) < 0) return -1;
     return 0;
 }

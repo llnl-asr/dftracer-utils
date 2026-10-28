@@ -23,11 +23,7 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -60,7 +56,6 @@
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <fcntl.h>
-#include <rocksdb/sst_file_writer.h>
 #include <simdjson.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -200,20 +195,12 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     }
 }
 
-using SstArtifacts =
-    dftracer::utils::index::store::IndexDatabaseSstWriterContext::Artifacts;
-
 // Write the index a bootstrap pass produced into `w`: members from the
 // artifacts, bloom and row sets from the folds, each with its manifest entry.
-// A bloom fold with spill enabled writes its tier as sorted runs, which the
-// caller ingests after `w` commits, as the batch builder does, or on the store
-// into a staged write, which the caller publishes.
-struct BootstrapSpill {
-    std::vector<SstArtifacts> runs;
-    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
-};
-
-BootstrapSpill write_bootstrap_index(
+// A bloom fold that spilled writes its tier into a staged write instead, which
+// is returned for the caller to publish.
+std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite>
+write_bootstrap_index(
     dftracer::utils::index::store::IndexWrite& w, const std::string& logical,
     const std::string& file_path,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
@@ -231,55 +218,33 @@ BootstrapSpill write_bootstrap_index(
     dftracer::utils::index::gzip::persist_gzip_index_artifacts(w, fid, arts);
     dftracer::utils::index::store::records::put_profile(w, fid, schema.id,
                                                         schema.params_hash());
-    BootstrapSpill spill;
-    if (bloom.writes_runs() && bloom.stages()) {
-        auto staged = bloom.finish_staged(fid);
+    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
+    if (bloom.writes_runs()) {
+        staged = bloom.finish_staged(fid);
         // The file's record gives the published tier the file's sources.
         dftracer::utils::index::store::records::put_file_record(
             *staged, logical,
             {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-        spill.staged = std::move(staged);
-    } else if (bloom.writes_runs()) {
-        spill.runs = bloom.finish_spilled(fid);
     } else {
         bloom.write(w, fid);
     }
-    try {
-        rowsets.write(w, fid);
-    } catch (...) {
-        dftracer::utils::index::build::remove_spill_runs(spill.runs);
-        throw;
-    }
-    return spill;
-}
-
-// The spill directory of the bloom chunks of the files bootstrapped into
-// `index_path`; the staging directory of the SST sinks lives under it.
-std::string bootstrap_spill_root(const std::string& index_path) {
-    return index_path + ".spill";
+    rowsets.write(w, fid);
+    return staged;
 }
 
 // The files of one index root and what its workers wrote.
 struct BootstrapRoot {
     std::string index_path;
-    std::string staging;
     dstd::Vector<std::size_t> members;
     std::optional<dftracer::utils::index::store::IndexDatabase> db;
-    // Declared after `db`, so it resumes the compactions before the close.
-    std::optional<dftracer::utils::index::store::AutoCompactionPause> pause;
 };
 
 // Every index root of a bootstrap, open once and held read-write until the
-// ingest, with an id reserved for each file of the plan.
+// last commit, with an id reserved for each file of the plan.
 struct BootstrapStores {
     BootstrapStores() = default;
     BootstrapStores(const BootstrapStores&) = delete;
     BootstrapStores& operator=(const BootstrapStores&) = delete;
-    ~BootstrapStores() {
-        std::error_code ec;
-        for (const auto& store : roots)
-            fs::remove_all(bootstrap_spill_root(store->index_path), ec);
-    }
 
     dstd::Map<trace::internal::IndexRoot*,
               dstd::SharedPtr<trace::internal::IndexRoot>>
@@ -287,14 +252,13 @@ struct BootstrapStores {
     dstd::Vector<trace::internal::RootPermit> building;
     dstd::Vector<int> ids;
     dstd::Vector<dstd::UniquePtr<BootstrapRoot>> roots;
-    std::atomic<std::size_t> sink_names{0};
 };
 
 // Reserving ids creates the index root before the files are in it. A scan that
 // starts meanwhile would take the root for a built index, so the build is
-// serialized with the metadata reads of the same root. A spill run is keyed by
-// the file id, so the ids are reserved before the build; a reserved id marks no
-// file as indexed.
+// serialized with the metadata reads of the same root. A staged spill is keyed
+// by the file id, so the ids are reserved before the build; a reserved id marks
+// no file as indexed.
 coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
                                            BootstrapStores& out) {
     const std::size_t n = plan.files.size();
@@ -316,7 +280,6 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
     for (const auto& [index_path, members] : by_index) {
         auto store = dstd::make_unique<BootstrapRoot>();
         store->index_path = index_path;
-        store->staging = bootstrap_spill_root(index_path) + "/sst";
         store->members.assign(members.begin(), members.end());
         // A file listed twice takes one id, as file_id_for would give it.
         dstd::Map<std::string, std::size_t> slot;
@@ -328,16 +291,8 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
                     .second)
                 paths.push_back(plan.files[i].file_path);
         // Held to the end, so a reader that opens the root meanwhile shares
-        // this read-write handle, and the ingest needs no upgrade.
+        // this read-write handle.
         store->db.emplace(index_path);
-        if (store->db->has_rocksdb()) {
-            store->pause.emplace(store->db->db());
-            const auto idle = store->db->db()->wait_for_compactions();
-            if (!idle.ok())
-                throw DFTUtilsException(
-                    ErrorCode::Io,
-                    "Failed to wait for compaction: " + idle.ToString());
-        }
         const auto got = store->db->assign_file_ids(paths);
         for (std::size_t i : members)
             out.ids[i] =
@@ -348,65 +303,24 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
     }
 }
 
-// The sink a worker fills, and the spill runs of the files written into it.
+// The write a worker fills.
 struct BootstrapSink {
     BootstrapRoot* root;
-    std::atomic<std::size_t>* names;
-    dstd::UniquePtr<
-        dftracer::utils::index::store::IndexDatabaseSstWriterContext>
-        sink;
-    /// The write of a root the store holds, which needs no staged SSTs.
     std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> write;
-    std::vector<std::vector<SstArtifacts>> spilled;
-    /// Bytes the sink holds before its worker commits it.
+    /// Bytes the write holds before its worker commits it.
     std::size_t limit = 0;
 };
 
-// Ingests the batch a worker commits: its sink and the spill runs of its files,
-// which hold whole files with their records, so the ingest is atomic over them.
-// Workers ingest at once; RocksDB runs the prepare step of each outside its
-// mutex and takes the ranges of the ingests one at a time.
-// On the store the commit waits for its writes without holding the worker.
+// Commits the write a worker fills, which holds whole files with their
+// records. The commit waits for its writes without holding the worker.
 coro::CoroTask<void> commit_bootstrap_sink(BootstrapSink& open) {
-    if (!open.sink && !open.write && open.spilled.empty()) co_return;
-    auto& counters = bootstrap_counters();
-    if (open.write) {
-        counters.ingest_calls.fetch_add(1, std::memory_order_relaxed);
-        co_await open.write->commit_async();
-        open.write.reset();
-        counters.sink_commits.fetch_add(1, std::memory_order_relaxed);
-        co_return;
-    }
-    dftracer::utils::index::store::SstArtifactRegistry registry;
-    if (open.sink) {
-        registry.append(open.sink->commit());
-        open.sink.reset();
-        counters.sink_commits.fetch_add(1, std::memory_order_relaxed);
-    }
-    for (auto& runs : open.spilled)
-        for (auto& r : runs) registry.append(std::move(r));
-    open.spilled.clear();
-    counters.ingest_calls.fetch_add(1, std::memory_order_relaxed);
-    if (counters.in_flight.load(std::memory_order_relaxed) > 1)
-        counters.ingests_during_parse.fetch_add(1, std::memory_order_relaxed);
-    const auto running =
-        counters.ingests_in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
-    auto seen = counters.max_ingests_in_flight.load(std::memory_order_relaxed);
-    while (running > seen &&
-           !counters.max_ingests_in_flight.compare_exchange_weak(
-               seen, running, std::memory_order_relaxed)) {
-    }
-    struct Leave {
-        BootstrapCounters& c;
-        ~Leave() {
-            c.ingests_in_flight.fetch_sub(1, std::memory_order_relaxed);
-        }
-    } leave{counters};
-    open.root->db->bulk_ingest(registry);
+    if (!open.write) co_return;
+    co_await open.write->commit_async();
+    open.write.reset();
+    bootstrap_counters().sink_commits.fetch_add(1, std::memory_order_relaxed);
 }
 
-// Writes one built file into the sink, which commits once it holds
-// its limit: its SSTs then cover this block of file ids alone.
+// Writes one built file into the sink, which commits once it holds its limit.
 coro::CoroTask<void> write_bootstrap_file(
     BootstrapSink& open, const ViewFile& f, int file_id,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
@@ -414,46 +328,17 @@ coro::CoroTask<void> write_bootstrap_file(
     dftracer::utils::index::extensions::BloomFold& bloom,
     dftracer::utils::index::extensions::RowSetFold& rowsets,
     std::uint64_t hash) {
-    if (!open.sink && !open.write) {
-        if (open.root->db->has_rocksdb())
-            open.sink = dstd::make_unique<
-                dftracer::utils::index::store::IndexDatabaseSstWriterContext>(
-                open.root->staging,
-                "batch_" + std::to_string(open.names->fetch_add(
-                               1, std::memory_order_relaxed)));
-        else
-            open.write = open.root->db->begin_write();
-    }
-    dftracer::utils::index::store::IndexWrite& sink =
-        open.sink ? static_cast<dftracer::utils::index::store::IndexWrite&>(
-                        *open.sink)
-                  : static_cast<dftracer::utils::index::store::IndexWrite&>(
-                        *open.write);
+    if (!open.write) open.write = open.root->db->begin_write();
     // The id was reserved for this pass, so the index holds nothing of it to
-    // clear. A clear would be a range delete whose end bound reaches the next
-    // file's first key, which puts the SSTs of two blocks in overlap.
-    sink.set_fresh_file(file_id);
-    auto spill = write_bootstrap_index(
-        sink,
+    // clear.
+    open.write->set_fresh_file(file_id);
+    auto staged = write_bootstrap_index(
+        *open.write,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path),
         f.file_path, arts, schema, bloom, rowsets, hash, file_id);
-    if (!spill.runs.empty()) open.spilled.push_back(std::move(spill.runs));
-    if (spill.staged) co_await spill.staged->commit_async();
-    if (sink.buffered_bytes() >= open.limit)
+    if (staged) co_await staged->commit_async();
+    if (open.write->buffered_bytes() >= open.limit)
         co_await commit_bootstrap_sink(open);
-}
-
-// Every batch is ingested by the worker that committed it, so the compactions
-// are all that is left to resume.
-void resume_bootstrap(BootstrapStores& stores) {
-    for (const auto& store : stores.roots) {
-        if (!store->pause) continue;
-        const auto resumed = store->pause->resume();
-        if (!resumed.ok())
-            throw DFTUtilsException(
-                ErrorCode::Io,
-                "Failed to resume compaction: " + resumed.ToString());
-    }
 }
 
 // An IndexVisitor that streams a member's plaintext lines straight to the
@@ -524,7 +409,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     if (!export_bootstrap_eligible(plan)) co_return false;
 
     // The files stream to the sink in plan order, so one sink per root takes
-    // them one after another, and each root ingests once.
+    // them one after another, and each root commits once.
     BootstrapStores stores;
     co_await open_bootstrap_stores(plan, stores);
     // One sink per root is open at a time, so each may hold a worker's share.
@@ -542,8 +427,7 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     dstd::Map<std::string, std::size_t> slot_of;
     for (const auto& root : stores.roots) {
         slot_of.emplace(root->index_path, open.size());
-        open.push_back(
-            {root.get(), &stores.sink_names, nullptr, nullptr, {}, sink_limit});
+        open.push_back({root.get(), nullptr, sink_limit});
     }
 
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
@@ -579,7 +463,6 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                       rowsets, hash);
     }
     for (auto& o : open) co_await commit_bootstrap_sink(o);
-    resume_bootstrap(stores);
     co_return true;
 }
 
@@ -788,10 +671,9 @@ namespace {
 // file is a clean first touch and nothing materialized can answer instead.
 //
 // A worker per core takes a block of consecutive files of equal cost, one file
-// at a time, and writes each into an SST sink of its block, so the SSTs of two
-// blocks overlap no other block's. A committed sink is ingested by its worker
-// while the other files still parse. One file's first-touch result: its
-// aggregate state with `keep_state`. `ok` is false when the build failed.
+// at a time, and writes each into a write of its block, which the worker
+// commits while the other files still parse. One file's first-touch result:
+// its aggregate state with `keep_state`. `ok` is false when the build failed.
 struct BootstrapFile {
     bool ok = false;
     dataframe::AggStatePtr state;
@@ -860,11 +742,8 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    // A spilled file is runs of SSTs to ingest on RocksDB, and stages of one
-    // write on the store.
-    if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET &&
-        dftracer::utils::index::store::index_backend() ==
-            dftracer::utils::index::store::IndexBackend::Store) {
+    // A spilled file is stages of one write.
+    if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET) {
         auto staged = open->root->db->begin_staged_write();
         // Its runs come before the file's record.
         staged->bind_file(
@@ -873,11 +752,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
             file_id);
         bloom.enable_spill(ticket.elastic_bytes(), std::move(staged), file_id,
                            /*fresh_id=*/true);
-    } else if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET)
-        bloom.enable_spill(ticket.elastic_bytes(),
-                           bootstrap_spill_root(f.index_path) + "/file_" +
-                               std::to_string(file_id),
-                           file_id, /*fresh_id=*/true);
+    }
     std::array<Fold*, 3> folds{&agg, &bloom, &rowsets};
     dftracer::utils::index::build::IndexFoldDriver driver(
         intern, folds, f.file_path, f.index_path, extra_capture_fields(*plan));
@@ -915,9 +790,7 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 run->next_block.fetch_add(1, std::memory_order_relaxed);
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
-            BootstrapSink open{block.root, &run->stores->sink_names,
-                               nullptr,    nullptr,
-                               {},         run->sink_limit};
+            BootstrapSink open{block.root, nullptr, run->sink_limit};
             auto& merged = run->states[b];
             for (std::size_t k = block.begin; k < block.end; ++k) {
                 if (run->failed.load(std::memory_order_relaxed))
@@ -1015,7 +888,6 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     run.admission = &admission;
     co_await dftracer::utils::run_coro_scope(bootstrap_workers, &run, active);
     if (run.failed.load(std::memory_order_relaxed)) co_return false;
-    resume_bootstrap(stores);
     if (!resolved_transform) {
         // Blocks are runs of consecutive files, so taking them by the first
         // file merges the states in file order, as one state per file would.

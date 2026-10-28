@@ -12,8 +12,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make a store index commit in a view bootstrap or an index build wait for its writes without holding a worker, so the peak memory of a bootstrap stays flat as its files grow.
 - Run the whole process on one runtime: pipelines, directory scans, index builds, the store, the caches and Python all share it.
   `configure_default_runtime()`, Python `Runtime(threads=...)` and `dftu_runtime_new()` grow or shrink its threads in place while work runs, and only process exit stops it.
-- Make the store the default index backend.
-  Each backend builds again an index that the other one built, so set `DFTRACER_UTILS_INDEX_BACKEND=rocksdb` to keep using a RocksDB index.
 - Keep the rollup and lookup caches in `.dftindex-cache` on the store, so several processes can write one cache folder.
 - Spill the bloom chunks of a large file on the store into copies that no reader sees until the file's index is complete.
 - Cut the peak memory of an index build on the store backend: the build keeps each key once until its commit and writes it into its extent without more copies, and page dictionaries train as tasks of the build's executor.
@@ -32,7 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The scan admits one more batch while each stat stays within 2 times the fastest it has seen and fewer when stats slow down, up to `--executor-threads`, and a cold view of the 8,404 minife traces on Lustre takes 9.1 to 9.6 s where it took 9.0 to 10.2 s.
 - Stat the shared index folder once in a `dftracer_view` run, where each input file made up to 4 stat calls and 7 lstat calls on it.
   A view of the 8,404 minife traces makes 34,954 stat calls cold and 33,780 warm where it made 51,756 and 67,392, and 8,148 lstat calls warm where it made 66,913.
-- Ingest the index files of a cold `dftracer_view` from each worker as it finishes its files, where one thread ingested all of them after the parse.
+- Commit the index of a cold `dftracer_view` from each worker as it finishes its files, where one thread wrote all of them after the parse.
   A cold view of the 8,404 minife traces at 48 threads takes 7.5 to 8.6 s where it took 11.1 to 12.1 s, with the stored index unchanged.
 - Stat the files of a directory scan on the pool of `dftracer_view`, `dftracer_index`, `dftracer_split` and `dftracer_run` instead of one at a time on the main thread.
   A cold `dftracer_view` of the 8,404 minife traces at 48 threads starts its parse after 0.3 s where it took 0.8 to 2.6 s and takes 11.6 s where it took 14.4 s, and `dftracer_index` takes 8.4 s where it took 8.7 s with the same index.
@@ -44,9 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Bound the parse memory of each worker in an index build and a cold first query: a chunk is parsed in pieces of at most 1 MiB and 8192 lines, `parse_many` reads batches of 128 KiB on the calling thread, a record longer than a batch is parsed alone, and event buffers cut back what a huge batch or event grew when they are returned.
   The peak of a build no longer grows by about 100 MB for each extra worker.
 - Admit the files of an index build and a cold first query by the bytes each holds under the memory budget instead of one per worker, let workers with no file parse pieces of files in flight, and give the strings of a file the same ids whatever the parse order.
-  A build under any memory budget, a 1 MiB one included, stores the same index as an unbounded build: spill runs are never smaller than 4 MiB, so a tiny budget no longer writes thousands of SSTs that a scan could not open at once, and a cold first export commits its sink at its limit instead of after every file.
-- Cut the serial stages of `dftracer_index`: the directory walk stats the entries of a folder in batches of 16 over the executor, and the final ingest links the staged SSTs into the database without the reopen and fsync RocksDB adds to each file (the SST writer already synced them) and removes the staged names in parallel.
-  On the 8,404 minife traces at 48 threads the walk takes 0.53 s where it took 1.3 s, the ingest of 1,124 SSTs 3.0 s where it took 5.2 s, and the run 9.2 s where it took 12.1 s. The stored index is unchanged.
+  A build under any memory budget, a 1 MiB one included, stores the same index as an unbounded build: spill runs are never smaller than 4 MiB, so a tiny budget no longer writes thousands of small runs, and a cold first export commits its sink at its limit instead of after every file.
+- Stat the entries of a folder in batches of 16 over the executor in the directory walk of `dftracer_index`.
+  On the 8,404 minife traces at 48 threads the walk takes 0.53 s where it took 1.3 s.
 - Rebuild the indexes and caches made before this change on first use.
   Every interface and format version of the library is now 0, and a stored index, view cache, viz summary or frame in another version is not read.
   A missing or unreadable manifest or format record also means a rebuild.
@@ -56,10 +54,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   `dftracer_index` opens each file once and reads its hash, schema and gzip index from that open file, and `dftracer_view` and `dftracer_split` keep the descriptor of the first look at a file for the pass that follows.
   On a parallel file system this cuts the metadata calls per input (a Corona run of 500 files made 12 stat calls and 4 opens per file in `dftracer_index`, and 57 stat calls per file in `dftracer_stats`).
   `dftracer_stats` reads the files once to build the category and the pid and tid counts, where it read them twice.
-- Keep one file in flight per worker in the first run of `dftracer_view` and any View over unindexed traces, with each worker writing its files into its own SST sink and one ingest per index root, where the run took files in waves of 16 and wrote each file's index under one lock.
+- Keep one file in flight per worker in the first run of `dftracer_view` and any View over unindexed traces, with each worker writing its files into its own write of the index, where the run took files in waves of 16 and wrote each file's index under one lock.
   Each worker merges the aggregate states of its files as they finish, a sink commits once it holds 32 MiB of memory (it counted only keys and values before), and the export first run takes the same path with one open of each index root.
   A worker that fails stops the others.
-  A read-only open of an index caps the files RocksDB keeps open at half the descriptor limit, so an index of thousands of SSTs opens under a limit of 1,024.
 - Index the trace files in subfolders of `-d` before `dftracer_event_count` counts, as the other tools do, where it indexed only the top folder up front and built the rest as it counted.
 - Check whether `dftracer_split` input files lie in the output folder by their walked path, and the output folder by its canonical path, instead of resolving every input file.
   A symlink that points into the output folder through a different spelling is no longer skipped.
@@ -74,12 +71,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A group of files starts only while the budget holds its writer, and one group always runs.
   Each writer used to assume a third of the memory, and the tracked heap reached 705 GiB on a 68 GB set.
 - Compress each gzip member into a buffer that is reused, and hand a full member to its compress job without a copy.
-- Write the bloom tier of a small file through the shared index write, so many small files share SST files.
+- Write the bloom tier of a small file through the shared index write, so many small files share one write.
   Only a file that spills while it is parsed writes runs of its own.
   On 1.09 GB of 77 KB traces (8,404 files) on Lustre, `dftracer_index` takes 189 s instead of 544 s with 96 threads and 84 s instead of 413 s with 16.
 - Check the indexes of many files of one index root at once, so only a file that must build its index waits for the root.
   On the same set, `dftracer_event_count` takes 37 s instead of 101 s and `dftracer_info` takes 31 s instead of 91 s.
-- Compress the upper RocksDB levels with zstd level 1 and no dictionary, and keep level 9 with a dictionary for the bottom level only.
 - Let only one idle executor worker poll on the short timer, so a quiet pool does not wake all of its workers.
 - Read the trace files in all subfolders of `-d` in `dftracer_index`, `dftracer_event_count`, `dftracer_info`, `dftracer_stats`, `dftracer_split`, `dftracer_comparator` and `dftracer_run`, as `dftracer_view` and `dftracer_validate` already did.
   Folders that hold index data or split output are skipped.
@@ -87,7 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The line-range reader starts at a restart piece, and a read that starts at one drops the line it opens, which belongs to the piece before.
   The tools read a plain trace only after it is gzipped (`dftracer_pgzip`).
   `dftracer_index`, `dftracer_view` and `dftracer_run` no longer write a gzip copy under `split/`.
-- Build the index of a set of files with every worker busy: a worker takes a block of consecutive file ids, writes each file into its block's SSTs as it finishes and frees its state, so memory grows with the workers and not with the files, and the SSTs of the blocks do not overlap, so the ingest leaves no files in level 0.
+- Build the index of a set of files with every worker busy: a worker takes a block of consecutive file ids, writes each file into its block's write as it finishes and frees its state, so memory grows with the workers and not with the files.
   `dftracer_index` on the 8,404-file minife set takes 14 s instead of 60 s at 48 threads.
 - Shrink the fixed cost of a string table from about 1.5 MB to about 120 KB, because its directories are now made as strings arrive.
   An index build makes one table per file, so a set of thousands of small files held several GB in empty tables.
@@ -109,10 +105,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Write the `run` and `func` records of `dftracer_genesis_gen_dist` after every `counter` record, in gzip members of their own, so a query on `func` or `run` records reads a few chunks instead of most of the file.
   On the 20.7 GB sweep, a `gtype == "func" and name == "main"` query takes 1.3 s instead of 44 s, and the amg scaling read takes 1 s instead of 13 s ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Keep the bloom index that a first `dftracer_view` query builds for each file within that file's share of `--memory-budget`.
-  Past it, finished chunks go to sorted runs next to the index and are ingested with the rest of the file, as `dftracer_index` already did, and the index is the same ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
-- Write the bloom index of a file as sorted runs that are built at the same time and ingested, also when nothing spilled, instead of one write batch into the database or one last run on one thread.
-  The first `dftracer_view` count over one genesis part of 160 million counter records takes 172 s instead of 190 s, and over 12 parts 222 s instead of 242 s.
-  `--no-spill` keeps the write batch ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
+  Past it, finished chunks go to a staged write of the index that is published with the rest of the file, as `dftracer_index` already did, and the index is the same ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
 - Keep the min and max of each auto-indexed args key of an index chunk as numbers while the chunk is built, and format a value as text only when it moves a bound, instead of formatting every value and parsing both bounds again for each comparison.
   The stored bounds are the same text.
   The first `dftracer_view` count over one genesis part of 160 million counter records takes 397 s instead of 760 s on one node, at the same 12.4 GB peak ([#112](https://github.com/llnl-asr/dftracer-utils/pull/112)).
@@ -177,9 +170,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
-- Build the index on the store backend (`DFTRACER_UTILS_INDEX_BACKEND=store`) from `dftracer_index` and from `distributed_index`, with no staged SST files and no ingest.
-  Each `distributed_index` worker writes the index directly, and on the 8,404 minife traces `dftracer_index` takes 12 s where it takes 36 s on RocksDB.
-- Add `IndexDatabase.close_writer()`, `IndexDatabase.refresh()` and `index_backend()` to the Python bindings.
+- Build the index on the index store from `dftracer_index` and from `distributed_index`, with no staged files and no ingest.
+  Each `distributed_index` worker writes the index directly, and on the 8,404 minife traces `dftracer_index` takes 12 s where it took 36 s on RocksDB.
+- Add `IndexDatabase.close_writer()` and `IndexDatabase.refresh()` to the Python bindings.
 - Add `DFTRACER_UTILS_IO_BACKEND` to force the I/O backend, such as the thread pool for a run traced with DFTracer's preload.
 - Add `DFTRACER_UTILS_MEMORY_REPORT` to print the allocator's live, measured and limit bytes, the page heap's peak mapped bytes and its peak bytes in use at exit.
   The mapped peak counts address space, which reached 705 GiB on a split run that used 100 GB, so read `used_peak` for memory use.
@@ -249,11 +242,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove RocksDB: the index store is the only index backend, and an index that RocksDB built is built again on first use.
+  The environment variables `DFTRACER_UTILS_INDEX_BACKEND`, `DFTRACER_UTILS_ROCKSDB_CACHE` and `DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES` and the CMake settings `DFTRACER_UTILS_ROCKSDB_VERSION` and `DFTRACER_UTILS_ROCKSDB_PREFIX` are gone.
+- Remove `build_sst_batch`, `SstArtifactRegistry`, `move_artifacts`, `index_backend`, `IndexDatabase.bulk_ingest()` and `IndexDatabase.init_schema()` from the Python bindings and `resolve_local_staging` from `dftracer.utils.dask`.
+  `build_index_batch` replaces `build_sst_batch`: it writes the index directly and returns the aggregation tracker.
+- Remove the `local_staging`, `shared_staging` and `flush_every_files` arguments of `distributed_index` and `build_index_distributed`, and `artifact_batches` from the result of `distributed_index`, since each worker writes the index directly.
 - Remove `set_default_runtime()`, `try_install_default_runtime()` and `clear_default_runtime_if()` from C++, `dftracer.utils.set_default_runtime()` from Python and `dftu_set_default_runtime()` from the C ABI.
   Configure the one runtime with `configure_default_runtime()`, `Runtime(threads=...)` or `dftu_runtime_new()` instead.
 - Remove the native `Runtime.shutdown()` from Python, so `Runtime.shutdown()` and leaving a `with` block release the handle and leave the runtime running.
-- Remove `plan_work_units`, `enumerate_gzip_members` and the `file_slices` argument of `build_sst_batch` from the Python bindings, since `distributed_index` no longer cuts a file across workers.
-- Remove the `DFTRACER_UTILS_ENABLE_ZSTD` and `DFTRACER_UTILS_ENABLE_LZ4` CMake options, and with them LZ4 compression of the RocksDB index.
+- Remove `plan_work_units` and `enumerate_gzip_members` from the Python bindings, since `distributed_index` no longer cuts a file across workers.
+- Remove the `DFTRACER_UTILS_ENABLE_ZSTD` and `DFTRACER_UTILS_ENABLE_LZ4` CMake options, and with them LZ4 compression of the index.
   Every build links zstd, so spill files and Arrow IPC files can always compress with zstd.
 - Remove the `DFTRACER_UTILS_USE_ZLIB_NG` option and the fallback to madler/zlib.
 - Remove the `-r` and `--recursive` options of `dftracer_replay`, since it now reads every subfolder of a directory input.
@@ -378,8 +376,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Fix a select-all frame that listed `args.*` columns of other traces.
   A plan declared the columns of every file in its index root, which holds all traces of one directory.
   It now declares only the columns of its own files.
-- Fix a memory leak when a scan stops while RocksDB still prefetches index blocks.
-  An aborted read did not get its callback, so RocksDB never freed the state of that read.
 
 ## [0.0.14] - 2026-10-10
 

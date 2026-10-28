@@ -5,9 +5,7 @@
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/parse_gate.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -144,11 +142,10 @@ using Dump = std::map<std::string, Family>;
 Dump dump_index(const std::string& first_file, const std::string& index_dir) {
     const auto path =
         trace::internal::determine_index_path(first_file, index_dir);
-    store::RocksDBManager::instance().reset(path);
+    store::release_index(path);
     store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
     Dump out;
-    // Grouped by what precedes the first '|': the family on RocksDB, the
-    // namespace or #copy on the store.
+    // Grouped by what precedes the first '|': the namespace, or #copy.
     db.for_each_record([&out](std::string_view key, std::string_view value) {
         const auto bar = key.find('|');
         out[std::string(key.substr(0, bar))].emplace_back(

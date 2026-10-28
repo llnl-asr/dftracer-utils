@@ -60,10 +60,10 @@ the caller's ``CoroScope``. The same calls are in the C ABI
    Indexer indexer = Indexer::open({"a.pfw.gz", "b.pfw.gz", "c.pfw.gz"}, options);
    IndexStatus status = indexer.build();  // or co_await indexer.build(scope)
 
-The batch builder, resolver and the distributed SST writer behind it are
-private (``src/dftracer/utils/index/build/``) and are not installed. The
-command-line tools use them directly for member normalization, bounded
-sub-batches and SST output, which ``Indexer`` does not offer yet.
+The batch builder and resolver behind it are private
+(``src/dftracer/utils/index/build/``) and are not installed. The
+command-line tools use them directly for member normalization and bounded
+sub-batches, which ``Indexer`` does not offer yet.
 
 IndexDatabase
 -------------
@@ -79,9 +79,8 @@ are built; data without a current manifest entry is never read.
    using namespace dftracer::utils::index::store;
 
    IndexDatabase db("trace.pfw.gz.dftindex");
-   db.init_schema();  // idempotent; writes the format version
 
-   // Writes go through a writer context
+   // Writes go through a write of the index
    auto writer = db.begin_write();
 
    // Read-only queries

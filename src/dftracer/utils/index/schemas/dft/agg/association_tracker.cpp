@@ -1,7 +1,6 @@
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
-#include <dftracer/utils/index/store/key_codec.h>
 
 #include <algorithm>
 
@@ -132,7 +131,6 @@ void AssociationTracker::merge(const AssociationTracker& other) {
 }
 
 namespace {
-namespace rocks = index::store;
 
 void put_str(std::string& out, const std::string& s) {
     append_u32_be(out, static_cast<std::uint32_t>(s.size()));

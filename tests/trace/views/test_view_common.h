@@ -3,9 +3,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -13,7 +11,6 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
-#include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -202,7 +199,7 @@ inline std::string bstr(const dataframe::DataFrame& b, std::int64_t row,
 }
 
 // A mixed(30 POSIX "read", 20 STDIO "fwrite") trace whose index is built once
-// and shared read-only across query cases. Building a RocksDB index per case is
+// and shared read-only across query cases. Building an index per case is
 // very slow under Valgrind, so read-only cases reuse this instead of rebuilding
 // the same data. doctest runs cases serially, so concurrent access is not a
 // concern.

@@ -2,7 +2,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/python/index_database.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -11,14 +10,12 @@
 #include <dftracer/utils/python/py_runtime_mixin.h>
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
-#include <dftracer/utils/python/sst_distribution.h>
 
 #include <new>
 #include <string>
 #include <vector>
 
 using dftracer::utils::index::store::IndexDatabase;
-using dftracer::utils::index::store::SstArtifactRegistry;
 
 static void IndexDatabase_dealloc(IndexDatabaseObject *self) {
     self->db.~shared_ptr<IndexDatabase>();
@@ -48,16 +45,6 @@ static int IndexDatabase_init(IndexDatabaseObject *self, PyObject *args,
         return -1;
     }
     return 0;
-}
-
-static PyObject *IndexDatabase_init_schema(IndexDatabaseObject *self,
-                                           PyObject * /*ignored*/) {
-    if (!self->db) {
-        PyErr_SetString(PyExc_RuntimeError, "IndexDatabase not initialised");
-        return NULL;
-    }
-    if (!run_blocking([&] { self->db->init_schema(); })) return NULL;
-    Py_RETURN_NONE;
 }
 
 static PyObject *IndexDatabase_close_writer(IndexDatabaseObject *self,
@@ -123,48 +110,6 @@ static PyObject *IndexDatabase_reserve_file_id_range(IndexDatabaseObject *self,
         return NULL;
     }
     return PyLong_FromLong(first);
-}
-
-static PyObject *IndexDatabase_bulk_ingest(IndexDatabaseObject *self,
-                                           PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"registry", "skip_cfs", NULL};
-    PyObject *registry_obj;
-    PyObject *skip_cfs_obj = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|O",
-                                     const_cast<char **>(kwlist), &registry_obj,
-                                     &skip_cfs_obj)) {
-        return NULL;
-    }
-
-    SstArtifactRegistry *registry =
-        dftracer::utils::python::sst_artifact_registry_get(registry_obj);
-    if (!registry) {
-        PyErr_SetString(PyExc_TypeError,
-                        "expected an SstArtifactRegistry instance");
-        return NULL;
-    }
-
-    dftracer::utils::StringViewSet skip_cfs;
-    if (skip_cfs_obj && skip_cfs_obj != Py_None) {
-        PyObject *seq =
-            PySequence_Fast(skip_cfs_obj, "skip_cfs must be an iterable");
-        if (!seq) return NULL;
-        Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-        for (Py_ssize_t i = 0; i < n; ++i) {
-            PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
-            const char *s = as_utf8(item);
-            if (!s) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-            skip_cfs.emplace(s);
-        }
-        Py_DECREF(seq);
-    }
-
-    if (!run_blocking([&] { self->db->bulk_ingest(*registry, skip_cfs); }))
-        return NULL;
-    Py_RETURN_NONE;
 }
 
 static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
@@ -267,17 +212,14 @@ static PyObject *IndexDatabase_find_stale_files(IndexDatabaseObject *self,
 }
 
 static PyMethodDef IndexDatabase_methods[] = {
-    {"init_schema", DFTU_PYCFUNCTION(IndexDatabase_init_schema), METH_NOARGS,
-     "Idempotently write the format version and extension registry."},
     {"close_writer", DFTU_PYCFUNCTION(IndexDatabase_close_writer), METH_NOARGS,
      "close_writer() -> None\n"
-     "Store backend: close this process's writer of the index, so its data "
-     "file is complete for other processes; a later write opens a new one. "
-     "No-op on RocksDB."},
+     "Close this process's writer of the index, so its data file is "
+     "complete for other processes; a later write opens a new one."},
     {"refresh", DFTU_PYCFUNCTION(IndexDatabase_refresh), METH_NOARGS,
      "refresh() -> None\n"
-     "Store backend: later reads in this process see the data files other "
-     "processes wrote since. No-op on RocksDB."},
+     "Later reads in this process see the data files other processes "
+     "wrote since."},
     {"assign_file_ids", DFTU_PYCFUNCTION(IndexDatabase_assign_file_ids),
      METH_VARARGS | METH_KEYWORDS,
      "assign_file_ids(paths) -> list[int]\n"
@@ -293,18 +235,11 @@ static PyMethodDef IndexDatabase_methods[] = {
      DFTU_PYCFUNCTION(IndexDatabase_reserve_file_id_range), METH_VARARGS,
      "reserve_file_id_range(count) -> int\n"
      "Atomically reserve `count` contiguous file_ids, return the first."},
-    {"bulk_ingest", DFTU_PYCFUNCTION(IndexDatabase_bulk_ingest),
-     METH_VARARGS | METH_KEYWORDS,
-     "bulk_ingest(registry, skip_cfs=None) -> None\n"
-     "Ingest all SSTs collected in the SstArtifactRegistry.\n"
-     "skip_cfs is an optional iterable of CF names whose SSTs are left "
-     "outside the unified DB (used by distributed builds to keep "
-     "SYSTEM_METRICS SSTs addressable by manifest)."},
     {"write_agg_config", DFTU_PYCFUNCTION(IndexDatabase_write_agg_config),
      METH_VARARGS,
      "write_agg_config(aggregation_config) -> None\n"
      "Record the aggregation config a distributed build aggregated its "
-     "files with. Each file's dftracer.agg entry comes with its SSTs."},
+     "files with. Each file's dftracer.agg entry comes with its data."},
     {"write_aggregation_tracker",
      DFTU_PYCFUNCTION(IndexDatabase_write_aggregation_tracker), METH_VARARGS,
      "write_aggregation_tracker(blobs) -> None\n"
@@ -332,7 +267,7 @@ PyTypeObject IndexDatabaseType = {
     0,
     0,
     Py_TPFLAGS_DEFAULT,
-    "Handle to a .dftindex RocksDB store.",
+    "Handle to a .dftindex index store.",
     0,
     0,
     0,

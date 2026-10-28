@@ -17,7 +17,6 @@ except ImportError:
 
 from dftracer.utils import AggregationConfig, Indexer, TraceViewer
 from dftracer.utils.dask import distributed_index
-from dftracer.utils.dftracer_utils_ext import index_backend
 
 from .common import Environment
 
@@ -37,13 +36,9 @@ def _build_distributed(env, pids, num_events=100):
     index_dir = os.path.join(env.temp_dir, "idx")
     os.makedirs(index_dir, exist_ok=True)
     index_path = os.path.join(index_dir, ".dftindex")
-    staging = os.path.join(env.temp_dir, "stage")
-    os.makedirs(staging, exist_ok=True)
     result = distributed_index(
         files=files,
         index_path=index_path,
-        local_staging=staging,
-        shared_staging=staging,
         client=None,
         aggregation_config=AGG_CFG,
     )
@@ -82,33 +77,6 @@ class TestDistributedIndexUnified:
                 f"event count mismatch: unified={uni_count} distributed={dist_count}"
             )
             assert uni_count > 0
-
-    def test_move_artifacts_preserves_per_file_agg_ssts(self):
-        """With cross-FS staging, per-file `aggregation.sst` must not collapse."""
-        with Environment(lines=120) as env:
-            files = [
-                env.create_dft_trace_file_with_pid(f"trace_p{p}.pfw.gz", p, 120)
-                for p in [1, 2, 3, 4]
-            ]
-            local_staging = os.path.join(env.temp_dir, "local_stage")
-            shared_staging = os.path.join(env.temp_dir, "lustre_stage")
-            os.makedirs(local_staging, exist_ok=True)
-            os.makedirs(shared_staging, exist_ok=True)
-            index_dir = os.path.join(env.temp_dir, "idx")
-            os.makedirs(index_dir, exist_ok=True)
-            index_path = os.path.join(index_dir, ".dftindex")
-
-            distributed_index(
-                files=files,
-                index_path=index_path,
-                local_staging=local_staging,
-                shared_staging=shared_staging,
-                client=None,
-                aggregation_config=AGG_CFG,
-            )
-
-            total = _agg_event_count(files, os.path.dirname(index_path))
-            assert total > 0, "no events: per-file SSTs likely clobbered each other"
 
     def test_ensure_indexed_is_noop_after_distributed_build(self):
         import time as _time
@@ -156,22 +124,13 @@ class TestDistributedWithDask:
                 index_dir = os.path.join(env.temp_dir, "idx")
                 os.makedirs(index_dir, exist_ok=True)
                 index_path = os.path.join(index_dir, ".dftindex")
-                staging = os.path.join(env.temp_dir, "stage")
-                os.makedirs(staging, exist_ok=True)
                 result = distributed_index(
                     files=files,
                     index_path=index_path,
-                    local_staging=staging,
-                    shared_staging=staging,
                     client=client,
                     aggregation_config=AGG_CFG,
                 )
                 assert result["total_files"] == len(files)
-                # The store takes the workers' writes directly: nothing staged.
-                if index_backend() == "store":
-                    assert result["artifact_batches"] == 0
-                else:
-                    assert result["artifact_batches"] > 0
                 assert not os.path.exists(os.path.join(index_path, "agg_manifest.json"))
 
                 # The coordinator process reads back what the worker processes
@@ -226,13 +185,9 @@ class TestDistributedWholeFiles:
 
                 index_dir = os.path.join(env.temp_dir, "idx")
                 os.makedirs(index_dir, exist_ok=True)
-                staging = os.path.join(env.temp_dir, "stage")
-                os.makedirs(staging, exist_ok=True)
                 result = distributed_index(
                     files=files,
                     index_path=os.path.join(index_dir, ".dftindex"),
-                    local_staging=staging,
-                    shared_staging=staging,
                     client=client,
                     aggregation_config=AGG_CFG,
                 )
@@ -255,12 +210,10 @@ class TestDistributedWholeFiles:
 class TestDistributedIndexIdempotent:
     """distributed_index skips the parse fan-out for already-indexed files."""
 
-    def _run(self, files, index_path, staging, **kw):
+    def _run(self, files, index_path, **kw):
         return distributed_index(
             files=files,
             index_path=index_path,
-            local_staging=staging,
-            shared_staging=staging,
             client=None,
             aggregation_config=AGG_CFG,
             **kw,
@@ -269,41 +222,34 @@ class TestDistributedIndexIdempotent:
     def _setup(self, env, pids):
         files = [env.create_dft_trace_file_with_pid(f"t{p}.pfw.gz", p, 100) for p in pids]
         index_path = os.path.join(env.temp_dir, ".dftindex")
-        staging = os.path.join(env.temp_dir, "stage")
-        os.makedirs(staging, exist_ok=True)
-        return files, index_path, staging
+        return files, index_path
 
     def test_warm_call_skips_reparse(self):
         with Environment(lines=50) as env:
-            files, index_path, staging = self._setup(env, [1, 2])
-            cold = self._run(files, index_path, staging)
+            files, index_path = self._setup(env, [1, 2])
+            cold = self._run(files, index_path)
             assert sum(cold["per_worker"]) == 2
-            # The store takes the workers' writes directly: nothing staged.
-            if index_backend() != "store":
-                assert cold["artifact_batches"] > 0
-            warm = self._run(files, index_path, staging)
-            assert warm["artifact_batches"] == 0
+            warm = self._run(files, index_path)
             assert warm["per_worker"] == []
             assert warm["total_files"] == 2
 
     def test_partial_builds_only_new_file(self):
         with Environment(lines=50) as env:
-            files, index_path, staging = self._setup(env, [1, 2])
-            self._run(files, index_path, staging)
+            files, index_path = self._setup(env, [1, 2])
+            self._run(files, index_path)
             files.append(env.create_dft_trace_file_with_pid("t3.pfw.gz", 3, 100))
-            part = self._run(files, index_path, staging)
+            part = self._run(files, index_path)
             assert part["total_files"] == 3
             assert sum(part["per_worker"]) == 1
 
     def test_force_rebuild_reparses_all(self):
         with Environment(lines=50) as env:
-            files, index_path, staging = self._setup(env, [1, 2])
-            self._run(files, index_path, staging)
-            forced = self._run(files, index_path, staging, force_rebuild=True)
+            files, index_path = self._setup(env, [1, 2])
+            self._run(files, index_path)
+            forced = self._run(files, index_path, force_rebuild=True)
             assert sum(forced["per_worker"]) == 2
 
 
-@pytest.mark.skipif(index_backend() != "store", reason="the store backend only")
 class TestStoreSeesOtherProcesses:
     def test_long_lived_process_sees_another_process_write(self):
         import subprocess

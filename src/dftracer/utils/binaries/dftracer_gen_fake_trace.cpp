@@ -6,9 +6,8 @@
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -84,8 +83,7 @@ static coro::CoroTask<int> run_verify(
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
-        dftracer::utils::index::store::RocksDBManager::instance().reset(
-            index_path);
+        dftracer::utils::index::store::release_index(index_path);
 
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths = std::move(abs_paths);
@@ -119,7 +117,6 @@ static coro::CoroTask<int> run_verify(
                 internal::determine_index_path(abs_path, "");
             IndexDatabase idx_db(idx_path_bidx);
             auto writer = idx_db.begin_write();
-            writer->init_schema();
 
             const int fid = writer->file_id_for(get_logical_path(abs_path));
             namespace records = dftracer::utils::index::store::records;

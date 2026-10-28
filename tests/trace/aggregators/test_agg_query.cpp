@@ -10,7 +10,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -20,7 +19,6 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <doctest/doctest.h>
-#include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
 #include <trace/aggregators/aggregation_oracle.h>
 

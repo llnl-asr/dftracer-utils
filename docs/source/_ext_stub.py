@@ -348,11 +348,7 @@ def install_extension_stub() -> None:
             return None
 
         def close(self) -> None:
-            """Release this Python wrapper's native indexer handle.
-
-            This does not force-close the shared RocksDB instance for the same
-            ``.dftindex`` path.
-            """
+            """Release this Python wrapper's native indexer handle."""
             return None
 
         @property
@@ -390,11 +386,7 @@ def install_extension_stub() -> None:
             exc_val: BaseException | None,
             exc_tb: TracebackType | None,
         ) -> None:
-            """Release this Python wrapper on context exit.
-
-            This does not force-close the shared RocksDB instance for the same
-            ``.dftindex`` path.
-            """
+            """Release this Python wrapper on context exit."""
             return None
 
     class TaskHandle(_BaseNative, Generic[_T]):
@@ -441,26 +433,24 @@ def install_extension_stub() -> None:
             return {}
 
     class IndexDatabase(_BaseNative):
-        """Handle to a .dftindex RocksDB store.
+        """Handle to a .dftindex index store.
 
         Used by the distributed indexer coordinator to assign file ids,
-        reserve file_id ranges and bulk-ingest worker-produced SSTs.
+        reserve file_id ranges and record the aggregation of a distributed
+        build.
         """
 
         def __init__(self, index_path: str) -> None:
             self._index_path = index_path
 
-        def init_schema(self) -> None:
-            return None
-
         def close_writer(self) -> None:
-            """Store backend: close this process's writer of the index, so its
-            data file is complete for other processes. No-op on RocksDB."""
+            """Close this process's writer of the index, so its data file is
+            complete for other processes."""
             return None
 
         def refresh(self) -> None:
-            """Store backend: later reads in this process see the data files
-            other processes wrote since. No-op on RocksDB."""
+            """Later reads in this process see the data files other processes
+            wrote since."""
             return None
 
         def assign_file_ids(self, paths: list[str]) -> list[int]:
@@ -473,41 +463,15 @@ def install_extension_stub() -> None:
             """Atomically reserve `count` contiguous file_ids; return first."""
             return 0
 
-        def bulk_ingest(
-            self,
-            registry: "SstArtifactRegistry",
-            skip_cfs: object = None,
-        ) -> None:
-            """Ingest all SSTs collected in the registry.
-
-            skip_cfs is an optional iterable of CF names whose SSTs are left
-            outside the unified DB. Distributed builds pass
-            {"aggregation", "system_metrics"} to keep per-worker AGG/SYS SSTs
-            addressable via `agg_manifest.json` for parallel reads at analyze
-            time. See `dftracer.utils.dask.consolidate_index` to fold them
-            back into the unified DB later.
-            """
-            return None
-
         def write_agg_config(self, aggregation_config: object) -> None:
             """Record the aggregation config a distributed build aggregated its
             files with (a ``dftracer.utils.indexer.AggregationConfig``). Each
-            file's ``dftracer.agg`` entry comes with its SSTs."""
+            file's ``dftracer.agg`` entry comes with its data."""
             return None
 
         def write_aggregation_tracker(self, blobs: list[bytes]) -> None:
             """Merge serialized AssociationTracker blobs and write the result
             to the index."""
-            return None
-
-    class SstArtifactRegistry(_BaseNative):
-        """Thread-safe collector for SST artifact paths produced by workers."""
-
-        def __init__(self) -> None:
-            pass
-
-        def append(self, artifacts_dict: dict[str, str | None]) -> None:
-            """Add a per-batch Artifacts dict as returned by `build_sst_batch`."""
             return None
 
     def merge_flamegraph_partials(partials: list[bytes]) -> object:
@@ -559,27 +523,23 @@ def install_extension_stub() -> None:
         """
         return {}
 
-    def build_sst_batch(
+    def build_index_batch(
         files: list[str],
-        file_ids: list[int],
-        staging_dir: str,
-        batch_id: str,
-        index_dir: str = "",
+        index_dir: str,
         checkpoint_size: int = 33554432,
-        build_manifest: bool = False,
         force_rebuild: bool = False,
+        build_bloom: bool = True,
         bloom_dimensions: list[str] | None = None,
         parallelism: int = 0,
-        flush_every_files: int = 0,
         runtime: Runtime | object | None = None,
         aggregation_config: object = None,
-    ) -> tuple[list[dict[str, str | None]], bytes]:
-        """Run the indexer pipeline with an SST sink. Returns
-        `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
-        merged AssociationTracker for the batch (empty bytes when
-        `aggregation_config` is None). On the store backend the batch writes
-        the index itself and returns no artifacts."""
-        return ([], b"")
+        progress: object = None,
+    ) -> bytes:
+        """Run the indexer pipeline on `files` into the index at `index_dir`,
+        which this worker writes directly and numbers its own files in.
+        Returns the serialized merged AssociationTracker of the batch (empty
+        bytes when `aggregation_config` is None)."""
+        return b""
 
     def plan_lpt_partition(
         entries: list[tuple[str, int]], num_workers: int
@@ -598,22 +558,10 @@ def install_extension_stub() -> None:
         files matching the patterns."""
         return []
 
-    def index_backend() -> str:
-        """The backend that holds the indexes this process opens: "rocksdb"
-        or "store", as DFTRACER_UTILS_INDEX_BACKEND chose it."""
-        return "rocksdb"
-
     def enable_aggregation_deterministic_ids() -> None:
         """Flip the global aggregation StringIntern into deterministic-id mode
         so the same string maps to the same 32-bit id in every worker process."""
         return None
-
-    def move_artifacts(
-        artifacts: dict[str, str | None], dest_dir: str
-    ) -> dict[str, str | None]:
-        """Move every populated SST in `artifacts` into `dest_dir` via the
-        C++ rename/copy helper, returning a fresh dict with the new paths."""
-        return {}
 
     class _Series(_BaseNative):
         """Native columnar Series handle (SIMD ops + Arrow C Data Interface).
@@ -707,23 +655,20 @@ def install_extension_stub() -> None:
         "IndexerCheckpoint",
         "JsonDictValue",
         "Runtime",
-        "SstArtifactRegistry",
         "TaskHandle",
     ]
     _function_symbols = [
         "_dataframe_from_arrow",
         "_series_from_arrow",
         "_series_from_numpy",
-        "build_sst_batch",
+        "build_index_batch",
         "peek_default_runtime",
         "enable_aggregation_deterministic_ids",
         "get_default_runtime",
         "get_log_level",
-        "index_backend",
         "jit_run_op",
         "memory_budget_advice",
         "merge_flamegraph_partials",
-        "move_artifacts",
         "plan_lpt_partition",
         "read_arrow_files_parallel",
         "scan_files",

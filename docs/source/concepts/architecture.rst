@@ -15,9 +15,9 @@ static variant (``src/CMakeLists.txt``), aggregated behind
 ``dftracer::utils``:
 
 - ``dftracer_utils_runtime`` is the async runtime: coroutines, the task
-  executor and scheduler, the io backend, the pipeline machinery, RocksDB
-  wrappers, and shared primitives (string interning, sharded maps, the
-  error type). It knows nothing about traces.
+  executor and scheduler, the io backend, the pipeline machinery, and shared
+  primitives (string interning, sharded maps, the error type). It knows
+  nothing about traces.
 - ``dftracer_utils_store`` is the key-value store engine: data files, the
   writer and its committer, and the snapshot that reads them. It links only
   the runtime and knows nothing about traces.

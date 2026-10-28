@@ -105,10 +105,10 @@ class Cursor {
         if (offset_ + len > data_.size()) {
             char err[DECODE_CONTEXT_BUF_SIZE + 64];
             if (g_decode_context[0] != '\0') {
-                std::snprintf(err, sizeof(err), "Corrupt RocksDB payload [%s]",
+                std::snprintf(err, sizeof(err), "Corrupt index payload [%s]",
                               g_decode_context);
             } else {
-                std::snprintf(err, sizeof(err), "Corrupt RocksDB payload");
+                std::snprintf(err, sizeof(err), "Corrupt index payload");
             }
             throw IndexerError(IndexerError::Type::DatabaseError, err);
         }

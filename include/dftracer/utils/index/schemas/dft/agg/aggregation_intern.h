@@ -25,7 +25,7 @@ AggInternPtr intern_for_index(std::string_view index_path);
 AggInternPtr make_intern_table();
 
 /// Make every table created afterwards in this process derive ids from string
-/// content, so ranks writing SSTs for one index agree on key bytes. Set before
+/// content, so ranks writing one index agree on key bytes. Set before
 /// any table is created.
 void enable_deterministic_intern_ids();
 

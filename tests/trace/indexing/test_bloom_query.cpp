@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/indexing/bloom_query_utility.h>
 #include <doctest/doctest.h>
@@ -20,7 +19,6 @@ static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
     IndexDatabase idx_db(index_path);
     auto writer = idx_db.begin_write();
-    writer->init_schema();
 
     int fid =
         writer->get_or_create_file_info(get_logical_path(file_path), 12345);

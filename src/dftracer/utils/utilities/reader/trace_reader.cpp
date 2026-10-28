@@ -178,8 +178,8 @@ coro::AsyncGenerator<Line> read_lines_indexed(
     std::shared_ptr<internal::Reader> reader, std::string index_path,
     std::string file_path, ReadConfig config, std::optional<Query> query,
     bool chunk_prune_only = false) {
-    // Keep RocksDB alive for the generator's lifetime so per-method opens
-    // in GzipIndexer reuse DBManager's cached handle.
+    // Keep the index open for the generator's lifetime so per-method opens
+    // in GzipIndexer reuse its handle.
     std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
     if (!index_path.empty()) {
         try {
@@ -321,8 +321,8 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     std::shared_ptr<internal::Reader> reader, std::string index_path,
     std::string file_path, ReadConfig config, std::optional<Query> query,
     bool extend_to_line_boundary) {
-    // Keep RocksDB alive for the generator's lifetime so per-method opens
-    // in GzipIndexer reuse DBManager's cached handle.
+    // Keep the index open for the generator's lifetime so per-method opens
+    // in GzipIndexer reuse its handle.
     std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
     if (!index_path.empty()) {
         try {
@@ -745,8 +745,8 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
 coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
     ReadConfig config) {
     if (has_index_) {
-        // Keep RocksDB alive for the generator's lifetime so per-method
-        // opens in GzipIndexer reuse DBManager's cached handle.
+        // Keep the index open for the generator's lifetime so per-method
+        // opens in GzipIndexer reuse its handle.
         std::optional<dftracer::utils::index::store::IndexDatabase>
             db_keep_alive;
         if (!index_path_.empty()) {

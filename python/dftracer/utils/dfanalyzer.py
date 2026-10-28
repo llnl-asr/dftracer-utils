@@ -40,7 +40,6 @@ from .dask import (
     DaskAggregatedTraceViewer,
     distributed_index,
     register_auto_thread_plugin,
-    resolve_local_staging,
 )
 from .dftracer_utils_ext import TRACE_FILE_PATTERNS
 from .indexer import AggregationConfig, _open_readonly_indexer
@@ -888,17 +887,14 @@ def build_index_distributed(
     directory="",
     files=None,
     index_path="",
-    local_staging="",
-    shared_staging="",
     client=None,
     aggregation=None,
     progress: Optional[Callable[[int, int, str], None]] = None,
 ):
     """Build the dftracer index across a Dask cluster.
 
-    Workers build per-CF SSTs under `local_staging`, move them to
-    `shared_staging` for the coordinator to bulk-ingest. When `aggregation` is
-    given, the AGGREGATION + SYSTEM_METRICS tiers are filled in parallel.
+    Workers write their files straight into the index. When `aggregation` is
+    given, the aggregation tier is filled in parallel.
 
     If `client` is None the active Dask client is looked up; if none exists
     (or `dask.distributed` is not installed), tasks run inline serially.
@@ -917,8 +913,6 @@ def build_index_distributed(
         directory=directory,
         files=files,
         index_path=index_path,
-        local_staging=local_staging,
-        shared_staging=shared_staging,
         client=client,
         aggregation_config=aggregation,
         progress=progress,
@@ -953,15 +947,10 @@ def ensure_index(
     if not directory and not files:
         return
     index_path = index_path_for(trace_path)
-    local_staging = (
-        resolve_local_staging(client) if client is not None else os.path.dirname(index_path)
-    )
     build_index_distributed(
         directory=directory,
         files=files,
         index_path=index_path,
-        local_staging=local_staging,
-        shared_staging=os.path.dirname(index_path),
         client=client,
         aggregation=AggregationConfig(
             time_interval_ms=time_interval_ms, group_by_file=group_by_file

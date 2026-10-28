@@ -2,12 +2,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -488,27 +484,6 @@ TEST_SUITE("Truncated") {
         const auto got = indexed(path);
         CHECK_FALSE(got.truncated);
         CHECK(got.lines == zlib_prefix(full).lines);
-        rt.shutdown();
-    }
-
-    TEST_CASE("an index in another format is rebuilt") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        Runtime rt(4);
-        TestEnvironment env(10);
-        const auto trace = env.create_dft_test_gzip_file(50);
-        auto ix = Indexer::open({trace}, with_runtime(rt));
-        ix.build();
-        dftracer::utils::index::store::RocksDBManager::instance().reset(
-            index_of(trace));
-        {
-            dftracer::utils::index::store::RocksDatabase db(index_of(trace));
-            namespace layout = dftracer::utils::index::store::layout;
-            REQUIRE(db.del(layout::format_key()).ok());
-        }
-        CHECK(ix.status().needs_work == std::vector<std::string>{trace});
-        CHECK(ix.build().indexed == 1);
-        CHECK(ix.status().needs_work.empty());
         rt.shutdown();
     }
 

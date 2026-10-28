@@ -161,7 +161,7 @@ bool ascii_iequals(std::string_view a, std::string_view b);
 bool is_data_transfer_op(std::string_view cat, std::string_view name);
 
 /**
- * @brief Determine the root-local RocksDB index path for a given input path.
+ * @brief Determine the root-local index path for a given input path.
  *
  * When a custom index directory is provided, the index root is
  * `<index_dir>/.dftindex`. Otherwise, the index root is placed alongside the

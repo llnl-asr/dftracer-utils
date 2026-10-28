@@ -7,14 +7,11 @@
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
-#include <rocksdb/iterator.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 
@@ -97,48 +94,6 @@ void build_one(const std::string& file, const std::string& index_dir) {
     rt.submit(std::move(task), "event-cost").wait();
     rt.shutdown();
     REQUIRE(result.indexed == 1);
-}
-
-// The digest of each column family of the index write_trace builds, recorded
-// from the build before the per-event cost work. The members digest, which
-// holds compressed offsets, was recorded again when the trace moved to stored
-// gzip blocks, on a build whose other digests still matched. A family that
-// holds no rows digests to the FNV offset.
-struct FamilyDigest {
-    std::string_view family;
-    std::uint64_t digest;
-};
-constexpr FamilyDigest RECORDED[] = {
-    {"default", 12842990505823536473ULL},
-    {"members", 15479869490099263789ULL},
-    {"granule", 7655030195474814324ULL},
-    {"blob", 5112685343885646931ULL},
-    {"postings", 1070782933062292960ULL},
-    {"system_metrics", 1469598103934665603ULL},
-    {"rollup", 1469598103934665603ULL},
-};
-
-// FNV-1a of every key and value of one column family. A row that names the
-// test directory (the trace's path, whose length varies) is left out.
-std::uint64_t family_digest(store::RocksDatabase& db, std::string_view cf,
-                            const std::string& dir) {
-    std::uint64_t h = 1469598103934665603ULL;
-    const auto mix = [&h](std::string_view bytes) {
-        for (unsigned char c : bytes) h = (h ^ c) * 1099511628211ULL;
-        h = (h ^ 0xFF) * 1099511628211ULL;
-    };
-    auto it = db.new_iterator(cf);
-    for (it->SeekToFirst(); it->Valid(); it->Next()) {
-        const std::string_view key = it->key().ToStringView();
-        const std::string_view value = it->value().ToStringView();
-        if (key.find(dir) != std::string_view::npos ||
-            value.find(dir) != std::string_view::npos)
-            continue;
-        mix(key);
-        mix(value);
-    }
-    REQUIRE(it->status().ok());
-    return h;
 }
 
 }  // namespace
@@ -250,28 +205,5 @@ TEST_SUITE("IndexEventCost") {
               Stats::serialize_sketch_map(by_string.cat_duration_sketches));
         CHECK(Stats::serialize_sketch_map(by_slot.pid_duration_sketches) ==
               Stats::serialize_sketch_map(by_string.pid_duration_sketches));
-    }
-
-    TEST_CASE("the index of a fixed trace is unchanged") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        dftu_utils_test::TestEnvironment env(10);
-        const std::string file = write_trace(env.get_dir());
-        build_one(file, env.get_dir() + "/idx");
-        const std::string path =
-            trace::internal::determine_index_path(file, env.get_dir() + "/idx");
-        store::RocksDatabase db(path, store::RocksDatabase::OpenMode::ReadOnly);
-        REQUIRE(db.is_open());
-        std::size_t checked = 0;
-        for (const auto cf : store::RocksDatabase::default_column_families()) {
-            const std::uint64_t digest = family_digest(db, cf, env.get_dir());
-            MESSAGE("family " << std::string(cf) << " " << digest);
-            for (const auto& want : RECORDED)
-                if (want.family == cf) {
-                    CHECK(digest == want.digest);
-                    ++checked;
-                }
-        }
-        CHECK(checked == std::size(RECORDED));
     }
 }

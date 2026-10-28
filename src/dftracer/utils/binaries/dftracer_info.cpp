@@ -11,9 +11,8 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -300,7 +299,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
         indexed_groups) {
     auto index_path = internal::determine_index_path(
         files_needing_index.front().file_path, index_dir);
-    dftracer::utils::index::store::RocksDBManager::instance().reset(index_path);
+    dftracer::utils::index::store::release_index(index_path);
 
     {
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();

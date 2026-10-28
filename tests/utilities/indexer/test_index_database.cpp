@@ -1,12 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/dstd/big_endian.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <testing_utilities.h>
@@ -20,8 +15,6 @@
 using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using dftracer::utils::index::store::ColumnType;
 using dftracer::utils::index::store::IndexDatabase;
-namespace layout = dftracer::utils::index::store::layout;
-using dftracer::utils::append_u32_be;
 
 namespace {
 
@@ -34,14 +27,6 @@ void register_files(IndexDatabase& db, const std::vector<std::string>& paths) {
             static_cast<std::uint64_t>(internal::get_file_modification_time(p)),
             internal::file_size_bytes(p));
     w->commit();
-}
-
-void set_format_version(IndexDatabase& db, std::uint32_t version) {
-    std::string body;
-    append_u32_be(body, version);
-    db.db()->put(
-        layout::format_key(),
-        layout::with_header(layout::Ext::Host, layout::host::FORMAT, body));
 }
 
 }  // namespace
@@ -65,12 +50,10 @@ TEST_SUITE("IndexDatabase") {
 
         {
             auto writer = db1.begin_write();
-            writer->init_schema();
             writer->commit();
         }
         {
             auto writer = db2.begin_write();
-            writer->init_schema();
             writer->commit();
         }
 
@@ -96,7 +79,6 @@ TEST_SUITE("IndexDatabase") {
         int file_id;
         {
             auto writer = db.begin_write();
-            writer->init_schema();
 
             file_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xAAAA);
@@ -147,7 +129,6 @@ TEST_SUITE("IndexDatabase") {
         fs::create_directories(root);
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
 
         static constexpr int NUM_FILES = 100;
         static constexpr int BATCH_SIZE = 10;
@@ -211,7 +192,6 @@ TEST_SUITE("IndexDatabase") {
         int file_id;
         {
             auto writer = db.begin_write();
-            writer->init_schema();
             file_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xAAAA);
 
@@ -237,7 +217,6 @@ TEST_SUITE("IndexDatabase") {
         fs::create_directories(root);
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
 
         auto result = db.query_file_pids(999);
         CHECK(result.empty());
@@ -252,7 +231,6 @@ TEST_SUITE("IndexDatabase") {
         int file_id1, file_id2, file_id3;
         {
             auto writer = db.begin_write();
-            writer->init_schema();
 
             file_id1 = dftu_utils_test::register_test_file(
                 *writer, "trace1.pfw.gz", 0xAAA1);
@@ -300,7 +278,6 @@ TEST_SUITE("IndexDatabase") {
         int file_id;
         {
             auto writer = db.begin_write();
-            writer->init_schema();
             file_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xBBBB);
 
@@ -343,7 +320,6 @@ TEST_SUITE("IndexDatabase") {
         int f1, f2;
         {
             auto writer = db.begin_write();
-            writer->init_schema();
             f1 = dftu_utils_test::register_test_file(*writer, "a.pfw.gz",
                                                      0x1111);
             f2 = dftu_utils_test::register_test_file(*writer, "b.pfw.gz",
@@ -400,7 +376,6 @@ TEST_SUITE("IndexDatabase staleness") {
         auto a = write_file(root / "a.pfw", "hello world");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a});
 
         auto stat = db.get_file_stat(a);
@@ -416,7 +391,6 @@ TEST_SUITE("IndexDatabase staleness") {
         auto b = write_file(root / "b.pfw", "bbbbb");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a, b});
 
         auto result = db.find_stale_files({a, b});
@@ -432,7 +406,6 @@ TEST_SUITE("IndexDatabase staleness") {
         auto a = write_file(root / "a.pfw", "original");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a});
 
         write_file(root / "a.pfw", "original plus more bytes");
@@ -449,7 +422,6 @@ TEST_SUITE("IndexDatabase staleness") {
         auto a = write_file(root / "a.pfw", "same-size-content");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a});
 
         auto bumped = fs::last_write_time(a) + std::chrono::hours(48);
@@ -466,7 +438,6 @@ TEST_SUITE("IndexDatabase staleness") {
         auto a = write_file(root / "a.pfw", "aaa");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a});
 
         auto b = write_file(root / "b.pfw", "bbb");
@@ -483,30 +454,11 @@ TEST_SUITE("IndexDatabase staleness") {
         auto b = write_file(root / "b.pfw", "bbb");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a, b});
 
         auto result = db.find_stale_files({a});
         REQUIRE(result.removed.size() == 1);
         CHECK(result.removed[0] == b);
-    }
-
-    TEST_CASE("another format version forces a full rebuild") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        auto root = dftu_utils_test::make_unique_test_path("stale_schema");
-        fs::create_directories(root);
-        auto a = write_file(root / "a.pfw", "aaa");
-
-        IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
-        register_files(db, {a});
-
-        set_format_version(db, IndexDatabase::FORMAT_VERSION + 1);
-
-        auto result = db.find_stale_files({a});
-        CHECK(result.format_outdated);
-        CHECK(result.stale());
     }
 
     TEST_CASE("size or mtime change makes a file stale") {
@@ -516,7 +468,6 @@ TEST_SUITE("IndexDatabase staleness") {
         auto b = write_file(root / "b.pfw", "same-size-content");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a, b});
 
         CHECK(db.check_freshness(a) == IndexDatabase::Freshness::Fresh);
@@ -536,119 +487,10 @@ TEST_SUITE("IndexDatabase staleness") {
         auto b = write_file(root / "b.pfw", "bbb");
 
         IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
         register_files(db, {a});
 
         // Registered file with no changes is fresh; unregistered is stale.
         CHECK(db.check_freshness(a) == IndexDatabase::Freshness::Fresh);
         CHECK(db.check_freshness(b) == IndexDatabase::Freshness::Stale);
-    }
-
-    TEST_CASE("another stored format version is not fresh") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        auto root = dftu_utils_test::make_unique_test_path("fresh_format");
-        fs::create_directories(root);
-        auto a = write_file(root / "a.pfw", "aaa");
-
-        IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
-        register_files(db, {a});
-
-        set_format_version(db, IndexDatabase::FORMAT_VERSION + 1);
-        CHECK(db.check_freshness(a) ==
-              IndexDatabase::Freshness::FormatOutdated);
-    }
-
-    TEST_CASE("an index from the previous layout is outdated, not misread") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        auto root = dftu_utils_test::make_unique_test_path("stale_v14");
-        fs::create_directories(root);
-        auto a = write_file(root / "a.pfw", "aaa");
-
-        IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
-        register_files(db, {a});
-
-        // The previous layout kept its version under another key, so the
-        // format key is absent.
-        db.db()->del(layout::format_key());
-
-        CHECK(db.format_outdated());
-        CHECK(db.check_freshness(a) ==
-              IndexDatabase::Freshness::FormatOutdated);
-        auto result = db.find_stale_files({a});
-        CHECK(result.format_outdated);
-        CHECK(result.stale());
-    }
-}
-
-TEST_SUITE("IndexDatabase manifest") {
-    TEST_CASE("only a decoded, ready manifest at this version is current") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        using dftracer::utils::index::store::IndexExtension;
-        auto root = dftu_utils_test::make_unique_test_path("manifest_current");
-        IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
-        int file_id;
-        {
-            auto writer = db.begin_write();
-            file_id = dftu_utils_test::register_test_file(
-                *writer, "trace.pfw.gz", 0xAAAA);
-            writer->commit();
-        }
-
-        CHECK_FALSE(
-            db.extension_state(file_id, IndexExtension::Zonemap).has_value());
-        CHECK_FALSE(db.extension_current(file_id, IndexExtension::Zonemap));
-
-        {
-            auto writer = db.begin_write();
-            dftu_utils_test::mark_built(*writer, file_id);
-            writer->commit();
-        }
-        CHECK(db.extension_current(file_id, IndexExtension::Zonemap));
-
-        db.db()->put(layout::manifest_key(static_cast<std::uint32_t>(file_id),
-                                          IndexExtension::Zonemap),
-                     std::string("not a manifest"));
-        CHECK_FALSE(
-            db.extension_state(file_id, IndexExtension::Zonemap).has_value());
-        CHECK_FALSE(db.extension_current(file_id, IndexExtension::Zonemap));
-        CHECK(db.extension_current(file_id, IndexExtension::Members));
-    }
-
-    TEST_CASE("an index with no stored format is outdated") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        auto root = dftu_utils_test::make_unique_test_path("format_missing");
-        IndexDatabase db((root / ".dftindex").string());
-        db.init_schema();
-        CHECK(db.get_format_version() == IndexDatabase::FORMAT_VERSION);
-        CHECK_FALSE(db.format_outdated());
-        db.db()->del(layout::format_key());
-        CHECK_FALSE(db.get_format_version().has_value());
-        CHECK(db.format_outdated());
-        db.db()->put(layout::format_key(), std::string("garbage"));
-        CHECK(db.format_outdated());
-    }
-}
-
-TEST_SUITE("IndexDatabase format") {
-    TEST_CASE("opening an index of another layout does not stamp it current") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        auto root = dftu_utils_test::make_unique_test_path("format_old");
-        const auto path = (root / ".dftindex").string();
-        {
-            IndexDatabase db(path);
-            db.db()->del(layout::format_key());
-            db.db()->put("_schema_version", std::string("\x00\x00\x00\x11", 4));
-        }
-        dftracer::utils::index::store::RocksDBManager::instance().reset(path);
-        IndexDatabase reopened(path);
-        CHECK(reopened.format_outdated());
     }
 }

@@ -125,11 +125,6 @@ inline constexpr std::size_t SPAWN_FREE_DIVISOR = 4;
 }  // namespace file_admission
 
 namespace indexer {
-/// The engine that holds an index root: INDEX_BACKEND_ROCKSDB or
-/// INDEX_BACKEND_STORE. Unset reads as INDEX_BACKEND_STORE.
-inline constexpr const char* INDEX_BACKEND_ENV = "DFTRACER_UTILS_INDEX_BACKEND";
-inline constexpr const char* INDEX_BACKEND_ROCKSDB = "rocksdb";
-inline constexpr const char* INDEX_BACKEND_STORE = "store";
 /// How often, at most, a process that holds a store index checks whether
 /// other processes changed it, in milliseconds. 0 checks on every read.
 inline constexpr const char* INDEX_STORE_REFRESH_MS_ENV =
@@ -160,26 +155,6 @@ static constexpr std::size_t FILE_IO_BUFFER_SIZE =
     262144;  ///< 256KB for file I/O
 }  // namespace reader
 
-namespace rocksdb {
-/// ZSTD dictionary training tuning for the bottom level, shared by every
-/// DB-open path.
-static constexpr int ZSTD_COMPRESSION_LEVEL = 9;
-/// Upper LSM levels, which compaction rewrites again: a fast level and no
-/// dictionary, so a level that is soon rewritten is not trained or squeezed.
-static constexpr int ZSTD_UPPER_LEVEL = 1;
-static constexpr std::size_t ZSTD_MAX_DICT_BYTES = 262144;        ///< 256KB
-static constexpr std::size_t ZSTD_MAX_TRAIN_BYTES = 1024 * 1024;  ///< 1MB
-
-static constexpr std::size_t BLOCK_CACHE_BYTES = 512ULL * 1024 * 1024;
-/// Total memtable budget across every column family, capped by a shared
-/// WriteBufferManager so many CFs or many per-node workers cannot each reserve
-/// their own write buffers.
-static constexpr std::size_t WRITE_BUFFER_BYTES = 512ULL * 1024 * 1024;
-/// Point-lookup families read one small value per get, so they want small
-/// blocks and a filter rather than the scan-oriented defaults.
-static constexpr std::size_t POINT_LOOKUP_BLOCK_SIZE = 4 * 1024;
-static constexpr double BLOOM_BITS_PER_KEY = 10.0;
-}  // namespace rocksdb
 }  // namespace dftracer::utils::constants
 
 #else  // C

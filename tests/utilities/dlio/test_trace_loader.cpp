@@ -4,7 +4,6 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/dlio/trace_loader.h>
 #include <doctest/doctest.h>
-#include <rocksdb_exit_listener.h>
 #include <testing_utilities.h>
 
 #include <cstdint>

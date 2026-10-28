@@ -6,9 +6,7 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/memory/budget.h>
@@ -20,7 +18,6 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
-#include <rocksdb/iterator.h>
 #include <testing_runtime.h>
 #include <trace/views/groupmap_oracle.h>
 #include <trace/views/test_view_common.h>
@@ -477,7 +474,7 @@ class ThrowingFold final : public Fold {
 static std::vector<std::pair<std::string, std::string>> index_contents(
     const std::string& index_path) {
     namespace store = dftracer::utils::index::store;
-    store::RocksDBManager::instance().reset(index_path);
+    store::release_index(index_path);
     store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
     std::vector<std::pair<std::string, std::string>> out;
     db.for_each_record([&out](std::string_view key, std::string_view value) {

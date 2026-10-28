@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 
 #include <atomic>
@@ -47,7 +46,7 @@ struct ParsedIndexJob {
     /// The schema the file was decoded with; written with its members.
     const index::RecordSchema* schema = nullptr;
     std::string error_message;
-    /// The staged write a spill on the store left, which the caller publishes
+    /// The staged write a spill left, which the caller publishes
     /// once write_index_job returns.
     std::unique_ptr<index::store::IndexDatabaseWrite> staged;
 };
@@ -59,21 +58,13 @@ struct BatchWriterMetrics {
     std::atomic<std::size_t> batches_committed{0};
 };
 
-/// The spill runs of one file, committed as that file's own ingest once the
-/// sink they were written beside has committed.
-struct SpilledFile {
-    std::string file_path;
-    std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts> runs;
-};
-
 /// Write `job` into `sink`, which the caller commits. A file whose bloom fold
-/// spilled writes its tier as runs instead: they are appended to `spilled`.
-/// On the store the spill is a staged write, left in `job.staged` for the
-/// caller to publish before the next file, so a sink holds none of them.
-/// Returns false, with `job.error_message` set, when the write failed; what
-/// was already written for the file is left in the sink.
-inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
-                            std::vector<SpilledFile>& spilled) {
+/// spilled writes its tier into a staged write instead, left in `job.staged`
+/// for the caller to publish before the next file, so a sink holds none of
+/// them. Returns false, with `job.error_message` set, when the write failed;
+/// what was already written for the file is left in the sink.
+inline bool write_index_job(index::store::IndexWrite& sink,
+                            ParsedIndexJob& job) {
     sink.set_fresh_file(job.fresh_id ? job.file_id : -1);
     // Only a file that spilled while parsed writes its tier as runs.
     const bool spills = job.bloom_fold && job.bloom_fold->writes_runs();
@@ -86,8 +77,8 @@ inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
                                                       job.artifacts);
             // New members renumber the chunks, so tier data the bloom fold
             // does not rewrite would describe old ones. A spilled tier clears
-            // in its own first run instead: this sink may commit after that
-            // ingest. A fresh id has no old data, so its clears write nothing.
+            // in its own staged write instead. A fresh id has no old data, so
+            // its clears write nothing.
             for (auto ext : index::store::ALL_EXTENSIONS)
                 if (!spills && ext != index::store::IndexExtension::Members)
                     index::store::records::clear_file(sink, ext, job.file_id);
@@ -100,16 +91,13 @@ inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
                                                    job.schema->id,
                                                    job.schema->params_hash());
         }
-        if (spills && job.bloom_fold->stages()) {
+        if (spills) {
             auto staged = job.bloom_fold->finish_staged(job.file_id);
             // The file's record gives the published tier the file's sources.
             if (!job.logical_path.empty())
                 index::store::records::put_file_record(
                     *staged, job.logical_path, job.record);
             job.staged = std::move(staged);
-        } else if (spills) {
-            spilled.push_back(
-                {job.file_path, job.bloom_fold->finish_spilled(job.file_id)});
         } else if (job.bloom_fold)
             job.bloom_fold->write(sink, job.file_id);
         if (job.plugin_builders) job.plugin_builders->write(sink, job.file_id);

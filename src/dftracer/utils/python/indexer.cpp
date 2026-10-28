@@ -19,9 +19,7 @@
 
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
-        // The Python wrapper owns only the native indexer handle. The
-        // underlying RocksDB instance remains manager-owned and may continue to
-        // live process-wide for the same .dftindex path.
+        // The Python wrapper owns only the native indexer handle.
         delete self->handle;
         self->handle = NULL;
     }
@@ -34,7 +32,6 @@ static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
 static void CheckpointIndexer_release_handle(CheckpointIndexerObject *self) {
     if (self->handle) {
         // Releasing the handle drops this wrapper's native indexer state only.
-        // Shared RocksDB lifetime is managed separately by RocksDBManager.
         delete self->handle;
         self->handle = NULL;
     }
@@ -359,17 +356,11 @@ static PyMethodDef CheckpointIndexer_methods[] = {
     {"get_num_lines", DFTU_PYCFUNCTION(CheckpointIndexer_get_num_lines),
      METH_NOARGS, "Get the total number of lines in the indexed file."},
     {"close", DFTU_PYCFUNCTION(CheckpointIndexer_close), METH_NOARGS,
-     "Release this Python wrapper's native indexer handle.\n"
-     "\n"
-     "The shared RocksDB instance for the same .dftindex path remains managed\n"
-     "by the native RocksDBManager cache."},
+     "Release this Python wrapper's native indexer handle."},
     {"__enter__", DFTU_PYCFUNCTION(CheckpointIndexer_enter), METH_NOARGS,
      "Enter the runtime context for the with statement."},
     {"__exit__", DFTU_PYCFUNCTION(CheckpointIndexer_exit), METH_VARARGS,
-     "Release this Python wrapper on context exit.\n"
-     "\n"
-     "This does not force-close the shared RocksDB instance for the same\n"
-     ".dftindex path."},
+     "Release this Python wrapper on context exit."},
     {NULL} /* Sentinel */
 };
 

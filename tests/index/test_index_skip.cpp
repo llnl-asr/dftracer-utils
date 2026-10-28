@@ -42,15 +42,17 @@ IndexRun run_index(const std::string& dir, bool force) {
     return run;
 }
 
-std::vector<std::string> sst_set(const std::string& dir) {
-    std::vector<std::string> ssts;
+// Every file the index holds, with its size.
+std::vector<std::string> index_files(const std::string& dir) {
+    std::vector<std::string> files;
     const fs::path root = fs::path(dir) / ".dftindex";
-    if (!fs::exists(root)) return ssts;
+    if (!fs::exists(root)) return files;
     for (const auto& entry : fs::recursive_directory_iterator(root))
-        if (entry.path().extension() == ".sst")
-            ssts.push_back(entry.path().string());
-    std::sort(ssts.begin(), ssts.end());
-    return ssts;
+        if (entry.is_regular_file())
+            files.push_back(entry.path().string() + " " +
+                            std::to_string(entry.file_size()));
+    std::sort(files.begin(), files.end());
+    return files;
 }
 
 std::string trace_path(const std::string& dir, int id) {
@@ -76,14 +78,15 @@ TEST_CASE("a second dftracer_index skips files that did not change") {
     REQUIRE(first.exit_code == 0);
     CHECK(first.indexed == FILE_COUNT);
     CHECK(first.skipped == 0);
-    const auto ssts = sst_set(dir);
+    const auto stored = index_files(dir);
 
-    SUBCASE("unchanged files are skipped and nothing is ingested") {
+    SUBCASE("unchanged files are skipped and nothing is written") {
         const auto second = run_index(dir, false);
         CHECK(second.exit_code == 0);
         CHECK(second.indexed == 0);
         CHECK(second.skipped == FILE_COUNT);
-        CHECK(sst_set(dir) == ssts);
+        CHECK_FALSE(stored.empty());
+        CHECK(index_files(dir) == stored);
     }
 
     SUBCASE("a file with other content is indexed again") {

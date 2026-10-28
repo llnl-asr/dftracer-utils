@@ -79,7 +79,6 @@ index/test_record_schema	28.6
 dataframe/test_join_spill	27.1
 utilities/common/statistics/test_mixture	27.0
 utilities/reader/test_large_gzip_members	26.5
-utilities/indexer/test_rocksdb_storage	25.9
 utilities/plugins/test_plugin_agg_spill	25.5
 utilities/fileio/lines/sources/test_async_indexed_file_line_generator	25.3
 reader/test_reader_line_byte_stream	25.2
@@ -113,7 +112,6 @@ index/test_kinds	16.1
 dataframe/test_eval_inputs_in_place	15.9
 dataframe/test_variance_stable	15.5
 utilities/plugins/test_plugin_order	15.2
-utilities/indexer/test_sst_ingest_spike	15.2
 utilities/indexer/test_hash_table_aggregation	15.2
 trace/test_trace_config	15.0
 utilities/plugins/test_plugin_public_config	14.8
@@ -148,7 +146,6 @@ utilities/plugins/test_plugin_abi_features	9.9
 dataframe/test_mask	9.9
 dataframe/test_slice_views	9.8
 dataframe/test_frame_asof	9.8
-utilities/indexer/test_scan_prefix	9.7
 index/test_schema_class	9.7
 dataframe/test_lazy_frame_ops	9.7
 dataframe/test_join_null_keys	9.7

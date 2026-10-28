@@ -11,7 +11,7 @@ reproduced in full in its source tree (``.cpmsource/<name>/.../LICENSE`` after a
 build). dftracer-utils itself is under the terms in ``LICENSE``; this page
 covers only the third-party components.
 
-Dual-licensed components (Highway, RocksDB, simdjson, Zstandard) are used under
+Dual-licensed components (Highway, simdjson, Zstandard) are used under
 the permissive option (Apache-2.0 / BSD-3-Clause), never the GPL option.
 
 Runtime dependencies
@@ -27,9 +27,6 @@ Runtime dependencies
    * - Highway (SIMD)
      - ``Apache-2.0 OR BSD-3-Clause``
      - https://github.com/google/highway
-   * - RocksDB
-     - ``Apache-2.0 OR GPL-2.0-only``
-     - https://github.com/facebook/rocksdb
    * - simdjson
      - ``Apache-2.0 OR MIT``
      - https://github.com/simdjson/simdjson

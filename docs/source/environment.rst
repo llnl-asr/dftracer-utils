@@ -199,28 +199,11 @@ Index storage and indexing
    * - Variable
      - Default
      - Effect
-   * - ``DFTRACER_UTILS_INDEX_BACKEND``
-     - ``store``
-     - The engine that holds each ``.dftindex``: ``store`` or ``rocksdb``.
-       A process uses one engine, read once at the first index open.
-       An index built by one engine is not read by the other, so the other one builds it again.
    * - ``DFTRACER_UTILS_INDEX_STORE_REFRESH_MS``
      - ``1000``
-     - On the ``store`` engine, the shortest time in milliseconds between two looks for the data files that other processes wrote.
+     - The shortest time in milliseconds between two looks for the data files
+       that other processes wrote to the index store.
        ``0`` looks at each read.
-   * - ``DFTRACER_UTILS_ROCKSDB_CACHE``
-     - ``64``
-     - Cap on the process-wide LRU of retained read-only RocksDB handles, so
-       sequential reads (plan phases, later queries, Dask tasks) reuse one
-       open handle. Non-positive or unparsable values fall back to the
-       default.
-   * - ``DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES``
-     - ``32`` (write mode); unlimited (``-1``) for read-only databases
-     - Sets RocksDB's ``max_open_files``. Accepts ``-1`` (unlimited) or a
-       positive integer; any other value falls back to the default. Setting
-       it explicitly also overrides the read-only fast path, which otherwise
-       keeps every SST file open (``-1``) to avoid re-reading filter/index
-       blocks on point lookups.
    * - ``DFTRACER_UTILS_SCHEMA_PATH``
      - unset
      - Record schema spec files or directories, ``:``-separated, registered

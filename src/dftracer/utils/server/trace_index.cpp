@@ -7,9 +7,8 @@
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -531,7 +530,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     root.c_str());
                 // Drop the cached handle first, as the builder does: a live
                 // handle on a removed directory would serve the old data.
-                index::store::RocksDBManager::instance().reset(root);
+                index::store::release_index(root);
                 std::error_code ec;
                 fs::remove_all(root, ec);
                 forget_input(root);

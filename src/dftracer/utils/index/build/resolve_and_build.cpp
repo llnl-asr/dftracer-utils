@@ -16,7 +16,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -134,7 +133,7 @@ coro::CoroTask<ResolverResult> resolve_dropping_outdated(ResolverInput input,
     for (const auto& root : result.outdated_roots) {
         // Close any cached open handle to this index before removing the
         // directory, or the removal fails with EBUSY.
-        index::store::RocksDBManager::instance().reset(root);
+        index::store::release_index(root);
         std::error_code ec;
         fs::remove_all(root, ec);
         forget_input(root);
@@ -337,7 +336,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         // re-resolve below reads the destination.
         if (staging) {
             agg_run.reset();
-            index::store::RocksDBManager::instance().reset(build_index_path);
+            index::store::release_index(build_index_path);
             publish_path(build_index_path, staged_final_path);
         }
 
@@ -455,7 +454,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         roots.size(), failure.c_str());
     for (const auto& root : roots)
         if (fs::exists(root)) {
-            index::store::RocksDBManager::instance().reset(root);
+            index::store::release_index(root);
             index::store::IndexDatabase db(
                 root, index::store::IndexOpenMode::ReadWrite);
             agg::tier::clear(db);

@@ -13,7 +13,6 @@
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -137,17 +136,14 @@ bool setup_and_parse(Cli& cli, int argc, char** argv) {
 template <class CliT, class RunFn>
 int cli_main(int argc, char** argv, const char* name, const char* description,
              RunFn&& run) {
-    // Close process-lifetime RocksDB caches (e.g. the aggregation tier cache,
-    // which holds read-only agg DBs open for reuse) at true process exit, while
-    // RocksDB's globals are still alive - running it here at cli_main scope,
-    // not via atexit, avoids the static-destruction-order races that abandon
-    // the handles and leak them.
-    struct RocksDbExitGuard {
-        ~RocksDbExitGuard() {
+    // Close the index writers at cli_main scope, while the runtime they wait
+    // on still runs, not via atexit, where static destruction order would
+    // leave them waiting on stopped threads.
+    struct IndexExitGuard {
+        ~IndexExitGuard() {
             dftracer::utils::index::store::close_index_writers();
-            dftracer::utils::index::store::mark_process_exiting_for_rocksdb();
         }
-    } rocksdb_exit_guard;
+    } index_exit_guard;
     dftracer::utils::logger::init();
     if (auto configured = dftracer::utils::configure_memory_from_env();
         !configured) {

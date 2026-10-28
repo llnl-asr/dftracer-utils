@@ -337,8 +337,7 @@ std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
 void set_test_library_path(const std::string& binary) {
     const fs::path build_root =
         fs::absolute(binary).parent_path().parent_path();
-    const std::string libs = (build_root / "lib").string() + ":" +
-                             (build_root / "_deps" / "rocksdb-build").string();
+    const std::string libs = (build_root / "lib").string();
     ::setenv("LD_LIBRARY_PATH", libs.c_str(), 1);
 }
 

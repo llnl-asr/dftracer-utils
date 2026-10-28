@@ -4,8 +4,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/index_backend.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
@@ -14,13 +13,13 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
-#include <rocksdb/iterator.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
 #include <ctime>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -140,46 +139,52 @@ build::IndexBuildBatchResult build_one(const std::string& file,
     return result;
 }
 
-// The digest of each column family of the index write_trace builds, recorded
-// from the build before the single-walk parse. The members digest, which
-// holds compressed offsets, was recorded again when the trace moved to stored
-// gzip blocks, on a build whose other digests still matched. A family that
-// holds no rows digests to the FNV offset.
-struct FamilyDigest {
-    std::string_view family;
+// The digest of each namespace of the index write_trace builds, recorded from
+// the build on the store. A namespace missing here fails the check.
+struct NamespaceDigest {
+    std::string_view name;
     std::uint64_t digest;
 };
-constexpr FamilyDigest RECORDED[] = {
-    {"default", 8611890762692540955ULL},
-    {"members", 9480084793286417120ULL},
-    {"granule", 309768426608778519ULL},
-    {"blob", 8561683722829537242ULL},
-    {"postings", 10242643526126183152ULL},
-    {"system_metrics", 1469598103934665603ULL},
-    {"rollup", 1469598103934665603ULL},
+constexpr NamespaceDigest RECORDED[] = {
+    {"dftu.idx.bloom", 18403345228985193765ULL},
+    {"dftu.idx.core.catalog", 15388493844977032509ULL},
+    {"dftu.idx.core.members", 15972920933709271177ULL},
+    {"dftu.idx.core.profile", 7294177582628813408ULL},
+    {"dftu.idx.core.rowset", 2644236780002143878ULL},
+    {"dftu.idx.counts", 3743539684424360917ULL},
+    {"dftu.idx.dft.metadata", 18388560704676654305ULL},
+    {"dftu.idx.dft.stats", 3464317095957144947ULL},
+    {"dftu.idx.postings", 17935341531168067248ULL},
+    {"dftu.idx.zonemap", 10281655885967840629ULL},
 };
 
-// FNV-1a of every key and value of one column family. A row that names the
-// test directory (the trace's path, whose length varies) is left out.
-std::uint64_t family_digest(store::RocksDatabase& db, std::string_view cf,
-                            const std::string& dir) {
-    std::uint64_t h = 1469598103934665603ULL;
-    const auto mix = [&h](std::string_view bytes) {
-        for (unsigned char c : bytes) h = (h ^ c) * 1099511628211ULL;
-        h = (h ^ 0xFF) * 1099511628211ULL;
+// FNV-1a of every record of each namespace, as for_each_record gives them,
+// with the test directory (whose length varies) cut out of each.
+std::map<std::string, std::uint64_t> namespace_digests(
+    const store::IndexDatabase& db, const std::string& dir) {
+    std::map<std::string, std::uint64_t> out;
+    const auto without_dir = [&dir](std::string_view bytes) {
+        std::string text(bytes);
+        for (auto at = text.find(dir); at != std::string::npos;
+             at = text.find(dir, at))
+            text.erase(at, dir.size());
+        return text;
     };
-    auto it = db.new_iterator(cf);
-    for (it->SeekToFirst(); it->Valid(); it->Next()) {
-        const std::string_view key = it->key().ToStringView();
-        const std::string_view value = it->value().ToStringView();
-        if (key.find(dir) != std::string_view::npos ||
-            value.find(dir) != std::string_view::npos)
-            continue;
-        mix(key);
-        mix(value);
-    }
-    REQUIRE(it->status().ok());
-    return h;
+    db.for_each_record([&](std::string_view key, std::string_view value) {
+        std::string_view name = key;
+        if (name.starts_with("#copy|")) name.remove_prefix(6);
+        name = name.substr(0, name.find('|'));
+        auto [it, fresh] =
+            out.emplace(std::string(name), 1469598103934665603ULL);
+        std::uint64_t& h = it->second;
+        const auto mix = [&h](std::string_view bytes) {
+            for (unsigned char c : bytes) h = (h ^ c) * 1099511628211ULL;
+            h = (h ^ 0xFF) * 1099511628211ULL;
+        };
+        mix(without_dir(key));
+        mix(without_dir(value));
+    });
+    return out;
 }
 
 namespace views = dftracer::utils::trace::views::detail;
@@ -252,26 +257,21 @@ TEST_SUITE("IndexParseWalks") {
     }
 
     TEST_CASE("the index of a fixed trace is unchanged") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         const std::string file = write_trace(env.get_dir());
         build_one(file, env.get_dir() + "/idx");
         const std::string path =
             trace::internal::determine_index_path(file, env.get_dir() + "/idx");
-        store::RocksDatabase db(path, store::RocksDatabase::OpenMode::ReadOnly);
-        REQUIRE(db.is_open());
-        std::size_t checked = 0;
-        for (const auto cf : store::RocksDatabase::default_column_families()) {
-            const std::uint64_t digest = family_digest(db, cf, env.get_dir());
-            MESSAGE("family " << std::string(cf) << " " << digest);
-            for (const auto& want : RECORDED)
-                if (want.family == cf) {
-                    CHECK(digest == want.digest);
-                    ++checked;
-                }
+        const store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
+        const auto digests = namespace_digests(db, env.get_dir());
+        for (const auto& [name, digest] : digests)
+            MESSAGE("namespace " << name << " " << digest);
+        CHECK(digests.size() == std::size(RECORDED));
+        for (const auto& want : RECORDED) {
+            const auto it = digests.find(std::string(want.name));
+            REQUIRE(it != digests.end());
+            CHECK(it->second == want.digest);
         }
-        CHECK(checked == std::size(RECORDED));
     }
 
     TEST_CASE("a malformed record drops only itself") {

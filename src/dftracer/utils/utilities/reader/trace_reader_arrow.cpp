@@ -339,8 +339,8 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         co_return;
     }
 
-    // Keep RocksDB alive for the generator's lifetime so per-method opens
-    // in GzipIndexer reuse DBManager's cached handle.
+    // Keep the index open for the generator's lifetime so per-method opens
+    // in GzipIndexer reuse its handle.
     std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
     if (has_index_ && !index_path_.empty()) {
         try {

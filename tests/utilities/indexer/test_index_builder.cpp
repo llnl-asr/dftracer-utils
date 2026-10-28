@@ -5,9 +5,7 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -73,7 +71,7 @@ std::pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
     }
     // Put the fixture in its own directory: the index derives as
     // <dir>/.dftindex next to the trace, so a unique filename in the shared
-    // temp root would still collapse every case onto one shared RocksDB and
+    // temp root would still collapse every case onto one shared index and
     // corrupt it.
     auto dir = make_unique_test_path("members");
     fs::create_directories(dir);

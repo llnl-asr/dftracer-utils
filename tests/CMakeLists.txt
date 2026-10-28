@@ -325,12 +325,9 @@ set(TEST_CPP_SOURCES
     index/test_catalog.cpp
     index/test_bloom_open_counts.cpp
     index/test_build_memory.cpp
-    index/test_read_bytes.cpp
-    index/test_build_file_count.cpp
     index/test_build_parallelism.cpp
     index/test_build_peak.cpp
     index/test_design_a.cpp
-    index/test_scan_errors.cpp
     index/test_big_member_reads.cpp
     index/test_parser_reuse.cpp
     index/test_parse_allocations.cpp
@@ -404,22 +401,6 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set(default_test_timeout 300)
   endif()
 
-  # The index tests that run on either backend, run again on the RocksDB
-  # backend of this process.
-  set(rocksdb_backend_cases
-      index/test_indexer
-      index/test_catalog
-      index/test_kinds
-      index/test_layout
-      index/test_bloom_open_counts
-      index/test_record_schema)
-  if(bin_exec IN_LIST rocksdb_backend_cases)
-    add_test(NAME "${bin_exec}[rocksdb]" COMMAND ${target_name})
-    set_tests_properties("${bin_exec}[rocksdb]" PROPERTIES
-                         ENVIRONMENT "DFTRACER_UTILS_INDEX_BACKEND=rocksdb"
-                         TIMEOUT ${default_test_timeout})
-  endif()
-
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})
 
   # These thread-heavy tests contend heavily when run together on low-core CI.
@@ -438,9 +419,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
                                            RESOURCE_LOCK heavy_threading)
   endif()
 
-  # Builds a dozen RocksDB indexes. Each SST flush and compaction ends in a
-  # full fsync (F_FULLFSYNC on macOS), so it waits on the disk and takes 10x
-  # longer when the rest of the suite writes at the same time.
+  # Builds a dozen indexes. Each commit ends in a full fsync (F_FULLFSYNC on
+  # macOS), so it waits on the disk and takes 10x longer when the rest of the
+  # suite writes at the same time.
   # index/test_indexer and reader/test_reader build indexes too: 11 to 16 s
   # alone, past their 120 s limit under the full suite.
   if(bin_exec STREQUAL "index/test_build_memory"
@@ -707,12 +688,6 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   elseif(bin_exec STREQUAL "binaries/test_dftracer_index")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>")
-    # The same runs with the index on the RocksDB backend.
-    add_test(NAME "${bin_exec}[rocksdb]" COMMAND ${target_name})
-    set_tests_properties("${bin_exec}[rocksdb]" PROPERTIES
-      TIMEOUT ${integration_test_timeout}
-      ENVIRONMENT
-      "DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>;DFTRACER_UTILS_INDEX_BACKEND=rocksdb")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_gen_dlio_config")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>")

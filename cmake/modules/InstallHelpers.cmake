@@ -284,57 +284,8 @@ if(ZSTD_LIBRARY_BUNDLED)
             INTERFACE_INCLUDE_DIRECTORIES \"\${ZSTD_INCLUDE_DIR_BUNDLED}\"
         )
     endif()
-
-    # zstd::zstd is the target name RocksDB links against
-    if(ZSTD_INCLUDE_DIR_BUNDLED AND NOT TARGET zstd::zstd)
-        add_library(zstd::zstd UNKNOWN IMPORTED)
-        set_target_properties(zstd::zstd PROPERTIES
-            IMPORTED_LOCATION \"\${ZSTD_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${ZSTD_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
 else()
     find_dependency(zstd QUIET)
-endif()
-
-# ROCKSDB dependency (database for indexing)
-find_library(ROCKSDB_LIBRARY_BUNDLED
-    NAMES rocksdb librocksdb
-    PATHS \${_IMPORT_PREFIX}/lib
-    NO_DEFAULT_PATH
-)
-
-if(ROCKSDB_LIBRARY_BUNDLED)
-    find_path(ROCKSDB_INCLUDE_DIR_BUNDLED
-        NAMES rocksdb/db.h
-        PATHS \${_IMPORT_PREFIX}/include
-        NO_DEFAULT_PATH
-    )
-
-    if(ROCKSDB_INCLUDE_DIR_BUNDLED AND NOT TARGET RocksDB::rocksdb)
-        add_library(RocksDB::rocksdb UNKNOWN IMPORTED)
-        set_target_properties(RocksDB::rocksdb PROPERTIES
-            IMPORTED_LOCATION \"\${ROCKSDB_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${ROCKSDB_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
-
-    # Also look for static version
-    find_library(ROCKSDB_STATIC_LIBRARY_BUNDLED
-        NAMES rocksdb_static librocksdb_static rocksdb
-        PATHS \${_IMPORT_PREFIX}/lib
-        NO_DEFAULT_PATH
-    )
-
-    if(ROCKSDB_STATIC_LIBRARY_BUNDLED AND NOT TARGET RocksDB::rocksdb_static)
-        add_library(RocksDB::rocksdb_static UNKNOWN IMPORTED)
-        set_target_properties(RocksDB::rocksdb_static PROPERTIES
-            IMPORTED_LOCATION \"\${ROCKSDB_STATIC_LIBRARY_BUNDLED}\"
-            INTERFACE_INCLUDE_DIRECTORIES \"\${ROCKSDB_INCLUDE_DIR_BUNDLED}\"
-        )
-    endif()
-else()
-    find_dependency(RocksDB QUIET)
 endif()
 
 # NANOARROW dependency (Arrow support)

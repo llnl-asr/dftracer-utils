@@ -4,21 +4,13 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/agg_row_reader.h>
-#include <dftracer/utils/index/store/internal/db_error.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
-#include <dftracer/utils/index/store/internal/iterator_codec.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
-#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/index/store/internal/statistics_codec.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/store_backend.h>
@@ -44,13 +36,11 @@
 
 namespace dftracer::utils::index::store {
 
-namespace rocks = index::store;
 namespace kv = dftracer::utils::store;
 
 using namespace dftracer::utils::index::gzip;
 using namespace dftracer::utils::index::store::internal;
 using layout::Ext;
-using layout::Family;
 namespace sk = layout::stats_kind;
 namespace pk = layout::path_kind;
 
@@ -213,23 +203,15 @@ struct StoreNamespace {
 
 struct IndexDatabase::Impl {
     std::string db_path_;
-    IndexBackend backend_ = IndexBackend::RocksDb;
-    rocks::RocksDatabase::OpenMode open_mode_ =
-        rocks::RocksDatabase::OpenMode::ReadWrite;
-    /// The RocksDB handle, null on the store.
-    std::shared_ptr<rocks::RocksDatabase> db_;
-    /// The store root, null on RocksDB.
+    IndexOpenMode open_mode_ = IndexOpenMode::ReadWrite;
     std::shared_ptr<StoreRoot> store_;
 
-    bool on_store() const { return backend_ == IndexBackend::Store; }
-
-    /// The value stored at the full index key `key` of `family`.
-    std::optional<std::string> raw_get(layout::Family family,
-                                       std::string_view key);
-    /// Calls fn(full_key, value) for every key of `family` under `prefix`, in
-    /// ascending byte order; the full RocksDB-form key goes to fn.
+    /// The value stored at the full index key `key`.
+    std::optional<std::string> raw_get(std::string_view key);
+    /// Calls fn(full_key, value) for every key under `prefix`, in
+    /// ascending byte order; the full index key goes to fn.
     template <typename Fn>
-    void raw_scan(layout::Family family, std::string_view prefix, Fn&& fn);
+    void raw_scan(std::string_view prefix, Fn&& fn);
 
     /// The payload at `key` of (ext, kind); nullopt when absent or when its
     /// header does not match.
@@ -240,16 +222,15 @@ struct IndexDatabase::Impl {
     template <typename Fn>
     void scan(layout::Ext ext, std::uint8_t kind, std::string_view prefix,
               Fn&& fn);
-    /// Calls fn(key) for every presence key of (ext, kind) under `prefix`.
+    /// Calls fn(key) for every presence key under `prefix`.
     template <typename Fn>
-    void scan_keys(layout::Ext ext, std::uint8_t kind, std::string_view prefix,
-                   Fn&& fn);
+    void scan_keys(std::string_view prefix, Fn&& fn);
     /// Calls fn(file_id, key, payload) for the rows of (ext, kind) of the
     /// files in `file_ids`, in key order.
     template <typename Fn>
     void scan_files(layout::Ext ext, std::uint8_t kind,
                     const std::vector<int>& file_ids, Fn&& fn);
-    bool any_with_prefix(layout::Family family, std::string_view prefix);
+    bool any_with_prefix(std::string_view prefix);
     std::optional<layout::FileRecord> file_record(std::string_view path);
 
     // The store mapping: one form per key of the index key space.
@@ -330,46 +311,26 @@ void throw_store_error(const char* what, const dstd::Error& error) {
 }  // namespace
 
 template <typename Fn>
-void IndexDatabase::Impl::raw_scan(layout::Family family,
-                                   std::string_view prefix, Fn&& fn) {
-    if (on_store()) {
-        // The snapshot and the blocks it loads live in the root's pool; the
-        // caller's work on each record stays in the caller's pool.
-        memory::Pool& caller = memory::current_pool();
-        memory::Scope in_store(store_->pool());
-        store_scan(prefix, [&](std::string_view key, std::string_view value) {
-            memory::Scope back(caller);
-            return fn(key, value);
-        });
-        return;
-    }
-    scan_from("Failed to scan index data",
-              db_->new_iterator(layout::family_name(family)), prefix,
-              [&](::rocksdb::Iterator& it) {
-                  const std::string_view key(it.key().data(), it.key().size());
-                  if (!key.starts_with(prefix)) return false;
-                  return fn(key, std::string_view(it.value().data(),
-                                                  it.value().size()));
-              });
+void IndexDatabase::Impl::raw_scan(std::string_view prefix, Fn&& fn) {
+    // The snapshot and the blocks it loads live in the root's pool; the
+    // caller's work on each record stays in the caller's pool.
+    memory::Pool& caller = memory::current_pool();
+    memory::Scope in_store(store_->pool());
+    store_scan(prefix, [&](std::string_view key, std::string_view value) {
+        memory::Scope back(caller);
+        return fn(key, value);
+    });
 }
 
-std::optional<std::string> IndexDatabase::Impl::raw_get(layout::Family family,
-                                                        std::string_view key) {
-    if (on_store()) {
-        memory::Scope in_store(store_->pool());
-        return store_get(key);
-    }
-    std::string value;
-    auto status = db_->get(key, &value, layout::family_name(family));
-    if (status.IsNotFound()) return std::nullopt;
-    if (!status.ok()) throw_db_error("Failed to read index data", status);
-    return value;
+std::optional<std::string> IndexDatabase::Impl::raw_get(std::string_view key) {
+    memory::Scope in_store(store_->pool());
+    return store_get(key);
 }
 
 std::optional<std::string> IndexDatabase::Impl::get(layout::Ext ext,
                                                     std::uint8_t kind,
                                                     std::string_view key) {
-    auto value = raw_get(layout::family_of(ext, kind), key);
+    auto value = raw_get(key);
     if (!value) return std::nullopt;
     auto body = layout::payload(*value, ext, kind);
     if (!body) return std::nullopt;
@@ -379,22 +340,18 @@ std::optional<std::string> IndexDatabase::Impl::get(layout::Ext ext,
 template <typename Fn>
 void IndexDatabase::Impl::scan(layout::Ext ext, std::uint8_t kind,
                                std::string_view prefix, Fn&& fn) {
-    raw_scan(layout::family_of(ext, kind), prefix,
-             [&](std::string_view key, std::string_view value) {
-                 if (auto body = layout::payload(value, ext, kind))
-                     fn(key, *body);
-                 return true;
-             });
+    raw_scan(prefix, [&](std::string_view key, std::string_view value) {
+        if (auto body = layout::payload(value, ext, kind)) fn(key, *body);
+        return true;
+    });
 }
 
 template <typename Fn>
-void IndexDatabase::Impl::scan_keys(layout::Ext ext, std::uint8_t kind,
-                                    std::string_view prefix, Fn&& fn) {
-    raw_scan(layout::family_of(ext, kind), prefix,
-             [&](std::string_view key, std::string_view) {
-                 fn(key);
-                 return true;
-             });
+void IndexDatabase::Impl::scan_keys(std::string_view prefix, Fn&& fn) {
+    raw_scan(prefix, [&](std::string_view key, std::string_view) {
+        fn(key);
+        return true;
+    });
 }
 
 template <typename Fn>
@@ -408,33 +365,6 @@ void IndexDatabase::Impl::scan_files(layout::Ext ext, std::uint8_t kind,
     std::sort(ids.begin(), ids.end());
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
     if (ids.empty()) return;
-    if (!on_store()) {
-        // One iterator over the id range: the files of a batch are mostly
-        // dense, so a seek per file costs more than skipping the others.
-        const auto kind_prefix = layout::kind_prefix(ext, kind);
-        scan_from("Failed to scan index data",
-                  db_->new_iterator(
-                      layout::family_name(layout::family_of(ext, kind))),
-                  layout::file_prefix(ext, kind, ids.front()),
-                  [&](::rocksdb::Iterator& it) {
-                      const std::string_view key(it.key().data(),
-                                                 it.key().size());
-                      if (!key.starts_with(kind_prefix) ||
-                          key.size() < layout::KEY_PREFIX_BYTES)
-                          return false;
-                      const std::uint32_t file_id =
-                          layout::read_u32(key.substr(3, 4));
-                      if (file_id > ids.back()) return false;
-                      if (!std::binary_search(ids.begin(), ids.end(), file_id))
-                          return true;
-                      const std::string_view value(it.value().data(),
-                                                   it.value().size());
-                      if (auto body = layout::payload(value, ext, kind))
-                          fn(static_cast<int>(file_id), key, *body);
-                      return true;
-                  });
-        return;
-    }
     for (std::uint32_t file_id : ids) {
         scan(ext, kind, layout::file_prefix(ext, kind, file_id),
              [&](std::string_view key, std::string_view body) {
@@ -443,10 +373,9 @@ void IndexDatabase::Impl::scan_files(layout::Ext ext, std::uint8_t kind,
     }
 }
 
-bool IndexDatabase::Impl::any_with_prefix(layout::Family family,
-                                          std::string_view prefix) {
+bool IndexDatabase::Impl::any_with_prefix(std::string_view prefix) {
     bool found = false;
-    raw_scan(family, prefix, [&](std::string_view, std::string_view) {
+    raw_scan(prefix, [&](std::string_view, std::string_view) {
         found = true;
         return false;
     });
@@ -457,9 +386,7 @@ std::optional<layout::FileRecord> IndexDatabase::Impl::file_record(
     std::string_view path) {
     // A file record carries its own header, so the value goes through
     // decode_file_record whole rather than through get().
-    auto value = raw_get(
-        layout::family_of(layout::Ext::Host, layout::host::FILE_BY_PATH),
-        layout::file_by_path_key(path));
+    auto value = raw_get(layout::file_by_path_key(path));
     if (!value) return std::nullopt;
     return layout::decode_file_record(*value);
 }
@@ -676,8 +603,7 @@ std::optional<std::string> IndexDatabase::Impl::store_get(
         return std::nullopt;
     }
     const auto target = store_layout::target_of(key);
-    // A key the mapping cannot express holds nothing, like a key RocksDB
-    // never wrote.
+    // A key the mapping cannot express holds nothing.
     if (!target) return std::nullopt;
     kv::NamespaceSpec spec;
     kv::ScopeKey scope;
@@ -953,6 +879,18 @@ class RetainedStoreRoots {
         }
     }
 
+    void forget(const std::string& path) {
+        std::list<std::pair<std::string, std::shared_ptr<StoreRoot>>> dropped;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            const auto known = std::find_if(
+                roots_.begin(), roots_.end(),
+                [&](const auto& held) { return held.first == path; });
+            if (known != roots_.end())
+                dropped.splice(dropped.begin(), roots_, known);
+        }
+    }
+
    private:
     std::mutex mutex_;
     /// Most recently opened first.
@@ -967,6 +905,11 @@ void close_index_writers() {
     }
 }
 
+void release_index(const std::string& index_path) {
+    RetainedStoreRoots::instance().forget(
+        index::store::internal::normalize_index_root(index_path));
+}
+
 std::uint64_t IndexDatabase::read_write_opens() noexcept {
     return read_write_open_count.load(std::memory_order_relaxed);
 }
@@ -975,73 +918,29 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
                              IndexOpenMode open_mode)
     : impl_(std::make_unique<Impl>()) {
     impl_->db_path_ = index::store::internal::normalize_index_root(index_path);
-    impl_->backend_ = index_backend();
-    impl_->open_mode_ = open_mode == IndexOpenMode::ReadOnly
-                            ? rocks::RocksDatabase::OpenMode::ReadOnly
-                            : rocks::RocksDatabase::OpenMode::ReadWrite;
-    if (impl_->on_store()) {
-        impl_->store_ = StoreRoot::get_or_open(impl_->db_path_);
-        if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadOnly) {
-            RetainedStoreRoots::instance().retain(impl_->db_path_,
-                                                  impl_->store_);
-        }
-        // An index root opened for writing exists from then on, as it does on
-        // the RocksDB backend, which creates its directory at open. Only a
-        // write creates the store inside it.
-        if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
-            std::error_code error;
-            fs::create_directories(impl_->db_path_, error);
-            if (error) {
-                throw std::runtime_error("store index: cannot create " +
-                                         impl_->db_path_ + ": " +
-                                         error.message());
-            }
-        }
-    } else {
-        impl_->db_ = rocks::RocksDBManager::instance().get_or_open(
-            impl_->db_path_, impl_->open_mode_);
+    impl_->open_mode_ = open_mode;
+    impl_->store_ = StoreRoot::get_or_open(impl_->db_path_);
+    if (open_mode == IndexOpenMode::ReadOnly) {
+        RetainedStoreRoots::instance().retain(impl_->db_path_, impl_->store_);
+        return;
     }
-    if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
-        read_write_open_count.fetch_add(1, std::memory_order_relaxed);
-        init_schema();
+    // An index root opened for writing exists from then on. Only a write
+    // creates the store inside it.
+    std::error_code error;
+    fs::create_directories(impl_->db_path_, error);
+    if (error) {
+        throw std::runtime_error("store index: cannot create " +
+                                 impl_->db_path_ + ": " + error.message());
     }
+    read_write_open_count.fetch_add(1, std::memory_order_relaxed);
 }
 
 IndexDatabase::IndexDatabase(IndexDatabase&&) noexcept = default;
 IndexDatabase& IndexDatabase::operator=(IndexDatabase&&) noexcept = default;
 IndexDatabase::~IndexDatabase() = default;
 
-std::shared_ptr<rocks::RocksDatabase> IndexDatabase::db() const {
-    if (impl_->on_store()) {
-        throw std::runtime_error(
-            "store index: " + impl_->db_path_ +
-            " is held by the store, which has no RocksDB handle");
-    }
-    return impl_->db_;
-}
-
-bool IndexDatabase::has_rocksdb() const noexcept { return !impl_->on_store(); }
-
 void IndexDatabase::for_each_record(
     const std::function<void(std::string_view, std::string_view)>& fn) const {
-    if (!impl_->on_store()) {
-        for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
-            const auto family = static_cast<layout::Family>(f);
-            const std::string name(layout::family_name(family));
-            auto it = impl_->db_->new_iterator(name);
-            if (!it) continue;
-            for (it->SeekToFirst(); it->Valid(); it->Next()) {
-                const std::string key =
-                    name + "|" +
-                    std::string(it->key().data(), it->key().size());
-                fn(key,
-                   std::string_view(it->value().data(), it->value().size()));
-            }
-            if (!it->status().ok())
-                throw_db_error("Failed to read every record", it->status());
-        }
-        return;
-    }
     const auto held = impl_->store_->snapshot();
     if (!held) return;
     const auto declared = held->namespaces();
@@ -1088,46 +987,11 @@ void IndexDatabase::for_each_record(
 }
 
 std::unique_ptr<IndexDatabaseWrite> IndexDatabase::begin_staged_write() {
-    if (!impl_->on_store()) {
-        throw std::runtime_error(
-            "index database: a staged write needs the store backend");
-    }
     return impl_->store_->begin_write(true);
 }
 
 std::unique_ptr<IndexDatabaseWrite> IndexDatabase::begin_write() {
-    if (impl_->on_store()) {
-        return impl_->store_->begin_write();
-    }
-    return std::unique_ptr<IndexDatabaseWrite>(
-        new IndexDatabaseWriterContext(impl_->db_));
-}
-
-void IndexDatabase::bulk_ingest(const SstArtifactRegistry& registry,
-                                const StringViewSet& skip_cfs) {
-    if (impl_->on_store()) {
-        if (registry.empty()) return;
-        throw std::runtime_error("store index: bulk ingest is not supported");
-    }
-    // One atomic multi-CF ingest: a single manifest edit, so the manifest
-    // entries in the registry family commit together with their data.
-    // Overlapping index-wide SSTs (dictionaries) and system metrics SSTs are
-    // fine with allow_global_seqno, which assigns seqnos in list order.
-    std::vector<std::pair<std::string_view, const std::vector<std::string>*>>
-        per_cf;
-    for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
-        const auto family = static_cast<Family>(f);
-        const auto name = layout::family_name(family);
-        const auto& files = registry.files(family);
-        if (files.empty() || skip_cfs.contains(std::string(name))) continue;
-        per_cf.emplace_back(name, &files);
-    }
-    if (per_cf.empty()) return;
-    auto status = impl_->db_->ingest_external_files_multi(per_cf);
-    if (!status.ok())
-        throw_db_error("Failed to ingest SSTs into column family '" +
-                           std::string(per_cf.front().first) + "'",
-                       status);
+    return impl_->store_->begin_write();
 }
 
 std::vector<int> IndexDatabase::assign_file_ids(
@@ -1146,50 +1010,17 @@ std::vector<int> IndexDatabase::assign_file_ids(
 }
 
 int IndexDatabase::reserve_file_id_range(std::size_t count) {
-    if (impl_->on_store()) {
-        return count == 0 ? impl_->store_->next_file_id()
-                          : impl_->store_->reserve_file_id_range(count);
-    }
-    std::uint32_t first = 1;
-    if (auto body = impl_->get(Ext::Host, layout::host::NEXT_FILE_ID,
-                               layout::next_file_id_key()))
-        first = layout::read_u32(*body);
-    if (count == 0) return static_cast<int>(first);
-    auto status = impl_->db_->put(
-        layout::next_file_id_key(),
-        next_file_id_value(first + static_cast<std::uint32_t>(count)));
-    if (!status.ok()) throw_db_error("Failed to advance next file id", status);
-    return static_cast<int>(first);
+    return count == 0 ? impl_->store_->next_file_id()
+                      : impl_->store_->reserve_file_id_range(count);
 }
 
-void IndexDatabase::close_writer() {
-    if (impl_->on_store()) impl_->store_->close();
-}
+void IndexDatabase::close_writer() { impl_->store_->close(); }
 
-void IndexDatabase::refresh() {
-    if (impl_->on_store()) impl_->store_->refresh();
-}
-
-void IndexDatabase::init_schema() {
-    if (impl_->on_store()) return;
-    auto writer = begin_write();
-    writer->init_schema();
-    writer->commit();
-    // Rollups moved to <index>/cache; drop the rows older builds left here.
-    if (any_key_with_prefix("Failed to scan the legacy rollup family",
-                            impl_->db_->new_iterator(cf::ROLLUP), {})) {
-        auto status = impl_->db_->delete_range(
-            std::string_view(), std::string(32, '\xFF'), cf::ROLLUP);
-        if (!status.ok())
-            throw_db_error("Failed to clear the legacy rollup family", status);
-    }
-}
+void IndexDatabase::refresh() { impl_->store_->refresh(); }
 
 std::optional<ExtensionState> IndexDatabase::extension_state(
     int file_id, IndexExtension ext) const {
-    auto value =
-        impl_->raw_get(layout::family_of(Ext::Host, layout::host::MANIFEST),
-                       layout::manifest_key(fid(file_id), ext));
+    auto value = impl_->raw_get(layout::manifest_key(fid(file_id), ext));
     if (!value) return std::nullopt;
     auto entry = layout::decode_manifest(*value);
     if (!entry) return std::nullopt;
@@ -1200,8 +1031,7 @@ std::optional<ExtensionState> IndexDatabase::extension_state(
 std::optional<ExtensionState> IndexDatabase::plugin_extension_state(
     int file_id, std::string_view name) const {
     auto value =
-        impl_->raw_get(layout::family_of(Ext::Host, layout::host::MANIFEST),
-                       layout::plugin_manifest_key(fid(file_id), name));
+        impl_->raw_get(layout::plugin_manifest_key(fid(file_id), name));
     if (!value) return std::nullopt;
     auto entry = layout::decode_manifest(*value);
     if (!entry) return std::nullopt;
@@ -1213,19 +1043,17 @@ std::vector<std::pair<std::string, ExtensionState>>
 IndexDatabase::plugin_extension_states(int file_id) const {
     std::vector<std::pair<std::string, ExtensionState>> out;
     const auto prefix = layout::manifest_key(fid(file_id), Ext::Plugin);
-    impl_->raw_scan(
-        layout::Family::Registry, prefix,
-        [&](std::string_view key, std::string_view value) {
-            if (key.size() <= prefix.size() || key.back() != '\0') return true;
-            auto entry = layout::decode_manifest(value);
-            if (!entry) return true;
-            out.emplace_back(
-                std::string(
-                    key.substr(prefix.size(), key.size() - prefix.size() - 1)),
-                ExtensionState{entry->version, entry->params_hash,
-                               entry->status == layout::ExtStatus::Ready});
-            return true;
-        });
+    impl_->raw_scan(prefix, [&](std::string_view key, std::string_view value) {
+        if (key.size() <= prefix.size() || key.back() != '\0') return true;
+        auto entry = layout::decode_manifest(value);
+        if (!entry) return true;
+        out.emplace_back(
+            std::string(
+                key.substr(prefix.size(), key.size() - prefix.size() - 1)),
+            ExtensionState{entry->version, entry->params_hash,
+                           entry->status == layout::ExtStatus::Ready});
+        return true;
+    });
     return out;
 }
 
@@ -1242,7 +1070,7 @@ std::vector<std::string> IndexDatabase::extension_paths(
     int file_id, IndexExtension ext) const {
     std::vector<std::string> paths;
     const auto prefix = layout::file_prefix(ext, pk::PATHS, fid(file_id));
-    impl_->scan_keys(ext, pk::PATHS, prefix, [&](std::string_view key) {
+    impl_->scan_keys(prefix, [&](std::string_view key) {
         paths.emplace_back(key.substr(prefix.size()));
     });
     return paths;
@@ -1271,8 +1099,7 @@ std::optional<std::string> IndexDatabase::path_file_value(
 bool IndexDatabase::has_postings(int file_id, std::string_view path) const {
     const auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
-    return impl_->any_with_prefix(layout::family_of(Ext::Postings, pk::IN_FILE),
-                                  prefix);
+    return impl_->any_with_prefix(prefix);
 }
 
 bool IndexDatabase::has_posting(int file_id, std::string_view path,
@@ -1280,8 +1107,7 @@ bool IndexDatabase::has_posting(int file_id, std::string_view path,
     auto key =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
     append_u64_be(key, value_hash);
-    return impl_->raw_get(layout::family_of(Ext::Postings, pk::IN_FILE), key)
-        .has_value();
+    return impl_->raw_get(key).has_value();
 }
 
 std::vector<std::uint64_t> IndexDatabase::posting_granules(
@@ -1290,11 +1116,10 @@ std::vector<std::uint64_t> IndexDatabase::posting_granules(
     auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_GRANULE, fid(file_id), path);
     append_u64_be(prefix, value_hash);
-    impl_->scan_keys(Ext::Postings, pk::IN_GRANULE, prefix,
-                     [&](std::string_view key) {
-                         if (key.size() == prefix.size() + 4)
-                             out.push_back(tail_u32(key, prefix.size()));
-                     });
+    impl_->scan_keys(prefix, [&](std::string_view key) {
+        if (key.size() == prefix.size() + 4)
+            out.push_back(tail_u32(key, prefix.size()));
+    });
     return out;
 }
 
@@ -1399,15 +1224,13 @@ StringViewMap<FileRegistryEntry> IndexDatabase::query_all_file_registry()
     StringViewMap<FileRegistryEntry> results;
     const auto prefix =
         layout::kind_prefix(Ext::Host, layout::host::FILE_BY_PATH);
-    impl_->raw_scan(
-        layout::Family::Registry, prefix,
-        [&](std::string_view key, std::string_view value) {
-            if (auto record = layout::decode_file_record(value))
-                results.emplace(
-                    key.substr(prefix.size()),
-                    FileRegistryEntry{static_cast<int>(record->file_id)});
-            return true;
-        });
+    impl_->raw_scan(prefix, [&](std::string_view key, std::string_view value) {
+        if (auto record = layout::decode_file_record(value))
+            results.emplace(
+                key.substr(prefix.size()),
+                FileRegistryEntry{static_cast<int>(record->file_id)});
+        return true;
+    });
     return results;
 }
 
@@ -1710,8 +1533,7 @@ namespace dftracer::utils::index::store {
 void AggRowReader::for_each_row(const IndexDatabase& db, std::uint8_t kind,
                                 std::string_view prefix, const RowFn& fn) {
     db.impl_->raw_scan(
-        layout::family_of(layout::Ext::Agg, kind), prefix,
-        [&](std::string_view key, std::string_view value) {
+        prefix, [&](std::string_view key, std::string_view value) {
             if (auto body = layout::payload(value, layout::Ext::Agg, kind))
                 return fn(key, *body);
             return true;
@@ -1730,16 +1552,12 @@ std::vector<std::uint32_t> AggRowReader::file_ids(const IndexDatabase& db) {
          {layout::agg_kind::PARTIAL, layout::agg_kind::SYSTEM,
           layout::agg_kind::DICT}) {
         const auto prefix = layout::kind_prefix(layout::Ext::Agg, kind);
-        db.impl_->raw_scan(layout::family_of(layout::Ext::Agg, kind), prefix,
-                           [&](std::string_view key, std::string_view) {
-                               if (key.size() < layout::KEY_PREFIX_BYTES)
-                                   return true;
-                               const std::uint32_t file_id =
-                                   layout::read_u32(key.substr(3, 4));
-                               if (file_id != layout::INDEX_WIDE)
-                                   out.push_back(file_id);
-                               return true;
-                           });
+        db.impl_->raw_scan(prefix, [&](std::string_view key, std::string_view) {
+            if (key.size() < layout::KEY_PREFIX_BYTES) return true;
+            const std::uint32_t file_id = layout::read_u32(key.substr(3, 4));
+            if (file_id != layout::INDEX_WIDE) out.push_back(file_id);
+            return true;
+        });
     }
     std::sort(out.begin(), out.end());
     out.erase(std::unique(out.begin(), out.end()), out.end());

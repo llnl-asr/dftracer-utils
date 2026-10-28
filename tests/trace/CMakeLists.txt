@@ -172,39 +172,3 @@ set_tests_properties(trace/aggregators/test_quantile_store PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
 set_tests_properties(trace/aggregators/test_agg_partial PROPERTIES
   ENVIRONMENT "DFTRACER_UTILS_MEMORY_DEBUG=1")
-
-# The aggregation tests that run on either backend, run again on the RocksDB
-# backend of this process.
-set(rocksdb_backend_cases
-    aggregators/test_agg_parity
-    aggregators/test_agg_partial
-    aggregators/test_agg_query
-    aggregators/test_system_metrics
-    views/test_view_partials
-    views/test_view_aggregate
-    views/test_view_agg_parity
-    views/test_view_agg_keys
-    views/test_view_agg_scan
-    views/test_view_index_freshness
-    views/test_stats_view)
-foreach(bin_exec ${rocksdb_backend_cases})
-  string(REPLACE "/" "_" target_name "trace_${bin_exec}")
-  set(rocksdb_env "DFTRACER_UTILS_INDEX_BACKEND=rocksdb")
-  set(rocksdb_timeout 300)
-  if(bin_exec STREQUAL "aggregators/test_agg_parity")
-    set(rocksdb_env
-        "${rocksdb_env};DFTRACER_UTILS_COMPARATOR_PATH=$<TARGET_FILE:dftracer_comparator>;DFTRACER_UTILS_GEN_DLIO_CONFIG_PATH=$<TARGET_FILE:dftracer_gen_dlio_config>")
-    set(rocksdb_timeout 600)
-  elseif(bin_exec STREQUAL "aggregators/test_agg_partial")
-    set(rocksdb_env "${rocksdb_env};DFTRACER_UTILS_MEMORY_DEBUG=1")
-  endif()
-  # Its own directory: a test may clear its directory, and the default run of
-  # the same binary can run beside it.
-  set(rocksdb_working_directory
-      "${CMAKE_CURRENT_BINARY_DIR}/workdirs/${target_name}_rocksdb")
-  file(MAKE_DIRECTORY "${rocksdb_working_directory}")
-  add_test(NAME "trace/${bin_exec}[rocksdb]" COMMAND ${target_name})
-  set_tests_properties("trace/${bin_exec}[rocksdb]" PROPERTIES
-                       WORKING_DIRECTORY "${rocksdb_working_directory}"
-                       ENVIRONMENT "${rocksdb_env}" TIMEOUT ${rocksdb_timeout})
-endforeach()

@@ -309,8 +309,8 @@ class ReclaimSlot {
 /**
  * @brief Bytes the process holds outside this library, such as spill files in
  * a RAM-backed directory, released on destruction. Memory that comes from the
- * global operator new of an executable, RocksDB's included, is in the heap
- * already and must not be attached here as well.
+ * global operator new of an executable is in the heap already and must not be
+ * attached here as well.
  *
  * Counted bytes count toward the budget like reservations do; reported
  * bytes, such as spill files on a disk, show in Stats::external only. Empty
@@ -754,8 +754,8 @@ void rearm_exit_check() noexcept;
  * @brief Leave the live blocks of @p pool out of the exit check.
  *
  * For a pool that holds process-lifetime blocks that no check can tell from
- * a leak, such as the blocks of the global operator new, where RocksDB and the
- * C++ runtime keep singletons to the end. The pool still counts in every
+ * a leak, such as the blocks of the global operator new, where the C++
+ * runtime keeps singletons to the end. The pool still counts in every
  * counter and report. Only one pool is exempt; a later call replaces it.
  */
 void exempt_from_exit_check(Pool& pool) noexcept;

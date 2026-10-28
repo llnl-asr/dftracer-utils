@@ -1,7 +1,6 @@
 """Dask distributed integration for dftracer-utils."""
 
 import os
-import shutil
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, replace
 from typing import (
@@ -114,7 +113,6 @@ class DistributedIndexResult(TypedDict):
     total_files: int
     per_worker: List[int]
     index_path: str
-    artifact_batches: int
 
 
 def _worker_progress_forwarder(phase: str, batch: str) -> Callable[[int, int], None]:
@@ -187,26 +185,6 @@ class ProgressAggregator:
             except Exception:
                 pass
         return False
-
-
-def resolve_local_staging(client: "Client") -> str:
-    """Derive node-local SST scratch from each Dask worker's own scratch.
-
-    Workers share the path *string* (e.g. ``/scratch/$USER``) but each resolves
-    it to its own node-local storage; falls back to ``/tmp`` when nothing is
-    reported.
-    """
-    workers = client.scheduler_info().get("workers", {}) or {}
-    if workers:
-        worker_local_dir = next(iter(workers.values())).get("local_directory") or "/tmp"
-    else:
-        worker_local_dir = "/tmp"
-    return os.path.join(worker_local_dir, "dftracer-sst-staging")
-
-
-def _rmtree_quiet(path: str) -> None:
-    """Best-effort recursive remove; submitted to workers for staging cleanup."""
-    shutil.rmtree(path, ignore_errors=True)
 
 
 def _runtime_threads(worker: "Worker", host_worker_counts: Dict[str, int], total_cpus: int) -> int:
@@ -978,33 +956,29 @@ def assign_files_by_pid(
     return dict(worker_assignments)
 
 
-def _build_sst_task(
+def _build_index_task(
     files: List[str],
-    file_ids: List[int],
-    local_staging: str,
-    shared_staging: str,
     batch_id: str,
     index_dir: str,
     checkpoint_size: int,
     bloom_dimensions: Optional[List[str]],
     force_rebuild: bool,
     parallelism: int,
-    flush_every_files: int,
     build_bloom: bool = True,
-    # Opaque native aggregation-config object, forwarded straight to build_sst_batch.
+    # Opaque native aggregation-config object, forwarded straight to build_index_batch.
     aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
     enable_det_ids: bool = False,
-) -> Tuple[List[Dict[str, List[str]]], bytes]:
-    """Dask worker task: build per-worker SSTs and relocate to shared FS.
+) -> bytes:
+    """Dask worker task: index `files` straight into the index at `index_dir`.
 
-    Returns ``(artifact_dicts, tracker_blob)``."""
+    Returns the serialized aggregation tracker of the batch."""
     import logging as _logging
     import socket as _socket
     import time as _time
 
-    from .dftracer_utils_ext import build_sst_batch, move_artifacts
+    from .dftracer_utils_ext import build_index_batch
 
-    _log = _logging.getLogger("dftracer.utils.dask._build_sst_task")
+    _log = _logging.getLogger("dftracer.utils.dask._build_index_task")
     _host = _socket.gethostname()
 
     _progress_cb = _worker_progress_forwarder("Indexing", batch_id)
@@ -1015,55 +989,32 @@ def _build_sst_task(
 
         enable_aggregation_deterministic_ids()
 
-    artifact_dicts, tracker_blob = build_sst_batch(
+    tracker_blob = build_index_batch(
         files,
-        file_ids,
-        local_staging,
-        batch_id,
         index_dir,
         checkpoint_size,
         force_rebuild,
         build_bloom,
         bloom_dimensions,
         parallelism,
-        flush_every_files,
         None,
         aggregation_config,
         progress=_progress_cb,
     )
-    t_build = _time.monotonic()
-
-    n_moved = 0
-    if shared_staging and shared_staging != local_staging:
-        # Keep per-sink subdir to avoid blob.sst collisions.
-        base = os.path.join(shared_staging, batch_id)
-        relocated: List[Dict[str, List[str]]] = []
-        for i, d in enumerate(artifact_dicts):
-            relocated.append(move_artifacts(d, os.path.join(base, f"sub_{i}")))
-        artifact_dicts = relocated
-        n_moved = len(relocated)
-    t_move = _time.monotonic()
-
     _log.info(
-        "build host=%s batch=%s n_files=%d n_artifacts=%d build=%.2fs move=%.2fs(n=%d) total=%.2fs",
+        "build host=%s batch=%s n_files=%d total=%.2fs",
         _host,
         batch_id,
         len(files),
-        len(artifact_dicts),
-        t_build - t0,
-        t_move - t_build,
-        n_moved,
-        t_move - t0,
+        _time.monotonic() - t0,
     )
-    return artifact_dicts, tracker_blob
+    return tracker_blob
 
 
 def distributed_index(
     directory: str = "",
     files: Optional[List[str]] = None,
     index_path: str = "",
-    local_staging: str = "",
-    shared_staging: str = "",
     client: "Optional[Client]" = None,
     checkpoint_size: Union[int, str] = 32 * 1024 * 1024,
     bloom_dimensions: Optional[List[str]] = None,
@@ -1071,72 +1022,46 @@ def distributed_index(
     build_bloom: bool = True,
     partition: Literal["lpt", "round_robin"] = "lpt",
     parallelism_per_worker: int = 0,
-    flush_every_files: int = 0,
     aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
     progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> DistributedIndexResult:
-    """Index a set of trace files using Dask workers writing SSTs in parallel.
+    """Index a set of trace files using Dask workers that write in parallel.
 
     Steps (all O(1) on the coordinator except the fan-out):
       1. Enumerate files + sizes via parallel scan.
       2. LPT bin-pack whole files into one bucket per Dask worker. A file is
-         never split across workers: every part of its index is built from
-         the whole file, by one worker with its own threads.
-      3. Assign file ids on the coordinator's IndexDatabase; each worker
-         writes its files' records with their index data.
-      4. Submit one Dask task per non-empty worker that runs the existing
-         indexer pipeline with an SST sink, writing SSTs to `local_staging`
-         and (if different) moving them to `shared_staging`.
-      5. Collect artifact dicts into an SstArtifactRegistry; the coordinator
-         ingests them in one atomic bulk_ingest.
-
-    On the store backend (``index_backend() == "store"``) each worker writes
-    the index directly and numbers its own files, and nothing is staged or
-    ingested: the staging arguments are unused. The coordinator writes the aggregation config and trackers, then
-    refreshes its view of the index.
+         never split across workers: every part of its index is built from the
+         whole file, by one worker with its own threads.
+      3. Submit one Dask task per non-empty worker that runs the indexer
+         pipeline straight into the index. Each worker numbers its own files,
+         and nothing is staged or ingested.
+      4. The coordinator writes the aggregation config and trackers, then
+         refreshes its view of the index.
 
     Args:
         directory: Directory containing trace files.
         files: Explicit file list (alternative to directory).
         index_path: Target .dftindex path (coordinator-writable).
-        local_staging: Per-worker SST build dir. If equal to shared_staging,
-            no post-build move. Required on RocksDB only.
-        shared_staging: Shared FS dir the coordinator reads SSTs from during
-            ingest. Must be on the same filesystem as index_path for the
-            cheapest ingest.
         client: Dask distributed Client. None -> run tasks inline.
         partition: "lpt" (greedy longest-processing-time bin-pack) or
             "round_robin".
         parallelism_per_worker: 0 -> let the plugin/default Runtime choose
             (one coroutine thread per core).
-        flush_every_files: 0 -> build SSTs once per worker; >0 -> flush
-            mid-batch to bound peak memory.
 
     Returns:
-        dict with total_files, per_worker sizes, index_path, artifact_count.
+        dict with total_files, per_worker sizes and index_path.
     """
     if dask is None:
         raise ImportError("dask is required for distributed_index")
     checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
     if not index_path:
         raise ValueError("index_path is required")
-    from .dftracer_utils_ext import index_backend as _index_backend
-
-    on_store = _index_backend() == "store"
-    if not on_store and not local_staging:
-        raise ValueError("local_staging is required")
-    if not shared_staging:
-        shared_staging = local_staging
-
     import logging as _logging
     import time as _time
 
     from .dftracer_utils_ext import TRACE_FILE_PATTERNS
     from .dftracer_utils_ext import (
         IndexDatabase as _IndexDatabase,
-    )
-    from .dftracer_utils_ext import (
-        SstArtifactRegistry as _SstArtifactRegistry,
     )
     from .dftracer_utils_ext import (
         plan_lpt_partition as _plan_lpt_partition,
@@ -1166,7 +1091,6 @@ def distributed_index(
             "total_files": 0,
             "per_worker": [],
             "index_path": index_path,
-            "artifact_batches": 0,
         }
 
     n_workers = 1
@@ -1200,28 +1124,15 @@ def distributed_index(
                 "total_files": n_total_files,
                 "per_worker": [],
                 "index_path": index_path,
-                "artifact_batches": 0,
             }
         if len(_needs) < len(entries):
             entries = [(p, s) for (p, s) in entries if p in _needs]
             all_paths = [p for (p, _) in entries]
 
-    # 2. Assign every file an id once on the coordinator (file_ids are then
-    #    parallel to `entries`).
-    _t1 = _time.monotonic()
     _log.info("distributed_index: opening IndexDatabase at %s", index_path)
     db = _IndexDatabase(index_path)
-    db.init_schema()
-    # On the store a file id is a label inside one process: each worker
-    # numbers its own files.
-    all_file_ids = [0] * len(all_paths) if on_store else db.assign_file_ids(all_paths)
-    _log.info(
-        "distributed_index: assign_file_ids done (%d files, %.1fs)",
-        len(all_paths),
-        _time.monotonic() - _t1,
-    )
 
-    # 3. PLAN: whole files bin-packed across workers. A file is never split
+    # 2. PLAN: whole files bin-packed across workers. A file is never split
     #    across workers: each part of a file's index is built from the whole
     #    file, so one worker builds it, with its own threads.
     _t3 = _time.monotonic()
@@ -1243,42 +1154,30 @@ def distributed_index(
         [len(u) for u in per_worker_files],
     )
 
-    # 4. BUILD: each worker receives its (paths, file_ids) parallel lists.
+    # 3. BUILD: each worker receives its paths.
     index_dir = os.path.dirname(index_path.rstrip("/"))
-    if not on_store:
-        os.makedirs(local_staging, exist_ok=True)
-        os.makedirs(shared_staging, exist_ok=True)
-
     worker_file_lists: List[List[str]] = [
         [all_paths[i] for i in files_w] for files_w in per_worker_files
-    ]
-    worker_file_ids: List[List[int]] = [
-        [int(all_file_ids[i]) for i in files_w] for files_w in per_worker_files
     ]
 
     _t_build = _time.monotonic()
     worker_ids: List[int] = []
-    worker_addrs: List[str] = []
-    # Each entry is (artifact_dicts, tracker_blob) returned by _build_sst_task.
-    worker_results: List[Tuple[List[Dict[str, List[str]]], bytes]] = []
+    # The tracker blob each worker's _build_index_task returned.
+    worker_results: List[bytes] = []
     if client is None:
-        for w, (paths_w, ids_w) in enumerate(zip(worker_file_lists, worker_file_ids)):
+        for w, paths_w in enumerate(worker_file_lists):
             if not paths_w:
                 continue
             worker_ids.append(w)
             worker_results.append(
-                _build_sst_task(
+                _build_index_task(
                     paths_w,
-                    ids_w,
-                    local_staging,
-                    shared_staging,
                     f"worker_{w}",
                     index_dir,
                     checkpoint_size,
                     bloom_dimensions,
                     force_rebuild,
                     parallelism_per_worker,
-                    flush_every_files,
                     build_bloom,
                     aggregation_config,
                     False,
@@ -1288,25 +1187,21 @@ def distributed_index(
         worker_addrs = list(client.nthreads().keys())
         with ProgressAggregator(client, progress):
             futures = []
-            for w, (paths_w, ids_w) in enumerate(zip(worker_file_lists, worker_file_ids)):
+            for w, paths_w in enumerate(worker_file_lists):
                 if not paths_w:
                     continue
                 target = [worker_addrs[w % len(worker_addrs)]] if worker_addrs else None
                 worker_ids.append(w)
                 futures.append(
                     client.submit(
-                        _build_sst_task,
+                        _build_index_task,
                         paths_w,
-                        ids_w,
-                        local_staging,
-                        shared_staging,
                         f"worker_{w}",
                         index_dir,
                         checkpoint_size,
                         bloom_dimensions,
                         force_rebuild,
                         parallelism_per_worker,
-                        flush_every_files,
                         build_bloom,
                         aggregation_config,
                         True,
@@ -1321,42 +1216,8 @@ def distributed_index(
         len(worker_ids),
     )
 
-    # 5. Bulk-ingest on coordinator (all CFs).
-    _t_collect = _time.monotonic()
-    registry = _SstArtifactRegistry()
-    total_artifacts = 0
-    tracker_blobs: List[bytes] = []
-    for wres in worker_results:
-        if isinstance(wres, tuple) and len(wres) == 2:
-            dicts, tracker_blob = wres
-        else:
-            dicts, tracker_blob = wres, b""
-        if tracker_blob:
-            tracker_blobs.append(tracker_blob)
-        for d in dicts:
-            registry.append(d)
-            total_artifacts += 1
-    _log.info(
-        "distributed_index: collected %d artifacts in %.2fs",
-        total_artifacts,
-        _time.monotonic() - _t_collect,
-    )
-
-    # bulk_ingest is a single coordinator call with no granular counter yet, so
-    # report it as an indeterminate labelled phase.
-    _t_ingest = _time.monotonic()
-    if not on_store:
-        if progress is not None:
-            progress(0, 0, "Ingesting SSTs")
-        db.bulk_ingest(registry)
-        if progress is not None:
-            progress(1, 1, "Ingesting SSTs")
-    _log.info(
-        "distributed_index: bulk_ingest done in %.1fs (%d artifacts)",
-        _time.monotonic() - _t_ingest,
-        total_artifacts,
-    )
-    built = bool(worker_ids) if on_store else total_artifacts > 0
+    tracker_blobs = [blob for blob in worker_results if blob]
+    built = bool(worker_ids)
     if aggregation_config is not None and built:
         _t_meta = _time.monotonic()
         db.write_agg_config(aggregation_config)
@@ -1369,40 +1230,13 @@ def distributed_index(
         )
 
     # The coordinator's own writes end in a complete data file, and reads in
-    # this process see what the workers wrote; on the store the workers wrote
-    # from other processes.
+    # this process see what the workers wrote from other processes.
     db.close_writer()
     db.refresh()
-
-    stale = []
-    for w in [] if on_store else worker_ids:
-        stale.append((w, os.path.join(local_staging, f"worker_{w}")))
-        if shared_staging and shared_staging != local_staging:
-            stale.append((w, os.path.join(shared_staging, f"worker_{w}")))
-    if client is not None and worker_addrs:
-        try:
-            client.gather(
-                [
-                    client.submit(
-                        _rmtree_quiet,
-                        path,
-                        workers=[worker_addrs[w % len(worker_addrs)]],
-                        allow_other_workers=True,
-                        pure=False,
-                    )
-                    for w, path in stale
-                ]
-            )
-        except Exception:
-            _log.warning("distributed_index: staging cleanup failed", exc_info=True)
-    else:
-        for _w, path in stale:
-            _rmtree_quiet(path)
 
     per_worker_file_counts = [len(set(paths)) for paths in worker_file_lists]
     return {
         "total_files": n_total_files,
         "per_worker": per_worker_file_counts,
         "index_path": index_path,
-        "artifact_batches": total_artifacts,
     }

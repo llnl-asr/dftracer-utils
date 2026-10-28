@@ -102,11 +102,8 @@ ci:
   script:
     - JOBID=$(flux jobs -n --name="$ALLOC_NAME" -o "{id}" | head -1)
     - test -n "$JOBID"
-    # RocksDB first and alone: the five phases below would otherwise each build
-    # their own copy, five times over, in parallel.
-    # ubuntu:24.04, not 22.04: presets v6 needs CMake >= 3.25, 22.04 ships 3.22.
-    - flux proxy "$JOBID" flux run -N 1 bash .gitlab/ci/run-in-podman.sh docker.io/library/ubuntu:24.04 .gitlab/ci/rocksdb.sh
     # One container per phase, run concurrently in the single allocation.
+    # ubuntu:24.04, not 22.04: presets v6 needs CMake >= 3.25, 22.04 ships 3.22.
     - bash .gitlab/ci/parallel-phases.sh test-cpp test-py valgrind-cpp valgrind-py valgrind-mpi
   # On failure, keep the diagnostics: the per-PID Valgrind logs (full
   # stacktraces) and the CTest temporary logs. Bind-mounted to the checkout, so

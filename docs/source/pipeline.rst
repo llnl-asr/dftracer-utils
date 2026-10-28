@@ -1011,28 +1011,26 @@ set the out-of-core aggregation budget directly on a query (0 = pure in-memory,
 spilling to sorted temp runs above the cap); ``TraceViewer.auto_spill()`` /
 ``View::auto_spill()`` picks a budget from available memory for you.
 
-``flush_every_files`` for Batched Index Writes
-----------------------------------------------
+``memory_budget`` for Index Builds
+----------------------------------
 
-``IndexBuildBatchConfig::flush_every_files`` (used by the distributed/SST index
-build path) bounds peak memory by fully indexing and flushing a batch of that
-many files before starting the next, instead of holding every file's state live
-at once.
+``IndexBuildBatchConfig::memory_budget`` bounds the peak memory of an index
+build. A worker admits a file only while its estimated bytes fit the budget,
+and a file whose state outgrows its share spills into a staged write of the
+index.
 
 .. code-block:: cpp
 
    auto batch_config = std::make_shared<IndexBuildBatchConfig>();
-   batch_config->file_paths        = files;
-   batch_config->index_dir         = index_dir;
-   batch_config->checkpoint_size   = checkpoint_size;
-   batch_config->parallelism       = executor_threads;
-   batch_config->flush_every_files = 64;   // tune to your per-file memory profile
+   batch_config->file_paths      = files;
+   batch_config->index_dir       = index_dir;
+   batch_config->checkpoint_size = checkpoint_size;
+   batch_config->parallelism     = executor_threads;
+   batch_config->memory_budget   = budget_bytes;
 
-A ``flush_every_files`` of ``0`` (the default) disables sub-batching and
-processes every file in one shot, which is fastest for small inputs but
-not memory-safe at scale. Size it with ``compute_memory_budget()`` and
-``estimate_per_file_bytes()`` above: pick a count such that
-``count * per_file_bytes`` stays under your budget.
+A ``memory_budget`` of ``0`` (the default) resolves the budget from the
+memory the process may use, and ``memory::NO_SPILL_BUDGET`` leaves the build
+unbounded.
 
 API Reference
 -------------

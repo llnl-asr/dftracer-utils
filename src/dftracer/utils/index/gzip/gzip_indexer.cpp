@@ -11,7 +11,6 @@
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
@@ -31,6 +30,7 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -898,7 +898,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
     // Pre-scanned slice path: caller supplied the member map and a range.
     // Used by the MPI/distributed indexer to split one file across ranks
     // without re-scanning. Member indices start at `member_begin` so
-    // multiple slices of the same file_id produce disjoint SST entries.
+    // multiple slices of the same file_id produce disjoint entries.
     if (slice != nullptr && slice->members != nullptr &&
         slice->member_end > slice->member_begin) {
         const auto& all = *slice->members;

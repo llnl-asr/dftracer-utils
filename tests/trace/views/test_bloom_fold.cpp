@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -32,6 +31,8 @@ using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::index::extensions::ScalableBloomFilter;
+
+namespace store = dftracer::utils::index::store;
 
 namespace {
 
@@ -70,6 +71,15 @@ int file_id_of(dftracer::utils::index::store::IndexDatabase& db,
                const std::string& gz) {
     return db.get_file_info_id(
         dftracer::utils::index::store::internal::get_logical_path(gz));
+}
+
+// Binds a logical path to the file id a fold writes, since the store names a
+// file by its path.
+int bind_file(store::IndexDatabase& db, std::string_view logical_path) {
+    auto write = db.begin_write();
+    const int fid = dftu_utils_test::register_test_file(*write, logical_path);
+    write->commit();
+    return fid;
 }
 
 bool file_bloom_contains(dftracer::utils::index::store::IndexDatabase& db,
@@ -124,8 +134,9 @@ std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
 }  // namespace
 
 TEST_SUITE("BloomFold") {
-    // A build that fails after spilling drops its fold; the runs go with it.
-    // Runs handed off by finish_spilled belong to the caller.
+    // A build that fails after spilling drops its fold, and the runs it staged
+    // go with it: nothing of them is readable. Runs handed off by
+    // finish_staged belong to the caller, whose commit publishes the tier.
     TEST_CASE("spill runs live until handed off or dropped") {
         TestEnvironment env(10);
         StringIntern intern;
@@ -136,9 +147,10 @@ TEST_SUITE("BloomFold") {
                             std::to_string(i) +
                             R"(,"dur":1,"args":{"k":"v"}})");
         auto events = events_of(lines, intern);
+        constexpr std::uint64_t CHUNKS = 4 + BloomFold::SPILL_LAG;
         auto drive = [&](BloomFold& fold) {
             // A chunk spills once SPILL_LAG later checkpoints have started.
-            for (std::uint64_t cp = 0; cp < 4 + BloomFold::SPILL_LAG; ++cp) {
+            for (std::uint64_t cp = 0; cp < CHUNKS; ++cp) {
                 ScanUnit unit;
                 unit.file_path = "f.pfw.gz";
                 unit.index_path = env.get_dir() + "/.dftindex";
@@ -148,26 +160,59 @@ TEST_SUITE("BloomFold") {
         };
         const std::string dropped = env.get_dir() + "/dropped";
         {
+            store::IndexDatabase db(dropped);
+            REQUIRE(bind_file(db, "f.pfw.gz") == 1);
             BloomFold fold(intern);
-            fold.enable_spill(1, dropped, 1);
+            fold.enable_spill(1, db.begin_staged_write(), 1,
+                              /*fresh_id=*/true);
             drive(fold);
-            // The three spills fill one run, far under the run size floor.
+            // The spills fill one run, far under the run size floor.
             CHECK(fold.spill_runs() == 1);
-            CHECK(fs::exists(dropped));
         }
-        CHECK_FALSE(fs::exists(dropped));
+        {
+            store::IndexDatabase db(dropped, store::IndexOpenMode::ReadOnly);
+            CHECK_FALSE(db.pruning_tier_current(1));
+            CHECK(db.query_chunk_statistics(1).empty());
+        }
 
         const std::string kept = env.get_dir() + "/kept";
-        std::size_t runs = 0;
         {
+            store::IndexDatabase db(kept);
+            REQUIRE(bind_file(db, "f.pfw.gz") == 1);
             BloomFold fold(intern);
-            fold.enable_spill(1, kept, 1);
+            fold.enable_spill(1, db.begin_staged_write(), 1,
+                              /*fresh_id=*/true);
             drive(fold);
-            runs = fold.finish_spilled(1).size();
+            CHECK(fold.spill_runs() == 1);
+            auto staged = fold.finish_staged(1);
+            REQUIRE(staged);
+            staged->commit();
         }
-        // The spilled run, one with the chunks left and one closing run.
-        CHECK(runs == 3);
-        CHECK(fs::exists(kept));
+        // The staged tier holds every chunk the fold saw, as the tier a fold
+        // that fit in memory writes does.
+        const std::string memory = env.get_dir() + "/memory";
+        {
+            store::IndexDatabase db(memory);
+            REQUIRE(bind_file(db, "f.pfw.gz") == 1);
+            BloomFold fold(intern);
+            drive(fold);
+            CHECK(fold.spill_runs() == 0);
+            auto write = db.begin_write();
+            fold.write(*write, 1);
+            write->commit();
+        }
+        auto chunks = [](const std::string& path) {
+            store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
+            return db.query_chunk_statistics(1);
+        };
+        const auto spilled = chunks(kept);
+        const auto held = chunks(memory);
+        REQUIRE(spilled.size() == CHUNKS);
+        REQUIRE(held.size() == CHUNKS);
+        for (std::size_t i = 0; i < spilled.size(); ++i) {
+            CHECK(spilled[i].checkpoint_idx == held[i].checkpoint_idx);
+            CHECK(spilled[i].stats.total_events == held[i].stats.total_events);
+        }
     }
 
     // An unfiltered export rides the fold along, so the pruner index it could
@@ -277,7 +322,7 @@ TEST_SUITE("BloomFold") {
     }
 
     // The streaming index build owns its write transaction, so the folds write
-    // into a caller-provided sink (here a RocksDB writer) rather than opening
+    // into a caller-provided sink (here an index write) rather than opening
     // their own index. Both artifacts must come back queryable.
     TEST_CASE("write writes queryable bloom and hash") {
         TestEnvironment env(200);

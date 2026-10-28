@@ -4,9 +4,6 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -17,7 +14,6 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
-#include <rocksdb/iterator.h>
 #include <testing_utilities.h>
 
 #include <atomic>
@@ -103,7 +99,7 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
 // Every live key and value of every family, in order.
 std::vector<std::pair<std::string, std::string>> contents(
     const std::string& index_path) {
-    store::RocksDBManager::instance().reset(index_path);
+    store::release_index(index_path);
     store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
     std::vector<std::pair<std::string, std::string>> out;
     // A read error throws rather than read as a smaller index.
@@ -244,28 +240,6 @@ TEST_SUITE("IndexBuildMemory") {
         CHECK(ext::BloomFold::run_limit(SHARE, 0) ==
               constants::file_admission::MIN_SPILL_RUN_BYTES);
         CHECK(ext::BloomFold::run_limit(64 * MIB, 0) == 16 * MIB);
-    }
-
-    TEST_CASE("a spill run that cannot be written fails the build") {
-        dftu_utils_test::TestEnvironment env(10);
-        const std::vector<std::string> files = {
-            write_trace(env.get_dir(), "blocked", 12000, 600, 2048)};
-        const auto dir = env.get_dir() + "/blocked_idx";
-        // The store spills into stages of one write, with no directory of
-        // runs to block.
-        if (store::index_backend() == store::IndexBackend::Store) return;
-        const auto index = index_of(files[0], dir);
-        // A regular file where the spill directory goes: no run can open.
-        fs::create_directories(fs::path(index).parent_path());
-        {
-            std::ofstream(index + ".spill") << "not a directory";
-        }
-        const auto r = run_build(files, dir, 1 * MIB);
-        CHECK(r.indexed == 0);
-        CHECK(r.failed == 1);
-        REQUIRE(r.results.size() == 1);
-        CHECK_FALSE(r.results[0].success);
-        CHECK_FALSE(r.results[0].error_message.empty());
     }
 
     TEST_CASE("a spilled build writes the same index as an unbounded one") {

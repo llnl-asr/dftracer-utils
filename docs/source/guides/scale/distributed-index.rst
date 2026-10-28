@@ -1,4 +1,4 @@
-:description: Index a large trace set in parallel across a dask cluster: workers build shards to node-local staging and the coordinator assembles the store.
+:description: Index a large trace set in parallel across a dask cluster: each worker writes its share of the files straight into the index store.
 
 Build an index across a dask cluster
 ====================================
@@ -7,8 +7,8 @@ Build an index across a dask cluster
    :class: goal
 
    Index a large trace set in parallel across a `dask
-   <https://www.dask.org/>`_ cluster, with each worker building shards to
-   node-local staging and the coordinator assembling them into one index store.
+   <https://www.dask.org/>`_ cluster, with each worker writing its share of
+   the files straight into one index store.
 
 This is a Python-only API. It lives in ``dftracer.utils.dask`` and has no C++ or
 C equivalent; the C++ indexer is single-process (parallel within the node).
@@ -23,23 +23,21 @@ package root):
 
    from dftracer.utils.dask import distributed_index
 
-The minimal call runs inline on the coordinator - no cluster needed. Three
-arguments are required: a source (``directory`` or ``files``), an
-``index_path``, and a ``local_staging`` directory:
+The minimal call runs inline on the coordinator - no cluster needed. Two
+arguments are required: a source (``directory`` or ``files``) and an
+``index_path``:
 
 .. code-block:: python
 
    result = distributed_index(
        directory="./traces",
        index_path="/path/to/index.dftindex",
-       local_staging="/path/to/staging",
    )
-   # {"total_files": 128, "per_worker": [...], "index_path": "...",
-   #  "artifact_batches": 4}
+   # {"total_files": 128, "per_worker": [...], "index_path": "..."}
 
 With ``client=None`` (the default) every task runs inline on the coordinator. To
-fan the work across workers, pass a ``dask.distributed.Client`` and give a
-``shared_staging`` path on a filesystem the coordinator can also read:
+fan the work across workers, pass a ``dask.distributed.Client`` and give every
+worker write access to ``index_path``:
 
 .. code-block:: python
 
@@ -52,8 +50,6 @@ fan the work across workers, pass a ``dask.distributed.Client`` and give a
    result = distributed_index(
        directory="/shared/traces",
        index_path="/shared/index.dftindex",
-       local_staging="/scratch/local",     # node-local scratch on each worker
-       shared_staging="/shared/staging",   # visible to the coordinator
        client=client,
        partition="lpt",                    # longest-processing-time balancing
    )
@@ -73,13 +69,7 @@ Useful parameters
      - Trace source. Give one of them.
    * - ``index_path``
      - (required)
-     - Output index store path.
-   * - ``local_staging``
-     - (required)
-     - Per-worker (node-local) staging directory.
-   * - ``shared_staging``
-     - = ``local_staging``
-     - Staging root reachable by the coordinator (needed with a real cluster).
+     - Output index store path, written by every worker.
    * - ``client``
      - ``None``
      - A dask ``Client``; ``None`` runs inline on the coordinator.
@@ -100,8 +90,8 @@ Useful parameters
      - Callback ``(done, total, message)`` for progress reporting.
 
 ``distributed_index`` returns a dict with ``total_files``, ``per_worker`` (files
-per worker), ``index_path``, and ``artifact_batches``. It raises ``ValueError``
-when ``index_path`` or ``local_staging`` is empty or neither ``directory`` nor
+per worker) and ``index_path``. It raises ``ValueError``
+when ``index_path`` is empty or neither ``directory`` nor
 ``files`` is given, and ``ImportError`` when dask is not installed.
 
 Related helpers

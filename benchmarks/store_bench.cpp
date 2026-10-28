@@ -1,18 +1,17 @@
-// Compares the index store writer and reader with RocksDB, as the indexer uses
-// it, over the same payload, keys, values and threads: write GB/s at 1, 16 and
+// Measures the index store writer and reader, as the indexer uses them, over
+// one payload, key and value set and one thread list: write GB/s at 1, 16 and
 // 96 threads with one shared file against one file per thread, the writes and
 // syncs of the write path by kind, the bytes on disk and the on-disk
-// amplification of both engines, the cost of a commit as the number of scopes
+// amplification of the write, the cost of a commit as the number of scopes
 // grows, the read path (open, point get, scope scan and full scan) on the data
 // the shared write case left behind, and a fold scan over many scopes, the way
 // an index query sums per-file aggregates over every file of a trace set.
 //
 //   store_bench --smoke
 //
-//   store_bench --dir /scratch --case all --engine both --threads 1,16,96
-//   --payload-mib 256
+//   store_bench --dir /scratch --case all --threads 1,16,96 --payload-mib 256
 //
-//   store_bench --dir /private/tmp --case query --engine rocksdb --gets 100000
+//   store_bench --dir /private/tmp --case query --gets 100000
 //
 //   store_bench --dir /private/tmp --case fold --fold-scopes 1000,8404
 //   --fold-keys 1024
@@ -20,29 +19,28 @@
 //   store_bench --dir /p/a --keep /p/kept --threads 96 --payload-mib 4096
 //   store_bench --dir /p/b --reuse /p/kept --threads 96 --payload-mib 4096
 //
-//   store_bench --space /p/kept/ours-shared-96-4096
+//   store_bench --space /p/kept/shared-96-4096
 //
 // --keep writes the data of the query case under its path and keeps it, with
 // no reads; --reuse reads that data with no writes, so the reads can run on
 // another node, with nothing of the data in its page cache. Both runs take the
-// same --threads, --payload-mib, --value-bytes, --value-kind, --keys-per-batch
-// and --engine.
+// same --threads, --payload-mib, --value-bytes, --value-kind and
+// --keys-per-batch.
 //
 // --space writes and reads nothing: it prints the space report of every data
 // file of one store directory, the sum of them and the bytes of its summary
 // file, as `name value` lines, and exits.
 //
 // Output: comment lines naming the extent size, the I/O backend, the file
-// system kind and the options both engines run under, then TSV rows. A write
-// row is one mode, engine and thread count; its I/O counts come from io_fault's
-// counting mode and cover every descriptor of the case, so they leave out the
-// header each writer writes when it is created, and the RocksDB side prints a
-// dash there. A query row is one operation and engine, read from the data the
-// shared write case wrote. The scopes case is ours only. Keys are 16 bytes and
-// unique, so the keys read back count the entries a case committed. A fold row
-// is one engine, scope count and part count: its scan reads scopes * keys fold
-// entries and yields one output key per distinct key, so ns_per_key divides by
-// keys, and 1, 4 and 16 parts show how one fold scan scales.
+// system kind and the options the store runs under, then TSV rows. A write row
+// is one mode and thread count; its I/O counts come from io_fault's counting
+// mode and cover every descriptor of the case, so they leave out the header
+// each writer writes when it is created. A query row is one operation, read
+// from the data the shared write case wrote. Keys are 16 bytes and unique, so
+// the keys read back count the entries a case committed. A fold row is one
+// scope count and part count: its scan reads scopes * keys fold entries and
+// yields one output key per distinct key, so ns_per_key divides by keys, and 1,
+// 4 and 16 parts show how one fold scan scales.
 
 #include <bench_counters.h>
 #include <dftracer/utils/common/constants.h>
@@ -50,7 +48,6 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -59,12 +56,6 @@
 #include <dftracer/utils/store/io_fault.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
-#include <rocksdb/db.h>
-#include <rocksdb/iterator.h>
-#include <rocksdb/options.h>
-#include <rocksdb/slice.h>
-#include <rocksdb/statistics.h>
-#include <rocksdb/write_batch.h>
 
 #include <algorithm>
 #include <array>
@@ -83,7 +74,6 @@
 #include <string>
 #include <string_view>
 #include <thread>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -118,11 +108,6 @@ constexpr std::uint64_t SCOPES_PER_CORO = 64;
 constexpr std::size_t SCOPE_CASE_THREADS = 2;
 /// Busy retries of one commit before the case is called stuck.
 constexpr int COMMIT_ATTEMPTS = 1 << 16;
-/// The one namespace of the benchmark, the first byte of a RocksDB key.
-constexpr std::uint8_t STORE_NAMESPACE_ID = 1;
-/// Separates the scope from the entry key, so every key of a scope shares a
-/// prefix and a scope is one range read.
-constexpr char SCOPE_TERMINATOR = '\0';
 /// A key index no write uses, so the entry is absent from every scope.
 constexpr std::uint32_t ABSENT_KEY_INDEX = 0xFFFFFFFFU;
 /// The seed of the query keys, fixed so two runs read the same keys.
@@ -168,39 +153,12 @@ const char* filesystem_name(FilesystemKind kind) {
     return "unknown";
 }
 
-const char* compression_name(::rocksdb::CompressionType type) {
-    switch (type) {
-        case ::rocksdb::kNoCompression:
-            return "none";
-        case ::rocksdb::kSnappyCompression:
-            return "snappy";
-        case ::rocksdb::kZlibCompression:
-            return "zlib";
-        case ::rocksdb::kBZip2Compression:
-            return "bzip2";
-        case ::rocksdb::kLZ4Compression:
-            return "lz4";
-        case ::rocksdb::kLZ4HCCompression:
-            return "lz4hc";
-        case ::rocksdb::kXpressCompression:
-            return "xpress";
-        case ::rocksdb::kZSTD:
-            return "zstd";
-        case ::rocksdb::kDisableCompressionOption:
-            return "disabled";
-        default:
-            break;
-    }
-    return "unknown";
-}
-
 struct Options {
     bool smoke = false;
     bool help = false;
     std::string dir;
     std::vector<int> threads{1, 16, 96};
     std::vector<std::string> modes{"shared", "per-thread"};
-    std::vector<std::string> engines{"ours", "rocksdb"};
     std::uint64_t payload_mib = 256;
     std::size_t value_bytes = 200;
     bool trace_values = true;
@@ -221,7 +179,6 @@ void apply_smoke(Options& opt) {
     opt.smoke = true;
     opt.threads = {1, 2};
     opt.modes = {"shared", "per-thread"};
-    opt.engines = {"ours", "rocksdb"};
     opt.payload_mib = 1;
     opt.value_bytes = 200;
     opt.keys_per_batch = 256;
@@ -281,17 +238,6 @@ bool parse_args(int argc, char** argv, Options& opt) {
                 opt.modes = {"per-thread"};
             } else if (mode == "both") {
                 opt.modes = {"shared", "per-thread"};
-            } else {
-                return false;
-            }
-        } else if (arg == "--engine") {
-            const std::string which_engine = value();
-            if (which_engine == "ours") {
-                opt.engines = {"ours"};
-            } else if (which_engine == "rocksdb") {
-                opt.engines = {"rocksdb"};
-            } else if (which_engine == "both") {
-                opt.engines = {"ours", "rocksdb"};
             } else {
                 return false;
             }
@@ -380,7 +326,6 @@ void usage() {
         << "usage: store_bench [--smoke] [--value-kind trace|repeat] [--dir "
            "PATH] [--threads 1,16,96]\n"
            "                   [--mode shared|per-thread|both]\n"
-           "                   [--engine ours|rocksdb|both]\n"
            "                   [--payload-mib N] [--value-bytes N]\n"
            "                   [--keys-per-batch N] [--scopes 10,1000,100000]\n"
            "                   [--commits N] [--gets N]\n"
@@ -547,27 +492,6 @@ std::string scope_name(std::uint64_t coro, std::uint64_t slot) {
            ".dft";
 }
 
-/// The key prefix of one scope on the RocksDB side: the namespace id and the
-/// scope, terminated, so the scope's entries are one range of keys.
-std::string scope_prefix(std::uint64_t coro, std::uint64_t slot) {
-    std::string prefix;
-    prefix.reserve(1 + 32 + 1);
-    prefix.push_back(static_cast<char>(STORE_NAMESPACE_ID));
-    prefix += scope_name(coro, slot);
-    prefix.push_back(SCOPE_TERMINATOR);
-    return prefix;
-}
-
-std::string rocks_key(std::uint64_t coro, std::uint64_t batch_index,
-                      std::uint32_t index) {
-    const std::size_t slot = batch_index % SCOPES_PER_CORO;
-    std::string key = scope_prefix(coro, slot);
-    const auto entry = make_key(static_cast<std::uint32_t>(coro),
-                                static_cast<std::uint32_t>(batch_index), index);
-    key.append(reinterpret_cast<const char*>(entry.data()), entry.size());
-    return key;
-}
-
 /// The key of one fold entry: 'k' and six digits, so a lexicographic scan
 /// yields the keys in key-number order and a key needs no table.
 std::string fold_key(std::uint64_t index) {
@@ -654,8 +578,8 @@ std::uint64_t directory_bytes(const std::string& dir) {
     return total;
 }
 
-/// The keys every engine writes, and which of them a commit wrote or a key
-/// absent from every scope: what the query case reads and checks.
+/// The keys of one case, and which of them a commit wrote or a key absent from
+/// every scope: what the query case reads and checks.
 struct Workload {
     std::uint64_t threads = 0;
     std::uint64_t batches = 0;
@@ -697,37 +621,6 @@ std::uint64_t scope_rows(const Workload& workload, std::uint64_t slot) {
            workload.keys_per_batch;
 }
 
-bool has_engine(const std::vector<std::string>& engines,
-                const std::string& name) {
-    return std::find(engines.begin(), engines.end(), name) != engines.end();
-}
-
-const ::rocksdb::WriteOptions& rocks_write_options() {
-    static const ::rocksdb::WriteOptions options = [] {
-        ::rocksdb::WriteOptions write;
-        write.disableWAL = true;
-        return write;
-    }();
-    return options;
-}
-
-/// The options the indexer would open with, so both sides write under one
-/// table and cache configuration.
-::rocksdb::Options rocks_bench_options() {
-    auto options =
-        dftracer::utils::index::store::RocksDatabase::default_options();
-    static_cast<::rocksdb::ColumnFamilyOptions&>(options) = dftracer::utils::
-        index::store::RocksDatabase::default_column_family_options();
-    return options;
-}
-
-::rocksdb::Options rocks_read_options() {
-    auto options = rocks_bench_options();
-    options.create_if_missing = false;
-    options.create_missing_column_families = false;
-    return options;
-}
-
 /// The commit of one batch with the retry the writer documents: the bytes of
 /// earlier commits are written, then the same batch commits again (a Busy
 /// commit left it whole).
@@ -744,12 +637,11 @@ coro::CoroTask<bool> commit_retrying(Writer& writer, Batch batch,
 
 struct WriteRow {
     std::string mode;
-    std::string engine = "ours";
     int threads = 0;
     std::uint64_t payload = 0;
     double seconds = 0;
-    /// The write path up to the flush and the close, and the same with the
-    /// compaction wait between them; ours has one phase, so both are the close.
+    /// The close of the store: it has one phase after the last commit, so both
+    /// of these are the close time that `seconds` holds.
     double seconds_flushed = 0;
     double seconds_compacted = 0;
     io_fault::Counts counts;
@@ -758,14 +650,11 @@ struct WriteRow {
     std::uint64_t keys = 0;
     std::uint64_t read_keys = 0;
     std::uint64_t disk_bytes = 0;
-    std::uint64_t db_bytes_written = 0;
-    std::uint64_t db_compaction_bytes = 0;
     /// The directory the query case reads, when this case keeps one.
     std::string keep_dir;
 };
 
 struct QueryRow {
-    std::string engine;
     std::string op;
     std::uint64_t count = 0;
     double ms_total = 0;
@@ -781,7 +670,6 @@ struct ScopeRow {
 };
 
 struct FoldRow {
-    std::string engine;
     std::uint64_t scopes = 0;
     std::uint64_t keys = 0;
     std::uint64_t threads = 0;
@@ -800,11 +688,10 @@ struct FoldScan {
     bool ok = true;
 };
 
-/// One query key of one scope, in both encodings, so the timed loop only reads.
+/// One query key of one scope, so the timed loop only reads.
 struct QueryItem {
     std::size_t scope = 0;
     std::array<std::uint8_t, KEY_BYTES> key{};
-    std::string rocks;
 };
 
 struct QueryScan {
@@ -814,7 +701,6 @@ struct QueryScan {
 
 struct QueryPlan {
     std::vector<ScopeKey> scopes;
-    std::vector<std::string> prefixes;
     std::vector<QueryItem> hits;
     std::vector<QueryItem> misses;
     std::vector<QueryScan> scans;
@@ -995,13 +881,11 @@ struct Bench {
     void ensure_comment() {
         if (comment_written) return;
         comment_written = true;
-        const auto cf = dftracer::utils::index::store::RocksDatabase::
-            default_column_family_options();
         std::cout
             << "# extent_size=" << extent_size << " backend=" << backend
             << " fs=" << filesystem_name(dftracer::utils::filesystem_kind(root))
             << " dir=" << root << "\n"
-            << "# ours codec="
+            << "# codec="
             << (opt.codec == store::PageCodec::Zstd
                     ? "zstd level 1 per 32 KiB page (raw when it saves under an"
                       " eighth)"
@@ -1014,27 +898,12 @@ struct Bench {
                     STORE_DEFAULT_PAGE_CACHE_BYTES >>
                 20)
             << " MiB unless DFTRACER_UTILS_STORE_PAGE_CACHE_BYTES sets it\n"
-            << "# rocksdb compression=" << compression_name(cf.compression)
-            << " bottommost=" << compression_name(cf.bottommost_compression)
-            << " wal=off block_cache_mib="
-            << (dftracer::utils::index::store::g_block_cache_bytes.load(
-                    std::memory_order_relaxed) /
-                MIB_BYTES)
-            << " write_buffer_mib=" << (cf.write_buffer_size / MIB_BYTES)
-            << " per column family (one block cache and one write buffer"
-               " manager for every DB of the process)\n"
-            << "# rocksdb default column family uses"
-               " default_column_family_options (32 KiB blocks, no bloom"
-               " filter); the indexer opens it with"
-               " point_lookup_column_family_options\n"
-            << "# rocksdb point gets and scans use default ReadOptions (no"
-               " async prefetch)\n"
             << (opt.trace_values
                     ? "# values: 4096 different DFTracer-like event lines, "
-                      "picked by key hash; ours compresses each extent with "
-                      "zstd\n"
-                    : "# values: one repeated byte, so RocksDB compression is "
-                      "at its best and ours stores it uncompressed\n")
+                      "picked by key hash, so the writes compress about as real"
+                      " index data does\n"
+                    : "# values: one repeated byte, the best case for the "
+                      "codec\n")
             << "# rss_growth_mib is the growth of the peak resident set of the"
                " process (getrusage maxrss) across a phase, and a peak only"
                " rises, so a phase that reuses the memory of an earlier one"
@@ -1045,20 +914,19 @@ struct Bench {
         if (write_header_written) return;
         write_header_written = true;
         std::cout
-            << "mode\tengine\tthreads\tpayload_bytes\tseconds\tgib_per_s"
+            << "mode\tthreads\tpayload_bytes\tseconds\tgib_per_s"
                "\tseconds_flushed\tseconds_compacted\textent_writes"
                "\textent_bytes"
                "\tbig_writes\tbig_bytes\trecord_writes\trecord_bytes"
                "\theader_writes\theader_bytes\tfooter_bytes\ttrailer_bytes"
                "\tsyncs\ttotal_bytes\twrite_amp\tdisk_bytes\tdisk_amp"
-               "\tdb_bytes_written\tdb_compaction_bytes\tdb_write_amp\tbusy"
-               "\tmax_extent_bytes\tcommits_per_s\n";
+               "\tbusy\tmax_extent_bytes\tcommits_per_s\n";
     }
 
     void ensure_query_header() {
         if (query_header_written) return;
         query_header_written = true;
-        std::cout << "engine\top\tcount\tms_total\tns_per_item\textra"
+        std::cout << "op\tcount\tms_total\tns_per_item\textra"
                      "\trss_growth_mib\n";
     }
 
@@ -1071,40 +939,28 @@ struct Bench {
     void ensure_fold_header() {
         if (fold_header_written) return;
         fold_header_written = true;
-        std::cout << "engine\tscopes\tkeys\tthreads\tms_open\tms_scan"
+        std::cout << "scopes\tkeys\tthreads\tms_open\tms_scan"
                      "\tns_per_key\tmismatches\treads\n";
     }
 
     bool run();
-    WriteRow run_ours_write_case(Runtime& runtime, const Workload& workload,
-                                 const std::string& dir, bool per_thread,
-                                 bool keep_dir);
-    WriteRow run_rocksdb_write_case(const Workload& workload,
-                                    const std::string& dir, bool per_thread,
-                                    bool keep_dir);
+    WriteRow run_write_case(Runtime& runtime, const Workload& workload,
+                            const std::string& dir, bool per_thread,
+                            bool keep_dir);
     QueryPlan make_query_plan(const Workload& workload) const;
     bool run_kept();
-    bool run_query_case(const Workload& workload, const std::string& ours_dir,
-                        const std::string& rocksdb_dir);
-    bool query_ours(const Workload& workload, const std::string& dir,
-                    const QueryPlan& plan);
-    bool query_rocksdb(const Workload& workload, const std::string& dir,
-                       const QueryPlan& plan);
+    bool run_query_case(const Workload& workload, const std::string& dir);
+    bool query_store(const Workload& workload, const std::string& dir,
+                     const QueryPlan& plan);
     ScopeRow run_scope_case(Runtime& runtime, std::uint64_t scopes);
     NamespaceSpec fold_spec() const;
-    bool write_fold_ours(Runtime& runtime, const std::string& dir,
-                         std::uint64_t scopes, std::uint64_t keys);
-    bool write_fold_rocksdb(const std::string& dir, std::uint64_t scopes,
-                            std::uint64_t keys);
-    FoldScan fold_scan_ours(const Snapshot& snapshot,
-                            const NamespaceSpec& namespace_spec,
-                            const std::vector<ScopeKey>& scopes,
-                            std::uint64_t keys, std::uint64_t threads,
-                            const std::vector<std::int64_t>& expected);
-    FoldScan fold_scan_rocksdb(::rocksdb::DB& db,
-                               const std::vector<std::string>& prefixes,
-                               std::uint64_t keys, std::uint64_t threads,
-                               const std::vector<std::int64_t>& expected);
+    bool write_fold(Runtime& runtime, const std::string& dir,
+                    std::uint64_t scopes, std::uint64_t keys);
+    FoldScan fold_scan(const Snapshot& snapshot,
+                       const NamespaceSpec& namespace_spec,
+                       const std::vector<ScopeKey>& scopes, std::uint64_t keys,
+                       std::uint64_t threads,
+                       const std::vector<std::int64_t>& expected);
     bool run_fold_case(Runtime& runtime, std::uint64_t scopes);
     void print_write_row(const WriteRow& row);
     void print_query_row(const QueryRow& row);
@@ -1112,7 +968,6 @@ struct Bench {
     void print_fold_row(const FoldRow& row);
     bool check_write_row(const WriteRow& row);
     std::uint64_t count_keys(const std::string& dir);
-    std::uint64_t count_rocks_keys(const std::string& dir);
     void close_writers(Runtime& runtime,
                        std::vector<std::unique_ptr<Writer>>& writers,
                        std::atomic<int>& errors);
@@ -1120,11 +975,9 @@ struct Bench {
                                    const std::string& prefix, bool print_now);
 };
 
-QueryRow query_row(std::string engine_name, std::string op, std::uint64_t count,
-                   std::uint64_t nanos, std::uint64_t rss_before,
-                   std::string extra) {
+QueryRow query_row(std::string op, std::uint64_t count, std::uint64_t nanos,
+                   std::uint64_t rss_before, std::string extra) {
     QueryRow row;
-    row.engine = std::move(engine_name);
     row.op = std::move(op);
     row.count = count;
     row.ms_total = static_cast<double>(nanos) / 1e6;
@@ -1140,26 +993,19 @@ QueryRow query_row(std::string engine_name, std::string op, std::uint64_t count,
 void Bench::print_write_row(const WriteRow& row) {
     ensure_write_header();
     ensure_comment();
-    const bool ours = row.engine == "ours";
     const std::uint64_t total = total_bytes(row.counts);
     const double seconds = row.seconds;
     const double gib_per_s =
         seconds > 0 ? static_cast<double>(row.payload) / seconds / GIB_BYTES
                     : 0;
     const double write_amp =
-        ours && row.payload > 0
+        row.payload > 0
             ? static_cast<double>(total) / static_cast<double>(row.payload)
             : 0;
     const double disk_amp = row.payload > 0
                                 ? static_cast<double>(row.disk_bytes) /
                                       static_cast<double>(row.payload)
                                 : 0;
-    const double db_write_amp =
-        !ours && row.payload > 0
-            ? static_cast<double>(row.db_bytes_written +
-                                  row.db_compaction_bytes) /
-                  static_cast<double>(row.payload)
-            : 0;
     const double commits_per_s =
         seconds > 0 ? static_cast<double>(row.commits) / seconds : 0;
     const auto& counts = row.counts;
@@ -1167,59 +1013,26 @@ void Bench::print_write_row(const WriteRow& row) {
         return counts.writes[static_cast<std::size_t>(kind)];
     };
     std::ostringstream line;
-    line << row.mode << '\t' << row.engine << '\t' << row.threads << '\t'
-         << row.payload << '\t' << std::fixed << std::setprecision(6) << seconds
-         << '\t' << std::setprecision(4) << gib_per_s << '\t'
-         << std::setprecision(6) << row.seconds_flushed << '\t'
-         << row.seconds_compacted << '\t';
-    const auto ours_only = [&line, ours](std::uint64_t value) {
-        if (ours) {
-            line << value;
-        } else {
-            line << '-';
-        }
-        line << '\t';
-    };
-    const auto rocksdb_only = [&line, ours](std::uint64_t value) {
-        if (ours) {
-            line << '-';
-        } else {
-            line << value;
-        }
-        line << '\t';
-    };
-    ours_only(writes_of(io_fault::WriteKind::Extent));
-    ours_only(indexed(counts, io_fault::WriteKind::Extent));
-    ours_only(writes_of(io_fault::WriteKind::Big));
-    ours_only(indexed(counts, io_fault::WriteKind::Big));
-    ours_only(writes_of(io_fault::WriteKind::Record));
-    ours_only(indexed(counts, io_fault::WriteKind::Record));
-    ours_only(writes_of(io_fault::WriteKind::Header));
-    ours_only(indexed(counts, io_fault::WriteKind::Header));
-    ours_only(indexed(counts, io_fault::WriteKind::Footer));
-    ours_only(indexed(counts, io_fault::WriteKind::Trailer));
-    ours_only(counts.syncs);
-    ours_only(total);
-    if (ours) {
-        line << std::setprecision(4) << write_amp;
-    } else {
-        line << '-';
-    }
-    line << '\t' << row.disk_bytes << '\t' << std::setprecision(4) << disk_amp
-         << '\t';
-    rocksdb_only(row.db_bytes_written);
-    rocksdb_only(row.db_compaction_bytes);
-    if (ours) {
-        line << '-';
-    } else {
-        line << std::setprecision(4) << db_write_amp;
-    }
-    line << '\t';
-    ours_only(row.busy);
-    ours_only(
-        counts
-            .max_bytes[static_cast<std::size_t>(io_fault::WriteKind::Extent)]);
-    line << std::setprecision(1) << commits_per_s;
+    line << row.mode << '\t' << row.threads << '\t' << row.payload << '\t'
+         << std::fixed << std::setprecision(6) << seconds << '\t'
+         << std::setprecision(4) << gib_per_s << '\t' << std::setprecision(6)
+         << row.seconds_flushed << '\t' << row.seconds_compacted << '\t'
+         << writes_of(io_fault::WriteKind::Extent) << '\t'
+         << indexed(counts, io_fault::WriteKind::Extent) << '\t'
+         << writes_of(io_fault::WriteKind::Big) << '\t'
+         << indexed(counts, io_fault::WriteKind::Big) << '\t'
+         << writes_of(io_fault::WriteKind::Record) << '\t'
+         << indexed(counts, io_fault::WriteKind::Record) << '\t'
+         << writes_of(io_fault::WriteKind::Header) << '\t'
+         << indexed(counts, io_fault::WriteKind::Header) << '\t'
+         << indexed(counts, io_fault::WriteKind::Footer) << '\t'
+         << indexed(counts, io_fault::WriteKind::Trailer) << '\t'
+         << counts.syncs << '\t' << total << '\t' << std::setprecision(4)
+         << write_amp << '\t' << row.disk_bytes << '\t' << std::setprecision(4)
+         << disk_amp << '\t' << row.busy << '\t'
+         << counts.max_bytes[static_cast<std::size_t>(
+                io_fault::WriteKind::Extent)]
+         << '\t' << std::setprecision(1) << commits_per_s;
     std::cout << line.str() << '\n';
 }
 
@@ -1227,10 +1040,10 @@ void Bench::print_query_row(const QueryRow& row) {
     ensure_query_header();
     ensure_comment();
     std::ostringstream line;
-    line << row.engine << '\t' << row.op << '\t' << row.count << '\t'
-         << std::fixed << std::setprecision(3) << row.ms_total << '\t'
-         << std::setprecision(1) << row.ns_per_item << '\t' << row.extra << '\t'
-         << std::setprecision(3) << row.rss_growth_mib;
+    line << row.op << '\t' << row.count << '\t' << std::fixed
+         << std::setprecision(3) << row.ms_total << '\t' << std::setprecision(1)
+         << row.ns_per_item << '\t' << row.extra << '\t' << std::setprecision(3)
+         << row.rss_growth_mib;
     std::cout << line.str() << '\n';
 }
 
@@ -1247,11 +1060,10 @@ void Bench::print_fold_row(const FoldRow& row) {
     ensure_fold_header();
     ensure_comment();
     std::ostringstream line;
-    line << row.engine << '\t' << row.scopes << '\t' << row.keys << '\t'
-         << row.threads << '\t' << std::fixed << std::setprecision(3)
-         << row.ms_open << '\t' << row.ms_scan << '\t' << std::setprecision(1)
-         << row.ns_per_key << '\t' << row.mismatches << '\t'
-         << format_read_stats(row.reads);
+    line << row.scopes << '\t' << row.keys << '\t' << row.threads << '\t'
+         << std::fixed << std::setprecision(3) << row.ms_open << '\t'
+         << row.ms_scan << '\t' << std::setprecision(1) << row.ns_per_key
+         << '\t' << row.mismatches << '\t' << format_read_stats(row.reads);
     std::cout << line.str() << '\n';
 }
 
@@ -1276,7 +1088,7 @@ bool Bench::report_single_thread_open(const std::string& dir,
         return false;
     }
     QueryRow row = query_row(
-        "ours", "open_1t", 1, nanos, rss,
+        "open_1t", 1, nanos, rss,
         prefix + format_stats(opened->open_stats(), opened->read_stats()));
     if (print_now) {
         print_query_row(row);
@@ -1301,8 +1113,8 @@ bool Bench::check_write_row(const WriteRow& row) {
     bool ok = true;
     const auto require = [&](bool condition, const char* what) {
         if (!condition) {
-            fail(row.engine + " " + row.mode + " " +
-                 std::to_string(row.threads) + " threads: " + what);
+            fail(row.mode + " " + std::to_string(row.threads) +
+                 " threads: " + what);
             ok = false;
         }
     };
@@ -1312,12 +1124,6 @@ bool Bench::check_write_row(const WriteRow& row) {
     require(row.keys > 0, "no keys");
     require(row.read_keys == row.keys, "the keys read back differ");
     require(row.disk_bytes > 0, "no bytes on disk");
-    if (!(row.engine == "ours")) {
-        require(row.db_bytes_written > 0, "RocksDB wrote no bytes");
-        require(row.seconds_compacted >= row.seconds_flushed,
-                "the compaction time is below the flush time");
-        return ok;
-    }
     require(counts.writes[extent] > 0, "no extent write");
     require(counts.bytes[extent] > 0, "no extent bytes");
     require(counts.writes[record] > 0, "no record write");
@@ -1352,25 +1158,6 @@ std::uint64_t Bench::count_keys(const std::string& dir) {
     return count;
 }
 
-std::uint64_t Bench::count_rocks_keys(const std::string& dir) {
-    std::unique_ptr<::rocksdb::DB> db;
-    auto status =
-        ::rocksdb::DB::OpenForReadOnly(rocks_read_options(), dir, &db);
-    if (!status.ok()) {
-        fail("RocksDB read-only open of " + dir + ": " + status.ToString());
-        return 0;
-    }
-    ::rocksdb::ReadOptions read;
-    auto iterator = std::unique_ptr<::rocksdb::Iterator>(db->NewIterator(read));
-    std::uint64_t count = 0;
-    for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) ++count;
-    if (!iterator->status().ok()) {
-        fail("RocksDB scan of " + dir + ": " + iterator->status().ToString());
-        return 0;
-    }
-    return count;
-}
-
 void Bench::close_writers(Runtime& runtime,
                           std::vector<std::unique_ptr<Writer>>& writers,
                           std::atomic<int>& errors) {
@@ -1391,11 +1178,10 @@ void Bench::close_writers(Runtime& runtime,
         });
 }
 
-WriteRow Bench::run_ours_write_case(Runtime& runtime, const Workload& workload,
-                                    const std::string& dir, bool per_thread,
-                                    bool keep_dir) {
+WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
+                               const std::string& dir, bool per_thread,
+                               bool keep_dir) {
     WriteRow row;
-    row.engine = "ours";
     row.mode = per_thread ? "per-thread" : "shared";
     row.threads = static_cast<int>(workload.threads);
     row.payload = workload.payload;
@@ -1492,142 +1278,13 @@ WriteRow Bench::run_ours_write_case(Runtime& runtime, const Workload& workload,
     return row;
 }
 
-WriteRow Bench::run_rocksdb_write_case(const Workload& workload,
-                                       const std::string& dir, bool per_thread,
-                                       bool keep_dir) {
-    WriteRow row;
-    row.engine = "rocksdb";
-    row.mode = per_thread ? "per-thread" : "shared";
-    row.threads = static_cast<int>(workload.threads);
-    row.payload = workload.payload;
-    row.keys = workload.total_keys;
-    row.commits = workload.batches * workload.threads;
-    std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (error) {
-        fail("cannot create " + dir + ": " + error.message());
-        return row;
-    }
-
-    auto options = rocks_bench_options();
-    options.statistics = ::rocksdb::CreateDBStatistics();
-    const std::size_t dbs_count =
-        per_thread ? static_cast<std::size_t>(workload.threads) : 1;
-    std::vector<std::string> db_dirs(dbs_count);
-    for (std::size_t at = 0; at < dbs_count; ++at) {
-        db_dirs[at] = per_thread ? dir + "/db" + std::to_string(at) : dir;
-    }
-    std::vector<std::unique_ptr<::rocksdb::DB>> dbs(dbs_count);
-    for (std::size_t at = 0; at < dbs_count; ++at) {
-        auto status = ::rocksdb::DB::Open(options, db_dirs[at], &dbs[at]);
-        if (!status.ok()) {
-            fail("RocksDB open of " + db_dirs[at] + ": " + status.ToString());
-            return row;
-        }
-    }
-
-    const ValuePool values(workload.value_bytes, opt.trace_values);
-    std::atomic<int> errors{0};
-    const auto started = std::chrono::steady_clock::now();
-    std::vector<std::thread> writers;
-    writers.reserve(static_cast<std::size_t>(workload.threads));
-    for (std::uint64_t at = 0; at < workload.threads; ++at) {
-        writers.emplace_back([&, at] {
-            ::rocksdb::DB* db =
-                dbs[per_thread ? static_cast<std::size_t>(at) : 0].get();
-            for (std::uint64_t batch_index = 0; batch_index < workload.batches;
-                 ++batch_index) {
-                ::rocksdb::WriteBatch batch;
-                for (std::size_t k = 0; k < opt.keys_per_batch; ++k) {
-                    const std::string key = rocks_key(
-                        at, batch_index, static_cast<std::uint32_t>(k));
-                    const auto entry =
-                        make_key(static_cast<std::uint32_t>(at),
-                                 static_cast<std::uint32_t>(batch_index),
-                                 static_cast<std::uint32_t>(k));
-                    const std::string& value =
-                        values.for_key(entry.data(), entry.size());
-                    batch.Put(::rocksdb::Slice(key), ::rocksdb::Slice(value));
-                }
-                auto status = db->Write(rocks_write_options(), &batch);
-                if (!status.ok()) {
-                    errors.fetch_add(1, std::memory_order_relaxed);
-                    return;
-                }
-            }
-        });
-    }
-    for (auto& writer : writers) writer.join();
-
-    // The close of one DB: flush, then wait for the compactions the flush
-    // scheduled, then close. The flush time is the last flush to end over the
-    // DBs, and the close time the last DB to close.
-    std::vector<std::uint64_t> flushed(dbs_count, 0);
-    std::vector<std::uint64_t> compacted(dbs_count, 0);
-    std::vector<std::thread> closers;
-    closers.reserve(dbs_count);
-    for (std::size_t at = 0; at < dbs_count; ++at) {
-        closers.emplace_back([&, at] {
-            ::rocksdb::FlushOptions flush_options;
-            flush_options.wait = true;
-            auto status = dbs[at]->Flush(flush_options);
-            if (!status.ok()) errors.fetch_add(1, std::memory_order_relaxed);
-            flushed[at] =
-                nanos_between(started, std::chrono::steady_clock::now());
-            ::rocksdb::WaitForCompactOptions wait_options;
-            wait_options.abort_on_pause = false;
-            wait_options.flush = false;
-            status = dbs[at]->WaitForCompact(wait_options);
-            if (!status.ok()) errors.fetch_add(1, std::memory_order_relaxed);
-            compacted[at] =
-                nanos_between(started, std::chrono::steady_clock::now());
-            dbs[at].reset();
-        });
-    }
-    for (auto& closer : closers) closer.join();
-    const std::uint64_t closed =
-        nanos_between(started, std::chrono::steady_clock::now());
-    const std::uint64_t flush_nanos =
-        *std::max_element(flushed.begin(), flushed.end());
-    const std::uint64_t compact_nanos =
-        *std::max_element(compacted.begin(), compacted.end());
-    // The close itself happens after the compaction wait, so its cost is what
-    // is left between the last compaction and the last close.
-    row.seconds_flushed =
-        static_cast<double>(flush_nanos + (closed - compact_nanos)) / 1e9;
-    row.seconds_compacted = static_cast<double>(closed) / 1e9;
-    row.seconds = row.seconds_flushed;
-
-    row.db_bytes_written =
-        options.statistics->getTickerCount(::rocksdb::BYTES_WRITTEN);
-    row.db_compaction_bytes =
-        options.statistics->getTickerCount(::rocksdb::COMPACT_WRITE_BYTES);
-    row.disk_bytes = directory_bytes(dir);
-    if (errors.load() > 0) {
-        fail(row.mode + " " + std::to_string(workload.threads) +
-             " threads: a RocksDB write, flush or compaction failed");
-    }
-    for (const std::string& db_dir : db_dirs) {
-        row.read_keys += count_rocks_keys(db_dir);
-    }
-    check_write_row(row);
-    if (keep_dir) {
-        row.keep_dir = dir;
-    } else {
-        std::filesystem::remove_all(dir, error);
-    }
-    return row;
-}
-
 QueryPlan Bench::make_query_plan(const Workload& workload) const {
     QueryPlan plan;
     const std::size_t scopes = static_cast<std::size_t>(workload.total_scopes);
     plan.scopes.reserve(scopes);
-    plan.prefixes.reserve(scopes);
     for (std::uint64_t coro = 0; coro < workload.threads; ++coro) {
         for (std::uint64_t slot = 0; slot < workload.scopes_per_thread;
              ++slot) {
-            plan.prefixes.push_back(scope_prefix(coro, slot));
             plan.scopes.push_back(ScopeKey::file(scope_name(coro, slot)));
         }
     }
@@ -1649,9 +1306,6 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
                 batch_index % SCOPES_PER_CORO;
             item.key = make_key(static_cast<std::uint32_t>(coro),
                                 static_cast<std::uint32_t>(batch_index), index);
-            item.rocks = plan.prefixes[item.scope];
-            item.rocks.append(reinterpret_cast<const char*>(item.key.data()),
-                              item.key.size());
             items.push_back(std::move(item));
         }
     };
@@ -1674,9 +1328,8 @@ QueryPlan Bench::make_query_plan(const Workload& workload) const {
     return plan;
 }
 
-bool Bench::query_ours(const Workload& workload, const std::string& dir,
-                       const QueryPlan& plan) {
-    const std::string engine_name = "ours";
+bool Bench::query_store(const Workload& workload, const std::string& dir,
+                        const QueryPlan& plan) {
     const NamespaceSpec namespace_spec = spec();
 
     // An open of its own first, so the reported open is the warm one: the
@@ -1709,7 +1362,7 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
     }
     Snapshot snapshot = std::move(*opened);
     query_rows.push_back(query_row(
-        engine_name, "open", 1, open_nanos, cold_rss,
+        "open", 1, open_nanos, cold_rss,
         "warm ms reported, cold=" + format_ms(cold_nanos) +
             " ms (cold ms list=" + format_ms_value(cold->open_stats().ms_list) +
             " files=" + format_ms_value(cold->open_stats().ms_open_files) +
@@ -1729,10 +1382,10 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
             nanos_between(started, std::chrono::steady_clock::now());
         if (first.has_value() && first->has_value()) {
             query_rows.push_back(
-                query_row(engine_name, "first_get", 1, nanos, rss,
+                query_row("first_get", 1, nanos, rss,
                           format_read_stats(cold->read_stats())));
         } else {
-            fail("ours: the first get of the cold snapshot of " + dir +
+            fail("the first get of the cold snapshot of " + dir +
                  " returned nothing");
         }
         cold.reset();
@@ -1766,12 +1419,12 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(
-            query_row(engine_name, "get_hit", plan.hits.size(), nanos, rss,
+            query_row("get_hit", plan.hits.size(), nanos, rss,
                       "mismatches=" + std::to_string(mismatches) + " " +
                           format_read_stats(snapshot.read_stats())));
     }
     if (mismatches > 0) {
-        fail("ours: " + std::to_string(mismatches) + " point gets of " + dir +
+        fail(std::to_string(mismatches) + " point gets of " + dir +
              " did not return the value written");
     }
     mismatches = 0;
@@ -1791,12 +1444,12 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(
-            query_row(engine_name, "get_miss", plan.misses.size(), nanos, rss,
+            query_row("get_miss", plan.misses.size(), nanos, rss,
                       "mismatches=" + std::to_string(mismatches) + " " +
                           format_read_stats(snapshot.read_stats())));
     }
     if (mismatches > 0) {
-        fail("ours: " + std::to_string(mismatches) + " absent keys of " + dir +
+        fail(std::to_string(mismatches) + " absent keys of " + dir +
              " were found");
     }
 
@@ -1826,13 +1479,14 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
               << " rows_per_scope=" << std::fixed << std::setprecision(1)
               << (plan.scans.empty()
                       ? 0
-                      : static_cast<double>(scanned) / plan.scans.size())
+                      : static_cast<double>(scanned) /
+                            static_cast<double>(plan.scans.size()))
               << " " << format_read_stats(snapshot.read_stats());
-        query_rows.push_back(query_row(engine_name, "scan_scope", scanned,
-                                       nanos, rss, extra.str()));
+        query_rows.push_back(
+            query_row("scan_scope", scanned, nanos, rss, extra.str()));
     }
     if (wrong_scopes > 0) {
-        fail("ours: " + std::to_string(wrong_scopes) + " scopes of " + dir +
+        fail(std::to_string(wrong_scopes) + " scopes of " + dir +
              " hold another row count than written");
     }
 
@@ -1851,180 +1505,27 @@ bool Bench::query_ours(const Workload& workload, const std::string& dir,
         const std::uint64_t nanos =
             nanos_between(started, std::chrono::steady_clock::now());
         query_rows.push_back(query_row(
-            engine_name, "full_scan", rows, nanos, rss,
+            "full_scan", rows, nanos, rss,
             "rows_per_s=" + format_rate(rows, nanos) +
                 " rows_expected=" + std::to_string(workload.total_keys) + " " +
                 format_read_stats(snapshot.read_stats())));
         if (rows != workload.total_keys) {
-            fail("ours: the full scan of " + dir + " read " +
-                 std::to_string(rows) + " rows, not " +
-                 std::to_string(workload.total_keys));
+            fail("the full scan of " + dir + " read " + std::to_string(rows) +
+                 " rows, not " + std::to_string(workload.total_keys));
         }
     }
     return true;
 }
 
-bool Bench::query_rocksdb(const Workload& workload, const std::string& dir,
-                          const QueryPlan& plan) {
-    const std::string engine_name = "rocksdb";
-    const auto options = rocks_read_options();
-
-    // As on the ours side: an open of its own first, then the timed warm one,
-    // and the peak resident set across the first.
-    const std::uint64_t cold_rss = dftu::bench::peak_heap_bytes();
-    const auto cold_started = std::chrono::steady_clock::now();
-    std::uint64_t cold_nanos = 0;
-    {
-        std::unique_ptr<::rocksdb::DB> cold;
-        auto status = ::rocksdb::DB::OpenForReadOnly(options, dir, &cold);
-        cold_nanos =
-            nanos_between(cold_started, std::chrono::steady_clock::now());
-        if (!status.ok()) {
-            fail("RocksDB cold open of " + dir + ": " + status.ToString());
-            return false;
-        }
-    }
-    const auto open_started = std::chrono::steady_clock::now();
-    std::unique_ptr<::rocksdb::DB> db;
-    auto status = ::rocksdb::DB::OpenForReadOnly(options, dir, &db);
-    const std::uint64_t open_nanos =
-        nanos_between(open_started, std::chrono::steady_clock::now());
-    if (!status.ok()) {
-        fail("RocksDB open of " + dir + ": " + status.ToString());
-        return false;
-    }
-    query_rows.push_back(
-        query_row(engine_name, "open", 1, open_nanos, cold_rss,
-                  "warm ms reported, cold=" + format_ms(cold_nanos) +
-                      " ms, rss_growth of the cold open"));
-
-    const ValuePool values(workload.value_bytes, opt.trace_values);
-    ::rocksdb::ReadOptions read;
-    std::string value;
-    std::uint64_t mismatches = 0;
-    {
-        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
-        for (const QueryItem& item : plan.hits) {
-            value.clear();
-            status = db->Get(read, ::rocksdb::Slice(item.rocks), &value);
-            if (!status.ok() ||
-                value != values.for_key(item.key.data(), item.key.size())) {
-                ++mismatches;
-            }
-        }
-        const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
-        query_rows.push_back(
-            query_row(engine_name, "get_hit", plan.hits.size(), nanos, rss,
-                      "mismatches=" + std::to_string(mismatches)));
-    }
-    if (mismatches > 0) {
-        fail("rocksdb: " + std::to_string(mismatches) + " point gets of " +
-             dir + " did not return the value written");
-    }
-    mismatches = 0;
-    {
-        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
-        for (const QueryItem& item : plan.misses) {
-            value.clear();
-            status = db->Get(read, ::rocksdb::Slice(item.rocks), &value);
-            if (!status.IsNotFound()) ++mismatches;
-        }
-        const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
-        query_rows.push_back(
-            query_row(engine_name, "get_miss", plan.misses.size(), nanos, rss,
-                      "mismatches=" + std::to_string(mismatches)));
-    }
-    if (mismatches > 0) {
-        fail("rocksdb: " + std::to_string(mismatches) + " absent keys of " +
-             dir + " were found");
-    }
-
-    auto iterator = std::unique_ptr<::rocksdb::Iterator>(db->NewIterator(read));
-    std::uint64_t scanned = 0;
-    std::uint64_t wrong_scopes = 0;
-    {
-        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
-        for (const QueryScan& scan : plan.scans) {
-            const ::rocksdb::Slice prefix(plan.prefixes[scan.scope]);
-            std::uint64_t rows = 0;
-            iterator->Seek(prefix);
-            while (iterator->Valid() && iterator->key().starts_with(prefix)) {
-                ++rows;
-                iterator->Next();
-            }
-            if (!iterator->status().ok()) {
-                fail("rocksdb scan of " + dir + ": " +
-                     iterator->status().ToString());
-                return false;
-            }
-            scanned += rows;
-            if (rows != scan.rows) ++wrong_scopes;
-        }
-        const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
-        std::ostringstream extra;
-        extra << "scopes=" << plan.scans.size()
-              << " rows_per_scope=" << std::fixed << std::setprecision(1)
-              << (plan.scans.empty()
-                      ? 0
-                      : static_cast<double>(scanned) / plan.scans.size());
-        query_rows.push_back(query_row(engine_name, "scan_scope", scanned,
-                                       nanos, rss, extra.str()));
-    }
-    if (wrong_scopes > 0) {
-        fail("rocksdb: " + std::to_string(wrong_scopes) + " scopes of " + dir +
-             " hold another row count than written");
-    }
-
-    {
-        const std::uint64_t rss = dftu::bench::peak_heap_bytes();
-        const auto started = std::chrono::steady_clock::now();
-        std::uint64_t rows = 0;
-        for (iterator->SeekToFirst(); iterator->Valid(); iterator->Next()) {
-            ++rows;
-        }
-        if (!iterator->status().ok()) {
-            fail("rocksdb full scan of " + dir + ": " +
-                 iterator->status().ToString());
-            return false;
-        }
-        const std::uint64_t nanos =
-            nanos_between(started, std::chrono::steady_clock::now());
-        query_rows.push_back(query_row(
-            engine_name, "full_scan", rows, nanos, rss,
-            "rows_per_s=" + format_rate(rows, nanos) +
-                " rows_expected=" + std::to_string(workload.total_keys)));
-        if (rows != workload.total_keys) {
-            fail("rocksdb: the full scan of " + dir + " read " +
-                 std::to_string(rows) + " rows, not " +
-                 std::to_string(workload.total_keys));
-        }
-    }
-    return true;
-}
-
-bool Bench::run_query_case(const Workload& workload,
-                           const std::string& ours_dir,
-                           const std::string& rocksdb_dir) {
-    if (ours_dir.empty() && rocksdb_dir.empty()) {
+bool Bench::run_query_case(const Workload& workload, const std::string& dir) {
+    if (dir.empty()) {
         ensure_comment();
         std::cout << "# the query case reads the data of the shared write case,"
                      " which --mode per-thread does not write; skipped\n";
         return true;
     }
     const QueryPlan plan = make_query_plan(workload);
-    if (!ours_dir.empty() && !query_ours(workload, ours_dir, plan)) {
-        return false;
-    }
-    if (!rocksdb_dir.empty() && !query_rocksdb(workload, rocksdb_dir, plan)) {
-        return false;
-    }
-    return true;
+    return query_store(workload, dir, plan);
 }
 
 ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
@@ -2125,8 +1626,8 @@ NamespaceSpec Bench::fold_spec() const {
     return namespace_spec;
 }
 
-bool Bench::write_fold_ours(Runtime& runtime, const std::string& dir,
-                            std::uint64_t scopes, std::uint64_t keys) {
+bool Bench::write_fold(Runtime& runtime, const std::string& dir,
+                       std::uint64_t scopes, std::uint64_t keys) {
     std::error_code error;
     std::filesystem::create_directories(dir, error);
     if (error) {
@@ -2199,64 +1700,11 @@ bool Bench::write_fold_ours(Runtime& runtime, const std::string& dir,
     return true;
 }
 
-bool Bench::write_fold_rocksdb(const std::string& dir, std::uint64_t scopes,
-                               std::uint64_t keys) {
-    std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (error) {
-        fail("cannot create " + dir + ": " + error.message());
-        return false;
-    }
-    std::unique_ptr<::rocksdb::DB> db;
-    auto status = ::rocksdb::DB::Open(rocks_bench_options(), dir, &db);
-    if (!status.ok()) {
-        fail("RocksDB open of " + dir + ": " + status.ToString());
-        return false;
-    }
-
-    // The same two batches per scope that ours gets, in the same order. The
-    // key of each ends in its batch number, so the second does not overwrite
-    // the first and the scan folds the two, as ours does.
-    const std::vector<std::string> names = fold_key_names(keys);
-    std::array<std::uint8_t, FOLD_VALUE_BYTES> value{};
-    std::string key;
-    for (std::uint64_t scope = 0; scope < scopes; ++scope) {
-        const std::string prefix = scope_prefix(0, scope);
-        for (std::uint8_t segment = 0; segment < 2; ++segment) {
-            ::rocksdb::WriteBatch batch;
-            for (std::uint64_t at = 0; at < keys; ++at) {
-                dftracer::utils::write_u64_le(
-                    value.data(), segment == 0 ? fold_value(scope, at) : 1);
-                key.assign(prefix);
-                key += names[static_cast<std::size_t>(at)];
-                key.push_back(static_cast<char>(segment));
-                batch.Put(::rocksdb::Slice(key),
-                          ::rocksdb::Slice(
-                              reinterpret_cast<const char*>(value.data()),
-                              FOLD_VALUE_BYTES));
-            }
-            status = db->Write(rocks_write_options(), &batch);
-            if (!status.ok()) {
-                fail("RocksDB write of " + dir + ": " + status.ToString());
-                return false;
-            }
-        }
-    }
-    ::rocksdb::FlushOptions flush_options;
-    flush_options.wait = true;
-    status = db->Flush(flush_options);
-    if (!status.ok()) {
-        fail("RocksDB flush of " + dir + ": " + status.ToString());
-        return false;
-    }
-    return true;
-}
-
-FoldScan Bench::fold_scan_ours(const Snapshot& snapshot,
-                               const NamespaceSpec& namespace_spec,
-                               const std::vector<ScopeKey>& scopes,
-                               std::uint64_t keys, std::uint64_t threads,
-                               const std::vector<std::int64_t>& expected) {
+FoldScan Bench::fold_scan(const Snapshot& snapshot,
+                          const NamespaceSpec& namespace_spec,
+                          const std::vector<ScopeKey>& scopes,
+                          std::uint64_t keys, std::uint64_t threads,
+                          const std::vector<std::int64_t>& expected) {
     FoldScan scan;
     std::vector<std::vector<std::int64_t>> parts(
         static_cast<std::size_t>(threads),
@@ -2312,218 +1760,75 @@ FoldScan Bench::fold_scan_ours(const Snapshot& snapshot,
     return scan;
 }
 
-FoldScan Bench::fold_scan_rocksdb(::rocksdb::DB& db,
-                                  const std::vector<std::string>& prefixes,
-                                  std::uint64_t keys, std::uint64_t threads,
-                                  const std::vector<std::int64_t>& expected) {
-    FoldScan scan;
-    std::vector<std::vector<std::int64_t>> parts(
-        static_cast<std::size_t>(threads),
-        std::vector<std::int64_t>(static_cast<std::size_t>(keys), 0));
-    std::atomic<int> errors{0};
-    const auto started = std::chrono::steady_clock::now();
-    std::vector<std::thread> workers;
-    workers.reserve(static_cast<std::size_t>(threads));
-    for (std::uint64_t at = 0; at < threads; ++at) {
-        workers.emplace_back([&, at] {
-            const std::size_t part = static_cast<std::size_t>(at);
-            const std::size_t count = static_cast<std::size_t>(threads);
-            const std::size_t begin = prefixes.size() * part / count;
-            const std::size_t end = prefixes.size() * (part + 1) / count;
-            std::vector<std::int64_t>& sums = parts[part];
-            // The work a query does with keys it cannot index: fold by the key
-            // bytes in a hash map, then sort, so the part ends in key order as
-            // ours does.
-            std::unordered_map<std::string, std::int64_t> folded;
-            ::rocksdb::ReadOptions read;
-            std::unique_ptr<::rocksdb::Iterator> iterator(db.NewIterator(read));
-            for (std::size_t scope = begin; scope < end; ++scope) {
-                const ::rocksdb::Slice prefix(prefixes[scope]);
-                iterator->Seek(prefix);
-                while (iterator->Valid() &&
-                       iterator->key().starts_with(prefix)) {
-                    const ::rocksdb::Slice key = iterator->key();
-                    const ::rocksdb::Slice value = iterator->value();
-                    if (value.size() != FOLD_VALUE_BYTES ||
-                        key.size() < prefix.size() + 1U) {
-                        errors.fetch_add(1, std::memory_order_relaxed);
-                        return;
-                    }
-                    const auto* bytes =
-                        reinterpret_cast<const std::uint8_t*>(value.data());
-                    folded[std::string(key.data() + prefix.size(),
-                                       key.size() - prefix.size() - 1U)] +=
-                        static_cast<std::int64_t>(
-                            dftracer::utils::read_u64_le(bytes));
-                    iterator->Next();
-                }
-                if (!iterator->status().ok()) {
-                    errors.fetch_add(1, std::memory_order_relaxed);
-                    return;
-                }
-            }
-            std::vector<std::pair<std::string, std::int64_t>> ordered(
-                folded.begin(), folded.end());
-            std::sort(ordered.begin(), ordered.end());
-            for (const auto& entry : ordered) {
-                const std::uint64_t index = fold_key_index(
-                    ByteView(entry.first.data(), entry.first.size()));
-                if (index >= keys) {
-                    errors.fetch_add(1, std::memory_order_relaxed);
-                    return;
-                }
-                sums[static_cast<std::size_t>(index)] += entry.second;
-            }
-        });
-    }
-    for (auto& worker : workers) worker.join();
-    scan.nanos = nanos_between(started, std::chrono::steady_clock::now());
-    if (errors.load() > 0) {
-        fail("RocksDB fold scan: a key or a value is not the one written");
-        scan.ok = false;
-        return scan;
-    }
-    for (std::uint64_t key = 0; key < keys; ++key) {
-        const std::size_t at = static_cast<std::size_t>(key);
-        std::int64_t total = 0;
-        for (const std::vector<std::int64_t>& sums : parts) total += sums[at];
-        if (total != expected[at]) ++scan.mismatches;
-    }
-    return scan;
-}
-
 bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
     const std::uint64_t keys = opt.fold_keys;
     const std::vector<std::int64_t> expected = fold_expectation(scopes, keys);
     std::vector<ScopeKey> scope_keys;
-    std::vector<std::string> prefixes;
     scope_keys.reserve(static_cast<std::size_t>(scopes));
-    prefixes.reserve(static_cast<std::size_t>(scopes));
     for (std::uint64_t scope = 0; scope < scopes; ++scope) {
         scope_keys.push_back(ScopeKey::file(scope_name(0, scope)));
-        prefixes.push_back(scope_prefix(0, scope));
     }
+    const std::string dir = case_dir("fold-" + std::to_string(scopes));
     std::error_code error;
     bool ok = true;
-
-    if (has_engine(opt.engines, "ours")) {
-        const std::string dir = case_dir("fold-ours-" + std::to_string(scopes));
-        if (!write_fold_ours(runtime, dir, scopes, keys)) {
+    if (!write_fold(runtime, dir, scopes, keys)) {
+        ok = false;
+    } else {
+        const auto open_started = std::chrono::steady_clock::now();
+        auto opened = Snapshot::open(dir);
+        const std::uint64_t open_nanos =
+            nanos_between(open_started, std::chrono::steady_clock::now());
+        const double ms_open = static_cast<double>(open_nanos) / 1e6;
+        if (!opened) {
+            fail("snapshot of " + dir + ": " + to_std(opened.error()));
             ok = false;
         } else {
-            const auto open_started = std::chrono::steady_clock::now();
-            auto opened = Snapshot::open(dir);
-            const std::uint64_t open_nanos =
-                nanos_between(open_started, std::chrono::steady_clock::now());
-            const double ms_open = static_cast<double>(open_nanos) / 1e6;
-            if (!opened) {
-                fail("snapshot of " + dir + ": " + to_std(opened.error()));
+            Snapshot snapshot = std::move(*opened);
+            const std::string scope_column =
+                "scopes=" + std::to_string(scopes) + " ";
+            // This case prints its rows as they come, so the open rows of
+            // this directory are printed here and not queued.
+            print_query_row(
+                query_row("open", 1, open_nanos, dftu::bench::peak_heap_bytes(),
+                          scope_column + format_stats(snapshot.open_stats(),
+                                                      snapshot.read_stats())));
+            if (!report_single_thread_open(dir, scope_column, true)) {
                 ok = false;
-            } else {
-                Snapshot snapshot = std::move(*opened);
-                const std::string scope_column =
-                    "scopes=" + std::to_string(scopes) + " ";
-                // This case prints its rows as they come, so the open rows of
-                // this directory are printed here and not queued.
-                print_query_row(query_row(
-                    "ours", "open", 1, open_nanos,
-                    dftu::bench::peak_heap_bytes(),
-                    scope_column + format_stats(snapshot.open_stats(),
-                                                snapshot.read_stats())));
-                if (!report_single_thread_open(dir, scope_column, true)) {
+            }
+            const NamespaceSpec namespace_spec = fold_spec();
+            for (const std::uint64_t threads : FOLD_THREADS) {
+                const FoldScan scan =
+                    fold_scan(snapshot, namespace_spec, scope_keys, keys,
+                              threads, expected);
+                FoldRow row;
+                row.scopes = scopes;
+                row.keys = keys;
+                row.threads = threads;
+                row.ms_open = ms_open;
+                row.ms_scan = static_cast<double>(scan.nanos) / 1e6;
+                row.reads = snapshot.read_stats();
+                row.ns_per_key =
+                    static_cast<double>(scan.nanos) / static_cast<double>(keys);
+                row.mismatches = scan.mismatches;
+                print_fold_row(row);
+                if (scan.mismatches > 0) {
+                    fail(std::to_string(scan.mismatches) + " fold sums of " +
+                         dir + " differ from the ones written");
                     ok = false;
                 }
-                const NamespaceSpec namespace_spec = fold_spec();
-                for (const std::uint64_t threads : FOLD_THREADS) {
-                    const FoldScan scan =
-                        fold_scan_ours(snapshot, namespace_spec, scope_keys,
-                                       keys, threads, expected);
-                    FoldRow row;
-                    row.engine = "ours";
-                    row.scopes = scopes;
-                    row.keys = keys;
-                    row.threads = threads;
-                    row.ms_open = ms_open;
-                    row.ms_scan = static_cast<double>(scan.nanos) / 1e6;
-                    row.reads = snapshot.read_stats();
-                    row.ns_per_key = static_cast<double>(scan.nanos) /
-                                     static_cast<double>(keys);
-                    row.mismatches = scan.mismatches;
-                    print_fold_row(row);
-                    if (scan.mismatches > 0) {
-                        fail("ours: " + std::to_string(scan.mismatches) +
-                             " fold sums of " + dir +
-                             " differ from the ones written");
-                        ok = false;
-                    }
-                    if (!scan.ok) ok = false;
-                }
+                if (!scan.ok) ok = false;
             }
         }
-        std::filesystem::remove_all(dir, error);
     }
-
-    if (has_engine(opt.engines, "rocksdb")) {
-        const std::string dir =
-            case_dir("fold-rocksdb-" + std::to_string(scopes));
-        if (!write_fold_rocksdb(dir, scopes, keys)) {
-            ok = false;
-        } else {
-            const auto open_started = std::chrono::steady_clock::now();
-            std::unique_ptr<::rocksdb::DB> db;
-            auto status =
-                ::rocksdb::DB::OpenForReadOnly(rocks_read_options(), dir, &db);
-            const double ms_open =
-                static_cast<double>(nanos_between(
-                    open_started, std::chrono::steady_clock::now())) /
-                1e6;
-            if (!status.ok()) {
-                fail("RocksDB read-only open of " + dir + ": " +
-                     status.ToString());
-                ok = false;
-            } else {
-                for (const std::uint64_t threads : FOLD_THREADS) {
-                    const FoldScan scan = fold_scan_rocksdb(*db, prefixes, keys,
-                                                            threads, expected);
-                    FoldRow row;
-                    row.engine = "rocksdb";
-                    row.scopes = scopes;
-                    row.keys = keys;
-                    row.threads = threads;
-                    row.ms_open = ms_open;
-                    row.ms_scan = static_cast<double>(scan.nanos) / 1e6;
-                    row.ns_per_key = static_cast<double>(scan.nanos) /
-                                     static_cast<double>(keys);
-                    row.mismatches = scan.mismatches;
-                    print_fold_row(row);
-                    if (scan.mismatches > 0) {
-                        fail("rocksdb: " + std::to_string(scan.mismatches) +
-                             " fold sums of " + dir +
-                             " differ from the ones written");
-                        ok = false;
-                    }
-                    if (!scan.ok) ok = false;
-                }
-            }
-        }
-        std::filesystem::remove_all(dir, error);
-    }
+    std::filesystem::remove_all(dir, error);
     return ok;
 }
 
 bool Bench::run_kept() {
     const bool keep = !opt.keep.empty();
     const std::string& base = keep ? opt.keep : opt.reuse;
-    const bool ours_on = has_engine(opt.engines, "ours");
-    const bool rocksdb_on = has_engine(opt.engines, "rocksdb");
     for (const std::string& mode : opt.modes) {
-        // One snapshot reads every file of a directory; RocksDB opens one
-        // database, so it keeps only the shared mode.
         const bool per_thread = mode == "per-thread";
-        if (per_thread && rocksdb_on) {
-            fail("--keep and --reuse keep the per-thread mode for ours only");
-            return false;
-        }
         for (int threads : opt.threads) {
             Runtime runtime(static_cast<std::size_t>(threads));
             note_backend(runtime);
@@ -2531,33 +1836,22 @@ bool Bench::run_kept() {
                 workload_of(opt, static_cast<std::uint64_t>(threads));
             const std::string name = mode + "-" + std::to_string(threads) +
                                      "-" + std::to_string(opt.payload_mib);
-            const std::string ours_dir = ours_on ? base + "/ours-" + name : "";
-            const std::string rocksdb_dir =
-                rocksdb_on ? base + "/rocksdb-" + name : "";
-            for (const std::string& dir : {ours_dir, rocksdb_dir}) {
-                if (dir.empty()) continue;
-                std::error_code error;
-                const bool exists = std::filesystem::exists(dir, error);
-                if (keep && exists) {
-                    fail(dir + " exists; --keep writes only a new directory");
-                    return false;
-                }
-                if (!keep && !exists) {
-                    fail(dir + " does not exist; write it first with --keep");
-                    return false;
-                }
+            const std::string dir = base + "/" + name;
+            std::error_code error;
+            const bool exists = std::filesystem::exists(dir, error);
+            if (keep && exists) {
+                fail(dir + " exists; --keep writes only a new directory");
+                return false;
+            }
+            if (!keep && !exists) {
+                fail(dir + " does not exist; write it first with --keep");
+                return false;
             }
             if (keep) {
-                if (ours_on) {
-                    print_write_row(run_ours_write_case(
-                        runtime, workload, ours_dir, per_thread, true));
-                }
-                if (rocksdb_on) {
-                    print_write_row(run_rocksdb_write_case(
-                        workload, rocksdb_dir, false, true));
-                }
+                print_write_row(
+                    run_write_case(runtime, workload, dir, per_thread, true));
             } else {
-                run_query_case(workload, ours_dir, rocksdb_dir);
+                run_query_case(workload, dir);
             }
         }
     }
@@ -2571,8 +1865,6 @@ bool Bench::run() {
     const bool do_query = opt.which == "query" || opt.which == "all";
     const bool do_scopes = opt.which == "scopes" || opt.which == "all";
     const bool do_fold = opt.which == "fold" || opt.which == "all";
-    const bool ours_on = has_engine(opt.engines, "ours");
-    const bool rocksdb_on = has_engine(opt.engines, "rocksdb");
     // The query case reads what the shared write case wrote, so with no write
     // rows asked for it writes that one case and prints only the query rows.
     const std::vector<std::string> modes =
@@ -2584,53 +1876,33 @@ bool Bench::run() {
             note_backend(runtime);
             const Workload workload =
                 workload_of(opt, static_cast<std::uint64_t>(threads));
-            std::string ours_dir;
-            std::string rocksdb_dir;
+            std::string query_dir;
             for (const std::string& mode : modes) {
                 const bool per_thread = mode == "per-thread";
                 const bool keep_dir = do_query && !per_thread;
                 const std::string name = mode + "-" + std::to_string(threads) +
                                          "-" + std::to_string(opt.payload_mib);
-                if (ours_on) {
-                    const WriteRow row = run_ours_write_case(
-                        runtime, workload, case_dir("ours-" + name), per_thread,
-                        keep_dir);
-                    if (print_writes) print_write_row(row);
-                    if (keep_dir) ours_dir = row.keep_dir;
-                }
-                if (rocksdb_on) {
-                    const WriteRow row = run_rocksdb_write_case(
-                        workload, case_dir("rocksdb-" + name), per_thread,
-                        keep_dir);
-                    if (print_writes) print_write_row(row);
-                    if (keep_dir) rocksdb_dir = row.keep_dir;
-                }
+                const WriteRow row = run_write_case(
+                    runtime, workload, case_dir(name), per_thread, keep_dir);
+                if (print_writes) print_write_row(row);
+                if (keep_dir) query_dir = row.keep_dir;
             }
             if (do_query) {
-                run_query_case(workload, ours_dir, rocksdb_dir);
+                run_query_case(workload, query_dir);
                 std::error_code error;
-                if (!ours_dir.empty()) {
-                    std::filesystem::remove_all(ours_dir, error);
-                }
-                if (!rocksdb_dir.empty()) {
-                    std::filesystem::remove_all(rocksdb_dir, error);
+                if (!query_dir.empty()) {
+                    std::filesystem::remove_all(query_dir, error);
                 }
             }
         }
     }
     for (const QueryRow& row : query_rows) print_query_row(row);
     if (do_scopes) {
-        if (!ours_on) {
-            ensure_comment();
-            std::cout << "# the scopes case commits through ours only; skipped"
-                         " with --engine rocksdb\n";
-        } else {
-            Runtime runtime(SCOPE_CASE_THREADS);
-            note_backend(runtime);
-            for (std::uint64_t scopes : opt.scopes) {
-                const ScopeRow row = run_scope_case(runtime, scopes);
-                print_scope_row(row);
-            }
+        Runtime runtime(SCOPE_CASE_THREADS);
+        note_backend(runtime);
+        for (std::uint64_t scopes : opt.scopes) {
+            const ScopeRow row = run_scope_case(runtime, scopes);
+            print_scope_row(row);
         }
     }
     if (do_fold) {

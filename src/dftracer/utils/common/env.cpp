@@ -51,24 +51,4 @@ std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name) {
     return parsed;
 }
 
-int Env::rocksdb_max_open_files() {
-    static const int cached_value = [] {
-        constexpr int default_max_open_files = 32;
-        constexpr std::string_view env_name =
-            "DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES";
-
-        auto configured = get<int>(env_name);
-        if (!configured.has_value()) {
-            return default_max_open_files;
-        }
-
-        if (*configured == -1 || *configured > 0) {
-            return *configured;
-        }
-        return default_max_open_files;
-    }();
-
-    return cached_value;
-}
-
 }  // namespace dftracer::utils

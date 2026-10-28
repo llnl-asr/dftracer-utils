@@ -2,14 +2,8 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/filesystem.h>
-#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -45,7 +39,6 @@ namespace {
 
 constexpr int SCAN_FILES = 200;
 constexpr int NESTED_FILES = 10;
-constexpr int INDEX_FILES = 64;
 constexpr std::size_t WORKERS = 8;
 constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
@@ -55,11 +48,6 @@ constexpr std::size_t HUGE_SINK = std::size_t{1} << 40;
 void write_sized_file(const std::string& path, std::size_t bytes) {
     std::ofstream out(path, std::ios::binary);
     out << std::string(bytes, 'x');
-}
-
-std::string read_bytes(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    return std::string(std::istreambuf_iterator<char>(in), {});
 }
 
 std::string write_small_trace(const std::string& dir, int n) {
@@ -147,19 +135,17 @@ void cold_count(const std::vector<std::string>& files,
 
 using Rows = std::vector<std::pair<std::string, std::string>>;
 
-std::map<std::string, Rows> dump_index(const std::string& root) {
-    store::RocksDBManager::instance().reset(root);
-    store::RocksDatabase db(root, store::RocksDatabase::OpenMode::ReadOnly);
-    REQUIRE(db.is_open());
-    std::map<std::string, Rows> out;
-    for (const auto cf : store::RocksDatabase::default_column_families()) {
-        auto it = db.new_iterator(cf);
-        auto& rows = out[std::string(cf)];
-        for (it->SeekToFirst(); it->Valid(); it->Next())
-            rows.emplace_back(it->key().ToString(), it->value().ToString());
-        REQUIRE(it->status().ok());
-    }
-    return out;
+// Every record of an index, in the order the store lists them. A scope is named
+// by its paths, so two indexes of the same files compare equal whatever ids
+// they gave them.
+Rows dump_index(const std::string& root) {
+    store::release_index(root);
+    store::IndexDatabase db(root, store::IndexOpenMode::ReadOnly);
+    Rows rows;
+    db.for_each_record([&rows](std::string_view key, std::string_view value) {
+        rows.emplace_back(std::string(key), std::string(value));
+    });
+    return rows;
 }
 
 struct SinkLimit {
@@ -182,18 +168,12 @@ struct ViewRun {
             SinkLimit limit(TINY_SINK);
             cold_count(files, many_dir);
         }
-        ingest_calls = counters.ingest_calls.load();
-        during_parse = counters.ingests_during_parse.load();
-        most_at_once = counters.max_ingests_in_flight.load();
         sink_commits = counters.sink_commits.load();
     }
 
     dftu_utils_test::TestEnvironment env;
     std::vector<std::string> files;
     std::string many_dir;
-    std::size_t ingest_calls = 0;
-    std::size_t during_parse = 0;
-    std::size_t most_at_once = 0;
     std::size_t sink_commits = 0;
 };
 
@@ -260,100 +240,6 @@ TEST_SUITE("SerialStages") {
             scan::scan_stat_threads().contains(std::this_thread::get_id()));
     }
 
-    TEST_CASE("an ingest links its staged SSTs without a reopen and fsync") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        for (int i = 0; i < INDEX_FILES; ++i)
-            files.push_back(write_small_trace(env.get_dir(), i));
-        const auto index_dir = env.get_dir() + "/idx";
-        const auto staging = env.get_dir() + "/staging";
-
-        store::SstArtifactRegistry registry;
-        build::IndexBuildBatchResult result;
-        {
-            Runtime rt(WORKERS);
-            auto counter = std::make_shared<std::atomic<std::size_t>>(0);
-            auto task = run_coro_scope(
-                rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    auto config =
-                        std::make_shared<build::IndexBuildBatchConfig>();
-                    config->file_paths = files;
-                    config->index_dir = index_dir;
-                    config->parallelism = WORKERS;
-                    config->sink_factory = [&staging, counter] {
-                        return std::make_unique<
-                            store::IndexDatabaseSstWriterContext>(
-                            staging,
-                            "batch_" + std::to_string(counter->fetch_add(1)));
-                    };
-                    config->sink_commit = [&registry](store::IndexWrite& sink) {
-                        registry.append(
-                            static_cast<store::IndexDatabaseSstWriterContext&>(
-                                sink)
-                                .commit());
-                    };
-                    result = co_await build::BatchBuilder::process(
-                        &scope, std::move(config));
-                });
-            rt.submit(std::move(task), "serial-stages-build").wait();
-            rt.shutdown();
-        }
-        REQUIRE(result.indexed == INDEX_FILES);
-
-        struct Staged {
-            std::string path;
-            ino_t inode;
-            std::string bytes;
-        };
-        std::vector<Staged> staged;
-        for (std::size_t f = 0; f < store::layout::FAMILY_COUNT; ++f) {
-            for (const auto& path :
-                 registry.files(static_cast<store::layout::Family>(f))) {
-                struct stat st;
-                REQUIRE(::stat(path.c_str(), &st) == 0);
-                staged.push_back({path, st.st_ino, read_bytes(path)});
-            }
-        }
-        REQUIRE(staged.size() > 1);
-
-        const auto index_path =
-            trace::internal::determine_index_path(files[0], index_dir);
-        store::IndexDatabase db(index_path);
-        db.init_schema();
-        const auto skipped_before = store::ingest_reopens_skipped();
-        db.bulk_ingest(registry, {});
-
-        std::map<ino_t, std::string> in_db;
-        for (const auto& e : fs::recursive_directory_iterator(index_path)) {
-            if (e.path().extension() != ".sst") continue;
-            struct stat st;
-            REQUIRE(::stat(e.path().c_str(), &st) == 0);
-            in_db[st.st_ino] = e.path().string();
-        }
-        for (const auto& s : staged) {
-            CHECK_FALSE(fs::exists(s.path));
-            const auto it = in_db.find(s.inode);
-            REQUIRE(it != in_db.end());
-            CHECK(read_bytes(it->second) == s.bytes);
-        }
-        CHECK(store::ingest_reopens_skipped() - skipped_before ==
-              staged.size());
-    }
-    TEST_CASE("a cold view ingests its sinks while files still parse") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
-        const auto& run = view_run();
-        MESSAGE("ingests " << run.ingest_calls << ", during parse "
-                           << run.during_parse << ", most at once "
-                           << run.most_at_once << ", sink commits "
-                           << run.sink_commits);
-        CHECK(run.ingest_calls > 1);
-        CHECK(run.during_parse > 0);
-        CHECK(run.most_at_once > 1);
-    }
-
     TEST_CASE("a bootstrap that fails midway marks only complete files") {
         const auto& run = view_run();
         auto files = run.files;
@@ -369,7 +255,7 @@ TEST_SUITE("SerialStages") {
         }
 
         const auto root = view_index_root(files.front(), index_dir);
-        store::RocksDBManager::instance().reset(root);
+        store::release_index(root);
         store::IndexDatabase db(root, store::IndexOpenMode::ReadOnly);
         std::size_t marked = 0;
         for (const auto& f : files) {
@@ -393,9 +279,7 @@ TEST_SUITE("SerialStages") {
                       files.back())) < 0);
     }
 
-    TEST_CASE("many ingests store the index that one ingest stores") {
-        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
-            dftracer::utils::index::store::IndexBackend::RocksDb);
+    TEST_CASE("many sink commits store the index that one commit stores") {
         const auto& run = view_run();
         const auto one_dir = run.env.get_dir() + "/one";
         configure_default_runtime({.threads = VIEW_WORKERS, .eager = true});
@@ -405,24 +289,19 @@ TEST_SUITE("SerialStages") {
             counters.reset();
             cold_count(run.files, one_dir);
         }
-        const auto one_ingests = counters.ingest_calls.load();
-        REQUIRE(run.ingest_calls > 1);
-        REQUIRE(one_ingests < run.ingest_calls);
+        const auto one_commits = counters.sink_commits.load();
+        REQUIRE(run.sink_commits > 1);
+        REQUIRE(one_commits < run.sink_commits);
 
         const auto many =
             dump_index(view_index_root(run.files.front(), run.many_dir));
         const auto one =
             dump_index(view_index_root(run.files.front(), one_dir));
+        REQUIRE_FALSE(many.empty());
         REQUIRE(many.size() == one.size());
-        for (const auto& [name, rows] : many) {
-            INFO("family " << name);
-            const auto it = one.find(name);
-            REQUIRE(it != one.end());
-            REQUIRE(rows.size() == it->second.size());
-            for (std::size_t i = 0; i < rows.size(); ++i) {
-                if (rows[i] != it->second[i])
-                    FAIL("row " << i << " differs in " << name);
-            }
+        for (std::size_t i = 0; i < many.size(); ++i) {
+            if (many[i] != one[i])
+                FAIL("record " << i << " differs: " << many[i].first);
         }
     }
 }

@@ -3,7 +3,6 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/open_extent.h>
@@ -33,12 +32,6 @@ constexpr std::size_t FEW_WORKERS = 2;
 // Small, so each worker fills its staged index buffer within a few files and
 // 64 files hold as many buffered bytes as 256.
 constexpr std::size_t SINK_LIMIT = std::size_t{256} << 10;
-// Small, so the blocks RocksDB caches as each file's index is read do not
-// grow the peak with the file count; the store, not the bootstrap, owns them.
-constexpr std::size_t BLOCK_CACHE_LIMIT = std::size_t{1} << 20;
-// Small, so the pages the store collects to train its page dictionaries do not
-// grow the peak with the data written; the store, not the bootstrap, owns
-// them, and they stop at their size.
 constexpr std::size_t DICT_SAMPLE_LIMIT = std::size_t{256} << 10;
 // What a worker may hold to parse a file, whatever the file.
 constexpr std::size_t PER_WORKER_BUDGET = std::size_t{24} << 20;
@@ -165,7 +158,6 @@ TEST_SUITE("BootstrapPeak") {
         for (int i = 0; i < *n; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
         build::g_max_sink_bytes.store(SINK_LIMIT);
-        index::store::g_block_cache_bytes.store(BLOCK_CACHE_LIMIT);
         dftracer::utils::store::g_dict_sample_bytes.store(DICT_SAMPLE_LIMIT);
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         dataframe::DataFrame df;

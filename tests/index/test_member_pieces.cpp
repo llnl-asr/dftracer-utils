@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 

@@ -819,8 +819,9 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
     int status = 0;
     bool exited = false;
     // A generous exit budget: the graceful teardown (close listen fd, drain the
-    // async runtime + RocksDB) can be CPU-starved when the full suite runs many
-    // process-spawning tests unbounded-parallel, so 15s occasionally flaked.
+    // async runtime + index store) can be CPU-starved when the full suite runs
+    // many process-spawning tests unbounded-parallel, so 15s occasionally
+    // flaked.
     for (int i = 0; i < 600; ++i) {
         if (::waitpid(server.pid, &status, WNOHANG) > 0) {
             exited = true;

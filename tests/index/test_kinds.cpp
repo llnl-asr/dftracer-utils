@@ -5,7 +5,6 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <testing_utilities.h>

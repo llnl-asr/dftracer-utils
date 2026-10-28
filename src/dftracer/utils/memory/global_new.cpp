@@ -16,7 +16,7 @@ using memory::PoolHandle;
 constexpr std::size_t DEFAULT_ALIGN = alignof(std::max_align_t);
 
 // Blocks of the global operator new have a pool of their own, left out of the
-// exit check: RocksDB and the C++ runtime keep singletons that are never freed.
+// exit check: the C++ runtime keeps singletons that are never freed.
 // It is not a scope pool, so a block that outlives a scope is no leak of it.
 Pool& new_pool() {
     alignas(PoolHandle) static unsigned char storage[sizeof(PoolHandle)];

@@ -11,9 +11,8 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/queries.h>
 #include <dftracer/utils/json/json.h>
@@ -981,7 +980,7 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
                                              std::size_t executor_threads) {
     auto index_path = trace::internal::determine_index_path(
         partition.files_needing_index.front().file_path, index_dir);
-    dftracer::utils::index::store::RocksDBManager::instance().reset(index_path);
+    dftracer::utils::index::store::release_index(index_path);
 
     std::printf("Auto-building index for %zu file(s)...\n",
                 partition.files_needing_index.size());
@@ -1485,12 +1484,11 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
 }
 
 int main(int argc, char** argv) {
-    // RocksDB process-exit cleanup is handled by cli::cli_main's own guard.
     return cli::cli_main<StatsArgParse>(
         argc, argv, "dftracer_stats",
         "Display statistics for DFTracer trace files from pre-built "
         ".dftindex databases. Auto-builds indexes if missing. "
-        "Zero-cost reads from RocksDB metadata, no decompression.",
+        "Zero-cost reads from index metadata, no decompression.",
         [](StatsArgParse& args) {
             return cli::run_single_task(
                 "DFTracer Stats Main", args.pipeline,

@@ -10,7 +10,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
@@ -238,7 +237,6 @@ std::size_t merge_shard_set(const std::string& root,
     {
         dftracer::utils::index::store::IndexDatabase out_db(
             out_idx, dftracer::utils::index::store::IndexOpenMode::ReadWrite);
-        out_db.init_schema();
 
         for (const auto& shard : manifest->shards) {
             if (shard.empty()) continue;

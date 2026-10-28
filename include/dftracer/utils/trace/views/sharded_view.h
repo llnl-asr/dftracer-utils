@@ -25,7 +25,7 @@ namespace dftracer::utils::trace::views {
 /// for the per-shard `aggregate_partial()` (the tier read opens the aggregation
 /// DB read-only; the scan fallback reads the index without writing). It never
 /// builds, rebuilds, or persists a rollup - unlike `collect()`/`materialize()`,
-/// which do - so it takes no RocksDB write lock and is safe against shards on a
+/// which do - so it takes no index write lock and is safe against shards on a
 /// read-only mount or NFS.
 class ShardedView {
    public:

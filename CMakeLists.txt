@@ -110,12 +110,6 @@ if(NOT DFTRACER_UTILS_MEMORY_BACKEND MATCHES "^(page_heap|system)$")
       "DFTRACER_UTILS_MEMORY_BACKEND must be page_heap or system, not '${DFTRACER_UTILS_MEMORY_BACKEND}'"
   )
 endif()
-set(DFTRACER_UTILS_ROCKSDB_VERSION
-    "11.1.2"
-    CACHE STRING "RocksDB version to find or build")
-set(DFTRACER_UTILS_ROCKSDB_PREFIX
-    "$ENV{DFTRACER_UTILS_ROCKSDB_PREFIX}"
-    CACHE PATH "Install prefix of a prebuilt RocksDB to use instead of source")
 set(DFTRACER_UTILS_DEPS_BUILD_TYPE
     "RelWithDebInfo"
     CACHE STRING "Build type of the dependencies built as installs (vectorscan)")
@@ -128,7 +122,7 @@ option(DFTRACER_UTILS_ENABLE_VECTORSCAN "Use Vectorscan for duql regexes and the
 option(DFTRACER_UTILS_ENABLE_ARROW_IPC "Enable Arrow IPC file read/write via nanoarrow" ON)
 option(
   DFTRACER_UTILS_LOCAL_PACKAGES
-  "Prefer system-installed bundled dependencies (RocksDB, zstd, simdjson, ...) when available; set OFF to build them from source for portable wheels"
+  "Prefer system-installed bundled dependencies (zstd, simdjson, ...) when available; set OFF to build them from source for portable wheels"
   ON)
 
 if(DFTRACER_UTILS_TESTS)

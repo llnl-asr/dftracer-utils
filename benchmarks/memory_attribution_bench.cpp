@@ -6,7 +6,7 @@
 // the peak live and reserved bytes of the root pool and of the workload's own
 // pools ("query" for a lazy plan, "genesis/..." for genesis, "fold buffers"
 // for the index build), and unattributed = peak anon - peak root live. Memory
-// that no pool holds (RocksDB, the C library) is unattributed.
+// that no pool holds (the C library) is unattributed.
 //
 //   memory_attribution_bench           (larger sizes)
 //   memory_attribution_bench --smoke   (small sizes plus the checks, for ctest)
@@ -450,10 +450,6 @@ int main(int argc, char** argv) {
             mib(r.peak_root_reserved), group_name(info.group),
             mib(r.peak_group_live), mib(r.peak_group_reserved),
             static_cast<double>(unattributed) / MIB);
-        if (info.id == Workload::INDEX_BUILD)
-            std::printf(
-                "%-12s rocksdb block cache %.1f MiB (fixed, in no gauge)\n",
-                info.name, mib(constants::rocksdb::BLOCK_CACHE_BYTES));
 #if defined(__GLIBC__)
         if (info.id == Workload::SPILL_CYCLE)
             std::printf(

@@ -78,7 +78,7 @@ struct ReadConfig {
     /// trusts the caller's start_line/end_line window. Intended for the
     /// checkpoint-level work-item dispatcher, which already pruned once
     /// per file at enumeration time. Without this the pruner would
-    /// re-run per work item (hundreds-of-thousands of RocksDB opens).
+    /// re-run per work item (hundreds of thousands of index opens).
     bool skip_pruning = false;
 
     bool start_at_checkpoint = false;

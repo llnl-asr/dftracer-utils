@@ -21,7 +21,7 @@
 // One query API over the chunk partials of the aggregation tier. A query
 // names the files, a group-by, an optional time window and filters, and gets
 // one row per group key, each an AggPartial that has the stored partials
-// merged into it as the iterator over RocksDB yields them.
+// merged into it as the index scan yields them.
 //
 // A stored partial is added whole when it answers the query exactly. It is
 // answered by re-reading its chunk when it cannot:

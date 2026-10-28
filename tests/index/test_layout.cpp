@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/big_endian.h>
-#include <dftracer/utils/index/store/key_codec.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <doctest/doctest.h>
 
@@ -13,13 +12,7 @@ using layout::Ext;
 
 TEST_SUITE("index layout") {
     TEST_CASE("stored key and header bytes are big-endian and fixed") {
-        using dftracer::utils::index::store::KeyCodec;
         using namespace std::string_view_literals;
-        CHECK(KeyCodec::encode_be32(0x01020304U) == "\x01\x02\x03\x04"sv);
-        CHECK(KeyCodec::encode_be64(0x0102030405060708ULL) ==
-              "\x01\x02\x03\x04\x05\x06\x07\x08"sv);
-        CHECK(KeyCodec::decode_be64("\x01\x02\x03\x04\x05\x06\x07\x08"sv) ==
-              0x0102030405060708ULL);
         CHECK(layout::granule_key(Ext::Zonemap, layout::path_kind::DATA,
                                   0x01020304U, 0x0A0B0C0DU) ==
               "\x00\x04\x01\x01\x02\x03\x04\x0A\x0B\x0C\x0D"sv);

@@ -3,7 +3,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <trace/views/test_view_common.h>
 
@@ -85,8 +85,7 @@ TEST_SUITE("QueryCache") {
                                rdb::IndexOpenMode::ReadOnly);
         bool rollup_in_index = false;
         idx.for_each_record([&](std::string_view key, std::string_view) {
-            if (key.substr(0, rdb::cf::ROLLUP.size() + 1) ==
-                std::string(rdb::cf::ROLLUP) + "|")
+            if (key.find("rollup") != std::string_view::npos)
                 rollup_in_index = true;
         });
         CHECK_FALSE(rollup_in_index);

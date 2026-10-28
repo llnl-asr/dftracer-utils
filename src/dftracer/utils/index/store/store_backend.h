@@ -274,9 +274,6 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
 
     int file_id_for(std::string_view logical_path) override;
     void bind_file(std::string_view logical_path, int file_id) override;
-    /// Does nothing: a namespace version carries the format of the data it
-    /// holds.
-    void init_schema() override {}
 
    private:
     friend class StoreRoot;

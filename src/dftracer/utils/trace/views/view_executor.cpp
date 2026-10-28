@@ -207,10 +207,9 @@ using SstArtifacts =
 // artifacts, bloom and row sets from the folds, each with its manifest entry.
 // A bloom fold with spill enabled writes its tier as sorted runs, which the
 // caller ingests after `w` commits, as the batch builder does, or on the store
-// into a staged write, which the caller commits after `w`.
+// into a staged write, which is published here.
 struct BootstrapSpill {
     std::vector<SstArtifacts> runs;
-    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
 };
 
 BootstrapSpill write_bootstrap_index(
@@ -233,11 +232,12 @@ BootstrapSpill write_bootstrap_index(
                                                         schema.params_hash());
     BootstrapSpill spill;
     if (bloom.writes_runs() && bloom.stages()) {
-        spill.staged = bloom.finish_staged(fid);
+        auto staged = bloom.finish_staged(fid);
         // The file's record gives the published tier the file's sources.
         dftracer::utils::index::store::records::put_file_record(
-            *spill.staged, logical,
+            *staged, logical,
             {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
+        staged->commit();
     } else if (bloom.writes_runs()) {
         spill.runs = bloom.finish_spilled(fid);
     } else {
@@ -357,11 +357,6 @@ struct BootstrapSink {
     /// The write of a root the store holds, which needs no staged SSTs.
     std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> write;
     std::vector<std::vector<SstArtifacts>> spilled;
-    /// The staged writes of the files that spilled on the store, committed
-    /// after `write`.
-    std::vector<
-        std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite>>
-        staged;
     /// Bytes the sink holds before its worker commits it.
     std::size_t limit = 0;
 };
@@ -371,16 +366,12 @@ struct BootstrapSink {
 // Workers ingest at once; RocksDB runs the prepare step of each outside its
 // mutex and takes the ranges of the ingests one at a time.
 void commit_bootstrap_sink(BootstrapSink& open) {
-    if (!open.sink && !open.write && open.spilled.empty() &&
-        open.staged.empty())
-        return;
+    if (!open.sink && !open.write && open.spilled.empty()) return;
     auto& counters = bootstrap_counters();
-    if (open.write || !open.staged.empty()) {
+    if (open.write) {
         counters.ingest_calls.fetch_add(1, std::memory_order_relaxed);
-        if (open.write) open.write->commit();
+        open.write->commit();
         open.write.reset();
-        for (auto& staged : open.staged) staged->commit();
-        open.staged.clear();
         counters.sink_commits.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -445,7 +436,6 @@ void write_bootstrap_file(
         dftracer::utils::index::store::internal::get_logical_path(f.file_path),
         f.file_path, arts, schema, bloom, rowsets, hash, file_id);
     if (!spill.runs.empty()) open.spilled.push_back(std::move(spill.runs));
-    if (spill.staged) open.staged.push_back(std::move(spill.staged));
     if (sink.buffered_bytes() >= open.limit) commit_bootstrap_sink(open);
 }
 
@@ -548,13 +538,8 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     dstd::Map<std::string, std::size_t> slot_of;
     for (const auto& root : stores.roots) {
         slot_of.emplace(root->index_path, open.size());
-        open.push_back({root.get(),
-                        &stores.sink_names,
-                        nullptr,
-                        nullptr,
-                        {},
-                        {},
-                        sink_limit});
+        open.push_back(
+            {root.get(), &stores.sink_names, nullptr, nullptr, {}, sink_limit});
     }
 
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
@@ -924,9 +909,9 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 run->next_block.fetch_add(1, std::memory_order_relaxed);
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
-            BootstrapSink open{
-                block.root, &run->stores->sink_names, nullptr, nullptr, {},
-                {},         run->sink_limit};
+            BootstrapSink open{block.root, &run->stores->sink_names,
+                               nullptr,    nullptr,
+                               {},         run->sink_limit};
             auto& merged = run->states[b];
             for (std::size_t k = block.begin; k < block.end; ++k) {
                 if (run->failed.load(std::memory_order_relaxed))

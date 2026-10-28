@@ -121,6 +121,9 @@ struct Admission {
     std::string spill_root;
     /// Files spill into a staged write of the index on the store.
     bool spill_staged = false;
+    /// The index the staged writes go to when this build holds it open; null
+    /// opens it for each file.
+    index::store::IndexDatabase* staged_db = nullptr;
     /// RecordSchema id for every file; empty detects each file's.
     std::string schema;
     std::atomic<std::size_t> spilled{0};
@@ -223,10 +226,7 @@ static void commit_open_sink(BlockWriter* writer, OpenSink& open,
     }
     for (auto& file : open.spilled) {
         try {
-            if (file.staged)
-                file.staged->commit();
-            else
-                writer->commit_spill(std::move(file.runs));
+            writer->commit_spill(std::move(file.runs));
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Failed to ingest the spilled index of %s: %s",
@@ -347,8 +347,10 @@ static coro::CoroTask<void> parse_and_write_worker(
                         job.bloom_fold->set_file_bytes(pf.file_size);
                         if (admission->spill_staged) {
                             auto staged =
-                                index::store::IndexDatabase(pf.index_path)
-                                    .begin_staged_write();
+                                admission->staged_db
+                                    ? admission->staged_db->begin_staged_write()
+                                    : index::store::IndexDatabase(pf.index_path)
+                                          .begin_staged_write();
                             // Its runs come before the file's record.
                             staged->bind_file(pf.logical_path, pf.file_id);
                             job.bloom_fold->enable_spill(
@@ -612,9 +614,11 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     // A spilled file is runs of SSTs to ingest on RocksDB, and stages of one
     // write on the store.
     if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit)) {
-        if (index::store::index_backend() == index::store::IndexBackend::Store)
+        if (index::store::index_backend() ==
+            index::store::IndexBackend::Store) {
             admission->spill_staged = true;
-        else
+            admission->staged_db = writer_db.get();
+        } else
             admission->spill_root = state->spill_dir.empty()
                                         ? state->index_path + ".spill"
                                         : state->spill_dir;

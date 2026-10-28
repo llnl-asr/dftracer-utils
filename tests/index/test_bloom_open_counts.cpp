@@ -49,7 +49,8 @@ struct Fixture {
         std::vector<views::FoldEvent> out(to - from);
         for (std::size_t i = from; i < to; ++i) {
             out[i - from].phase = trace::RecordPhase::Unknown;
-            out[i - from].schema_leaves = shapes[order[i]];
+            out[i - from].schema_leaves.assign(shapes[order[i]].begin(),
+                                               shapes[order[i]].end());
         }
         return out;
     }

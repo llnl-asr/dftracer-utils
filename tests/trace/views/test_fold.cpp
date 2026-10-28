@@ -437,38 +437,68 @@ TEST_SUITE("Fold") {
         CHECK(got.args.size() == 1);
         // Nothing of the wide record survives in the reused slot.
         CHECK(got.specials.empty());
-        CHECK(got.args.capacity() >= wide_args);
         CHECK(buf.events().size() == 1);
     }
 
-    TEST_CASE("clearing a buffer cuts back what a huge batch or event grew") {
+    TEST_CASE("clearing a buffer cuts back what a huge batch grew") {
+        using Arena = ChunkArena<FoldEvent::Arg>;
         FoldEventBuffer buf;
         const std::size_t slots = FoldEventBuffer::RETAIN_SLOTS + 100;
-        FoldEvent& first = buf.append();
-        first.args.resize(10 * FoldEventBuffer::RETAIN_ENTRIES);
-        first.schema_leaves.resize(10 * FoldEventBuffer::RETAIN_ENTRIES);
-        for (std::size_t i = 1; i < slots; ++i)
-            CHECK(buf.append().args.capacity() <=
-                  FoldEventBuffer::RETAIN_ENTRIES);
+        for (std::size_t i = 0; i < slots; ++i) {
+            FoldEvent& ev = buf.append();
+            ev.args.resize(64);
+            ev.schema_leaves.resize(64);
+        }
         CHECK(buf.slot_capacity() >= slots);
+        const std::size_t grown = buf.bytes();
         buf.clear();
         CHECK(buf.empty());
         CHECK(buf.slot_capacity() <= FoldEventBuffer::RETAIN_SLOTS);
+        const std::size_t kept =
+            FoldEventBuffer::RETAIN_SLOTS * sizeof(FoldEvent) +
+            Arena::RETAIN_CHUNKS * Arena::CHUNK_ENTRIES *
+                (sizeof(FoldEvent::Arg) + sizeof(FoldEvent::SpecialValue) +
+                 sizeof(FoldEvent::SchemaLeaf));
+        CHECK(buf.bytes() <= kept);
+        CHECK(buf.bytes() < grown);
+        // A slot reused after clear() starts empty.
+        CHECK(buf.append().args.empty());
+    }
 
-        for (std::size_t i = 0; i < slots; ++i) {
+    TEST_CASE("the events of a batch share chunks for their lists") {
+        using Arena = ChunkArena<FoldEvent::Arg>;
+        constexpr std::size_t EVENTS = 1000;
+        constexpr std::size_t ARGS = 5;
+        FoldEventBuffer buf;
+        for (std::size_t i = 0; i < EVENTS; ++i) {
             FoldEvent& ev = buf.append();
-            CHECK(ev.args.capacity() <= FoldEventBuffer::RETAIN_ENTRIES);
-            CHECK(ev.schema_leaves.capacity() <=
-                  FoldEventBuffer::RETAIN_ENTRIES);
+            for (std::size_t a = 0; a < ARGS; ++a)
+                ev.args.emplace_back(static_cast<std::uint32_t>(a),
+                                     FoldEvent::ArgValue{std::int64_t{1}});
         }
-        buf.clear();
-        CHECK(buf.slot_capacity() <= FoldEventBuffer::RETAIN_SLOTS);
+        // Each list grows in place at the end of its chunk, to 8 entries at
+        // most: no per-event block and no slack past one doubling.
+        const std::size_t arena =
+            buf.bytes() - buf.slot_capacity() * sizeof(FoldEvent);
+        CHECK(arena <= (EVENTS * 8 / Arena::CHUNK_ENTRIES + 1) *
+                           Arena::CHUNK_ENTRIES * sizeof(FoldEvent::Arg));
+        for (const FoldEvent& ev : buf.events()) CHECK(ev.args.size() == ARGS);
+    }
 
-        FoldEventBuffer small;
-        small.append().args.resize(FoldEventBuffer::RETAIN_ENTRIES);
-        small.clear();
-        CHECK(small.append().args.capacity() >=
-              FoldEventBuffer::RETAIN_ENTRIES);
+    TEST_CASE("an event copied out of a buffer outlives the buffer's reuse") {
+        FoldEventBuffer buf;
+        FoldEvent& ev = buf.append();
+        ev.args.emplace_back(7u, FoldEvent::ArgValue{std::int64_t{42}});
+        ev.schema_leaves.emplace_back(3u, std::uint8_t{1});
+        const FoldEvent copy = ev;
+        buf.clear();
+        FoldEvent& reused = buf.append();
+        reused.args.emplace_back(9u, FoldEvent::ArgValue{std::int64_t{-1}});
+        REQUIRE(copy.args.size() == 1);
+        CHECK(copy.args[0].first == 7u);
+        CHECK(std::get<std::int64_t>(copy.args[0].second) == 42);
+        REQUIRE(copy.schema_leaves.size() == 1);
+        CHECK(copy.schema_leaves[0].first == 3u);
     }
 
     TEST_CASE("EventRows over a pick list reads only the picked events") {

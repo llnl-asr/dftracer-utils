@@ -101,11 +101,10 @@ class FoldBufferPool final : public memory::Reclaimer {
 
     void give(std::unique_ptr<EventBuffer> b) {
         if (!b) return;
-        // The slots this use filled, a lower bound on what the buffer holds:
-        // the slots' own vectors are not counted.
-        const std::uint64_t bytes =
-            b->size() * sizeof(trace::views::detail::FoldEvent);
+        // What the buffer keeps for its next use: its slots and the chunks
+        // of their lists.
         b->clear();
+        const std::uint64_t bytes = b->bytes();
         std::lock_guard<std::mutex> lock(mu_);
         free_.push_back(Idle{std::move(b), bytes});
         idle_bytes_ += bytes;

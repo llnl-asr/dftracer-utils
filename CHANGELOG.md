@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Keep the argument, field and schema-leaf lists of the events a scan buffers in shared chunks of their buffer, where each event held its own heap block for each list.
+  A cold `dftracer_index` of the 14,117 minife traces peaks at 0.80 GB where it peaked at 0.92 GB at 16 threads and at 2.7 GB where it peaked at 3.1 GB at 96 threads, and takes 3 to 6% less CPU.
 - Commit each worker's index write once it holds 4 MiB instead of 32 MiB, as fast and with a 3% larger index.
   A cold `dftracer_index` of the 14,117 minife traces peaks at 0.98 GB where it peaked at 1.4 GB at 16 threads, and at 3.1 GB where it peaked at 3.6 GB at 96 threads.
 - Make a store index commit in a view bootstrap or an index build wait for its writes without holding a worker, so the peak memory of a bootstrap stays flat as its files grow.

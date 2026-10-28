@@ -7,6 +7,7 @@
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/store_backend.h>
 #include <dftracer/utils/index/store/store_layout.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -134,6 +135,46 @@ std::string granule_key_of(layout::Ext ext, std::uint8_t kind, int file_id,
         ext, kind, static_cast<std::uint32_t>(file_id), path);
     append_u32_be(key, granule);
     return key;
+}
+
+/// A Zonemap copy of TRACE with the paths args.name and args.dur, one granule
+/// each, written by a writer that is closed afterward.
+int write_closed_zonemap(const std::string& dir) {
+    auto root = StoreRoot::get_or_open(dir);
+    const int file_id = root->file_id_for(std::string(TRACE));
+    auto write = root->begin_write();
+    records::put_file_record(*write, TRACE, file_record(file_id));
+    records::put_manifest(*write, file_id, layout::Ext::Members, PARAMS);
+    records::put_manifest(*write, file_id, layout::Ext::Zonemap, 1);
+    records::put_path(*write, layout::Ext::Zonemap, file_id, "args.name");
+    records::put_path_granule(*write, layout::Ext::Zonemap, file_id,
+                              "args.name", 0, "name-old");
+    records::put_path(*write, layout::Ext::Zonemap, file_id, "args.dur");
+    records::put_path_granule(*write, layout::Ext::Zonemap, file_id, "args.dur",
+                              0, "dur-old");
+    write->commit();
+    root->close();
+    return file_id;
+}
+
+/// The args.name and args.dur keys, and the old and new args.name values.
+struct ZonemapCounts {
+    std::size_t name = 0;
+    std::size_t dur = 0;
+    std::size_t name_old = 0;
+    std::size_t name_new = 0;
+};
+
+ZonemapCounts zonemap_counts(StoreRoot& root) {
+    ZonemapCounts counts;
+    for (const auto& [key, value] :
+         rows_of(root, layout::Ext::Zonemap, file_scope(TRACE))) {
+        if (key.find("args.name") != std::string::npos) ++counts.name;
+        if (key.find("args.dur") != std::string::npos) ++counts.dur;
+        if (value.find("name-old") != std::string::npos) ++counts.name_old;
+        if (value.find("name-new") != std::string::npos) ++counts.name_new;
+    }
+    return counts;
 }
 
 }  // namespace
@@ -769,4 +810,101 @@ TEST_CASE("commits from many threads and a close in between all land") {
         CHECK(rows.begin()->first.find("r" + std::to_string(ROUNDS - 1)) !=
               std::string::npos);
     }
+}
+
+TEST_CASE(
+    "a write to part of a copy another writer holds keeps its other keys") {
+    dftu_test::ScopedTestDir dir("store_index_carry");
+    const int file_id = write_closed_zonemap(dir.str());
+    auto root = StoreRoot::get_or_open(dir.str());
+    auto write = root->begin_write();
+    records::put_path_granule(*write, layout::Ext::Zonemap, file_id,
+                              "args.name", 1, "name-new");
+    write->commit();
+
+    const auto counts = zonemap_counts(*root);
+    CHECK(counts.name == 3);
+    CHECK(counts.dur == 2);
+    CHECK(counts.name_old == 1);
+    CHECK(counts.name_new == 1);
+    const store::CopyInfo info = root->snapshot()->copy_info(
+        spec_of(layout::Ext::Zonemap), file_scope(TRACE));
+    CHECK(info.state == store::ScopeState::Ready);
+    CHECK(info.params_hash == 1);
+}
+
+TEST_CASE("a cleared path of a copy another writer holds stays hidden") {
+    dftu_test::ScopedTestDir dir("store_index_carry_erase");
+    const int file_id = write_closed_zonemap(dir.str());
+    auto root = StoreRoot::get_or_open(dir.str());
+    auto write = root->begin_write();
+    records::clear_path(*write, layout::Ext::Zonemap, file_id, "args.name");
+    records::put_path_granule(*write, layout::Ext::Zonemap, file_id,
+                              "args.name", 1, "name-new");
+    write->commit();
+
+    const auto counts = zonemap_counts(*root);
+    CHECK(counts.name_old == 0);
+    CHECK(counts.name_new == 1);
+    CHECK(counts.dur == 2);
+}
+
+TEST_CASE("a copy of a file that changed since is not carried") {
+    dftu_test::ScopedTestDir dir("store_index_carry_changed");
+    const int file_id = write_closed_zonemap(dir.str());
+    auto root = StoreRoot::get_or_open(dir.str());
+    auto write = root->begin_write();
+    auto changed = file_record(file_id);
+    changed.size += 1;
+    records::put_file_record(*write, TRACE, changed);
+    records::put_manifest(*write, file_id, layout::Ext::Zonemap, 1);
+    records::put_path_granule(*write, layout::Ext::Zonemap, file_id,
+                              "args.name", 1, "name-new");
+    write->commit();
+
+    const auto counts = zonemap_counts(*root);
+    CHECK(counts.name == 1);
+    CHECK(counts.name_new == 1);
+    CHECK(counts.dur == 0);
+}
+
+TEST_CASE("a file record the store already holds writes no copy") {
+    dftu_test::ScopedTestDir dir("store_index_record_again");
+    const int file_id = write_closed_zonemap(dir.str());
+    auto root = StoreRoot::get_or_open(dir.str());
+    const auto spec = spec_of(layout::Ext::Members);
+    const auto before = root->snapshot()->copy_info(spec, file_scope(TRACE));
+    REQUIRE(before.state == store::ScopeState::Ready);
+    auto write = root->begin_write();
+    records::put_file_record(*write, TRACE, file_record(file_id));
+    write->commit();
+    const auto after = root->snapshot()->copy_info(spec, file_scope(TRACE));
+    CHECK(after.generation == before.generation);
+    CHECK(after.state == store::ScopeState::Ready);
+}
+
+TEST_CASE("a commit from the only worker of the writer's runtime finishes") {
+    dftu_test::ScopedTestDir dir("store_index_worker_commit");
+    dftracer::utils::set_default_runtime(
+        std::make_shared<dftracer::utils::Runtime>(1));
+    {
+        auto root = StoreRoot::get_or_open(dir.str());
+        const int file_id = root->file_id_for(std::string(TRACE));
+        dftracer::utils::default_runtime().run_blocking(
+            "store-worker-commit",
+            [&](dftracer::utils::CoroScope&)
+                -> dftracer::utils::coro::CoroTask<void> {
+                auto write = root->begin_write();
+                records::put_file_record(*write, TRACE, file_record(file_id));
+                records::put_manifest(*write, file_id, layout::Ext::Members,
+                                      PARAMS);
+                write->commit();
+                co_return;
+            });
+        CHECK(root->snapshot()
+                  ->copy_info(spec_of(layout::Ext::Members), file_scope(TRACE))
+                  .state == store::ScopeState::Ready);
+        root->close();
+    }
+    dftracer::utils::set_default_runtime(nullptr);
 }

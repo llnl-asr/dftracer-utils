@@ -1,4 +1,4 @@
-:description: Reference for the C++ indexer: building and querying the RocksDB-backed index over trace events.
+:description: Reference for the C++ indexer: building and querying the index over trace events.
 
 Index
 =====
@@ -11,7 +11,7 @@ Index
 The index module in ``dftracer::utils::index``. ``Indexer``
 (``dftracer/utils/index/indexer.h``) is the entry point for building and
 inspecting an index; the sections after it document the installed layer
-types (RocksDB storage, gzip checkpoints, index extensions, the dftracer
+types (index storage, gzip checkpoints, index extensions, the dftracer
 record schema and its aggregation partials, the chunk indexer and the pruner) that
 other public headers still expose.
 

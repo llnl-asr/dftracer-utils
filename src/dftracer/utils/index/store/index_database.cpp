@@ -1022,6 +1022,79 @@ std::shared_ptr<rocks::RocksDatabase> IndexDatabase::db() const {
 
 bool IndexDatabase::has_rocksdb() const noexcept { return !impl_->on_store(); }
 
+void IndexDatabase::for_each_record(
+    const std::function<void(std::string_view, std::string_view)>& fn) const {
+    if (!impl_->on_store()) {
+        for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
+            const auto family = static_cast<layout::Family>(f);
+            const std::string name(layout::family_name(family));
+            auto it = impl_->db_->new_iterator(name);
+            if (!it) continue;
+            for (it->SeekToFirst(); it->Valid(); it->Next()) {
+                const std::string key =
+                    name + "|" +
+                    std::string(it->key().data(), it->key().size());
+                fn(key,
+                   std::string_view(it->value().data(), it->value().size()));
+            }
+            if (!it->status().ok())
+                throw_db_error("Failed to read every record", it->status());
+        }
+        return;
+    }
+    const auto held = impl_->store_->snapshot();
+    if (!held) return;
+    const auto declared = held->namespaces();
+    if (!declared)
+        throw_store_error("store index: list the namespaces", declared.error());
+    for (const kv::NamespaceDecl& decl : *declared) {
+        kv::NamespaceSpec spec;
+        spec.name = decl.name;
+        spec.format_version = decl.format_version;
+        const auto listed = held->scopes(spec);
+        if (!listed)
+            throw_store_error("store index: list the scopes", listed.error());
+        const std::string name(decl.name.data(), decl.name.size());
+        for (const kv::ScopeEntry& entry : *listed) {
+            std::string scope =
+                std::to_string(decl.format_version) + "|" +
+                std::to_string(static_cast<int>(entry.scope.kind));
+            for (const dstd::String& path : entry.scope.paths) {
+                scope += "|";
+                scope.append(path.data(), path.size());
+            }
+            const std::string copy =
+                std::to_string(static_cast<int>(entry.copy.state)) + "|" +
+                std::to_string(entry.copy.params_hash);
+            fn("#copy|" + name + "|" + scope, copy);
+            auto cursor = held->scan(spec, entry.scope, ByteView{}, ByteView{});
+            for (; !cursor.at_end(); cursor.next()) {
+                auto value = cursor.value();
+                if (!value)
+                    throw_store_error("store index: read a value",
+                                      value.error());
+                const ByteView key = cursor.key();
+                fn(name + "|" + scope + "|" +
+                       std::string(reinterpret_cast<const char*>(key.data()),
+                                   key.size()),
+                   std::string_view(
+                       reinterpret_cast<const char*>(value->data()),
+                       value->size()));
+            }
+            if (cursor.error())
+                throw_store_error("store index: scan a copy", *cursor.error());
+        }
+    }
+}
+
+std::unique_ptr<IndexDatabaseWrite> IndexDatabase::begin_staged_write() {
+    if (!impl_->on_store()) {
+        throw std::runtime_error(
+            "index database: a staged write needs the store backend");
+    }
+    return impl_->store_->begin_write(true);
+}
+
 std::unique_ptr<IndexDatabaseWrite> IndexDatabase::begin_write() {
     if (impl_->on_store()) {
         return impl_->store_->begin_write();

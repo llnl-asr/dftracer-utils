@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/parse_gate.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -143,16 +144,16 @@ using Dump = std::map<std::string, Family>;
 Dump dump_index(const std::string& first_file, const std::string& index_dir) {
     const auto path =
         trace::internal::determine_index_path(first_file, index_dir);
-    store::RocksDatabase db(path, store::RocksDatabase::OpenMode::ReadOnly);
-    REQUIRE(db.is_open());
+    store::RocksDBManager::instance().reset(path);
+    store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
     Dump out;
-    for (const auto cf : store::RocksDatabase::default_column_families()) {
-        auto it = db.new_iterator(cf);
-        Family& family = out[std::string(cf)];
-        for (it->SeekToFirst(); it->Valid(); it->Next())
-            family.emplace_back(it->key().ToString(), it->value().ToString());
-        REQUIRE_MESSAGE(it->status().ok(), it->status().ToString());
-    }
+    // Grouped by what precedes the first '|': the family on RocksDB, the
+    // namespace or #copy on the store.
+    db.for_each_record([&out](std::string_view key, std::string_view value) {
+        const auto bar = key.find('|');
+        out[std::string(key.substr(0, bar))].emplace_back(
+            std::string(key.substr(bar + 1)), std::string(value));
+    });
     return out;
 }
 

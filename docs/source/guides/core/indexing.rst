@@ -11,8 +11,8 @@ prunes chunks with it. This page is about building one and keeping it fresh,
 not the pruning mechanics.
 
 The index lives in a ``.dftindex`` directory next to the trace files it
-covers (or wherever you point ``index_dir``); it is a RocksDB store, not a
-single file. Building it is idempotent: run the same build again on unchanged
+covers (or wherever you point ``index_dir``); it is a directory of data
+files, not a single file. Building it is idempotent: run the same build again on unchanged
 traces and it does nothing, so you can call it at the top of every script
 without worrying about redundant work.
 

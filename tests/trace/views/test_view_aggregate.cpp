@@ -906,8 +906,6 @@ TEST_SUITE("View") {
         auto expect = canon(run(scan::collect_frame(make())));
         REQUIRE(expect.size() >= 1);
 
-        namespace rdb = dftracer::utils::index::store;
-
         // A materialize plan persists the result into the rollup store beside
         // the index as a byproduct of answering it.
         CHECK(canon(run(scan::collect_frame(
@@ -916,11 +914,10 @@ TEST_SUITE("View") {
             auto db = dftracer::utils::index::cache::open_rollup_db(
                 (fs::path(idx).parent_path() / ".dftindex-cache" / "rollups")
                     .string(),
-                rdb::RocksDatabase::OpenMode::ReadOnly);
+                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(db);
-            auto it = db->new_iterator(rdb::cf::ROLLUP);
-            it->SeekToFirst();
-            CHECK(it->Valid());  // the store holds the materialized view
+            CHECK_FALSE(
+                db->usage().empty());  // the store holds the materialized view
         }
 
         // A repeat query - even without materialize - reads the rollup back.
@@ -932,8 +929,6 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string gz = create_mixed_trace(env, 200, 60);
         std::string idx = determine_index_path(gz, "");
-
-        namespace rdb = dftracer::utils::index::store;
 
         auto canon = [](const dataframe::DataFrame& df) {
             std::vector<std::string> rows;
@@ -976,11 +971,9 @@ TEST_SUITE("View") {
             auto db = dftracer::utils::index::cache::open_rollup_db(
                 (fs::path(idx).parent_path() / ".dftindex-cache" / "rollups")
                     .string(),
-                rdb::RocksDatabase::OpenMode::ReadOnly);
+                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(db);
-            auto it = db->new_iterator(rdb::cf::ROLLUP);
-            it->SeekToFirst();
-            CHECK(it->Valid());
+            CHECK_FALSE(db->usage().empty());
         }
         CHECK(canon(make().collect().get()) == expect);  // now reads the rollup
     }

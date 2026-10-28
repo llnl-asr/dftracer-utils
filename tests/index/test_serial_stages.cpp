@@ -5,6 +5,7 @@
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/filesystem.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -261,6 +262,8 @@ TEST_SUITE("SerialStages") {
     }
 
     TEST_CASE("an ingest links its staged SSTs without a reopen and fsync") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;
         for (int i = 0; i < INDEX_FILES; ++i)
@@ -340,6 +343,8 @@ TEST_SUITE("SerialStages") {
               staged.size());
     }
     TEST_CASE("a cold view ingests its sinks while files still parse") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         const auto& run = view_run();
         MESSAGE("ingests " << run.ingest_calls << ", during parse "
                            << run.during_parse << ", most at once "
@@ -391,6 +396,8 @@ TEST_SUITE("SerialStages") {
     }
 
     TEST_CASE("many ingests store the index that one ingest stores") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         const auto& run = view_run();
         const auto one_dir = run.env.get_dir() + "/one";
         set_default_runtime(std::make_shared<Runtime>(VIEW_WORKERS));

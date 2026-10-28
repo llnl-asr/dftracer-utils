@@ -75,16 +75,19 @@ class BloomFold : public trace::views::detail::Fold {
     Lane open(const trace::views::detail::FoldBatch& batch);
     void observe(const Lane& lane,
                  const trace::views::detail::FoldBatch& batch);
-    bool spills() const { return !spill_dir_.empty(); }
+    bool spills() const { return !spill_dir_.empty() || staged_ != nullptr; }
     /// Whether finish_spilled writes the tier rather than write(): the file
     /// spilled while it was parsed. A file that fit its share goes through
     /// the shared write, so many small files share SSTs rather than each
     /// writing, syncing and ingesting runs of its own.
     bool writes_runs() const {
-        if (spill_dir_.empty() || files_.empty()) return false;
+        if (!spills() || files_.empty()) return false;
         const auto& sp = files_.begin()->second.spill;
-        return !sp.runs.empty() || sp.open != nullptr;
+        return !sp.runs.empty() || sp.open != nullptr || sp.staged_runs > 0 ||
+               sp.staged_bytes > 0;
     }
+    /// Whether the runs go to a staged write (the store) rather than SSTs.
+    bool stages() const { return staged_ != nullptr; }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
     void merge(trace::views::detail::Fold& slice) override;
@@ -115,6 +118,12 @@ class BloomFold : public trace::views::detail::Fold {
     /// A fresh `file_id` was reserved by this build, so its runs clear nothing.
     void enable_spill(std::uint64_t share, std::string dir, int file_id,
                       bool fresh_id = false);
+    /// The same bound for an index on the store: each run is a stage() of
+    /// `staged` (IndexDatabase::begin_staged_write), whose commit publishes
+    /// the tier whole; finish_staged hands it back.
+    void enable_spill(std::uint64_t share,
+                      std::unique_ptr<index::store::IndexDatabaseWrite> staged,
+                      int file_id, bool fresh_id = false);
     /// The on-disk size of the file being folded, which caps its auto keys.
     /// Unset, the size is read from the path when the file is written.
     void set_file_bytes(std::uint64_t bytes) { file_bytes_ = bytes; }
@@ -136,6 +145,12 @@ class BloomFold : public trace::views::detail::Fold {
     /// the files from here on.
     std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
     finish_spilled(int file_id);
+    /// finish_spilled for a fold that stages: writes the rest of the tier and
+    /// its manifest entries into the staged write and returns it. Its commit()
+    /// publishes the tier; the caller adds the file's record first, so the
+    /// tier carries the file's sources.
+    std::unique_ptr<index::store::IndexDatabaseWrite> finish_staged(
+        int file_id);
 
     /// The catalog of `file` as a full scan of its records so far leaves it
     /// (empty if unseen).
@@ -226,6 +241,10 @@ class BloomFold : public trace::views::detail::Fold {
         std::unique_ptr<index::store::IndexDatabaseSstWriterContext> open;
         /// Estimated bytes `open` holds.
         std::uint64_t buffered = 0;
+        /// Stages committed, and the bytes the staged write holds since the
+        /// last one.
+        std::size_t staged_runs = 0;
+        std::uint64_t staged_bytes = 0;
         bool handed_off = false;
     };
 
@@ -292,6 +311,8 @@ class BloomFold : public trace::views::detail::Fold {
     std::uint64_t resident_bytes(const FileState& fs, std::uint64_t cp) const;
     void chunk_started(FileState& fs, std::uint64_t cp);
     void spill(FileState& fs, std::uint64_t upto);
+    /// spill() into the staged write of a fold on the store.
+    void spill_staged(FileState& fs, std::uint64_t upto);
 
     StringViewMap<FileState> files_;
     // The file the last open() found, until files_ gains or loses a file.
@@ -300,6 +321,7 @@ class BloomFold : public trace::views::detail::Fold {
     std::uint64_t catalog_observations_ = 0;
     std::uint64_t spill_share_ = 0;
     std::string spill_dir_;
+    std::unique_ptr<index::store::IndexDatabaseWrite> staged_;
     int spill_file_id_ = -1;
     bool spill_fresh_ = false;
 };

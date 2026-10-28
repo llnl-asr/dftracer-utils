@@ -3,6 +3,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -120,6 +121,10 @@ TEST_SUITE("IndexParseAllocations") {
         {
             auto w = db.begin_write();
             for (int id : {REBUILT, FRESH}) {
+                store::layout::FileRecord record;
+                record.file_id = static_cast<std::uint32_t>(id);
+                store::records::put_file_record(
+                    *w, "file" + std::to_string(id) + ".pfw.gz", record);
                 store::records::put_manifest(*w, id, ext, 0);
                 store::records::put_path(*w, ext, id, "p");
                 store::records::put_path_file(*w, ext, id, "p", "payload");

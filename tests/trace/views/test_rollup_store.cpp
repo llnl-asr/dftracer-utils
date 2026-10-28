@@ -3,8 +3,6 @@
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/store/database.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -50,41 +48,16 @@ df::AggStatePtr make_state_kv(const std::vector<std::string>& gkeys,
 }  // namespace
 
 TEST_SUITE("RollupStore") {
-    TEST_CASE("key layout: tag, big-endian signature, group suffix") {
-        const std::uint64_t sig = 0x0102030405060708ULL;
-
-        std::string desc = rollup_desc_key(sig);
-        REQUIRE(desc.size() == 9);
-        CHECK(static_cast<unsigned char>(desc[0]) == 0x00);
-        CHECK(static_cast<unsigned char>(desc[1]) == 0x01);  // big-endian
-        CHECK(static_cast<unsigned char>(desc[8]) == 0x08);
-
-        std::string row = rollup_row_key(sig, "abc");
-        REQUIRE(row.size() == 12);
-        CHECK(static_cast<unsigned char>(row[0]) == 0x01);
-        CHECK(row.substr(9) == "abc");
-        CHECK(row.substr(1, 8) == desc.substr(1, 8));  // same signature bytes
-    }
-
-    TEST_CASE("key ordering groups a view and separates descriptors") {
-        const std::uint64_t s1 = 10, s2 = 11;
-        CHECK(rollup_desc_key(s1) < rollup_row_key(s1, ""));
-        CHECK(rollup_row_key(s1, "a") < rollup_row_key(s1, "b"));
-        CHECK(rollup_row_key(s1, "z") < rollup_row_key(s2, "a"));
-    }
-
     // The distributed reduce: two ranks' AggState partials are combined with
     // agg_merge, persisted as per-group blobs, and read back through a real
-    // RocksDB into an equivalent state.
+    // store into an equivalent state.
     TEST_CASE("agg_merge of rank partials persists and reads back") {
-        namespace rdb = dftracer::utils::index::store;
         const std::string dir =
             dftu_utils_test::make_unique_test_path("dftu_rollup_store_test")
                 .string();
         fs::remove_all(dir);
-        rdb::RocksDBManager::instance().reset(dir);
 
-        auto db = open_rollup_db(dir, rdb::RocksDatabase::OpenMode::ReadWrite);
+        auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
         const std::uint64_t sig = 0xABCDEF12;
 
@@ -106,21 +79,18 @@ TEST_SUITE("RollupStore") {
         CHECK_FALSE(rollup_exists(*db, 0x99999999));
         CHECK(read_rollup(*db, 0x99999999) == nullptr);
 
-        rdb::RocksDBManager::instance().reset(dir);
         fs::remove_all(dir);
     }
 
     // Two ranks' partials over three distinct groups round-trip: every group's
     // per-group blob persists and reads back into an equivalent merged state.
     TEST_CASE("multiple groups persist and read back") {
-        namespace rdb = dftracer::utils::index::store;
         const std::string dir = dftu_utils_test::make_unique_test_path(
                                     "dftu_rollup_store_multi_test")
                                     .string();
         fs::remove_all(dir);
-        rdb::RocksDBManager::instance().reset(dir);
 
-        auto db = open_rollup_db(dir, rdb::RocksDatabase::OpenMode::ReadWrite);
+        auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
         const std::uint64_t sig = 0xBEEF01;
 
@@ -152,7 +122,6 @@ TEST_SUITE("RollupStore") {
         CHECK(by_group["g3"].first == 1);
         CHECK(by_group["g3"].second == doctest::Approx(7));
 
-        rdb::RocksDBManager::instance().reset(dir);
         fs::remove_all(dir);
     }
 }

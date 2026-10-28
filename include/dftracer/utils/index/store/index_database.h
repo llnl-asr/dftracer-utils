@@ -7,6 +7,7 @@
 #include <dftracer/utils/index/store/types.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -261,8 +262,24 @@ class IndexDatabase {
     /// Arrow IPC frame; nullopt when the file's row sets are not current.
     std::optional<std::string> rowset(int file_id, std::string_view name) const;
 
+    /// Every record the index holds, for checks and tools that compare two
+    /// indexes. RocksDB gives `family|key` in family then key order. The store
+    /// gives, per current copy in namespace then scope order, a `#copy` record
+    /// with its state and params hash and then `namespace|scope|key` for each
+    /// of its keys; a scope is named by its paths, so two indexes of the same
+    /// files compare equal whatever ids they gave them. The two backends'
+    /// forms differ. Throws std::runtime_error on a read error.
+    void for_each_record(
+        const std::function<void(std::string_view key, std::string_view value)>&
+            fn) const;
+
     /// One write to this index, on whichever backend holds it.
     std::unique_ptr<IndexDatabaseWrite> begin_write();
+    /// A write whose stage() calls land its keys in pieces that no reader sees
+    /// until its commit() publishes them all, replacing what the index held for
+    /// the copies it wrote. The store only; throws std::runtime_error on
+    /// RocksDB.
+    std::unique_ptr<IndexDatabaseWrite> begin_staged_write();
 
     /// Ingest, in one atomic call, the SSTs of `IndexDatabaseSstWriterContext`
     /// instances with disjoint file ids. No-op on an empty registry. Throws

@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -25,35 +26,22 @@ std::string rollups_of(const std::string& gz) {
     return (fs::path(cache_of(gz)) / "rollups").string();
 }
 
-// Signatures in the rollup store, from its usage records (0x02 | sig).
-std::vector<std::string> rollup_sigs(const std::string& gz) {
-    std::vector<std::string> out;
+// Signatures in the rollup store, from its usage records.
+std::vector<std::uint64_t> rollup_sigs(const std::string& gz) {
+    std::vector<std::uint64_t> out;
     auto db = dftracer::utils::index::cache::open_rollup_db(
-        rollups_of(gz), rdb::RocksDatabase::OpenMode::ReadOnly);
-    auto it = db->new_iterator(rdb::cf::ROLLUP);
-    const char tag = '\x02';
-    for (it->Seek(std::string_view(&tag, 1)); it->Valid(); it->Next()) {
-        const std::string_view k(it->key().data(), it->key().size());
-        if (k.empty() || k[0] != tag) break;
-        out.emplace_back(k);
-    }
+        rollups_of(gz),
+        dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+    for (const auto& u : db->usage()) out.push_back(u.sig);
     return out;
 }
 
 std::uint64_t rollup_bytes(const std::string& gz) {
     std::uint64_t total = 0;
     auto db = dftracer::utils::index::cache::open_rollup_db(
-        rollups_of(gz), rdb::RocksDatabase::OpenMode::ReadOnly);
-    auto it = db->new_iterator(rdb::cf::ROLLUP);
-    const char tag = '\x02';
-    for (it->Seek(std::string_view(&tag, 1)); it->Valid(); it->Next()) {
-        const std::string_view k(it->key().data(), it->key().size());
-        if (k.empty() || k[0] != tag) break;
-        std::uint64_t b = 0;
-        for (int i = 0; i < 8; ++i)
-            b = (b << 8) | static_cast<unsigned char>(it->value()[i]);
-        total += b;
-    }
+        rollups_of(gz),
+        dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
+    for (const auto& u : db->usage()) total += u.bytes;
     return total;
 }
 
@@ -88,15 +76,20 @@ TEST_SUITE("QueryCache") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         by_cat(gz, "dur >= 0").materialize().get();
-        CHECK(fs::exists(fs::path(rollups_of(gz)) / "CURRENT"));
+        CHECK(
+            dftracer::utils::index::cache::CacheStore::exists(rollups_of(gz)));
         CHECK(rollup_sigs(gz).size() == 1);
         CHECK_FALSE(
             fs::exists(fs::path(determine_index_path(gz, "")) / "cache"));
         rdb::IndexDatabase idx(determine_index_path(gz, ""),
                                rdb::IndexOpenMode::ReadOnly);
-        auto it = idx.db()->new_iterator(rdb::cf::ROLLUP);
-        it->SeekToFirst();
-        CHECK_FALSE(it->Valid());
+        bool rollup_in_index = false;
+        idx.for_each_record([&](std::string_view key, std::string_view) {
+            if (key.substr(0, rdb::cf::ROLLUP.size() + 1) ==
+                std::string(rdb::cf::ROLLUP) + "|")
+                rollup_in_index = true;
+        });
+        CHECK_FALSE(rollup_in_index);
     }
 
     TEST_CASE("deleting the cache changes no result") {
@@ -115,8 +108,6 @@ TEST_SUITE("QueryCache") {
         REQUIRE(fs::exists(fs::path(cache_of(gz)) / "views"));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
 
-        dftracer::utils::index::store::RocksDBManager::instance().reset(
-            rollups_of(gz));
         fs::remove_all(cache_of(gz));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
         StringSink again;
@@ -128,15 +119,12 @@ TEST_SUITE("QueryCache") {
         CHECK(st.events_scanned == 50);
     }
 
-    TEST_CASE("a busy rollup store does not fail the query") {
+    TEST_CASE("a rollup store that cannot be opened does not fail the query") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         const auto want = canon(by_cat(gz, "dur >= 0").collect().get());
-        fs::create_directories(rollups_of(gz));
-        // Holds the store's lock outside the manager, as another process would.
-        rdb::RocksDatabase busy(rollups_of(gz),
-                                rdb::RocksDatabase::OpenMode::ReadWrite);
-        REQUIRE(busy.is_open());
+        fs::create_directories(cache_of(gz));
+        std::ofstream(rollups_of(gz)) << "x";
         CHECK_NOTHROW(by_cat(gz, "dur >= 0").materialize().get());
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == want);
     }

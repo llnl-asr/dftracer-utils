@@ -265,10 +265,13 @@ TEST_SUITE("AggPartialsStore") {
             agg::tier::write_config(db, old);
             agg::tier::put_files(db, ids, old.params_hash);
             auto w = db.begin_write();
-            const auto begin = layout::kind_prefix(layout::Ext::Agg,
-                                                   layout::agg_kind::PARTIAL);
-            w->delete_range(layout::Family::Blob, begin,
-                            layout::prefix_end(begin));
+            for (const int id : ids) {
+                const auto begin = layout::file_prefix(
+                    layout::Ext::Agg, layout::agg_kind::PARTIAL,
+                    static_cast<std::uint32_t>(id));
+                w->delete_range(layout::Family::Blob, begin,
+                                layout::prefix_end(begin));
+            }
             w->commit();
         }
         {

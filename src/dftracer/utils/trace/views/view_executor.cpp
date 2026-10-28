@@ -24,7 +24,6 @@
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
@@ -207,8 +206,14 @@ using SstArtifacts =
 // Write the index a bootstrap pass produced into `w`: members from the
 // artifacts, bloom and row sets from the folds, each with its manifest entry.
 // A bloom fold with spill enabled writes its tier as sorted runs, which the
-// caller ingests after `w` commits, as the batch builder does.
-std::vector<SstArtifacts> write_bootstrap_index(
+// caller ingests after `w` commits, as the batch builder does, or on the store
+// into a staged write, which the caller commits after `w`.
+struct BootstrapSpill {
+    std::vector<SstArtifacts> runs;
+    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
+};
+
+BootstrapSpill write_bootstrap_index(
     dftracer::utils::index::store::IndexWrite& w, const std::string& logical,
     const std::string& file_path,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
@@ -226,18 +231,25 @@ std::vector<SstArtifacts> write_bootstrap_index(
     dftracer::utils::index::gzip::persist_gzip_index_artifacts(w, fid, arts);
     dftracer::utils::index::store::records::put_profile(w, fid, schema.id,
                                                         schema.params_hash());
-    std::vector<SstArtifacts> runs;
-    if (bloom.writes_runs())
-        runs = bloom.finish_spilled(fid);
-    else
+    BootstrapSpill spill;
+    if (bloom.writes_runs() && bloom.stages()) {
+        spill.staged = bloom.finish_staged(fid);
+        // The file's record gives the published tier the file's sources.
+        dftracer::utils::index::store::records::put_file_record(
+            *spill.staged, logical,
+            {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
+    } else if (bloom.writes_runs()) {
+        spill.runs = bloom.finish_spilled(fid);
+    } else {
         bloom.write(w, fid);
+    }
     try {
         rowsets.write(w, fid);
     } catch (...) {
-        dftracer::utils::index::build::remove_spill_runs(runs);
+        dftracer::utils::index::build::remove_spill_runs(spill.runs);
         throw;
     }
-    return runs;
+    return spill;
 }
 
 // The spill directory of the bloom chunks of the files bootstrapped into
@@ -345,6 +357,11 @@ struct BootstrapSink {
     /// The write of a root the store holds, which needs no staged SSTs.
     std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> write;
     std::vector<std::vector<SstArtifacts>> spilled;
+    /// The staged writes of the files that spilled on the store, committed
+    /// after `write`.
+    std::vector<
+        std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite>>
+        staged;
     /// Bytes the sink holds before its worker commits it.
     std::size_t limit = 0;
 };
@@ -354,12 +371,16 @@ struct BootstrapSink {
 // Workers ingest at once; RocksDB runs the prepare step of each outside its
 // mutex and takes the ranges of the ingests one at a time.
 void commit_bootstrap_sink(BootstrapSink& open) {
-    if (!open.sink && !open.write && open.spilled.empty()) return;
+    if (!open.sink && !open.write && open.spilled.empty() &&
+        open.staged.empty())
+        return;
     auto& counters = bootstrap_counters();
-    if (open.write) {
+    if (open.write || !open.staged.empty()) {
         counters.ingest_calls.fetch_add(1, std::memory_order_relaxed);
-        open.write->commit();
+        if (open.write) open.write->commit();
         open.write.reset();
+        for (auto& staged : open.staged) staged->commit();
+        open.staged.clear();
         counters.sink_commits.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -419,11 +440,12 @@ void write_bootstrap_file(
     // clear. A clear would be a range delete whose end bound reaches the next
     // file's first key, which puts the SSTs of two blocks in overlap.
     sink.set_fresh_file(file_id);
-    auto runs = write_bootstrap_index(
+    auto spill = write_bootstrap_index(
         sink,
         dftracer::utils::index::store::internal::get_logical_path(f.file_path),
         f.file_path, arts, schema, bloom, rowsets, hash, file_id);
-    if (!runs.empty()) open.spilled.push_back(std::move(runs));
+    if (!spill.runs.empty()) open.spilled.push_back(std::move(spill.runs));
+    if (spill.staged) open.staged.push_back(std::move(spill.staged));
     if (sink.buffered_bytes() >= open.limit) commit_bootstrap_sink(open);
 }
 
@@ -526,8 +548,13 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     dstd::Map<std::string, std::size_t> slot_of;
     for (const auto& root : stores.roots) {
         slot_of.emplace(root->index_path, open.size());
-        open.push_back(
-            {root.get(), &stores.sink_names, nullptr, nullptr, {}, sink_limit});
+        open.push_back({root.get(),
+                        &stores.sink_names,
+                        nullptr,
+                        nullptr,
+                        {},
+                        {},
+                        sink_limit});
     }
 
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
@@ -843,10 +870,20 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    // A spilled file is a run of SSTs to ingest, which the store cannot take.
+    // A spilled file is runs of SSTs to ingest on RocksDB, and stages of one
+    // write on the store.
     if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET &&
         dftracer::utils::index::store::index_backend() ==
-            dftracer::utils::index::store::IndexBackend::RocksDb)
+            dftracer::utils::index::store::IndexBackend::Store) {
+        auto staged = open->root->db->begin_staged_write();
+        // Its runs come before the file's record.
+        staged->bind_file(
+            dftracer::utils::index::store::internal::get_logical_path(
+                f.file_path),
+            file_id);
+        bloom.enable_spill(ticket.elastic_bytes(), std::move(staged), file_id,
+                           /*fresh_id=*/true);
+    } else if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET)
         bloom.enable_spill(ticket.elastic_bytes(),
                            bootstrap_spill_root(f.index_path) + "/file_" +
                                std::to_string(file_id),
@@ -887,9 +924,9 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 run->next_block.fetch_add(1, std::memory_order_relaxed);
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
-            BootstrapSink open{block.root, &run->stores->sink_names,
-                               nullptr,    nullptr,
-                               {},         run->sink_limit};
+            BootstrapSink open{
+                block.root, &run->stores->sink_names, nullptr, nullptr, {},
+                {},         run->sink_limit};
             auto& merged = run->states[b];
             for (std::size_t k = block.begin; k < block.end; ++k) {
                 if (run->failed.load(std::memory_order_relaxed))
@@ -1080,11 +1117,12 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
     // Idempotent prewarm: skip if this view is already materialized.
-    if (!rdir.empty() && fs::exists(fs::path(rdir) / "CURRENT")) {
+    if (!rdir.empty() &&
+        dftracer::utils::index::cache::CacheStore::exists(rdir)) {
         try {
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir, dftracer::utils::index::store::RocksDatabase::OpenMode::
-                          ReadOnly);
+                rdir,
+                dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             if (db &&
                 dftracer::utils::index::cache::rollup_exists(
                     *db, dftracer::utils::index::cache::plan_signature(plan)))
@@ -1100,8 +1138,8 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
     if (!rdir.empty()) {
         try {
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir, dftracer::utils::index::store::RocksDatabase::OpenMode::
-                          ReadWrite);
+                rdir,
+                dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
             if (db)
                 dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(plan),
@@ -1122,14 +1160,15 @@ std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     const std::string rdir =
         dftracer::utils::index::cache::rollup_cache_path(plan);
     if (!rdir.empty()) plan_record_schema(plan);
-    if (rdir.empty() || !fs::exists(fs::path(rdir) / "CURRENT"))
+    if (rdir.empty() ||
+        !dftracer::utils::index::cache::CacheStore::exists(rdir))
         return std::nullopt;
     // A materialize() query opens ReadWrite so a miss reuses the handle to
     // persist below (avoids a RO-then-RW conflict).
     const auto mode =
         plan.materialize
-            ? dftracer::utils::index::store::RocksDatabase::OpenMode::ReadWrite
-            : dftracer::utils::index::store::RocksDatabase::OpenMode::ReadOnly;
+            ? dftracer::utils::index::cache::CacheStore::Mode::ReadWrite
+            : dftracer::utils::index::cache::CacheStore::Mode::ReadOnly;
     try {
         auto db = dftracer::utils::index::cache::open_rollup_db(rdir, mode);
         if (db)
@@ -1697,8 +1736,7 @@ coro::CoroTask<void> run_materialize_partials(
     if (!state) co_return;
     try {
         auto db = dftracer::utils::index::cache::open_rollup_db(
-            rdir,
-            dftracer::utils::index::store::RocksDatabase::OpenMode::ReadWrite);
+            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
         if (db)
             dftracer::utils::index::cache::persist_rollup(
                 *db, dftracer::utils::index::cache::plan_signature(plan),
@@ -1856,8 +1894,8 @@ void add_materialize_branch(ViewSessionState& state,
                 });
             if (!state_out) return;
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                rdir, dftracer::utils::index::store::RocksDatabase::OpenMode::
-                          ReadWrite);
+                rdir,
+                dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
             if (db)
                 dftracer::utils::index::cache::persist_rollup(
                     *db, dftracer::utils::index::cache::plan_signature(*plan),

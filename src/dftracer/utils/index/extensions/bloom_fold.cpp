@@ -378,10 +378,21 @@ void BloomFold::enable_spill(std::uint64_t share, std::string dir, int file_id,
     spill_fresh_ = fresh_id;
 }
 
+void BloomFold::enable_spill(
+    std::uint64_t share,
+    std::unique_ptr<index::store::IndexDatabaseWrite> staged, int file_id,
+    bool fresh_id) {
+    spill_share_ = share;
+    staged_ = std::move(staged);
+    spill_file_id_ = file_id;
+    spill_fresh_ = fresh_id;
+}
+
 std::size_t BloomFold::spill_runs() const {
     if (files_.empty()) return 0;
     const auto& sp = files_.begin()->second.spill;
-    return sp.runs.size() + (sp.open ? 1 : 0);
+    return sp.runs.size() + (sp.open ? 1 : 0) + sp.staged_runs +
+           (sp.staged_bytes > 0 ? 1 : 0);
 }
 
 std::uint64_t BloomFold::run_limit(std::uint64_t share,
@@ -407,6 +418,10 @@ void BloomFold::chunk_started(FileState& fs, std::uint64_t cp) {
 void BloomFold::spill(FileState& fs, std::uint64_t upto) {
     auto& sp = fs.spill;
     if (!sp.acc) sp.acc.emplace(config_);
+    if (staged_) {
+        spill_staged(fs, upto);
+        return;
+    }
     for (std::uint64_t cp = sp.next; cp < upto; ++cp) {
         if (!sp.open) {
             sp.open =
@@ -448,6 +463,108 @@ void BloomFold::spill(FileState& fs, std::uint64_t upto) {
     }
     sp.next = upto;
     sp.resident = 0;
+}
+
+void BloomFold::spill_staged(FileState& fs, std::uint64_t upto) {
+    auto& sp = fs.spill;
+    for (std::uint64_t cp = sp.next; cp < upto; ++cp) {
+        if (sp.staged_runs == 0 && sp.staged_bytes == 0 && !spill_fresh_)
+            for (auto ext : BV::tier_extensions(config_))
+                index::store::records::clear_file(*staged_, ext,
+                                                  spill_file_id_);
+        sp.staged_bytes += resident_bytes(fs, cp);
+        AutoKeys own;
+        if (auto ac = fs.auto_chunks.find(cp); ac != fs.auto_chunks.end()) {
+            for (const auto& [k, f] : ac->second) {
+                own.push_back({std::string(intern_->resolve(k)), k, false});
+                summarize(fs.evidence[k], f);
+            }
+            std::sort(own.begin(), own.end(),
+                      [](const AutoKey& a, const AutoKey& b) {
+                          return a.name < b.name;
+                      });
+        }
+        const ChunkState chunk = assemble_chunk(fs, cp, dims_of(own), own);
+        BV::write_chunk(*staged_, spill_file_id_, cp, chunk, dims_of(own),
+                        config_, *sp.acc);
+        sp.events += chunk.statistics.total_events;
+        std::vector<std::uint32_t> ids;
+        ids.reserve(own.size());
+        for (const AutoKey& key : own) {
+            ids.push_back(key.id);
+            sp.key_union.insert(key.id);
+        }
+        sp.keys.push_back({cp, chunk.statistics.total_events, std::move(ids)});
+        if (sp.staged_bytes > run_limit(spill_share_, sp.staged_runs)) {
+            staged_->stage();
+            ++sp.staged_runs;
+            sp.staged_bytes = 0;
+        }
+    }
+    sp.next = upto;
+    sp.resident = 0;
+}
+
+std::unique_ptr<index::store::IndexDatabaseWrite> BloomFold::finish_staged(
+    int file_id) {
+    const std::string& file = files_.begin()->first;
+    FileState& fs = files_.begin()->second;
+    auto& sp = fs.spill;
+    const std::uint64_t end =
+        fs.chunks.empty() ? sp.next
+                          : std::max(sp.next, fs.chunks.rbegin()->first + 1);
+    const AutoKeys keys = auto_keys(file, fs);
+    const auto dims = dims_of(keys);
+    if (!sp.acc) sp.acc.emplace(config_);
+    const bool staged_any = sp.staged_runs > 0 || sp.staged_bytes > 0;
+
+    ankerl::unordered_dense::set<std::uint32_t> full;
+    for (const AutoKey& key : keys)
+        if (!key.absence_only) full.insert(key.id);
+    // The keys staged so far hold every candidate path's evidence; the ones
+    // the selection did not keep are erased from them, and the chunks below
+    // write only the kept ones.
+    if (!staged_any && !spill_fresh_)
+        for (auto ext : BV::tier_extensions(config_))
+            index::store::records::clear_file(*staged_, ext, file_id);
+    for (std::uint32_t k : sp.key_union)
+        if (!full.contains(k))
+            for (auto ext : {index::store::IndexExtension::Zonemap,
+                             index::store::IndexExtension::Bloom,
+                             index::store::IndexExtension::Counts})
+                index::store::records::clear_path(*staged_, ext, file_id,
+                                                  intern_->resolve(k));
+    staged_->stage();
+
+    // One chunk at a time, staged as the share fills, so the rest of the tier
+    // never sits whole in memory.
+    std::uint64_t buffered = 0;
+    const auto stage_when_full = [&](std::uint64_t bytes) {
+        buffered += bytes;
+        if (buffered > run_limit(spill_share_, sp.staged_runs)) {
+            staged_->stage();
+            ++sp.staged_runs;
+            buffered = 0;
+        }
+    };
+    for (std::uint64_t cp = sp.next; cp < end; ++cp) {
+        const std::uint64_t bytes = resident_bytes(fs, cp);
+        BV::write_chunk(*staged_, file_id, cp,
+                        assemble_chunk(fs, cp, dims, keys), dims, config_,
+                        *sp.acc);
+        stage_when_full(bytes);
+    }
+    for (const auto& chunk : sp.keys) {
+        ankerl::unordered_dense::set<std::uint32_t> had(chunk.keys.begin(),
+                                                        chunk.keys.end());
+        for (const AutoKey& key : keys)
+            if (!had.contains(key.id))
+                BV::write_absent_extra(*staged_, file_id, chunk.checkpoint,
+                                       key.name, chunk.events, config_);
+    }
+    BV::finish_file(*staged_, file_id, *sp.acc, config_, dims, catalog(fs));
+    sp.handed_off = true;
+    return std::move(staged_);
 }
 
 std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts>
@@ -582,8 +699,7 @@ BloomFold::Lane BloomFold::open(const trace::views::detail::FoldBatch& batch) {
         it = fs.chunks.emplace(cp, ChunkState{}).first;
         BV::init_chunk_state(it->second, config_, config_.extra_dimensions);
     }
-    if (!spill_dir_.empty() && cp >= SPILL_LAG)
-        chunk_started(fs, cp - SPILL_LAG);
+    if (spills() && cp >= SPILL_LAG) chunk_started(fs, cp - SPILL_LAG);
     Lane lane;
     lane.chunk_ = &it->second;
     lane.auto_chunk_ = &fs.auto_chunks[cp];

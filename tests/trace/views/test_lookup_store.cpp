@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <trace/views/test_view_common.h>
@@ -15,7 +14,6 @@
 
 namespace {
 
-namespace rdb = dftracer::utils::index::store;
 namespace cache = dftracer::utils::index::cache;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
@@ -31,9 +29,9 @@ auto plan_of(const std::string& gz) {
     return p;
 }
 
-std::shared_ptr<rdb::RocksDatabase> store_in(TestEnvironment& env) {
+std::shared_ptr<cache::CacheStore> store_in(TestEnvironment& env) {
     return cache::open_lookup_db(env.get_dir() + "/lookups",
-                                 rdb::RocksDatabase::OpenMode::ReadWrite);
+                                 cache::CacheStore::Mode::ReadWrite);
 }
 
 std::string lookup_trace(TestEnvironment& env) {
@@ -82,8 +80,8 @@ TEST_SUITE("LookupStore") {
         REQUIRE(sig);
         CHECK(cache::lookup_signature(*plan, "where type == \"job\"") != sig);
 
-        auto db = cache::open_lookup_db(
-            path, rdb::RocksDatabase::OpenMode::ReadWrite);
+        auto db =
+            cache::open_lookup_db(path, cache::CacheStore::Mode::ReadWrite);
         REQUIRE(db);
         CHECK_FALSE(cache::lookup_exists(*db, *sig));
         CHECK_FALSE(cache::read_lookup(*db, *sig));
@@ -164,81 +162,66 @@ TEST_SUITE("LookupStore") {
         const auto sig = cache::lookup_signature(*plan, "side");
         REQUIRE(sig);
         {
-            auto db = cache::open_lookup_db(
-                path, rdb::RocksDatabase::OpenMode::ReadWrite);
+            auto db =
+                cache::open_lookup_db(path, cache::CacheStore::Mode::ReadWrite);
             REQUIRE(db);
             cache::persist_lookup(*db, *sig, "rows");
         }
-        rdb::RocksDBManager::instance().reset(path);
         fs::remove_all(fs::path(path).parent_path());
 
-        CHECK_FALSE(cache::open_lookup_db(
-            path, rdb::RocksDatabase::OpenMode::ReadOnly));
-        auto db = cache::open_lookup_db(
-            path, rdb::RocksDatabase::OpenMode::ReadWrite);
+        CHECK_FALSE(
+            cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly));
+        auto db =
+            cache::open_lookup_db(path, cache::CacheStore::Mode::ReadWrite);
         REQUIRE(db);
         CHECK_FALSE(cache::lookup_exists(*db, *sig));
         cache::persist_lookup(*db, *sig, "rows");
         CHECK(cache::read_lookup(*db, *sig) == "rows");
     }
 
-    TEST_CASE("repeated queries that hit a stored side open the store twice") {
+    TEST_CASE("repeated queries that hit a stored side add one data file") {
         TestEnvironment env(200);
         const std::string gz = lookup_trace(env);
         const std::string q = lookup_query();
-        auto& manager = rdb::RocksDBManager::instance();
-        const auto before = manager.opens();
         for (int query = 0; query < 20; ++query) {
             const View v = View::from_file(gz, determine_index_path(gz, ""));
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }
-        // One read-write open to store the side, then one read-only open
-        // that every later query reuses.
-        CHECK(manager.opens() - before <= 2);
-    }
-
-    TEST_CASE("queries leave the store's write lock free") {
-        TestEnvironment env(200);
-        const std::string gz = lookup_trace(env);
-        const View v = View::from_file(gz, determine_index_path(gz, ""));
-        for (int query = 0; query < 3; ++query)
-            CHECK(run(v.duql(lookup_query()).lazy().collect()).num_rows() == 4);
-        const std::string path =
-            (fs::path(determine_index_path(gz, "")).parent_path() /
-             ".dftindex-cache" / "lookups")
-                .string();
-        REQUIRE(fs::exists(path));
-
-        rdb::RocksDatabase other;
-        CHECK_NOTHROW(
-            other.open(path, rdb::RocksDatabase::OpenMode::ReadWrite));
+        const fs::path store =
+            fs::path(determine_index_path(gz, "")).parent_path() /
+            ".dftindex-cache" / "lookups" / "store";
+        REQUIRE(fs::exists(store));
+        std::size_t files = 0;
+        for (const auto& entry : fs::directory_iterator(store))
+            if (entry.path().extension() == ".dfs") ++files;
+        CHECK(files == 1);
     }
 
     TEST_CASE("a store written after reads is seen by the next read") {
         TestEnvironment env(200);
         const std::string path = env.get_dir() + "/lookups";
         {
-            auto db = cache::open_lookup_db(
-                path, rdb::RocksDatabase::OpenMode::ReadWrite);
+            auto db =
+                cache::open_lookup_db(path, cache::CacheStore::Mode::ReadWrite);
             REQUIRE(db);
             cache::persist_lookup(*db, 1, "one");
         }
         {
-            auto ro = cache::open_lookup_db(
-                path, rdb::RocksDatabase::OpenMode::ReadOnly);
+            auto ro =
+                cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly);
             REQUIRE(ro);
             CHECK(cache::lookup_exists(*ro, 1));
             CHECK_FALSE(cache::lookup_exists(*ro, 2));
         }
         {
-            auto rw = cache::open_lookup_db(
-                path, rdb::RocksDatabase::OpenMode::ReadWrite);
+            auto rw =
+                cache::open_lookup_db(path, cache::CacheStore::Mode::ReadWrite);
             REQUIRE(rw);
             cache::persist_lookup(*rw, 2, "two");
         }
         auto ro =
-            cache::open_lookup_db(path, rdb::RocksDatabase::OpenMode::ReadOnly);
+            cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly);
         REQUIRE(ro);
         CHECK(cache::lookup_exists(*ro, 2));
     }
@@ -247,7 +230,7 @@ TEST_SUITE("LookupStore") {
         TestEnvironment env(200);
         const std::string blocker = env.get_dir() + "/blocker";
         std::ofstream(blocker) << "x";
-        CHECK_FALSE(cache::open_lookup_db(
-            blocker + "/lookups", rdb::RocksDatabase::OpenMode::ReadWrite));
+        CHECK_FALSE(cache::open_lookup_db(blocker + "/lookups",
+                                          cache::CacheStore::Mode::ReadWrite));
     }
 }

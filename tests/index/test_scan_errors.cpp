@@ -2,15 +2,12 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/big_endian.h>
-#include <dftracer/utils/index/cache/lookup_store.h>
-#include <dftracer/utils/index/cache/lru.h>
-#include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -34,9 +31,11 @@ namespace rdb = dftracer::utils::index::store;
 namespace layout = dftracer::utils::index::store::layout;
 namespace pk = dftracer::utils::index::store::layout::path_kind;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace cache = dftracer::utils::index::cache;
 
 namespace {
+// Every case reads or writes RocksDB files, which only that backend has.
+const dftracer::utils::index::store::ScopedIndexBackend ROCKSDB_ONLY(
+    dftracer::utils::index::store::IndexBackend::RocksDb);
 
 constexpr std::size_t DAMAGED_BYTES = 16;
 
@@ -253,39 +252,6 @@ TEST_CASE("aggregation tier readers report a damaged store") {
         rdb::RocksDBManager::instance().reset(store.path);
         rdb::IndexDatabase idx(dir.index(), rdb::IndexOpenMode::ReadWrite);
         CHECK_THROWS_AS(agg::tier::clear(idx), DFTUtilsException);
-    }
-}
-
-TEST_CASE("rollup and lookup stores report a damaged store") {
-    TempDir dir("rollup");
-    const auto store =
-        make_store(dir.index(), {rdb::cf::ROLLUP}, [](rdb::RocksDatabase& db) {
-            REQUIRE(
-                db.put(cache::rollup_desc_key(5), "d", rdb::cf::ROLLUP).ok());
-            cache::persist_lookup(db, 5, "value");
-        });
-    damage(store, rdb::cf::ROLLUP);
-
-    SUBCASE("lookups") {
-        auto db = open_db(store, rdb::RocksDatabase::OpenMode::ReadOnly);
-        CHECK_THROWS_AS(cache::rollup_exists(*db, 5), DFTUtilsException);
-        CHECK_THROWS_AS(cache::read_rollup(*db, 5), DFTUtilsException);
-        CHECK_THROWS_AS(cache::lookup_exists(*db, 5), DFTUtilsException);
-        CHECK_THROWS_AS(cache::read_lookup(*db, 5), DFTUtilsException);
-
-        trace::views::detail::ViewPlan plan;
-        plan.record_schema = std::make_shared<index::RecordSchema>();
-        CHECK_THROWS_AS(cache::find_subsuming_rollup(*db, plan),
-                        DFTUtilsException);
-    }
-    SUBCASE("usage records") {
-        auto db = open_db(store, rdb::RocksDatabase::OpenMode::ReadWrite);
-        CHECK_THROWS_AS(cache::touch_usage(*db, rdb::cf::ROLLUP, 5),
-                        DFTUtilsException);
-        CHECK_THROWS_AS(
-            cache::evict_lru(*db, rdb::cf::ROLLUP, 5,
-                             [](rdb::RocksDatabase::Batch&, std::uint64_t) {}),
-            DFTUtilsException);
     }
 }
 

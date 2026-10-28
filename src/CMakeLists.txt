@@ -229,8 +229,8 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/prune.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/rowsets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/plan/view_resolver.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/cache_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/lookup_store.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/lru.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/mv_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/cache/rollup_store.cpp
 )

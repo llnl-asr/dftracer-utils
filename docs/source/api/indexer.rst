@@ -4,7 +4,7 @@ Indexer Module
 ==============
 
 The indexer module provides functionality for indexing DFTracer trace files
-(``.pfw.gz``) backed by a ``.dftindex`` RocksDB store. The
+(``.pfw.gz``) backed by a ``.dftindex`` store. The
 top-level :class:`~dftracer.utils.Indexer` follows a ``resolve`` / ``build``
 pattern over a directory or file list and exposes the higher index tiers
 (checkpoints, bloom filters, aggregation).

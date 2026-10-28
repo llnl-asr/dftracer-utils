@@ -10,7 +10,7 @@ The index is built once, queried many times
 --------------------------------------------------
 
 Indexing (``index/``) reads a ``.pfw.gz`` trace once and writes a
-per-directory RocksDB store (a ``.dftindex``) that later queries consult
+per-directory store (a ``.dftindex``) that later queries consult
 instead of re-reading the trace. It holds the **checkpoints** that mark
 where each compressed member of the gzip file starts, so a chunk can be
 decompressed on its own, and four kinds of pruning evidence, each kept per

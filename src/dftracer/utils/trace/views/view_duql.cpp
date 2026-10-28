@@ -1199,7 +1199,7 @@ void persist(const CacheKey& key, const std::vector<df::DataFrame>& parts) {
     if (parts.empty()) return;
     try {
         const auto db = ix::cache::open_lookup_db(
-            key.path, ix::store::RocksDatabase::OpenMode::ReadWrite);
+            key.path, ix::cache::CacheStore::Mode::ReadWrite);
         if (!db) return;
         std::vector<const df::DataFrame*> ptrs;
         for (const auto& p : parts) ptrs.push_back(&p);
@@ -1302,8 +1302,7 @@ class Sides {
                                                          DISTINCT_CACHE_SALT);
             try {
                 if (const auto db = ix::cache::open_lookup_db(
-                        key->path,
-                        ix::store::RocksDatabase::OpenMode::ReadOnly))
+                        key->path, ix::cache::CacheStore::Mode::ReadOnly))
                     if (auto bytes = ix::cache::read_lookup(*db, key->sig))
                         if (auto cached = df::frame_from_native(*bytes))
                             return std::make_shared<const df::DataFrame>(
@@ -1393,8 +1392,7 @@ class Sides {
             }
         if (keys[i]) try {
                 if (const auto db = ix::cache::open_lookup_db(
-                        keys[i]->path,
-                        ix::store::RocksDatabase::OpenMode::ReadOnly))
+                        keys[i]->path, ix::cache::CacheStore::Mode::ReadOnly))
                     if (auto bytes = ix::cache::read_lookup(*db, keys[i]->sig))
                         if (auto cached = df::frame_from_native(*bytes))
                             return std::make_shared<const df::DataFrame>(
@@ -1558,7 +1556,7 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
 std::string cache_state(const std::optional<CacheKey>& key) {
     if (!key) return "not cached";
     const auto db = ix::cache::open_lookup_db(
-        key->path, ix::store::RocksDatabase::OpenMode::ReadOnly);
+        key->path, ix::cache::CacheStore::Mode::ReadOnly);
     if (!db || !ix::cache::lookup_exists(*db, key->sig)) return "not cached";
     try {
         if (auto bytes = ix::cache::read_lookup(*db, key->sig))
@@ -3724,7 +3722,7 @@ class Applier {
         const auto& key = ctx_.sides->keys[i];
         if (!key) return false;
         const auto db = ix::cache::open_lookup_db(
-            key->path, ix::store::RocksDatabase::OpenMode::ReadOnly);
+            key->path, ix::cache::CacheStore::Mode::ReadOnly);
         return db && ix::cache::lookup_exists(*db, key->sig);
     }
 

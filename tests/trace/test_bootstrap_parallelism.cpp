@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -160,6 +161,8 @@ TEST_SUITE("BootstrapParallelism") {
     }
 
     TEST_CASE("the SST count does not grow with the files") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;
         for (int i = 0; i < 256; ++i)
@@ -186,6 +189,8 @@ TEST_SUITE("BootstrapParallelism") {
     }
 
     TEST_CASE("a read-only open of more SSTs than the descriptor limit works") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
         // 2 workers write too few SSTs to pass the lowered descriptor limit.
         MESSAGE("not run in a Valgrind build");

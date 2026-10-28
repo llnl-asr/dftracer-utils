@@ -52,7 +52,7 @@ IndexBackend index_backend() {
     if (const auto cached = cached_backend()) return *cached;
     const std::string_view asked =
         Env::get<std::string_view>(constants::indexer::INDEX_BACKEND_ENV)
-            .value_or(constants::indexer::INDEX_BACKEND_ROCKSDB);
+            .value_or(constants::indexer::INDEX_BACKEND_STORE);
     const IndexBackend backend = parse_backend(std::string(asked));
     cached_backend() = backend;
     return backend;

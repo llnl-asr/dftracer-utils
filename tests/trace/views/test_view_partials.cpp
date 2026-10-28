@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -358,6 +359,8 @@ TEST_SUITE("ViewPartials") {
     }
 
     TEST_CASE("a fresh index build writes no aggregation column family") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         Fixture fx;
         for (const auto& g : fx.gz) {
             const auto names = column_families_of(db_path_of(g));
@@ -367,6 +370,8 @@ TEST_SUITE("ViewPartials") {
     }
 
     TEST_CASE("an index with the legacy aggregation column family answers") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         Fixture fx;
         const std::string path = db_path_of(fx.gz[0]);
         ix::store::RocksDBManager::instance().reset(path);

@@ -52,6 +52,9 @@ set(ALLOWED
   "index/store/store_backend.h|store/record.h"
   "index/store/store_backend.h|store/snapshot.h"
   "index/store/store_backend.h|store/writer.h"
+  # the query caches keep their entries on the key-value store
+  "index/cache/cache_store.cpp|store/snapshot.h"
+  "index/cache/cache_store.cpp|store/writer.h"
   # IndexDatabase reads an index root through either backend
   "index/store/index_database.cpp|store/snapshot.h"
   "index/store/internal/index_encoding.h|index/gzip/gzip_member_record.h"

@@ -543,15 +543,10 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
         store::RocksDBManager::instance().reset(index_path);
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
         std::vector<std::pair<std::string, std::string>> out;
-        for (std::size_t f = 0; f < store::layout::FAMILY_COUNT; ++f) {
-            const auto name = store::layout::family_name(
-                static_cast<store::layout::Family>(f));
-            auto it = db.db()->new_iterator(name);
-            if (!it) continue;
-            for (it->SeekToFirst(); it->Valid(); it->Next())
-                out.emplace_back(std::string(name) + "|" + it->key().ToString(),
-                                 it->value().ToString());
-        }
+        db.for_each_record(
+            [&out](std::string_view key, std::string_view value) {
+                out.emplace_back(std::string(key), std::string(value));
+            });
         return out;
     };
     const auto& trace = corpus.traces.front();

@@ -62,7 +62,7 @@ active.
 
 The domain logic itself is grouped by what it does rather than by a shared
 base class: readers and the fused scan under ``trace/``, the index under
-``index/`` (in layers: ``store`` for RocksDB storage, ``gzip`` for
+``index/`` (in layers: ``store`` for index storage, ``gzip`` for
 checkpoints, ``extensions`` for blooms, dimension stats and stored row sets,
 ``schemas/dft`` for the dftracer-specific statistics and aggregation,
 then ``build``, ``plan`` for pruning and ``cache`` for rollups; a CTest check
@@ -89,7 +89,7 @@ regardless of which entry point started it (a CLI binary, the Python
        DF --> Out["Arrow / pandas / CLI / plugin"]
 
 1. **Index.** ``dftracer_index`` (or an equivalent library call) builds a
-   per-file index in a ``.dftindex`` RocksDB store: bloom filters over string
+   per-file index in a ``.dftindex`` store: bloom filters over string
    fields, min/max statistics per chunk, and checkpoints that mark where a
    compressed member starts. See :doc:`indexing-and-pushdown`.
 2. **Prune.** Given a query, the chunk pruner consults the index to decide

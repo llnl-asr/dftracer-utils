@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -160,6 +161,8 @@ TEST_SUITE("AggExtension") {
     TEST_CASE(
         "a tier stored under another version is rebuilt without double "
         "counting") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         namespace layout = dftracer::utils::index::store::layout;
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "old", 50, 1000);

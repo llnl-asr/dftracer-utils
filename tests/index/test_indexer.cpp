@@ -4,6 +4,7 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -491,6 +492,8 @@ TEST_SUITE("Truncated") {
     }
 
     TEST_CASE("an index in another format is rebuilt") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         Runtime rt(4);
         TestEnvironment env(10);
         const auto trace = env.create_dft_test_gzip_file(50);

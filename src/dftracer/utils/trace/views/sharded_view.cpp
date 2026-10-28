@@ -9,12 +9,9 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/index_write.h>
-#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -216,7 +213,6 @@ coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
 namespace {
 
 namespace agg = dftracer::utils::index::schemas::dft::agg;
-namespace rcf = dftracer::utils::index::store::cf;
 
 }  // namespace
 
@@ -249,10 +245,6 @@ std::size_t merge_shard_set(const std::string& root,
             const std::string idx = (fs::path(root) / shard.path).string();
             dftracer::utils::index::store::IndexDatabase sdb(
                 idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            // The shard's file records are copied whole, which the shard's
-            // own RocksDB handle iterates.
-            auto s = sdb.db();
-
             agg::AggInternTable shard_intern;
             agg::tier::load_dictionary(sdb, shard_intern);
 
@@ -275,31 +267,31 @@ std::size_t merge_shard_set(const std::string& root,
             dstd::HashMap<int, int> remap;
             {
                 namespace layout = dftracer::utils::index::store::layout;
-                const auto prefix = layout::kind_prefix(
-                    layout::Ext::Host, layout::host::FILE_BY_PATH);
+                const auto registry = sdb.query_all_file_registry();
+                std::vector<std::pair<std::string_view, int>> entries;
+                entries.reserve(registry.size());
+                for (const auto& [path, entry] : registry)
+                    entries.emplace_back(path, entry.file_id);
+                std::sort(entries.begin(), entries.end());
                 auto write = out_db.begin_write();
-                dftracer::utils::index::store::internal::scan_prefix_iterator(
-                    "shard file registry scan", prefix,
-                    [&] { return s->new_iterator(rcf::DEFAULT); },
-                    [&](::rocksdb::Iterator& it) {
-                        const std::string_view key(it.key().data(),
-                                                   it.key().size());
-                        auto record =
-                            layout::decode_file_record(std::string_view(
-                                it.value().data(), it.value().size()));
-                        if (!record)
-                            throw DFTUtilsException(
-                                ErrorCode::Parse,
-                                "shard " + shard.path +
-                                    " holds a malformed file record");
-                        const int old_id = static_cast<int>(record->file_id);
-                        record->file_id =
-                            static_cast<std::uint32_t>(next_file_id);
-                        remap[old_id] = next_file_id++;
-                        dftracer::utils::index::store::records::put_file_record(
-                            *write, key.substr(prefix.size()), *record);
-                        ++files;
-                    });
+                for (const auto& [path, old_id] : entries) {
+                    const auto stat = sdb.get_file_stat(path);
+                    const auto hash = sdb.get_file_hash(path);
+                    if (!stat || !hash)
+                        throw DFTUtilsException(
+                            ErrorCode::Parse,
+                            "shard " + shard.path +
+                                " holds a malformed file record");
+                    layout::FileRecord record;
+                    record.file_id = static_cast<std::uint32_t>(next_file_id);
+                    record.mtime = stat->mtime;
+                    record.hash = *hash;
+                    record.size = stat->size;
+                    remap[old_id] = next_file_id++;
+                    dftracer::utils::index::store::records::put_file_record(
+                        *write, path, record);
+                    ++files;
+                }
                 write->commit();
             }
 

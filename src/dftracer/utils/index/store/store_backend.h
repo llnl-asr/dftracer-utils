@@ -31,6 +31,12 @@ class Runtime;
 
 }  // namespace dftracer::utils
 
+namespace dftracer::utils::index::cache {
+
+class CacheStore;
+
+}  // namespace dftracer::utils::index::cache
+
 namespace dftracer::utils::index::store {
 
 /// The store library. Its names would otherwise collide with this namespace.
@@ -44,10 +50,13 @@ class StoreIndexWrite;
 /// one snapshot.
 class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
    public:
-    /// The root of `index_root`, opened on its first write or snapshot. Throws
-    /// std::runtime_error when the store directory cannot be created.
+    /// The root of `index_root`, opened on its first write or snapshot. Its
+    /// writer runs on `runtime`, or on the default runtime when it is null; a
+    /// root that is already open keeps its own. Throws std::runtime_error when
+    /// the store directory cannot be created.
     static std::shared_ptr<StoreRoot> get_or_open(
-        const std::string& index_root);
+        const std::string& index_root,
+        std::shared_ptr<Runtime> runtime = nullptr);
 
     /// Closes the writer of every root this process holds, as close() does.
     /// Runs while the runtime the writers wait on still runs, so a root that
@@ -100,13 +109,16 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
 
     /// One write over this root. Nothing it buffers is visible until its
     /// commit().
-    std::unique_ptr<StoreIndexWrite> begin_write();
+    /// A `staged` write lands its copies as building copies at each stage()
+    /// and publishes them at commit().
+    std::unique_ptr<StoreIndexWrite> begin_write(bool staged = false);
 
     /// The pool the store calls of a reader of this root run in.
     memory::Pool& pool() const noexcept { return *pool_; }
 
    private:
     friend class StoreIndexWrite;
+    friend class cache::CacheStore;
 
     struct NamespaceEntry {
         kv::NamespaceId id;
@@ -121,7 +133,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         dstd::Vector<kv::SourceStat> sources;
     };
 
-    explicit StoreRoot(std::string index_root);
+    StoreRoot(std::string index_root, std::shared_ptr<Runtime> runtime);
 
     void ensure_dir_locked();
     void ensure_writer_locked();
@@ -142,6 +154,11 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     dstd::Expected<void, dstd::Error> run(
         coro::CoroTask<dstd::Expected<void, dstd::Error>> task);
 
+    /// Commits `batch` through run(), waiting for extent bytes while the
+    /// writer is busy.
+    dstd::Expected<void, dstd::Error> commit(kv::Writer& writer,
+                                             kv::Batch batch);
+
     kv::Writer& writer();
     kv::NamespaceId namespace_id(const std::string& name,
                                  std::uint32_t version);
@@ -152,12 +169,25 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     void mark_committed(const std::string& name, const kv::ScopeKey& scope,
                         std::uint64_t params_hash,
                         const dstd::Vector<kv::SourceStat>* sources);
+    /// Records that this root dropped the copy of (name, scope).
     void forget_committed(const std::string& name, const kv::ScopeKey& scope);
     bool was_committed(const std::string& name, const kv::ScopeKey& scope);
     /// The copy this root committed for (name, scope); nullopt when it holds
     /// none.
     std::optional<CommittedCopy> committed_copy(const std::string& name,
                                                 const kv::ScopeKey& scope);
+    /// The Ready copy of (name, version, scope) another writer holds, with the
+    /// snapshot it was read from; nullopt when there is none, or when this root
+    /// committed or dropped a copy of the scope since. A snapshot behind this
+    /// root's own commits serves, since those are the copies it tracks; one
+    /// behind a refresh for other processes' files does not.
+    struct ForeignCopy {
+        std::shared_ptr<const kv::Snapshot> snapshot;
+        kv::CopyInfo info;
+    };
+    std::optional<ForeignCopy> foreign_copy(const std::string& name,
+                                            std::uint32_t version,
+                                            const kv::ScopeKey& scope);
     /// The sources of `scope`, one per path, from the file records of the
     /// write that asked or from the Members copy of the path; false when
     /// either holds none.
@@ -178,17 +208,22 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::string index_root_;
     std::string store_dir_;
     std::shared_ptr<Runtime> runtime_;
+    /// The runtime get_or_open() was given; null for the default runtime.
+    std::shared_ptr<Runtime> own_runtime_;
     std::unique_ptr<kv::Writer> writer_;
     std::map<std::string, NamespaceEntry> namespaces_;
     std::map<std::string, int> ids_by_path_;
     std::map<int, std::string> paths_by_id_;
     std::map<std::pair<std::string, kv::ScopeKey>, CommittedCopy> committed_;
+    std::set<std::pair<std::string, kv::ScopeKey>> dropped_;
     std::shared_ptr<const kv::Snapshot> snapshot_;
     /// What foreign_files_locked() found at the last look, and when.
     std::vector<std::pair<std::string, std::uint64_t>> foreign_seen_;
     std::chrono::steady_clock::time_point foreign_checked_{};
     std::uint64_t version_ = 0;
     std::uint64_t snapshot_version_ = 0;
+    /// version_ at the last refresh for other processes' data files.
+    std::uint64_t refreshed_version_ = 0;
     int next_file_id_ = 1;
     bool seeded_ = false;
     bool snapshot_taken_ = false;
@@ -217,8 +252,13 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     /// store error. put() and the deletes throw when a data key names a file
     /// id the table does not bind.
     void commit() override;
+    /// A staged write: commits what it holds as building copies, which its
+    /// commit() publishes. Throws std::logic_error on a write that is not
+    /// staged, and std::runtime_error on a store error.
+    void stage() override;
 
     int file_id_for(std::string_view logical_path) override;
+    void bind_file(std::string_view logical_path, int file_id) override;
     /// Does nothing: a namespace version carries the format of the data it
     /// holds.
     void init_schema() override {}
@@ -257,6 +297,13 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
         bool failed = false;
         bool cleared = false;
         std::vector<PendingKey> keys;
+        /// Key ranges, [begin, end) with an empty end meaning to the last key,
+        /// erased from a copy another writer holds: a rewrite of that copy
+        /// leaves them out.
+        std::vector<std::pair<std::string, std::string>> skips;
+        /// The write holds the file record of the scope's file, which the
+        /// store keeps as the sources of its Members copy.
+        bool file_record = false;
     };
 
     /// The keys of `copy` a commit writes: each key once, in key order, with
@@ -269,7 +316,29 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     /// `key` then `value`, copied next to each other into the arena.
     const char* keep(std::string_view key, std::string_view value);
 
-    explicit StoreIndexWrite(std::shared_ptr<StoreRoot> root);
+    StoreIndexWrite(std::shared_ptr<StoreRoot> root, bool staged);
+
+    /// What a staged write knows of one copy across its stages.
+    struct StagedCopy {
+        std::string name;
+        std::uint32_t version = 0;
+        kv::ScopeKey scope;
+        std::uint64_t params_hash = 0;
+        bool has_manifest = false;
+        bool failed = false;
+        bool cleared = false;
+        /// A stage committed a batch of it, so commit() publishes it.
+        bool building = false;
+    };
+    /// Commits the pending copies as building batches, under the gate the
+    /// caller holds.
+    void stage_locked(kv::Writer& writer);
+    bool building(const std::string& name, const kv::ScopeKey& scope) const;
+    /// Puts into `batch` each key of the copy `foreign` holds that `copy`
+    /// neither writes, deletes nor erases; returns how many.
+    static std::size_t carry_keys(const PendingCopy& copy,
+                                  const StoreRoot::ForeignCopy& foreign,
+                                  kv::Batch& batch);
 
     PendingCopy& pending_copy(layout::Ext ext, std::uint32_t file_id,
                               std::string_view plugin, std::string_view meta);
@@ -315,6 +384,8 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     std::string last_plugin_;
     std::string last_meta_;
     bool committed_ = false;
+    bool staged_ = false;
+    std::map<std::pair<std::string, kv::ScopeKey>, StagedCopy> staged_copies_;
 };
 
 }  // namespace dftracer::utils::index::store

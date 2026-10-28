@@ -126,7 +126,7 @@ inline constexpr std::size_t SPAWN_FREE_DIVISOR = 4;
 
 namespace indexer {
 /// The engine that holds an index root: INDEX_BACKEND_ROCKSDB or
-/// INDEX_BACKEND_STORE. Unset reads as INDEX_BACKEND_ROCKSDB.
+/// INDEX_BACKEND_STORE. Unset reads as INDEX_BACKEND_STORE.
 inline constexpr const char* INDEX_BACKEND_ENV = "DFTRACER_UTILS_INDEX_BACKEND";
 inline constexpr const char* INDEX_BACKEND_ROCKSDB = "rocksdb";
 inline constexpr const char* INDEX_BACKEND_STORE = "store";

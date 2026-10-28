@@ -5,6 +5,7 @@
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -36,6 +37,9 @@ using dftracer::utils::index::store::IndexDatabaseSstWriterContext;
 using dftracer::utils::index::store::SstArtifactRegistry;
 
 namespace {
+// Every case reads or writes RocksDB files, which only that backend has.
+const dftracer::utils::index::store::ScopedIndexBackend ROCKSDB_ONLY(
+    dftracer::utils::index::store::IndexBackend::RocksDb);
 
 GzipMemberRecord make_member(std::uint64_t idx, std::uint64_t uc_offset,
                              std::uint64_t num_lines) {

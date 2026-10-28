@@ -1,19 +1,14 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/versions.h>
-#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
-#include <dftracer/utils/index/cache/lru.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <dftracer/utils/utilities/common/serialization/binary_codec.h>
 
 #include <algorithm>
 #include <map>
@@ -23,16 +18,13 @@
 namespace dftracer::utils::index::cache {
 
 namespace rdb = index::store;
-namespace codec = utilities::common::serialization;
 
 namespace {
 
-std::string value_key(std::uint64_t sig) {
-    std::string key;
-    key.push_back('\x01');
-    append_u64_be(key, sig);
-    return key;
-}
+constexpr std::string_view VALUE_KEY = "\x01";
+// The signature that prefixed the key when entries shared one key space; the
+// size of an entry still counts it.
+constexpr std::uint64_t SIG_BYTES = 8;
 
 }  // namespace
 
@@ -88,45 +80,25 @@ std::optional<std::uint64_t> lookup_signature(
     return dftracer::utils::hash::fnv1a_hash(sig);
 }
 
-std::shared_ptr<rdb::RocksDatabase> open_lookup_db(
-    const std::string& path, rdb::RocksDatabase::OpenMode mode) {
-    try {
-        if (mode == rdb::RocksDatabase::OpenMode::ReadWrite)
-            fs::create_directories(path);
-        return rdb::RocksDBManager::instance().get_or_open(path, mode);
-    } catch (const std::exception&) {
-        return nullptr;
-    }
+std::shared_ptr<CacheStore> open_lookup_db(const std::string& path,
+                                           CacheStore::Mode mode) {
+    return CacheStore::open(path, mode);
 }
 
-std::optional<std::string> read_lookup(rdb::RocksDatabase& db,
-                                       std::uint64_t sig) {
-    std::string value;
-    const auto st = db.get(value_key(sig), &value, rdb::cf::ROLLUP);
-    if (st.IsNotFound()) return std::nullopt;
-    check_status(st, "lookup read");
-    touch_usage(db, rdb::cf::ROLLUP, sig);
+std::optional<std::string> read_lookup(CacheStore& db, std::uint64_t sig) {
+    auto value = db.get(sig, VALUE_KEY);
+    if (value) db.touch(sig);
     return value;
 }
 
-bool lookup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
-    std::string value;
-    return rdb::internal::get_checked("lookup read", db, value_key(sig), &value,
-                                      rdb::cf::ROLLUP);
+bool lookup_exists(const CacheStore& db, std::uint64_t sig) {
+    return db.get(sig, VALUE_KEY).has_value();
 }
 
-void persist_lookup(rdb::RocksDatabase& db, std::uint64_t sig,
-                    std::string_view value) {
-    const std::string key = value_key(sig);
-    auto batch = db.begin_batch();
-    db.put(batch, rdb::cf::ROLLUP, key, value);
-    put_usage(db, batch, rdb::cf::ROLLUP, sig,
-              key.size() + value.size() + 9 + USAGE_BYTES);
-    check_status(db.commit_batch(batch), "lookup persist");
-    evict_lru(db, rdb::cf::ROLLUP, sig,
-              [&db](rdb::RocksDatabase::Batch& b, std::uint64_t s) {
-                  db.del(b, rdb::cf::ROLLUP, value_key(s));
-              });
+void persist_lookup(CacheStore& db, std::uint64_t sig, std::string_view value) {
+    std::vector<std::pair<std::string, std::string>> entries;
+    entries.emplace_back(VALUE_KEY, value);
+    db.put(sig, entries, 2 * (1 + SIG_BYTES) + value.size() + USAGE_BYTES);
 }
 
 }  // namespace dftracer::utils::index::cache

@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make the store the default index backend.
+  Each backend builds again an index that the other one built, so set `DFTRACER_UTILS_INDEX_BACKEND=rocksdb` to keep using a RocksDB index.
+- Keep the rollup and lookup caches in `.dftindex-cache` on the store, so several processes can write one cache folder.
+- Spill the bloom chunks of a large file on the store into copies that no reader sees until the file's index is complete.
 - Cut the peak memory of an index build on the store backend: the build keeps each key once until its commit and writes it into its extent without more copies, and page dictionaries train as tasks of the build's executor.
   A cold `dftracer_index` of the 8,404 minife traces at 96 threads peaks at about 2.8 GB where it peaked at 3.6 GB.
 - Build each file of `distributed_index` on one worker, with that worker's threads, where a file larger than its share of the work was cut across workers.
@@ -262,6 +266,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a store index write from a worker of the default runtime hanging, as when a view builds its index.
+- Fix a store index write that changes part of a file's data losing the rest of it when another process wrote that data.
+- Fix `merge_shard_set` on the store backend, which kept no file of the merged index.
 - Fix `distributed_index` leaving out the events of every part but the first of a file it cut across workers.
   A 4-member file built by 2 workers kept 1,205 of its 1,605 events, and it now keeps all of them.
 - Fix a coroutine that waits on a timer hanging forever when the timer is set while the timer thread goes to sleep.

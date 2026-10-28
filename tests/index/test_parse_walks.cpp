@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
@@ -251,6 +252,8 @@ TEST_SUITE("IndexParseWalks") {
     }
 
     TEST_CASE("the index of a fixed trace is unchanged") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         const std::string file = write_trace(env.get_dir());
         build_one(file, env.get_dir() + "/idx");

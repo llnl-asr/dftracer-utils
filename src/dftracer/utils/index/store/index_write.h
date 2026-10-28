@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -60,8 +61,20 @@ class IndexDatabaseWrite : public IndexWrite {
     /// Makes every key of this write visible to later reads. A second call
     /// does nothing.
     virtual void commit() = 0;
+    /// A staged write (IndexDatabase::begin_staged_write) writes what it holds
+    /// so far as part of what commit() publishes, and frees it, so a write of
+    /// one file larger than memory lands in pieces that no reader sees until
+    /// commit(). Throws std::logic_error on any other write.
+    virtual void stage() {
+        throw std::logic_error("index write: only a staged write stages");
+    }
     /// The id of `logical_path`, assigned when the path is new.
     virtual int file_id_for(std::string_view logical_path) = 0;
+    /// Binds `file_id` to `logical_path` before the file's record is written,
+    /// for a write that puts the file's data first. Nothing to do where ids
+    /// are global to the index.
+    virtual void bind_file(std::string_view /*logical_path*/, int /*file_id*/) {
+    }
     /// Creates what an empty index root needs to hold a build's writes.
     virtual void init_schema() = 0;
 };

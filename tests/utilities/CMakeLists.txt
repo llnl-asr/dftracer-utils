@@ -283,21 +283,12 @@ foreach(test_file ${UTILITIES_TEST_SOURCES})
   set_tests_properties(utilities/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
 
-  # The same test on the store backend of this process. A case that reads or
-  # writes the RocksDB handle, or that changes the stored format version
-  # through it, is left out: the store has no such handle and takes its format
-  # version from the namespace versions.
-  # doctest splits the filters on commas, so a comma in a case name is escaped.
+  # The same test on the RocksDB backend of this process.
   if(bin_exec STREQUAL "indexer/test_index_database")
-    add_test(
-      NAME "utilities/${bin_exec}[store]"
-      COMMAND
-        ${target_name}
-        "--test-case-exclude=another format version forces a full rebuild,another stored format version is not fresh,an index from the previous layout is outdated\\, not misread,only a decoded\\, ready manifest at this version is current,an index with no stored format is outdated,opening an index of another layout does not stamp it current"
-    )
-    set_tests_properties("utilities/${bin_exec}[store]" PROPERTIES
+    add_test(NAME "utilities/${bin_exec}[rocksdb]" COMMAND ${target_name})
+    set_tests_properties("utilities/${bin_exec}[rocksdb]" PROPERTIES
                          WORKING_DIRECTORY "${test_working_directory}"
-                         ENVIRONMENT "DFTRACER_UTILS_INDEX_BACKEND=store")
+                         ENVIRONMENT "DFTRACER_UTILS_INDEX_BACKEND=rocksdb")
   endif()
 endforeach()
 

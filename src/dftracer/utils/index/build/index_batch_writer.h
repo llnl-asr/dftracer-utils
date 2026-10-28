@@ -57,10 +57,12 @@ struct BatchWriterMetrics {
 };
 
 /// The spill runs of one file, committed as that file's own ingest once the
-/// sink they were written beside has committed.
+/// sink they were written beside has committed: SST runs, or on the store the
+/// staged write whose commit publishes the file's tier.
 struct SpilledFile {
     std::string file_path;
     std::vector<index::store::IndexDatabaseSstWriterContext::Artifacts> runs;
+    std::unique_ptr<index::store::IndexDatabaseWrite> staged;
 };
 
 /// Write `job` into `sink`, which the caller commits. A file whose bloom fold
@@ -95,10 +97,18 @@ inline bool write_index_job(index::store::IndexWrite& sink, ParsedIndexJob& job,
                                                    job.schema->id,
                                                    job.schema->params_hash());
         }
-        if (spills)
-            spilled.push_back(
-                {job.file_path, job.bloom_fold->finish_spilled(job.file_id)});
-        else if (job.bloom_fold)
+        if (spills && job.bloom_fold->stages()) {
+            auto staged = job.bloom_fold->finish_staged(job.file_id);
+            // The file's record gives the published tier the file's sources.
+            if (!job.logical_path.empty())
+                index::store::records::put_file_record(
+                    *staged, job.logical_path, job.record);
+            spilled.push_back({job.file_path, {}, std::move(staged)});
+        } else if (spills) {
+            spilled.push_back({job.file_path,
+                               job.bloom_fold->finish_spilled(job.file_id),
+                               nullptr});
+        } else if (job.bloom_fold)
             job.bloom_fold->write(sink, job.file_id);
         if (job.plugin_builders) job.plugin_builders->write(sink, job.file_id);
         if (job.rowset_fold) job.rowset_fold->write(sink, job.file_id);

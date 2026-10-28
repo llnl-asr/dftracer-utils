@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_CACHE_LOOKUP_STORE_H
 #define DFTRACER_UTILS_INDEX_CACHE_LOOKUP_STORE_H
 
-#include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/cache/cache_store.h>
 
 #include <cstdint>
 #include <memory>
@@ -29,23 +29,22 @@ std::optional<std::uint64_t> lookup_signature(
     const trace::views::detail::ViewPlan& plan, std::string_view side_text);
 
 /// Open (or reuse) the lookup store at `path`. A ReadWrite open creates the
-/// folder. Null when the store cannot be opened; never throws.
-std::shared_ptr<index::store::RocksDatabase> open_lookup_db(
-    const std::string& path, index::store::RocksDatabase::OpenMode mode);
+/// folder. Null when the store cannot be opened, or for a ReadOnly open of a
+/// folder with no store; never throws.
+std::shared_ptr<CacheStore> open_lookup_db(const std::string& path,
+                                           CacheStore::Mode mode);
 
 /// The value stored for `sig`, or nullopt. Marks it used when `db` is
 /// writable. Throws IO on a failed read or usage write.
-std::optional<std::string> read_lookup(index::store::RocksDatabase& db,
-                                       std::uint64_t sig);
+std::optional<std::string> read_lookup(CacheStore& db, std::uint64_t sig);
 
 /// True if a value for `sig` is stored. No side effect.
-bool lookup_exists(const index::store::RocksDatabase& db, std::uint64_t sig);
+bool lookup_exists(const CacheStore& db, std::uint64_t sig);
 
 /// Store `value` for `sig`, then evict the least recently used entries until
 /// the store holds at most cache_max_bytes(); a value larger than the budget
 /// alone is not kept. Throws IO on a failed write.
-void persist_lookup(index::store::RocksDatabase& db, std::uint64_t sig,
-                    std::string_view value);
+void persist_lookup(CacheStore& db, std::uint64_t sig, std::string_view value);
 
 }  // namespace dftracer::utils::index::cache
 

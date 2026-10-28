@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
@@ -1234,8 +1233,8 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
         if (!rdir.empty()) {
             try {
                 auto db = dftracer::utils::index::cache::open_rollup_db(
-                    rdir, dftracer::utils::index::store::RocksDatabase::
-                              OpenMode::ReadWrite);
+                    rdir,
+                    dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
                 if (db)
                     dftracer::utils::index::cache::persist_rollup(
                         *db,

@@ -1,18 +1,13 @@
-#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
-#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
-#include <dftracer/utils/index/cache/lru.h>
+#include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/column_families.h>
-#include <dftracer/utils/index/store/db_manager.h>
-#include <dftracer/utils/index/store/internal/scan_prefix.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
@@ -27,7 +22,6 @@
 
 namespace dftracer::utils::index::cache {
 
-namespace rdb = index::store;
 namespace codec = utilities::common::serialization;
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -39,16 +33,12 @@ namespace {
 // matched (it is recomputed instead).
 constexpr std::string_view ROLLUP_FORMAT = "3";
 
-constexpr std::uint64_t DEFAULT_CACHE_MAX_BYTES = std::uint64_t{2} << 30;
-
-void drop_rollup(rdb::RocksDatabase& db, rdb::RocksDatabase::Batch& batch,
-                 std::uint64_t sig) {
-    const std::string rows = rollup_row_key(sig, "");
-    std::string rows_end = rollup_row_key(sig + 1, "");
-    if (sig == UINT64_MAX) rows_end = std::string(1, '\x02');
-    db.delete_range(batch, rdb::cf::ROLLUP, rows, rows_end);
-    db.del(batch, rdb::cf::ROLLUP, rollup_desc_key(sig));
-}
+// Inside the entry of one rollup: its descriptor, then a row per group.
+constexpr std::string_view DESC_KEY = std::string_view("\x00", 1);
+constexpr std::string_view ROW_TAG = "\x01";
+// The signature that prefixed each key of a rollup when entries shared one
+// key space; the size of an entry still counts it.
+constexpr std::uint64_t SIG_BYTES = 8;
 
 // Everything that decides a group key's values: a transform coarsens them, so
 // dirname(file_path) and file_path are different keys.
@@ -139,40 +129,13 @@ void add_rest_fields(std::string& sig,
 
 }  // namespace
 
-std::string rollup_row_key(std::uint64_t sig, std::string_view group_key) {
-    std::string key;
-    key.reserve(9 + group_key.size());
-    key.push_back('\x01');
-    append_u64_be(key, sig);
-    key.append(group_key);
-    return key;
+std::shared_ptr<CacheStore> open_rollup_db(const std::string& path,
+                                           CacheStore::Mode mode) {
+    return CacheStore::open(path, mode);
 }
 
-std::string rollup_desc_key(std::uint64_t sig) {
-    std::string key;
-    key.reserve(9);
-    key.push_back('\x00');
-    append_u64_be(key, sig);
-    return key;
-}
-
-std::shared_ptr<rdb::RocksDatabase> open_rollup_db(
-    const std::string& path, rdb::RocksDatabase::OpenMode mode) {
-    if (mode == rdb::RocksDatabase::OpenMode::ReadWrite)
-        fs::create_directories(path);
-    return rdb::RocksDBManager::instance().get_or_open(path, mode);
-}
-
-std::uint64_t cache_max_bytes() {
-    const auto text = dftracer::utils::Env::get<std::string_view>(
-        "DFTRACER_UTILS_CACHE_MAX_BYTES");
-    if (!text) return DEFAULT_CACHE_MAX_BYTES;
-    return dftracer::utils::parse_bytes(*text).value_or(
-        DEFAULT_CACHE_MAX_BYTES);
-}
-
-void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
-                    std::uint64_t rest_sig, std::uint64_t time_bucket_us,
+void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
+                    std::uint64_t time_bucket_us,
                     const std::vector<trace::views::GroupKey>& group_by,
                     const dataframe::AggState& state) {
     const std::int64_t ng = dataframe::agg_num_groups(state);
@@ -180,14 +143,15 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
     // tell a null key apart from an empty one.
     const dataframe::DataFrame finalized =
         dataframe::agg_finalize(state, std::vector<std::string>{});
-    auto batch = db.begin_batch();
+    std::vector<std::pair<std::string, std::string>> entries;
+    entries.reserve(static_cast<std::size_t>(ng) + 1);
     std::uint64_t bytes = 0;
     std::string row_key;
     for (std::int64_t g = 0; g < ng; ++g) {
         // Row key = the group's composite key, each part tagged null or
         // value, a stable identity so a re-persist of the same group
         // overwrites in place.
-        row_key.clear();
+        row_key.assign(ROW_TAG);
         const std::vector<std::string> parts =
             dataframe::agg_group_key(state, g);
         for (std::size_t k = 0; k < parts.size(); ++k) {
@@ -199,11 +163,10 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
             }
             row_key += trace::views::detail::GROUP_SEP;
         }
-        const std::string key = rollup_row_key(sig, row_key);
-        const std::string blob =
+        std::string blob =
             dataframe::agg_serialize(*dataframe::agg_extract_group(state, g));
-        bytes += key.size() + blob.size();
-        db.put(batch, rdb::cf::ROLLUP, key, blob);
+        bytes += SIG_BYTES + row_key.size() + blob.size();
+        entries.emplace_back(row_key, std::move(blob));
     }
     // Shape descriptor the planner matches against: rest hash + this rollup's
     // time bucket (for coarsening) + this view's grouping (kind + key identity
@@ -216,36 +179,24 @@ void persist_rollup(rdb::RocksDatabase& db, std::uint64_t sig,
         append_u32_be(desc, static_cast<std::uint32_t>(gk.kind));
         codec::put_str(desc, key_identity(gk));
     }
-    bytes += 9 + desc.size() + 9 + USAGE_BYTES;
-    db.put(batch, rdb::cf::ROLLUP, rollup_desc_key(sig), desc);
-    put_usage(db, batch, rdb::cf::ROLLUP, sig, bytes);
-    check_status(db.commit_batch(batch), "rollup persist");
-    evict_lru(db, rdb::cf::ROLLUP, sig,
-              [&db](rdb::RocksDatabase::Batch& b, std::uint64_t s) {
-                  drop_rollup(db, b, s);
-              });
+    bytes += 2 * (1 + SIG_BYTES) + desc.size() + USAGE_BYTES;
+    entries.emplace_back(DESC_KEY, std::move(desc));
+    db.put(sig, entries, bytes);
 }
 
-bool rollup_exists(const rdb::RocksDatabase& db, std::uint64_t sig) {
-    std::string val;
-    return rdb::internal::get_checked("rollup read", db, rollup_desc_key(sig),
-                                      &val, rdb::cf::ROLLUP);
+bool rollup_exists(const CacheStore& db, std::uint64_t sig) {
+    return db.get(sig, DESC_KEY).has_value();
 }
 
-dataframe::AggStatePtr read_rollup(const rdb::RocksDatabase& db,
-                                   std::uint64_t sig) {
-    const std::string prefix = rollup_row_key(sig, "");  // 0x01 | sig
+dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
     dataframe::AggStatePtr merged;
-    rdb::internal::scan_prefix_iterator(
-        "rollup scan", prefix, [&] { return db.new_iterator(rdb::cf::ROLLUP); },
-        [&](::rocksdb::Iterator& it) {
-            std::string blob(it.value().data(), it.value().size());
-            auto one = dataframe::agg_deserialize(blob);
-            if (!merged)
-                merged = std::move(one);
-            else
-                dataframe::agg_merge(*merged, *one);
-        });
+    db.scan(sig, ROW_TAG, [&](std::string_view, std::string_view blob) {
+        auto one = dataframe::agg_deserialize(std::string(blob));
+        if (!merged)
+            merged = std::move(one);
+        else
+            dataframe::agg_merge(*merged, *one);
+    });
     return merged;
 }
 
@@ -270,9 +221,8 @@ std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
 }
 
 std::optional<dataframe::DataFrame> find_subsuming_rollup(
-    rdb::RocksDatabase& db, const trace::views::detail::ViewPlan& plan) {
+    CacheStore& db, const trace::views::detail::ViewPlan& plan) {
     const std::uint64_t q_rest = rest_signature(plan);
-    const char desc_tag = '\x00';
 
     // Pick the tightest subsuming rollup: fewest group dims means fewest rows
     // to re-aggregate, and an exact match (same dims as the query) is optimal.
@@ -281,14 +231,10 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
     std::vector<trace::views::GroupKey> best_gb;
     bool have_best = false;
 
-    rdb::internal::scan_from(
-        "rollup descriptor scan", db.new_iterator(rdb::cf::ROLLUP),
-        std::string_view(&desc_tag, 1), [&](::rocksdb::Iterator& it) {
-            const std::string_view k(it.key().data(), it.key().size());
-            if (k.empty() || k[0] != '\x00') return false;
-            if (k.size() != 9) return true;
-
-            const std::string_view v(it.value().data(), it.value().size());
+    db.scan_all(
+        DESC_KEY, ROW_TAG,
+        [&](std::uint64_t sig, std::string_view k, std::string_view v) {
+            if (k != DESC_KEY) return true;
             if (v.size() < 20) return true;
             codec::BinaryReader br(v);
             if (br.be64() != q_rest) return true;
@@ -329,8 +275,7 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
             }
             if (!subset) return true;
 
-            best_sig = read_u64_be(
-                reinterpret_cast<const std::uint8_t*>(k.data() + 1));
+            best_sig = sig;
             best_bucket = r_bucket;
             best_gb = std::move(r_gb);
             have_best = true;
@@ -343,7 +288,7 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
     if (!have_best) return std::nullopt;
     auto fine = read_rollup(db, best_sig);
     if (!fine) return std::nullopt;
-    touch_usage(db, rdb::cf::ROLLUP, best_sig);
+    db.touch(best_sig);
 
     // Map the query's grouping onto the stored state's key columns. The state
     // key layout is [time_bucket?, best_gb...]; keep the query's keys in query

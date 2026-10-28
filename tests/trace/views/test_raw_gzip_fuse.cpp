@@ -480,15 +480,9 @@ static std::vector<std::pair<std::string, std::string>> index_contents(
     store::RocksDBManager::instance().reset(index_path);
     store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
     std::vector<std::pair<std::string, std::string>> out;
-    for (std::size_t f = 0; f < store::layout::FAMILY_COUNT; ++f) {
-        const auto family = static_cast<store::layout::Family>(f);
-        auto it = db.db()->new_iterator(store::layout::family_name(family));
-        if (!it) continue;
-        for (it->SeekToFirst(); it->Valid(); it->Next())
-            out.emplace_back(std::string(store::layout::family_name(family)) +
-                                 "|" + it->key().ToString(),
-                             it->value().ToString());
-    }
+    db.for_each_record([&out](std::string_view key, std::string_view value) {
+        out.emplace_back(std::string(key), std::string(value));
+    });
     return out;
 }
 

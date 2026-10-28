@@ -187,8 +187,8 @@ duql
      - ``1024``
      - Column cap of a ``pivot`` with no ``in`` list.
 
-RocksDB and indexing
-----------------------
+Index storage and indexing
+--------------------------
 
 .. list-table::
    :header-rows: 1
@@ -197,6 +197,15 @@ RocksDB and indexing
    * - Variable
      - Default
      - Effect
+   * - ``DFTRACER_UTILS_INDEX_BACKEND``
+     - ``store``
+     - The engine that holds each ``.dftindex``: ``store`` or ``rocksdb``.
+       A process uses one engine, read once at the first index open.
+       An index built by one engine is not read by the other, so the other one builds it again.
+   * - ``DFTRACER_UTILS_INDEX_STORE_REFRESH_MS``
+     - ``1000``
+     - On the ``store`` engine, the shortest time in milliseconds between two looks for the data files that other processes wrote.
+       ``0`` looks at each read.
    * - ``DFTRACER_UTILS_ROCKSDB_CACHE``
      - ``64``
      - Cap on the process-wide LRU of retained read-only RocksDB handles, so

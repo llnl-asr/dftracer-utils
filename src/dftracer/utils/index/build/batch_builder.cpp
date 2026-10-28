@@ -117,8 +117,10 @@ struct Admission {
     /// Bytes a sink holds before its worker commits it.
     std::size_t sink_limit;
     FileAdmission files;
-    /// Where a file's spill runs go; empty when files do not spill.
+    /// Where a file's spill runs go; empty when files do not spill or stage.
     std::string spill_root;
+    /// Files spill into a staged write of the index on the store.
+    bool spill_staged = false;
     /// RecordSchema id for every file; empty detects each file's.
     std::string schema;
     std::atomic<std::size_t> spilled{0};
@@ -221,7 +223,10 @@ static void commit_open_sink(BlockWriter* writer, OpenSink& open,
     }
     for (auto& file : open.spilled) {
         try {
-            writer->commit_spill(std::move(file.runs));
+            if (file.staged)
+                file.staged->commit();
+            else
+                writer->commit_spill(std::move(file.runs));
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Failed to ingest the spilled index of %s: %s",
@@ -340,12 +345,22 @@ static coro::CoroTask<void> parse_and_write_worker(
                             std::make_unique<index::extensions::BloomFold>(
                                 *job.intern, file_config);
                         job.bloom_fold->set_file_bytes(pf.file_size);
-                        if (!admission->spill_root.empty())
+                        if (admission->spill_staged) {
+                            auto staged =
+                                index::store::IndexDatabase(pf.index_path)
+                                    .begin_staged_write();
+                            // Its runs come before the file's record.
+                            staged->bind_file(pf.logical_path, pf.file_id);
+                            job.bloom_fold->enable_spill(
+                                ticket.elastic_bytes(), std::move(staged),
+                                pf.file_id, pf.fresh_id);
+                        } else if (!admission->spill_root.empty()) {
                             job.bloom_fold->enable_spill(
                                 ticket.elastic_bytes(),
                                 admission->spill_root + "/file_" +
                                     std::to_string(pf.file_id),
                                 pf.file_id, pf.fresh_id);
+                        }
                         fold_ptrs.push_back(job.bloom_fold.get());
                     }
                     if (!tier_only) {
@@ -594,12 +609,16 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto admission = std::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
-    // A spilled file is a run of SSTs to ingest, which the store cannot take.
-    if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit) &&
-        index::store::index_backend() == index::store::IndexBackend::RocksDb)
-        admission->spill_root = state->spill_dir.empty()
-                                    ? state->index_path + ".spill"
-                                    : state->spill_dir;
+    // A spilled file is runs of SSTs to ingest on RocksDB, and stages of one
+    // write on the store.
+    if (budget != NO_BUDGET && (!state->sink_factory || state->spill_commit)) {
+        if (index::store::index_backend() == index::store::IndexBackend::Store)
+            admission->spill_staged = true;
+        else
+            admission->spill_root = state->spill_dir.empty()
+                                        ? state->index_path + ".spill"
+                                        : state->spill_dir;
+    }
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
     auto next_block = std::make_shared<std::atomic<std::size_t>>(0);

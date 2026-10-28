@@ -3,7 +3,7 @@
 Indexer
 =================
 
-Unified indexing and reading infrastructure for compressed trace files. Builds a sidecar ``.dftindex`` RocksDB store (and optional flat-file SSTs) that enables efficient random access, bloom-filter-accelerated queries, and distributed aggregation, all from a single decompression pass.
+Unified indexing and reading infrastructure for compressed trace files. Builds a sidecar ``.dftindex`` store that enables efficient random access, bloom-filter-accelerated queries, and distributed aggregation, all from a single decompression pass.
 
 .. code-block:: cpp
 
@@ -13,8 +13,8 @@ Unified indexing and reading infrastructure for compressed trace files. Builds a
 Overview
 --------
 
-The indexer writes a shared ``.dftindex`` RocksDB store (or, for distributed
-builds, SST files that one atomic ingest adds to the store). Its data belongs
+The indexer writes a shared ``.dftindex`` store, in which each process,
+distributed workers included, writes its own data file. Its data belongs
 to extensions, each with a manifest entry per file:
 
 - ``core.members`` - gzip member boundaries and file metadata, for random
@@ -68,7 +68,7 @@ sub-batches and SST output, which ``Indexer`` does not offer yet.
 IndexDatabase
 -------------
 
-RocksDB-backed index store (the ``.dftindex`` root). Each kind of index data
+The index store (the ``.dftindex`` root). Each kind of index data
 belongs to an extension, and the manifest records, per file, which extensions
 are built; data without a current manifest entry is never read.
 

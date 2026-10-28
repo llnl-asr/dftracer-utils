@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -491,6 +492,8 @@ TEST_SUITE("IndexDatabase staleness") {
     }
 
     TEST_CASE("another format version forces a full rebuild") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         auto root = dftu_utils_test::make_unique_test_path("stale_schema");
         fs::create_directories(root);
         auto a = write_file(root / "a.pfw", "aaa");
@@ -542,6 +545,8 @@ TEST_SUITE("IndexDatabase staleness") {
     }
 
     TEST_CASE("another stored format version is not fresh") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         auto root = dftu_utils_test::make_unique_test_path("fresh_format");
         fs::create_directories(root);
         auto a = write_file(root / "a.pfw", "aaa");
@@ -556,6 +561,8 @@ TEST_SUITE("IndexDatabase staleness") {
     }
 
     TEST_CASE("an index from the previous layout is outdated, not misread") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         auto root = dftu_utils_test::make_unique_test_path("stale_v14");
         fs::create_directories(root);
         auto a = write_file(root / "a.pfw", "aaa");
@@ -579,6 +586,8 @@ TEST_SUITE("IndexDatabase staleness") {
 
 TEST_SUITE("IndexDatabase manifest") {
     TEST_CASE("only a decoded, ready manifest at this version is current") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         using dftracer::utils::index::store::IndexExtension;
         auto root = dftu_utils_test::make_unique_test_path("manifest_current");
         IndexDatabase db((root / ".dftindex").string());
@@ -612,6 +621,8 @@ TEST_SUITE("IndexDatabase manifest") {
     }
 
     TEST_CASE("an index with no stored format is outdated") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         auto root = dftu_utils_test::make_unique_test_path("format_missing");
         IndexDatabase db((root / ".dftindex").string());
         db.init_schema();
@@ -627,6 +638,8 @@ TEST_SUITE("IndexDatabase manifest") {
 
 TEST_SUITE("IndexDatabase format") {
     TEST_CASE("opening an index of another layout does not stamp it current") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         auto root = dftu_utils_test::make_unique_test_path("format_old");
         const auto path = (root / ".dftindex").string();
         {

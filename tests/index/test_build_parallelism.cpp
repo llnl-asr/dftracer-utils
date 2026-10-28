@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_sst_writer_context.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -98,6 +99,8 @@ TEST_SUITE("IndexBuildParallelism") {
     }
 
     TEST_CASE("the SSTs of the batches ingest below level 0") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;
         for (int i = 0; i < FILES; ++i)

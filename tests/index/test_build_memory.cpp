@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -93,6 +94,9 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
         });
     rt.submit(std::move(task), "test-build-memory").wait();
     rt.shutdown();
+    // A failed file says why in the test's output.
+    for (const auto& file : out.results)
+        if (!file.success) MESSAGE("build failed: " << file.error_message);
     return out;
 }
 
@@ -102,18 +106,10 @@ std::vector<std::pair<std::string, std::string>> contents(
     store::RocksDBManager::instance().reset(index_path);
     store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
     std::vector<std::pair<std::string, std::string>> out;
-    for (std::size_t f = 0; f < store::layout::FAMILY_COUNT; ++f) {
-        const auto family = static_cast<store::layout::Family>(f);
-        auto it = db.db()->new_iterator(store::layout::family_name(family));
-        if (!it) continue;
-        for (it->SeekToFirst(); it->Valid(); it->Next())
-            out.emplace_back(std::string(store::layout::family_name(family)) +
-                                 "|" + it->key().ToString(),
-                             it->value().ToString());
-        // A scan that stopped on an error, such as too many open SSTs, would
-        // read as a smaller index.
-        REQUIRE_MESSAGE(it->status().ok(), it->status().ToString());
-    }
+    // A read error throws rather than read as a smaller index.
+    db.for_each_record([&out](std::string_view key, std::string_view value) {
+        out.emplace_back(std::string(key), std::string(value));
+    });
     return out;
 }
 
@@ -255,6 +251,9 @@ TEST_SUITE("IndexBuildMemory") {
         const std::vector<std::string> files = {
             write_trace(env.get_dir(), "blocked", 12000, 600, 2048)};
         const auto dir = env.get_dir() + "/blocked_idx";
+        // The store spills into stages of one write, with no directory of
+        // runs to block.
+        if (store::index_backend() == store::IndexBackend::Store) return;
         const auto index = index_of(files[0], dir);
         // A regular file where the spill directory goes: no run can open.
         fs::create_directories(fs::path(index).parent_path());

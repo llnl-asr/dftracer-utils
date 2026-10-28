@@ -3,6 +3,7 @@
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/store/index_backend.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -367,6 +368,8 @@ TEST_SUITE("PathCatalog") {
     }
 
     TEST_CASE("a wide file keeps evidence for every useful path") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         // 400 paths; path p<j> is on the records of run j % 20 only, so
         // every path is absent from most chunks.
@@ -439,6 +442,8 @@ TEST_SUITE("PathCatalog") {
     }
 
     TEST_CASE("the cap keeps the most frequent paths whose evidence fits") {
+        dftracer::utils::index::store::ScopedIndexBackend rocksdb_only(
+            dftracer::utils::index::store::IndexBackend::RocksDb);
         dftu_utils_test::TestEnvironment env(10);
         // 1400 paths in groups of 200: group g is on every (g + 1)th record,
         // so ranking is by group, then by name; values differ by record.

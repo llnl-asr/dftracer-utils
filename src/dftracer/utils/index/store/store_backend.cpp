@@ -129,10 +129,11 @@ std::string full_key_of(layout::Ext ext, std::uint32_t file_id,
 
 }  // namespace
 
-StoreRoot::StoreRoot(std::string index_root)
+StoreRoot::StoreRoot(std::string index_root, std::shared_ptr<Runtime> runtime)
     : pool_(memory::Manager::get().root().child("index.store",
                                                 memory::PoolKind::Results)),
-      index_root_(std::move(index_root)) {
+      index_root_(std::move(index_root)),
+      own_runtime_(std::move(runtime)) {
     if (!pool_) {
         throw std::runtime_error("store index: the pool table is full");
     }
@@ -140,7 +141,7 @@ StoreRoot::StoreRoot(std::string index_root)
 }
 
 std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
-    const std::string& index_root) {
+    const std::string& index_root, std::shared_ptr<Runtime> runtime) {
     const std::string key = root_key(index_root);
     std::lock_guard<std::mutex> lock(root_registry_mutex());
     auto& roots = root_registry();
@@ -151,7 +152,8 @@ std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
     // A root outlives the query that opened it, so neither it nor its entry
     // here is charged to that query's pool.
     memory::Scope general(memory::Manager::get().general());
-    auto created = std::shared_ptr<StoreRoot>(new StoreRoot(key));
+    auto created =
+        std::shared_ptr<StoreRoot>(new StoreRoot(key, std::move(runtime)));
     roots.insert_or_assign(key, created);
     return created;
 }
@@ -199,7 +201,7 @@ void StoreRoot::ensure_dir_locked() {
 void StoreRoot::ensure_writer_locked() {
     if (writer_) return;
     ensure_dir_locked();
-    runtime_ = default_runtime_shared();
+    runtime_ = own_runtime_ ? own_runtime_ : default_runtime_shared();
     auto created = kv::Writer::create(store_dir_, *runtime_->executor());
     if (!created)
         throw_store_error("store index: open the writer", created.error());
@@ -208,10 +210,19 @@ void StoreRoot::ensure_writer_locked() {
     snapshot_taken_ = false;
 }
 
+dstd::Expected<void, dstd::Error> StoreRoot::commit(kv::Writer& writer,
+                                                    kv::Batch batch) {
+    return run(commit_with_space(writer, std::move(batch)));
+}
+
 dstd::Expected<void, dstd::Error> StoreRoot::run(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
     if (!runtime_)
         throw std::runtime_error("store index: no runtime to wait on");
+    // A commit can come from a worker of the runtime the writer runs on, so
+    // the wait hands off that worker's slot, as Runtime::run_blocking does.
+    const bool reentrant = Executor::current() == runtime_->executor();
+    BlockingRegion block(reentrant ? runtime_->executor() : nullptr);
     return runtime_->submit(std::move(task)).get();
 }
 
@@ -333,6 +344,7 @@ void StoreRoot::refresh() {
 
 void StoreRoot::refresh_locked() {
     ++version_;
+    refreshed_version_ = version_;
     // A table never seeded binds every path on its first use anyway.
     if (seeded_) {
         seeded_ = false;
@@ -495,6 +507,7 @@ void StoreRoot::mark_committed(const std::string& name,
     committed.params_hash = params_hash;
     if (sources != nullptr) committed.sources = *sources;
     std::lock_guard<std::mutex> lock(mutex_);
+    dropped_.erase({name, scope});
     committed_.insert_or_assign({name, scope}, std::move(committed));
 }
 
@@ -503,6 +516,7 @@ void StoreRoot::forget_committed(const std::string& name,
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     committed_.erase({name, scope});
+    dropped_.insert({name, scope});
 }
 
 bool StoreRoot::was_committed(const std::string& name,
@@ -519,6 +533,26 @@ std::optional<StoreRoot::CommittedCopy> StoreRoot::committed_copy(
     return at->second;
 }
 
+std::optional<StoreRoot::ForeignCopy> StoreRoot::foreign_copy(
+    const std::string& name, std::uint32_t version, const kv::ScopeKey& scope) {
+    memory::Scope in_pool(*pool_);
+    std::shared_ptr<const kv::Snapshot> held;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const std::pair<std::string, kv::ScopeKey> key{name, scope};
+        if (committed_.count(key) != 0 || dropped_.count(key) != 0)
+            return std::nullopt;
+        refresh_if_changed_locked();
+        held = snapshot_taken_ && snapshot_version_ >= refreshed_version_
+                   ? snapshot_
+                   : snapshot_locked();
+    }
+    if (!held) return std::nullopt;
+    kv::CopyInfo info = held->copy_info(make_spec(name, version), scope);
+    if (info.state != kv::ScopeState::Ready) return std::nullopt;
+    return ForeignCopy{std::move(held), std::move(info)};
+}
+
 void StoreRoot::bump_version() {
     std::lock_guard<std::mutex> lock(mutex_);
     ++version_;
@@ -531,6 +565,7 @@ void StoreRoot::close_locked() {
     // Namespace ids and committed copies belong to the closed writer.
     namespaces_.clear();
     committed_.clear();
+    dropped_.clear();
     ++version_;
     if (!closed)
         throw_store_error("store index: close the store", closed.error());
@@ -543,17 +578,27 @@ void StoreRoot::close() {
     close_locked();
 }
 
-std::unique_ptr<StoreIndexWrite> StoreRoot::begin_write() {
+std::unique_ptr<StoreIndexWrite> StoreRoot::begin_write(bool staged) {
     return std::unique_ptr<StoreIndexWrite>(
-        new StoreIndexWrite(shared_from_this()));
+        new StoreIndexWrite(shared_from_this(), staged));
 }
 
 int StoreIndexWrite::file_id_for(std::string_view logical_path) {
     return root_->file_id_for(logical_path);
 }
 
-StoreIndexWrite::StoreIndexWrite(std::shared_ptr<StoreRoot> root)
-    : root_(std::move(root)) {}
+void StoreIndexWrite::bind_file(std::string_view logical_path, int file_id) {
+    root_->bind_file_id(logical_path, file_id);
+}
+
+StoreIndexWrite::StoreIndexWrite(std::shared_ptr<StoreRoot> root, bool staged)
+    : root_(std::move(root)), staged_(staged) {}
+
+bool StoreIndexWrite::building(const std::string& name,
+                               const kv::ScopeKey& scope) const {
+    const auto at = staged_copies_.find({name, scope});
+    return at != staged_copies_.end() && at->second.building;
+}
 
 const char* StoreIndexWrite::keep(std::string_view key,
                                   std::string_view value) {
@@ -668,7 +713,14 @@ void StoreIndexWrite::clear_pending(PendingCopy& copy) {
 void StoreIndexWrite::clear_copy(layout::Ext ext, std::uint32_t file_id,
                                  std::string_view plugin,
                                  std::string_view meta) {
-    clear_pending(pending_copy(ext, file_id, plugin, meta));
+    PendingCopy& copy = pending_copy(ext, file_id, plugin, meta);
+    clear_pending(copy);
+    // The keys earlier stages of this write hold go too: a whole-copy erase of
+    // the building copy.
+    if (staged_ && building(copy.name, copy.scope)) {
+        erases_.push_back(
+            PendingErase{copy.name, copy.version, copy.scope, {}, {}});
+    }
 }
 
 void StoreIndexWrite::clear_plugin_copies(std::uint32_t file_id) {
@@ -706,6 +758,11 @@ void StoreIndexWrite::host_put(const store_layout::HostTarget& target,
                 target.path,
                 kv::SourceStat{record->mtime, record->size, record->hash});
             root_->bind_file_id(target.path, static_cast<int>(record->file_id));
+            // A staged write publishes whole copies, so it never holds a
+            // Members copy for a record alone.
+            if (!staged_)
+                pending_copy(layout::Ext::Members, record->file_id, {}, {})
+                    .file_record = true;
             return;
         }
         case store_layout::HostKind::Manifest: {
@@ -780,9 +837,19 @@ void StoreIndexWrite::erase_keys(const store_layout::KeyTarget& target,
                                  std::string_view begin, std::string_view end) {
     const std::string name = namespace_of(target);
     const kv::ScopeKey scope = scope_of(target.file_id);
+    // A copy a stage of this write already holds keys of hides them through
+    // the same erase as a copy committed before.
+    const bool staged_keys = staged_ && building(name, scope);
     auto at = pending_.find({name, scope});
-    if (at != pending_.end() && at->second.cleared) return;
-    if (!root_->was_committed(name, scope)) return;
+    if (!staged_keys) {
+        if (at != pending_.end() && at->second.cleared) return;
+        if (!root_->was_committed(name, scope)) {
+            PendingCopy& copy = pending_copy(target.ext, target.file_id,
+                                             target.plugin, target.meta);
+            copy.skips.emplace_back(begin, end);
+            return;
+        }
+    }
     const bool own_namespace =
         target.ext == layout::Ext::Plugin || !target.meta.empty();
     const std::uint32_t version =
@@ -884,12 +951,137 @@ void StoreIndexWrite::del(layout::Family, std::string_view key) {
     delete_key(at->second, target->inner_key);
 }
 
+void StoreIndexWrite::stage() {
+    if (!staged_) {
+        throw std::logic_error("store index: only a staged write stages");
+    }
+    if (committed_) return;
+    std::shared_lock<std::shared_mutex> gate(root_->gate_);
+    memory::Scope in_pool(root_->pool());
+    stage_locked(root_->writer());
+}
+
+void StoreIndexWrite::stage_locked(kv::Writer& writer) {
+    for (const PendingErase& erase : erases_) {
+        const kv::NamespaceId id =
+            root_->namespace_id(erase.name, erase.version);
+        check("store index: erase the keys of a copy",
+              writer.erase(id, erase.scope,
+                           ByteView{erase.begin.data(), erase.begin.size()},
+                           ByteView{erase.end.data(), erase.end.size()}));
+    }
+    erases_.clear();
+    for (auto& entry : pending_) {
+        PendingCopy& copy = entry.second;
+        StagedCopy& known = staged_copies_[entry.first];
+        known.name = copy.name;
+        known.version = copy.version;
+        known.scope = copy.scope;
+        if (copy.cleared) known.cleared = true;
+        if (copy.has_manifest) {
+            known.params_hash = copy.params_hash;
+            known.has_manifest = true;
+            known.failed = copy.failed;
+        }
+        const std::vector<PendingKey> keys = resolved_keys(copy);
+        if (keys.empty() && !copy.has_manifest) continue;
+        const kv::NamespaceId id = root_->namespace_id(copy.name, copy.version);
+        kv::Batch batch = writer.building_batch(id, copy.scope);
+        for (const PendingKey& key : keys) {
+            batch.put_ref(
+                ByteView(key.bytes, key.key_length),
+                ByteView(key.bytes + key.key_length, key.value_length));
+        }
+        if (keys.empty()) {
+            batch.put(
+                ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
+                ByteView());
+        }
+        check("store index: stage a copy",
+              root_->commit(writer, std::move(batch)));
+        known.building = true;
+    }
+    pending_.clear();
+    last_copy_ = nullptr;
+    arena_.clear();
+}
+
+std::size_t StoreIndexWrite::carry_keys(const PendingCopy& copy,
+                                        const StoreRoot::ForeignCopy& foreign,
+                                        kv::Batch& batch) {
+    std::vector<std::string_view> touched;
+    touched.reserve(copy.keys.size());
+    for (const PendingKey& key : copy.keys)
+        touched.emplace_back(key.bytes, key.key_length);
+    std::sort(touched.begin(), touched.end());
+    const auto skipped = [&](std::string_view key) {
+        if (key == EMPTY_COPY_MARKER) return true;
+        if (std::binary_search(touched.begin(), touched.end(), key))
+            return true;
+        for (const auto& [begin, end] : copy.skips)
+            if (key >= begin && (end.empty() || key < end)) return true;
+        return false;
+    };
+    std::size_t carried = 0;
+    auto cursor = foreign.snapshot->scan(make_spec(copy.name, copy.version),
+                                         copy.scope, ByteView{}, ByteView{});
+    for (; !cursor.at_end(); cursor.next()) {
+        const ByteView key = cursor.key();
+        const std::string_view text(reinterpret_cast<const char*>(key.data()),
+                                    key.size());
+        if (skipped(text)) continue;
+        auto value = cursor.value();
+        if (!value)
+            throw_store_error("store index: carry a copy", value.error());
+        batch.put(key, *value);
+        ++carried;
+    }
+    if (cursor.error())
+        throw_store_error("store index: carry a copy", *cursor.error());
+    return carried;
+}
+
 void StoreIndexWrite::commit() {
     if (committed_) return;
     committed_ = true;
     std::shared_lock<std::shared_mutex> gate(root_->gate_);
     memory::Scope in_pool(root_->pool());
     kv::Writer& writer = root_->writer();
+    if (staged_) {
+        stage_locked(writer);
+        // Every batch is recorded before the records that publish them.
+        check("store index: flush the writer", root_->run(writer.flush()));
+        for (auto& entry : staged_copies_) {
+            StagedCopy& copy = entry.second;
+            const kv::NamespaceId id =
+                root_->namespace_id(copy.name, copy.version);
+            if (copy.building) {
+                dstd::Vector<kv::SourceStat> sources;
+                const bool have_sources =
+                    root_->sources_of(copy.scope, file_stats_, sources);
+                check("store index: publish a copy",
+                      writer.publish(id, copy.scope, copy.params_hash,
+                                     have_sources ? &sources : nullptr));
+                root_->mark_committed(copy.name, copy.scope, copy.params_hash,
+                                      have_sources ? &sources : nullptr);
+                if (copy.failed) {
+                    check("store index: fail a copy",
+                          writer.fail(id, copy.scope, copy.params_hash));
+                }
+            } else if (copy.cleared) {
+                check("store index: drop a copy", writer.drop(id, copy.scope));
+                root_->forget_committed(copy.name, copy.scope);
+            } else if (copy.failed) {
+                check("store index: fail a copy",
+                      writer.fail(id, copy.scope, copy.params_hash));
+                root_->mark_committed(copy.name, copy.scope, copy.params_hash,
+                                      nullptr);
+            }
+        }
+        check("store index: flush the writer", root_->run(writer.flush()));
+        root_->bump_version();
+        return;
+    }
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =
             root_->namespace_id(erase.name, erase.version);
@@ -903,10 +1095,40 @@ void StoreIndexWrite::commit() {
         const std::uint32_t version = copy.version;
         const kv::NamespaceId id = root_->namespace_id(copy.name, version);
         const std::vector<PendingKey> keys = resolved_keys(copy);
-        const bool has_body = !keys.empty() || copy.has_manifest;
+        const auto previous = root_->committed_copy(copy.name, copy.scope);
+        // A write to part of a copy another writer holds rewrites that copy
+        // with the keys it leaves alone, as a write to a copy of this root
+        // adds to it.
+        std::optional<StoreRoot::ForeignCopy> foreign;
+        if (!copy.cleared && !copy.failed && !previous)
+            foreign = root_->foreign_copy(copy.name, version, copy.scope);
+        if (!copy.has_manifest) {
+            if (previous)
+                copy.params_hash = previous->params_hash;
+            else if (foreign)
+                copy.params_hash = foreign->info.params_hash;
+        }
+        const bool has_body = !keys.empty() || copy.has_manifest ||
+                              (foreign && !copy.skips.empty()) ||
+                              copy.file_record;
         dstd::Vector<kv::SourceStat> sources;
-        const bool have_sources =
+        bool have_sources =
             has_body && root_->sources_of(copy.scope, file_stats_, sources);
+        if (has_body && !have_sources && foreign &&
+            !foreign->info.sources.empty()) {
+            sources = foreign->info.sources;
+            have_sources = true;
+        }
+        const bool carry = has_body && foreign &&
+                           foreign->info.params_hash == copy.params_hash &&
+                           same_sources(foreign->info.sources, sources);
+        // A file record the copy already holds changes nothing.
+        if (keys.empty() && !copy.has_manifest && copy.skips.empty() &&
+            !copy.cleared &&
+            (carry || (previous && previous->params_hash == copy.params_hash &&
+                       same_sources(previous->sources, sources)))) {
+            continue;
+        }
         // The writer keeps one copy of a scope and the params hash and sources
         // it announced for it, so a copy this root already holds with another
         // of either, and a copy this write clears, is replaced by a drop first.
@@ -915,8 +1137,7 @@ void StoreIndexWrite::commit() {
             (!has_body || root_->was_committed(copy.name, copy.scope))) {
             check("store index: drop a copy", writer.drop(id, copy.scope));
             dropped = true;
-        } else if (const auto previous =
-                       root_->committed_copy(copy.name, copy.scope)) {
+        } else if (previous) {
             if (previous->params_hash != copy.params_hash ||
                 !same_sources(previous->sources, sources)) {
                 check("store index: drop a copy", writer.drop(id, copy.scope));
@@ -948,13 +1169,15 @@ void StoreIndexWrite::commit() {
                 ByteView(key.bytes, key.key_length),
                 ByteView(key.bytes + key.key_length, key.value_length));
         }
-        if (keys.empty()) {
+        const std::size_t carried =
+            carry ? carry_keys(copy, *foreign, batch) : 0;
+        if (keys.empty() && carried == 0) {
             batch.put(
                 ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
                 ByteView());
         }
         check("store index: commit a copy",
-              root_->run(commit_with_space(writer, std::move(batch))));
+              root_->commit(writer, std::move(batch)));
         root_->mark_committed(copy.name, copy.scope, copy.params_hash,
                               have_sources ? &sources : nullptr);
     }

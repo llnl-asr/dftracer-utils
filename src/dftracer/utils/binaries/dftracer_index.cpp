@@ -388,10 +388,14 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     pipeline.execute();
     log_stage("build");
     DFTRACER_UTILS_LOG_DEBUG(
-        "dftracer_index: thread_ms parse=%.2f schema=%.2f sink_commit=%.2f",
+        "dftracer_index: thread_ms parse=%.2f schema=%.2f sink_commit=%.2f "
+        "files_in_flight_max=%zu files_spilled=%zu spill_runs_max=%zu",
         static_cast<double>(batch_result.metrics.parse_ns) / 1e6,
         static_cast<double>(batch_result.metrics.schema_ns) / 1e6,
-        static_cast<double>(batch_result.metrics.write_ns) / 1e6);
+        static_cast<double>(batch_result.metrics.write_ns) / 1e6,
+        batch_result.metrics.max_files_in_flight,
+        batch_result.metrics.files_spilled,
+        batch_result.metrics.max_spill_runs);
 
     store_db.close_writer();
     log_stage("close_writer");

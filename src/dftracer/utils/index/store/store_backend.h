@@ -13,6 +13,7 @@
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/writer.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -253,8 +255,18 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// What foreign_files_locked() found at the last look, and when.
     std::vector<std::pair<std::string, std::uint64_t>> foreign_seen_;
     std::chrono::steady_clock::time_point foreign_checked_{};
-    std::uint64_t version_ = 0;
+    /// Changed under mutex_, read without it by snapshot()'s fast path.
+    std::atomic<std::uint64_t> version_{0};
     std::uint64_t snapshot_version_ = 0;
+    /// The snapshot readers share, and the version_ it was opened at:
+    /// snapshot() returns it under a shared lock, so readers never wait on
+    /// each other or on mutex_. Written under mutex_, then this lock.
+    mutable std::shared_mutex published_mutex_;
+    std::shared_ptr<const kv::Snapshot> published_;
+    std::uint64_t published_version_ = 0;
+    /// steady_clock ticks before which no look for other processes' data
+    /// files is due; 0 makes every snapshot() look.
+    std::atomic<std::int64_t> next_look_{0};
     /// version_ at the last refresh for other processes' data files.
     std::uint64_t refreshed_version_ = 0;
     int next_file_id_ = 1;

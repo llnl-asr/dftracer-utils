@@ -256,10 +256,23 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot() {
+    // Every read of the index asks, from every worker: the snapshot it can
+    // share needs no look and no reopen.
+    if (std::chrono::steady_clock::now().time_since_epoch().count() <
+        next_look_.load(std::memory_order_acquire)) {
+        std::shared_lock<std::shared_mutex> shared(published_mutex_);
+        if (published_ != nullptr &&
+            published_version_ == version_.load(std::memory_order_acquire))
+            return published_;
+    }
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     refresh_if_changed_locked();
-    return snapshot_locked();
+    auto held = snapshot_locked();
+    std::unique_lock<std::shared_mutex> publish(published_mutex_);
+    published_ = held;
+    published_version_ = snapshot_version_;
+    return held;
 }
 
 std::vector<std::pair<std::string, std::uint64_t>>
@@ -299,6 +312,12 @@ void StoreRoot::refresh_if_changed_locked() {
         return;
     }
     foreign_checked_ = now;
+    if (interval_ms > 0) {
+        next_look_.store((now + std::chrono::milliseconds(interval_ms))
+                             .time_since_epoch()
+                             .count(),
+                         std::memory_order_release);
+    }
     auto files = foreign_files_locked();
     if (files == foreign_seen_) return;
     foreign_seen_ = std::move(files);

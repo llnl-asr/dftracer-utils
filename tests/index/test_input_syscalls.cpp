@@ -27,6 +27,9 @@ constexpr const char* PRELOAD_VAR = "LD_PRELOAD";
 
 constexpr std::size_t MAX_STATS_PER_INPUT = 1;
 constexpr std::size_t MAX_STATS_PER_ROOT = 2;
+// Looks for an index root's schemas folder: a few per run, never one per input
+// file, since one such lookup can block for minutes on a parallel file system.
+constexpr std::size_t MAX_SCHEMA_LOOKUPS = 8;
 
 struct Counts {
     std::size_t stat = 0;
@@ -116,6 +119,7 @@ struct RunCounts {
     bool log_found = false;
     std::vector<Counts> per_input;
     Counts root;
+    std::size_t schema_lookups = 0;
     int exit_code = -1;
     std::string output;
 };
@@ -157,6 +161,8 @@ RunCounts run_once(const std::string& binary,
         const std::size_t n = std::stoul(line.substr(t1 + 1, t2 - t1 - 1));
         const std::string path = line.substr(t2 + 1);
         if (path.empty() || path[0] != '/') continue;
+        if (cls == "stat" && fs::path(path).filename() == "schemas")
+            rc.schema_lookups += n;
         auto it = canon_cache.find(path);
         if (it == canon_cache.end())
             it = canon_cache.emplace(path, canonical_or_empty(path)).first;
@@ -201,6 +207,10 @@ void check_run(const std::string& label, const std::string& tool,
                       tool << " " << label << " open count of " << inputs[k]
                            << " is " << rc.per_input[k].open);
     }
+    MESSAGE(tool << " " << label << " schemas lookups=" << rc.schema_lookups);
+    CHECK_MESSAGE(rc.schema_lookups <= MAX_SCHEMA_LOOKUPS,
+                  tool << " " << label << " looked for the schemas folder "
+                       << rc.schema_lookups << " times");
     MESSAGE(tool << " " << label << " input directory stat=" << rc.root.stat);
     CHECK_MESSAGE(rc.root.stat <= MAX_STATS_PER_ROOT * roots,
                   tool << " " << label << " input directory stat count is "
@@ -247,6 +257,32 @@ void run_tool(const Tool& tool) {
 }
 
 }  // namespace
+
+TEST_CASE("a cold index build looks for the schemas folder once per root") {
+    const std::string binary =
+        std::string(DFTRACER_UTILS_TEST_BIN_DIR) + "/dftracer_index";
+    REQUIRE_MESSAGE(::access(binary.c_str(), X_OK) == 0,
+                    binary << " is not built");
+    dftu_utils_test::ScopedTestDir dir("input_syscalls_schemas");
+    const std::string in = dir.file("in");
+    const std::string idx = dir.file("idx");
+    fs::create_directories(in);
+    fs::create_directories(idx);
+    constexpr int FILES = 24;
+    std::vector<std::string> inputs;
+    for (int i = 0; i < FILES; ++i) {
+        inputs.push_back(in + "/trace_" + std::to_string(i) + ".pfw.gz");
+        REQUIRE(!dftu_utils_test::write_gz_trace(inputs.back(),
+                                                 make_trace(i + 1, 50))
+                     .empty());
+    }
+    const auto run = run_once(binary, index_args(in, idx, {}),
+                              dir.file("schemas.log"), {in}, inputs);
+    REQUIRE(run.log_found);
+    REQUIRE(run.exit_code == 0);
+    MESSAGE("schemas lookups=" << run.schema_lookups);
+    CHECK(run.schema_lookups <= 2);
+}
 
 TEST_CASE("dftracer_index") { run_tool({"index", index_args}); }
 TEST_CASE("dftracer_event_count") { run_tool({"event_count", index_args}); }

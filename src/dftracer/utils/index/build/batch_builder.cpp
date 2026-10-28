@@ -253,7 +253,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                 job.identity = pf;
                 namespace views = trace::views::detail;
                 index::gzip::CheckpointIndexer::VisitorList visitors;
-                index::load_index_schemas(pf.index_path);
                 const auto s0 = std::chrono::steady_clock::now();
                 const index::RecordSchema& schema =
                     admission->schema.empty()
@@ -526,6 +525,9 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
 
     auto writer_metrics = std::make_shared<index::build::BatchWriterMetrics>();
 
+    // Every file of the pipeline shares one index root, so its schemas are
+    // loaded once: a lookup per file stalled a build on Lustre for minutes.
+    index::load_index_schemas(state->index_path);
     auto writer_db =
         std::make_shared<index::store::IndexDatabase>(state->index_path);
 

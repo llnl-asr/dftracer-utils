@@ -270,6 +270,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix an index build that stalled for about 100 s on Lustre: it looked for the index's `schemas` folder once for every input file, from every worker at once, and one such lookup could block.
+  It now looks once per index root, and a cold `dftracer_index` of the 14,117 minife traces at 16 threads no longer takes 122 s in 1 run of about 10.
 - Fix `dftracer_split` writing no output on Lustre when an input gzip member is larger than a stripe; such a member now takes whole stripes of its own.
 - Fix a pipeline that times out or stops ending the work of every other pipeline on the same executor.
 - Fix a store index commit opening the whole store again to find sources it already held, which grew the peak memory of a view bootstrap with the number of files.

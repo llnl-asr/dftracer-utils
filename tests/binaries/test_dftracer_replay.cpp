@@ -655,12 +655,12 @@ TEST_SUITE("DFTracerReplay") {
         fs::create_directories(temp_dir);
         std::vector<std::string> args = {"--dry-run", "--no-timing"};
         std::size_t expected = 0;
-        for (std::size_t i = 0; i < 6; ++i) {
+        for (int i = 0; i < 6; ++i) {
             const std::string path =
                 (temp_dir / ("trace" + std::to_string(i) + ".pfw")).string();
             create_sample_trace(path, 3 + i);
             args.push_back(path);
-            expected += 3 + i;
+            expected += static_cast<std::size_t>(3 + i);
         }
 
         auto count_after = [](const std::string& out, const std::string& key) {

@@ -279,6 +279,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftracer_comparator` reporting changes and regressions between two identical traces, and printing groups with equal changes in a different order from run to run.
+  Means and totals now come from the exact integer sums and sum their values in a fixed order, so the same input gives the same output.
 - Fix an index build that stalled for about 100 s on Lustre: it looked for the index's `schemas` folder once for every input file, from every worker at once, and one such lookup could block.
   It now looks once per index root, and a cold `dftracer_index` of the 14,117 minife traces at 16 threads no longer takes 122 s in 1 run of about 10.
 - Fix `dftracer_split` writing no output on Lustre when an input gzip member is larger than a stripe; such a member now takes whole stripes of its own.

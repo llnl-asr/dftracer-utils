@@ -728,7 +728,10 @@ void TreeTableFormatter::render(std::FILE* out,
         }
         std::sort(regs.begin(), regs.end(),
                   [](const RegressionEntry& a, const RegressionEntry& b) {
-                      return a.pct_change > b.pct_change;
+                      if (a.pct_change != b.pct_change)
+                          return a.pct_change > b.pct_change;
+                      if (a.path != b.path) return a.path < b.path;
+                      return a.metric < b.metric;
                   });
         if (!regs.empty()) {
             int show = std::min(options_.top_regressions,

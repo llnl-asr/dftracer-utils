@@ -272,6 +272,28 @@ std::uint64_t counted_events(const std::string& binary,
     return UINT64_MAX;
 }
 
+// Counts, in a parsed comparator JSON, the metrics, those with a nonzero
+// delta and those marked as a regression.
+void count_changes(simdjson::dom::element e, std::size_t& metrics,
+                   std::size_t& changed, std::size_t& regressions) {
+    if (e.is_object()) {
+        double delta = 0;
+        if (e["delta"].get(delta) == simdjson::SUCCESS) {
+            ++metrics;
+            if (delta != 0.0) ++changed;
+        }
+        bool regression = false;
+        if (e["is_regression"].get(regression) == simdjson::SUCCESS &&
+            regression)
+            ++regressions;
+        for (auto field : e.get_object().value())
+            count_changes(field.value, metrics, changed, regressions);
+    } else if (e.is_array()) {
+        for (auto item : e.get_array().value())
+            count_changes(item, metrics, changed, regressions);
+    }
+}
+
 }  // namespace
 
 // ============================================================================
@@ -308,6 +330,62 @@ TEST_SUITE("DFTracerComparator") {
         }
         int rc = run_comparator(binary, {});
         CHECK(rc != 0);
+    }
+
+    TEST_CASE("a trace compared with itself shows no change") {
+        auto binary = find_comparator_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_comparator binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        const std::string traces = env.get_dir() + "/traces";
+        fs::create_directories(traces);
+        // Durations near 2^50 make a floating point sum depend on the order
+        // of its adds, and many files with two threads each spread the
+        // events over the workers, which merge in no fixed order.
+        constexpr int FILES = 160;
+        constexpr int EVENTS = 64;
+        for (int f = 0; f < FILES; ++f) {
+            std::string text = "[\n";
+            for (int i = 0; i < EVENTS; ++i) {
+                const std::uint64_t dur =
+                    (std::uint64_t{1} << 50) +
+                    static_cast<std::uint64_t>((f * 7919 + i * 104729) % 9973);
+                text += R"({"id":)" + std::to_string(i) +
+                        R"(,"ph":"X","pid":)" + std::to_string(100 + f) +
+                        R"(,"tid":)" + std::to_string(i % 2) + R"(,"name":")" +
+                        (i % 3 == 0 ? "read" : "write") +
+                        R"(","cat":"POSIX","ts":)" +
+                        std::to_string(1000000000ULL + i * 400000ULL) +
+                        R"(,"dur":)" + std::to_string(dur) +
+                        R"(,"args":{"fhash":"f1","ret":)" +
+                        std::to_string(4096 + i) + "}}\n";
+            }
+            text += "]\n";
+            REQUIRE(
+                !dftu_utils_test::write_gz_trace(
+                     traces + "/rank_" + std::to_string(f) + ".pfw.gz", text)
+                     .empty());
+        }
+        const std::string out = env.get_dir() + "/self.json";
+        REQUIRE(
+            run_comparator(binary,
+                           {"--baseline", traces, "--variant", traces,
+                            "--baseline-index-dir", env.get_dir() + "/idx_base",
+                            "--variant-index-dir", env.get_dir() + "/idx_var",
+                            "--format", "json", "--executor-threads", "16"},
+                           out) == 0);
+        const std::string content = read_file(out);
+        simdjson::dom::parser parser;
+        auto doc = parser.parse(content);
+        REQUIRE(!doc.error());
+        std::size_t metrics = 0, changed = 0, regressions = 0;
+        count_changes(doc.value(), metrics, changed, regressions);
+        CHECK(metrics > 0);
+        CHECK(changed == 0);
+        CHECK(regressions == 0);
     }
 
     TEST_CASE("basic comparison - same file") {

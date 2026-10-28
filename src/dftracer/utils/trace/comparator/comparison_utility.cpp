@@ -14,8 +14,11 @@ namespace {
 
 using KeySet = dstd::HashSet<GroupKey, GroupKeyHash>;
 
-double vec_mean(const std::vector<double>& v) {
+// Sorts `v` first, so the mean does not depend on the order the values came
+// in.
+double vec_mean(std::vector<double>& v) {
     if (v.empty()) return 0.0;
+    std::sort(v.begin(), v.end());
     double sum = 0.0;
     for (double x : v) sum += x;
     return sum / static_cast<double>(v.size());
@@ -27,8 +30,22 @@ CollapsedMetrics merge_collapsed(const CollapsedMap& cm,
                                  std::string_view cat_filter = "") {
     CollapsedMetrics total;
     std::vector<double> counts, dur_means, size_means, xfers, bws;
-    for (const auto& [key, entry] : cm) {
-        if (!cat_filter.empty() && key.cat(intern) != cat_filter) continue;
+    // Merged in the order of the group texts: a hash map's order depends on
+    // the ids, and the order of the merges moves the floating point sums.
+    std::vector<const CollapsedMap::value_type*> entries;
+    entries.reserve(cm.size());
+    for (const auto& e : cm) {
+        if (!cat_filter.empty() && e.first.cat(intern) != cat_filter) continue;
+        entries.push_back(&e);
+    }
+    std::sort(
+        entries.begin(), entries.end(), [&](const auto* a, const auto* b) {
+            const auto ca = a->first.cat(intern), cb = b->first.cat(intern);
+            if (ca != cb) return ca < cb;
+            return a->first.name(intern) < b->first.name(intern);
+        });
+    for (const auto* e : entries) {
+        const CollapsedMetrics& entry = e->second;
         total.merged.merge(entry.merged);
         counts.push_back(entry.count_mean);
         dur_means.push_back(entry.dur_mean_of_means);
@@ -124,7 +141,9 @@ void ComparisonUtility::sort_by_regression(
     std::vector<GroupComparison>& groups) const {
     std::sort(groups.begin(), groups.end(),
               [](const GroupComparison& a, const GroupComparison& b) {
-                  return a.worst_pct_change > b.worst_pct_change;
+                  if (a.worst_pct_change != b.worst_pct_change)
+                      return a.worst_pct_change > b.worst_pct_change;
+                  return a.label < b.label;
               });
 }
 

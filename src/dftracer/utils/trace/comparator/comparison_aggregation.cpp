@@ -338,8 +338,11 @@ struct GroupAccum {
 
 double safe_div(double a, double b) { return b > 0.0 ? a / b : 0.0; }
 
-std::pair<double, double> mean_stdev(const dstd::Vector<double>& v) {
+// Sorts `v` first, so the result does not depend on the order the values
+// came in.
+std::pair<double, double> mean_stdev(dstd::Vector<double>& v) {
     if (v.empty()) return {0.0, 0.0};
+    std::sort(v.begin(), v.end());
     double sum = 0.0;
     for (double x : v) sum += x;
     double mean = sum / static_cast<double>(v.size());
@@ -420,8 +423,8 @@ TraceMetadata extract_metadata(const AggQueryResult& merged,
         all.files.merge(p.files);
         all.pid_files.merge(p.pid_files);
 
-        meta.total_io_time_us += p.duration.sum;
-        if (g.data_transfer) meta.total_bytes += p.size.sum;
+        meta.total_io_time_us += p.duration.exact_sum();
+        if (g.data_transfer) meta.total_bytes += p.size.exact_sum();
 
         if (p.ts < earliest_ts) earliest_ts = p.ts;
         if (p.te > latest_te) latest_te = p.te;
@@ -453,15 +456,20 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
             auto& w = per_window[WindowKey{g.key, key.window}];
 
             double cnt = static_cast<double>(p.count);
-            double dm = std::isnan(p.duration.mean()) ? 0.0 : p.duration.mean();
-            double sm = std::isnan(p.size.mean()) ? 0.0 : p.size.mean();
+            const auto mean_of = [](const dataframe::FieldStat& s) {
+                if (s.n == 0) return 0.0;
+                const double m = s.exact_sum() / static_cast<double>(s.n);
+                return std::isnan(m) ? 0.0 : m;
+            };
+            double dm = mean_of(p.duration);
+            double sm = mean_of(p.size);
             if (cnt > w.count) w.count = cnt;
             if (dm > w.dur_mean) w.dur_mean = dm;
             if (sm > w.size_mean) w.size_mean = sm;
 
             if (g.data_transfer) {
-                double total_bytes = p.size.sum;
-                double total_dur_us = p.duration.sum;
+                double total_bytes = p.size.exact_sum();
+                double total_dur_us = p.duration.exact_sum();
                 double xfer = safe_div(total_bytes, cnt);
                 double bw = safe_div(total_bytes, total_dur_us / 1e6);
                 if (xfer > w.xfer_size) w.xfer_size = xfer;

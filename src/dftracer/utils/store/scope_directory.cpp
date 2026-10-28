@@ -524,7 +524,7 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
         std::uint64_t commit_count = 0;
         if (!cursor.u32(copy.local_id) || !cursor.u64(copy.generation) ||
             !cursor.u64(copy.params_hash) || !cursor.u8(state) ||
-            state > static_cast<std::uint8_t>(CopyState::Failed) ||
+            state > static_cast<std::uint8_t>(CopyState::Building) ||
             !cursor.u8(copy.fold_kind) || !cursor.varint(source_count) ||
             source_count >
                 (payload.size() - cursor.position()) / SOURCE_STAT_BYTES) {

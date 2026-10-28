@@ -56,6 +56,9 @@ struct PendingBatch {
     /// lost run makes that commit read as bad.
     dstd::Vector<ExtentRef> big_runs;
     bool durable = false;
+    /// The batch publishes its copy: its CopyItem is recorded again, as the
+    /// state that replaces the one announced first.
+    bool publish = false;
 };
 
 /// Writes one record per group commit for the extents and copy state changes
@@ -92,7 +95,8 @@ class Committer {
                  dstd::Vector<std::uint8_t>&& end);
     /// Queues a range erase of one copy. Takes ownership of `batch`.
     void on_erase(PendingBatch* batch, EraseItem&& item);
-    /// Queues a copy in state Failed with no entries. Takes ownership of
+    /// Queues a copy state with no entries: a copy in state Failed, or a
+    /// building copy published (PendingBatch::publish). Takes ownership of
     /// `batch`.
     void on_fail(PendingBatch* batch);
 

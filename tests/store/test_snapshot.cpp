@@ -29,6 +29,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <thread>
@@ -809,6 +810,112 @@ TEST_SUITE("index store snapshot") {
             }
         }
         CHECK(failed > read / 4);
+    }
+
+    TEST_CASE("a building copy stays hidden until it is published") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_building_copy");
+        const ScopeKey scope = file_scope("/traces/building.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.building");
+        const auto get =
+            [&](const Snapshot& snapshot,
+                const std::string& key) -> std::optional<std::string> {
+            auto found = snapshot.get(spec, scope, view_of(key));
+            REQUIRE(found.has_value());
+            if (!found->has_value()) return std::nullopt;
+            return to_std((*found)->bytes());
+        };
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        const dstd::Vector<SourceStat> old_sources{SourceStat{1, 2, 3}};
+        Batch ready = writer->batch(*id, scope, 5, &old_sources);
+        ready.put(view_of(std::string("k1")), view_of(std::string("old1")));
+        ready.put(view_of(std::string("k2")), view_of(std::string("old2")));
+        REQUIRE(writer->commit(std::move(ready)).has_value());
+        REQUIRE(flush_writer(*writer).has_value());
+
+        Batch first = writer->building_batch(*id, scope);
+        first.put(view_of(std::string("k1")), view_of(std::string("new1")));
+        first.put(view_of(std::string("k3")), view_of(std::string("new3")));
+        REQUIRE(writer->commit(std::move(first)).has_value());
+        REQUIRE(flush_writer(*writer).has_value());
+        {
+            // Committed and recorded, and still the old copy for readers.
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            CHECK(get(*snapshot, "k1") == std::optional<std::string>("old1"));
+            CHECK(get(*snapshot, "k2") == std::optional<std::string>("old2"));
+            CHECK_FALSE(get(*snapshot, "k3").has_value());
+            CHECK(snapshot->copy_info(spec, scope).params_hash == 5);
+        }
+
+        // A plain batch cannot join a building copy.
+        Batch plain = writer->batch(*id, scope, 5, &old_sources);
+        plain.put(view_of(std::string("k9")), view_of(std::string("x")));
+        CHECK_FALSE(writer->commit(std::move(plain)).has_value());
+
+        // An erase inside the building copy hides its earlier batches' keys.
+        const std::string begin = "k3";
+        const std::string end = std::string("k3") + '\0';
+        REQUIRE(writer->erase(*id, scope, view_of(begin), view_of(end))
+                    .has_value());
+        Batch second = writer->building_batch(*id, scope);
+        second.put(view_of(std::string("k4")), view_of(std::string("new4")));
+        REQUIRE(writer->commit(std::move(second)).has_value());
+        REQUIRE(flush_writer(*writer).has_value());
+
+        const dstd::Vector<SourceStat> new_sources{SourceStat{4, 5, 6}};
+        REQUIRE(writer->publish(*id, scope, 9, &new_sources).has_value());
+        REQUIRE(flush_writer(*writer).has_value());
+        const auto check_published = [&](const Snapshot& snapshot) {
+            CHECK(get(snapshot, "k1") == std::optional<std::string>("new1"));
+            CHECK_FALSE(get(snapshot, "k2").has_value());
+            CHECK_FALSE(get(snapshot, "k3").has_value());
+            CHECK(get(snapshot, "k4") == std::optional<std::string>("new4"));
+            const CopyInfo info = snapshot.copy_info(spec, scope);
+            CHECK(info.state == ScopeState::Ready);
+            CHECK(info.params_hash == 9);
+            REQUIRE(info.sources.size() == 1);
+            CHECK(info.sources[0].mtime == 4);
+        };
+        {
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            check_published(*snapshot);
+        }
+        // Publishing twice, or a scope with no building copy, is refused.
+        CHECK_FALSE(writer->publish(*id, scope, 9, &new_sources).has_value());
+
+        REQUIRE(close_writer(*writer).has_value());
+        auto closed = Snapshot::open(dir.str());
+        REQUIRE(closed.has_value());
+        check_published(*closed);
+    }
+
+    TEST_CASE("a building copy never published stays hidden after close") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_building_unpublished");
+        const ScopeKey scope = file_scope("/traces/unpublished.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.building");
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch ready = writer->batch(*id, scope, 5);
+        ready.put(view_of(std::string("k1")), view_of(std::string("old1")));
+        REQUIRE(writer->commit(std::move(ready)).has_value());
+        Batch building = writer->building_batch(*id, scope);
+        building.put(view_of(std::string("k1")), view_of(std::string("new1")));
+        REQUIRE(writer->commit(std::move(building)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto found = snapshot->get(spec, scope, view_of(std::string("k1")));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == "old1");
+        CHECK(snapshot->copy_info(spec, scope).params_hash == 5);
     }
 
     TEST_CASE("the last put wins inside a batch and a later batch wins") {

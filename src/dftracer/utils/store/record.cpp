@@ -148,7 +148,8 @@ dstd::Expected<CopyItem, dstd::Error> decode_copy(ByteView bytes) {
         !read_u32(bytes, at, item.scope_id) ||
         !read_u64(bytes, at, item.params_hash) ||
         !read_u64(bytes, at, item.generation) || !read_u8(bytes, at, state) ||
-        state > 1 || !read_u32(bytes, at, source_count)) {
+        state > static_cast<std::uint8_t>(CopyState::Building) ||
+        !read_u32(bytes, at, source_count)) {
         return parse_error();
     }
     item.state = static_cast<CopyState>(state);

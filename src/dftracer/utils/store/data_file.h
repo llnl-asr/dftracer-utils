@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
@@ -90,6 +91,8 @@ struct FileIndex {
     dstd::Vector<NamespaceItem> namespaces;
     dstd::Vector<ScopeItem> scopes;
     dstd::Vector<CopyItem> copies;
+    /// The position in `copies` of each copy's local id.
+    dstd::HashMap<std::uint32_t, std::size_t> copy_at;
     dstd::Vector<DropItem> drops;
     dstd::Vector<EraseItem> erases;
     /// The extent refs the chain lists itself: those of the commits after the
@@ -216,6 +219,8 @@ class DataFileWriter {
     dstd::String label_;
     RecordItems pending_items_;
     RecordItems all_items_;
+    /// The position in all_items_ of each copy's local id.
+    dstd::HashMap<std::uint32_t, std::size_t> copy_item_at_;
     /// Every committed extent ref, in commit order: close() builds the extent
     /// table, the segment blocks and the directory from them without reading
     /// the file again.

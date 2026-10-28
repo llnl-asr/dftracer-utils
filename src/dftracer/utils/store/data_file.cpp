@@ -332,6 +332,7 @@ void apply_record(FileIndex& index, const Record& record) {
         index.namespaces.clear();
         index.scopes.clear();
         index.copies.clear();
+        index.copy_at.clear();
         index.drops.clear();
         index.erases.clear();
         index.extent_refs.clear();
@@ -343,7 +344,14 @@ void apply_record(FileIndex& index, const Record& record) {
         } else if (const auto* scope_item = std::get_if<ScopeItem>(&item)) {
             index.scopes.push_back(*scope_item);
         } else if (const auto* copy_item = std::get_if<CopyItem>(&item)) {
-            index.copies.push_back(*copy_item);
+            // A later item of the same copy publishes it.
+            const auto known = index.copy_at.try_emplace(copy_item->local_id,
+                                                         index.copies.size());
+            if (known.second) {
+                index.copies.push_back(*copy_item);
+            } else {
+                index.copies[known.first->second] = *copy_item;
+            }
         } else if (const auto* drop_item = std::get_if<DropItem>(&item)) {
             index.drops.push_back(*drop_item);
         } else if (const auto* erase_item = std::get_if<EraseItem>(&item)) {
@@ -560,6 +568,7 @@ DataFileWriter::DataFileWriter(DataFileWriter&& other) noexcept
       label_(std::move(other.label_)),
       pending_items_(std::move(other.pending_items_)),
       all_items_(std::move(other.all_items_)),
+      copy_item_at_(std::move(other.copy_item_at_)),
       committed_extents_(std::move(other.committed_extents_)),
       closed_(other.closed_.load(std::memory_order_relaxed)),
       latched_(other.latched_.load(std::memory_order_relaxed)),
@@ -586,6 +595,7 @@ DataFileWriter& DataFileWriter::operator=(DataFileWriter&& other) noexcept {
     label_ = std::move(other.label_);
     pending_items_ = std::move(other.pending_items_);
     all_items_ = std::move(other.all_items_);
+    copy_item_at_ = std::move(other.copy_item_at_);
     committed_extents_ = std::move(other.committed_extents_);
     closed_.store(other.closed_.load(std::memory_order_relaxed),
                   std::memory_order_relaxed);
@@ -737,6 +747,17 @@ void DataFileWriter::add(RecordItem item) {
     // An extent ref lives in its commit's record only: a checkpoint and the
     // footer list the commit by the summary commit() adds once the record is
     // written.
+    if (const auto* copy = std::get_if<CopyItem>(&item)) {
+        // A later item of the same copy publishes it: the copy is listed once,
+        // as it stands now.
+        const auto known =
+            copy_item_at_.try_emplace(copy->local_id, all_items_.size());
+        if (!known.second) {
+            all_items_[known.first->second] = *copy;
+            pending_items_.push_back(std::move(item));
+            return;
+        }
+    }
     if (!std::holds_alternative<ExtentRefItem>(item))
         all_items_.push_back(item);
     pending_items_.push_back(std::move(item));

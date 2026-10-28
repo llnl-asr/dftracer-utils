@@ -127,6 +127,8 @@ class Batch {
     dstd::Vector<SourceStat> sources_;
     FoldKind fold_ = FoldKind::None;
     dstd::Optional<dstd::Error> error_;
+    /// A batch of a building copy (Writer::building_batch).
+    bool building_ = false;
     dstd::Vector<Entry> entries_;
     /// Opened by the first put() that copies; put_ref() needs none. Behind a
     /// pointer, so the batch moves.
@@ -169,6 +171,19 @@ class Writer {
     Batch batch(NamespaceId namespace_id, const ScopeKey& scope,
                 std::uint64_t params_hash,
                 const dstd::Vector<SourceStat>* sources = nullptr);
+    /// A batch of a building copy of `scope`: the first one starts a new copy
+    /// under the next generation, which no reader sees, and later ones add to
+    /// it, until publish() makes it the copy readers see. A plain batch of a
+    /// scope whose copy is building is InvalidArgument at commit.
+    Batch building_batch(NamespaceId namespace_id, const ScopeKey& scope);
+    /// Makes the building copy of `scope` the copy readers see, with
+    /// `params_hash` and `sources` (one per path of the scope, or none). Its
+    /// batches must be recorded first: flush() before this, so the record that
+    /// publishes it never comes before one of its segments. InvalidArgument
+    /// when the scope has no building copy.
+    dstd::Expected<void, dstd::Error> publish(
+        NamespaceId namespace_id, const ScopeKey& scope,
+        std::uint64_t params_hash, const dstd::Vector<SourceStat>* sources);
 
     /// InvalidArgument on a closed writer, an unknown namespace, an invalid
     /// batch, or a closed pool; the committer's error once it failed; and
@@ -246,6 +261,8 @@ class Writer {
         /// Whether a batch of this copy was seen, so its params hash and
         /// sources are known.
         bool announced = false;
+        /// The copy is building: its batches stay hidden until publish().
+        bool building = false;
     };
 
     /// Hashes a scope by kind and paths, so a lookup over any number of scopes

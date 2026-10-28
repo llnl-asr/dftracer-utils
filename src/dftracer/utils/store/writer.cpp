@@ -512,6 +512,60 @@ Batch Writer::batch(NamespaceId namespace_id, const ScopeKey& scope,
     return batch;
 }
 
+Batch Writer::building_batch(NamespaceId namespace_id, const ScopeKey& scope) {
+    Batch batch = this->batch(namespace_id, scope, 0, nullptr);
+    batch.building_ = true;
+    return batch;
+}
+
+dstd::Expected<void, dstd::Error> Writer::publish(
+    NamespaceId namespace_id, const ScopeKey& scope, std::uint64_t params_hash,
+    const dstd::Vector<SourceStat>* sources) {
+    if (closed_.load(std::memory_order_acquire)) return invalid_error();
+    if (committer_.failed()) {
+        return dstd::Unexpected<dstd::Error>(committer_.error());
+    }
+    if (sources != nullptr && sources->size() != scope.paths.size()) {
+        return invalid_error();
+    }
+    auto* pending = new PendingBatch;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (latched_error_) {
+            delete pending;
+            return dstd::Unexpected<dstd::Error>(*latched_error_);
+        }
+        NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
+        ScopeEntry* scope_entry = find_scope(scope);
+        CopyEntry* copy_entry =
+            namespace_entry == nullptr || scope_entry == nullptr
+                ? nullptr
+                : find_copy(namespace_id.value, scope_entry->id);
+        if (copy_entry == nullptr || !copy_entry->building) {
+            delete pending;
+            return invalid_error();
+        }
+        copy_entry->building = false;
+        copy_entry->params_hash = params_hash;
+        copy_entry->sources.clear();
+        if (sources != nullptr) copy_entry->sources = *sources;
+
+        pending->namespace_id = namespace_entry->id.value;
+        pending->namespace_item =
+            namespace_item(namespace_entry->spec, namespace_entry->id);
+        pending->scope_id = scope_entry->id;
+        pending->scope_item = scope_item(scope, scope_entry->id);
+        pending->copy_item = copy_item(
+            copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
+            copy_entry->params_hash, copy_entry->generation, CopyState::Ready,
+            copy_entry->sources);
+        pending->publish = true;
+        pending->durable = namespace_entry->spec.durable;
+    }
+    committer_.on_fail(pending);
+    return {};
+}
+
 BigRef Writer::place_big(void* context, ByteView value) {
     auto* placement = static_cast<BigPlacement*>(context);
     auto placed = placement->writer->file_.append_big(value);
@@ -649,7 +703,25 @@ dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
     CopyEntry* copy_entry =
         find_or_add_copy(namespace_entry->spec, batch.namespace_id_,
                          batch.scope_, scope_entry->id);
-    if (copy_entry->announced) {
+    if (batch.building_) {
+        if (!copy_entry->building) {
+            // A new copy under the next generation; the one readers see stays
+            // theirs until this one is published.
+            if (copy_entry->announced) {
+                const std::uint64_t generation =
+                    copy_entry->highest_generation + 1U;
+                copy_entry->copy_id = next_copy_id_++;
+                copy_entry->generation = generation;
+                copy_entry->highest_generation = generation;
+            }
+            copy_entry->params_hash = 0;
+            copy_entry->sources.clear();
+            copy_entry->announced = true;
+            copy_entry->building = true;
+        }
+    } else if (copy_entry->building) {
+        return invalid_error();
+    } else if (copy_entry->announced) {
         if (copy_entry->params_hash != batch.params_hash_ ||
             !same_sources(copy_entry->sources, batch.sources_)) {
             return invalid_error();
@@ -667,7 +739,8 @@ dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
     pending.scope_item = scope_item(batch.scope_, scope_entry->id);
     pending.copy_item = copy_item(
         copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
-        copy_entry->params_hash, copy_entry->generation, CopyState::Ready,
+        copy_entry->params_hash, copy_entry->generation,
+        copy_entry->building ? CopyState::Building : CopyState::Ready,
         copy_entry->sources);
     pending.durable = namespace_entry->spec.durable;
     return {};
@@ -944,7 +1017,8 @@ dstd::Expected<void, dstd::Error> Writer::erase(NamespaceId namespace_id,
         pending->scope_item = scope_item(scope, scope_entry->id);
         pending->copy_item = copy_item(
             copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
-            copy_entry->params_hash, copy_entry->generation, CopyState::Ready,
+            copy_entry->params_hash, copy_entry->generation,
+            copy_entry->building ? CopyState::Building : CopyState::Ready,
             copy_entry->sources);
         pending->durable = namespace_entry->spec.durable;
     }

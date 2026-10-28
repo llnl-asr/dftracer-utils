@@ -22,7 +22,9 @@ enum class RecordKind : std::uint32_t {
     Footer = 3
 };
 enum class ScopeKind : std::uint8_t { Root = 0, File = 1, Files = 2 };
-enum class CopyState : std::uint8_t { Ready = 0, Failed = 1 };
+/// A Building copy holds batches no reader sees; a later CopyItem of the same
+/// local id in the same file publishes it as Ready.
+enum class CopyState : std::uint8_t { Ready = 0, Failed = 1, Building = 2 };
 
 struct NamespaceItem {
     std::uint32_t local_id = 0;

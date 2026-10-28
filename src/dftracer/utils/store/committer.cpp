@@ -433,7 +433,8 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
             file_.add(std::move(batch.scope_item));
         }
         if (batch.copy_item.local_id != 0 &&
-            announce(announced_copies_, batch.copy_item.local_id)) {
+            (announce(announced_copies_, batch.copy_item.local_id) ||
+             batch.publish)) {
             file_.add(std::move(batch.copy_item));
         }
         if (entry.emit_drop) {

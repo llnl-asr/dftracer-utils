@@ -1300,6 +1300,8 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
         group->highest_generation =
             std::max(group->highest_generation, entry->highest_generation);
         for (const DirectoryCopy& listed : entry->copies) {
+            // A copy still building is not readable until it is published.
+            if (listed.state == CopyState::Building) continue;
             detail::CopyData copy;
             copy.file_index = file;
             copy.generation = listed.generation;

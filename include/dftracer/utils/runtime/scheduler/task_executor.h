@@ -20,7 +20,21 @@
 namespace dftracer::utils {
 
 class Task;
-class Scheduler;
+
+/// Who submitted a task to a TaskExecutor and hears when it ends. Several
+/// owners share one executor.
+class TaskOwner {
+   public:
+    /// Called once per submitted task, from the worker that ends it. The
+    /// executor does not touch the owner after this returns.
+    virtual void finish_task(std::shared_ptr<Task> task) noexcept = 0;
+    /// True once the owner stopped: a task of it that has not started does
+    /// not run.
+    virtual bool is_stopping() const noexcept = 0;
+
+   protected:
+    ~TaskOwner() = default;
+};
 
 struct ExecutorConfig {
     std::size_t num_threads = 0;  ///< 0 = hardware_concurrency; the RUNNING cap
@@ -117,17 +131,15 @@ struct ExecutorProgress {
  */
 class TaskExecutor : public Executor {
    public:
-    using CompletionCallback = std::function<void(std::shared_ptr<Task>)>;
-
     virtual void start() = 0;
     virtual void shutdown() = 0;
-    virtual void request_shutdown() = 0;
 
-    virtual void set_completion_callback(CompletionCallback callback) = 0;
-    virtual void set_scheduler(Scheduler* scheduler) = 0;
-
+    /// Runs `task` and then calls `owner->finish_task(task)`, once, from the
+    /// worker that ends it, so `owner` must outlive the task. A task whose
+    /// owner is stopping before it starts does not run; it ends with an
+    /// Interrupted error, as does a queued task that shutdown() destroys.
     virtual void submit_task(std::shared_ptr<Task> task,
-                             std::shared_ptr<std::any> input,
+                             std::shared_ptr<std::any> input, TaskOwner* owner,
                              TaskIndex parent_task_id = -1) = 0;
     virtual TaskIndex enqueue_tracked(
         coro::Coro coro, std::string name,

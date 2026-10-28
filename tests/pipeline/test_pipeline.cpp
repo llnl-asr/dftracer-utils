@@ -2588,3 +2588,106 @@ TEST_CASE("PipelineConfig - Fluent API chaining") {
     CHECK(config.enable_watchdog == true);
     CHECK(config.global_timeout == std::chrono::seconds(60));
 }
+
+// ============================================================================
+// Schedulers sharing one executor
+// ============================================================================
+
+namespace {
+
+// A source that returns `value` and a child that waits and returns ten times
+// its input.
+std::shared_ptr<Task> chain_of(int value, std::shared_ptr<Task>& sink) {
+    auto source = make_task([value]() -> int { return value; }, "Source");
+    sink = make_task(
+        [](int x) -> int {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            return x * 10;
+        },
+        "Times10");
+    sink->depends_on(source);
+    return source;
+}
+
+int result_of(const std::shared_ptr<Task>& task) {
+    return std::any_cast<int>(task->result().get_ready());
+}
+
+}  // namespace
+
+TEST_CASE("Schedulers sharing one executor each get their own results") {
+    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    Scheduler first(&executor);
+    Scheduler second(&executor);
+    std::shared_ptr<Task> first_sink;
+    std::shared_ptr<Task> second_sink;
+    auto first_source = chain_of(1, first_sink);
+    auto second_source = chain_of(2, second_sink);
+
+    std::thread one([&] { first.schedule(first_source); });
+    std::thread two([&] { second.schedule(second_source); });
+    one.join();
+    two.join();
+
+    CHECK(result_of(first_sink) == 10);
+    CHECK(result_of(second_sink) == 20);
+    CHECK(executor.is_running());
+    executor.shutdown();
+}
+
+TEST_CASE("A stopped scheduler leaves another on the same executor running") {
+    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 4});
+    Scheduler stopped(&executor);
+    Scheduler other(&executor);
+
+    std::atomic<bool> started{false};
+    std::atomic<bool> release{false};
+    auto blocker = make_task(
+        [&]() {
+            started = true;
+            while (!release.load())
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        },
+        "Blocker");
+    bool interrupted = false;
+    std::thread one([&] {
+        try {
+            stopped.schedule(blocker);
+        } catch (const PipelineError& e) {
+            interrupted = e.get_type() == PipelineError::Interrupted;
+        }
+    });
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!started.load() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    REQUIRE(started.load());
+    stopped.request_shutdown();
+    one.join();
+    CHECK(interrupted);
+
+    std::shared_ptr<Task> sink;
+    auto source = chain_of(3, sink);
+    CHECK_NOTHROW(other.schedule(source));
+    CHECK(result_of(sink) == 30);
+
+    release = true;
+    executor.shutdown();
+}
+
+TEST_CASE("A scheduler that goes away leaves its executor running") {
+    ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
+    {
+        Scheduler gone(&executor);
+        std::shared_ptr<Task> sink;
+        auto source = chain_of(4, sink);
+        gone.schedule(source);
+        CHECK(result_of(sink) == 40);
+    }
+    CHECK(executor.is_running());
+    Scheduler next(&executor);
+    std::shared_ptr<Task> sink;
+    auto source = chain_of(5, sink);
+    next.schedule(source);
+    CHECK(result_of(sink) == 50);
+    executor.shutdown();
+}

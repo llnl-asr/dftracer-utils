@@ -6,6 +6,7 @@
 #include <dftracer/utils/runtime/io/io_backend_factory.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/error.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 
 #include <chrono>
@@ -430,10 +431,6 @@ void ThreadPoolExecutor::monitor_loop() {
     }
 }
 
-void ThreadPoolExecutor::set_completion_callback(CompletionCallback callback) {
-    completion_callback_ = std::move(callback);
-}
-
 void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     DFTRACER_UTILS_LOG_DEBUG("Worker %zu started", context->worker_id);
 
@@ -629,19 +626,6 @@ void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
     drain_thread_local_destroys();
 }
 
-void ThreadPoolExecutor::notify_completion(std::shared_ptr<Task> task) {
-    if (completion_callback_) completion_callback_(task);
-}
-
-void ThreadPoolExecutor::request_shutdown() {
-    if (shutdown_requested_.load()) {
-        return;  // Already requested
-    }
-
-    DFTRACER_UTILS_LOG_DEBUG("%s", "Shutdown requested for executor");
-    shutdown_requested_ = true;
-}
-
 void ThreadPoolExecutor::schedule_coroutine_resumption(
     std::coroutine_handle<> handle) {
     // Delegate to enqueue() -- unified path for all coroutine handles.
@@ -704,7 +688,7 @@ void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
 }
 
 bool ThreadPoolExecutor::is_responsive() const {
-    if (shutdown_requested_.load() || !running_.load()) {
+    if (!running_.load()) {
         return false;
     }
 
@@ -929,11 +913,31 @@ TaskProgress ThreadPoolExecutor::build_task_progress_tree(
 // ============================================================================
 
 coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
-                                        std::shared_ptr<std::any> input) {
+                                        std::shared_ptr<std::any> input,
+                                        TaskOwner* owner) {
     // Get worker context from TLS (set by worker_thread at start).
     auto* context = static_cast<WorkerContext*>(get_current_worker_context());
 
-    if (!context || !task) {
+    if (!task) {
+        co_return;
+    }
+    // Tells the owner the task ended when this frame ends: after the task
+    // ran, and also when it never runs because the owner stopped or the
+    // executor shut down and destroyed the queued frame.
+    struct FinishTask {
+        TaskOwner* owner;
+        std::shared_ptr<Task> task;
+        bool ran = false;
+        ~FinishTask() {
+            if (!ran)
+                task->set_exception(std::make_exception_ptr(
+                    PipelineError(PipelineError::Interrupted,
+                                  "the pipeline of the task stopped")));
+            owner->finish_task(task);
+        }
+    } finish{owner, task};
+    if (!context || owner->is_stopping()) {
+        ++tasks_completed_;
         co_return;
     }
 
@@ -1020,7 +1024,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
             }
 
             // Notify scheduler
-            notify_completion(task);
+            finish.ran = true;
 
         } else {
             try {
@@ -1047,7 +1051,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                     }
                 }
 
-                notify_completion(task);
+                finish.ran = true;
 
             } catch (...) {
                 DFTRACER_UTILS_LOG_ERROR(
@@ -1071,7 +1075,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                     }
                 }
 
-                notify_completion(task);
+                finish.ran = true;
             }
         }
     }
@@ -1092,6 +1096,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
 
 void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
                                      std::shared_ptr<std::any> input,
+                                     TaskOwner* owner,
                                      TaskIndex parent_task_id) {
     // Register in task registry
     {
@@ -1122,7 +1127,7 @@ void ThreadPoolExecutor::submit_task(std::shared_ptr<Task> task,
     ++total_tasks_submitted_;
 
     // Create Coro, set executor on promise, enqueue released handle
-    auto coro = run_task(std::move(task), std::move(input));
+    auto coro = run_task(std::move(task), std::move(input), owner);
     coro.handle().promise().executor = this;
     enqueue(coro.release());
 }

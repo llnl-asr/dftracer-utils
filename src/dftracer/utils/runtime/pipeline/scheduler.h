@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/typedefs.h>
 #include <dftracer/utils/runtime/pipeline/pipeline_config.h>
+#include <dftracer/utils/runtime/scheduler/task_executor.h>
 
 #include <any>
 #include <atomic>
@@ -21,7 +22,6 @@
 namespace dftracer::utils {
 
 class Task;
-class TaskExecutor;
 class Watchdog;
 
 /**
@@ -38,7 +38,7 @@ class Watchdog;
  * - Handles error policies
  * - Supports dynamic task submission
  */
-class Scheduler {
+class Scheduler final : public TaskOwner {
    private:
     TaskExecutor* executor_;
     std::atomic<bool> running_{false};
@@ -74,6 +74,13 @@ class Scheduler {
     std::function<void(std::size_t completed, std::size_t total)>
         progress_callback_;
     std::atomic<std::size_t> total_tasks_{0};
+
+    // Tasks submitted to the executor that have not reached finish_task().
+    // The destructor waits for none, since a task calls back into this
+    // scheduler when it ends.
+    std::size_t in_flight_{0};
+    std::mutex in_flight_mutex_;
+    std::condition_variable in_flight_cv_;
 
     // Coroutine support - completion callbacks
     using CallbackMap =
@@ -119,6 +126,14 @@ class Scheduler {
      * @param task Completed task
      */
     void on_task_completed(std::shared_ptr<Task> task);
+
+    /// Called by the executor, once per submitted task, when it ends: runs
+    /// on_task_completed and then lets the destructor go on. The scheduler
+    /// is not touched after its in-flight count reaches zero.
+    void finish_task(std::shared_ptr<Task> task) noexcept override;
+    bool is_stopping() const noexcept override {
+        return shutdown_requested_.load();
+    }
 
     /**
      * Submit a dynamic task (for intra-task parallelism)

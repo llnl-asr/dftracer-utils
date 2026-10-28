@@ -29,14 +29,11 @@
 namespace dftracer::utils {
 
 class Task;
-class Scheduler;
 
 /// Executes queued coroutine work on a pool of worker threads, notifying the
-/// scheduler on completion. Pool size defaults to hardware_concurrency.
+/// scheduler that submitted each task when it ends. Pool size defaults to
+/// hardware_concurrency.
 class ThreadPoolExecutor : public TaskExecutor {
-   public:
-    using TaskExecutor::CompletionCallback;
-
    private:
     // Aligned to avoid false sharing between adjacent workers.
     struct alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) WorkerContext {
@@ -121,11 +118,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::condition_variable coord_cv_;
     bool grow_pending_{false};
 
-    CompletionCallback completion_callback_;
-
-    // Reference to scheduler for dynamic task context
-    Scheduler* scheduler_{nullptr};
-
     // Global tracking, padded to avoid false sharing between counters
     // and with work_signal_ below.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
@@ -137,8 +129,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     // change.
     mutable std::atomic<std::uint64_t> seen_resumes_{0};
     mutable std::atomic<std::int64_t> last_progress_ns_;
-
-    std::atomic<bool> shutdown_requested_{false};
 
     // Responsiveness timeout thresholds
     std::chrono::seconds idle_timeout_;
@@ -229,12 +219,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     void enter_blocking() override;
     void exit_blocking() override;
 
-    void set_completion_callback(CompletionCallback callback) override;
-
-    void set_scheduler(Scheduler* scheduler) override {
-        scheduler_ = scheduler;
-    }
-
     TimerService& get_timer_service() override { return timer_service_; }
 
     bool is_running() const override { return running_.load(); }
@@ -276,14 +260,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     io::IoBackend& io_backend() override { return *io_backend_; }
     const io::IoBackend& io_backend() const { return *io_backend_; }
 
-    /**
-     * Request graceful shutdown
-     * Stops accepting new tasks and waits for current tasks to complete
-     */
-    void request_shutdown() override;
-
-    bool is_shutdown_requested() const { return shutdown_requested_.load(); }
-
     /// Whether the executor is making progress; false if it appears hung.
     /// Used by the watchdog.
     bool is_responsive() const override;
@@ -310,7 +286,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     /// Submit a DAG task for execution. parent_task_id tracks the parent, or
     /// -1 for a root task.
     void submit_task(std::shared_ptr<Task> task,
-                     std::shared_ptr<std::any> input,
+                     std::shared_ptr<std::any> input, TaskOwner* owner,
                      TaskIndex parent_task_id = -1) override;
 
     TaskIndex current_worker_task_id() const override;
@@ -339,8 +315,6 @@ class ThreadPoolExecutor : public TaskExecutor {
     TaskProgress build_task_progress_tree(
         TaskIndex task_id, std::unordered_set<TaskIndex>& processed) const;
 
-    void notify_completion(std::shared_ptr<Task> task);
-
     void signal_global_work();
 
     /// Acquire a run permit for `ctx`, parking on the permit futex until one is
@@ -366,11 +340,10 @@ class ThreadPoolExecutor : public TaskExecutor {
     /// Coro is at initial_suspend: the caller must set the executor on the
     /// promise and enqueue via release().
     coro::Coro run_task(std::shared_ptr<Task> task,
-                        std::shared_ptr<std::any> input);
+                        std::shared_ptr<std::any> input, TaskOwner* owner);
 
     void drain_destroy_queue();
 
-    friend class Scheduler;
     friend struct coro::CoroPromise;
 };
 

@@ -47,6 +47,8 @@ Pipeline::Pipeline(const PipelineConfig& config)
 
 Pipeline::~Pipeline() {
     DFTRACER_UTILS_LOG_DEBUG("Pipeline '%s' destroyed", name_.c_str());
+    // The scheduler waits for its tasks, which need the runtime running.
+    scheduler_.reset();
     runtime_->shutdown();
 }
 

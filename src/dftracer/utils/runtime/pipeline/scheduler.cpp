@@ -19,24 +19,6 @@ Scheduler::Scheduler(TaskExecutor* executor) : executor_(executor) {
                             "Executor cannot be null");
     }
 
-    // Set this scheduler as the executor's completion callback
-    executor_->set_completion_callback([this](std::shared_ptr<Task> task) {
-        try {
-            on_task_completed(task);
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Exception in on_task_completed for task '%s': %s",
-                task->get_name(), e.what());
-        } catch (...) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Unknown exception in on_task_completed for task '%s'",
-                task->get_name());
-        }
-    });
-
-    // Set scheduler reference in executor (for CoroScope)
-    executor_->set_scheduler(this);
-
     // Start executor to ensure workers are ready before scheduling begins
     if (!executor_->is_running()) {
         executor_->start();
@@ -56,21 +38,9 @@ Scheduler::Scheduler(TaskExecutor* executor, Watchdog* watchdog,
                             "Executor cannot be null");
     }
 
-    executor_->set_completion_callback([this](std::shared_ptr<Task> task) {
-        try {
-            on_task_completed(task);
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Exception in on_task_completed for task '%s': %s",
-                task->get_name(), e.what());
-        } catch (...) {
-            DFTRACER_UTILS_LOG_ERROR(
-                "Unknown exception in on_task_completed for task '%s'",
-                task->get_name());
-        }
-    });
-
-    executor_->set_scheduler(this);
+    if (!executor_->is_running()) {
+        executor_->start();
+    }
 
     if (watchdog_) {
         watchdog_->set_timeout_callback([this](const std::string& reason) {
@@ -93,13 +63,34 @@ Scheduler::Scheduler(TaskExecutor* executor, Watchdog* watchdog,
 }
 
 Scheduler::~Scheduler() {
-    if (executor_) {
-        executor_->shutdown();
-        executor_->set_scheduler(nullptr);
+    // The executor is shared: stop this scheduler's work only, and wait for
+    // the tasks that will still call back into it.
+    request_shutdown();
+    {
+        std::unique_lock<std::mutex> lock(in_flight_mutex_);
+        in_flight_cv_.wait(lock, [this] { return in_flight_ == 0; });
     }
     if (watchdog_) {
         watchdog_->stop();
     }
+}
+
+void Scheduler::finish_task(std::shared_ptr<Task> task) noexcept {
+    try {
+        on_task_completed(task);
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "Exception in on_task_completed for task '%s': %s",
+            task->get_name(), e.what());
+    } catch (...) {
+        DFTRACER_UTILS_LOG_ERROR(
+            "Unknown exception in on_task_completed for task '%s'",
+            task->get_name());
+    }
+    // Notified under the lock: the destructor cannot finish, and free the
+    // mutex, before this returns.
+    std::lock_guard<std::mutex> lock(in_flight_mutex_);
+    if (--in_flight_ == 0) in_flight_cv_.notify_all();
 }
 
 void Scheduler::schedule(std::shared_ptr<Task> source, const std::any& input) {
@@ -499,8 +490,11 @@ void Scheduler::submit_task_to_executor(std::shared_ptr<Task> task,
         parent_id = executor_->current_worker_task_id();
     }
 
-    // Submit via Coro-based path
-    executor_->submit_task(task, input_ptr, parent_id);
+    {
+        std::lock_guard<std::mutex> lock(in_flight_mutex_);
+        ++in_flight_;
+    }
+    executor_->submit_task(task, input_ptr, this, parent_id);
 }
 
 size_t Scheduler::count_reachable_tasks(std::shared_ptr<Task> source) {
@@ -679,9 +673,6 @@ void Scheduler::request_shutdown() {
 
     DFTRACER_UTILS_LOG_DEBUG("%s", "Shutdown requested for scheduler");
     shutdown_requested_ = true;
-
-    // Request executor shutdown
-    executor_->request_shutdown();
 
     // Wake up waiting thread -- lock-then-unlock done_mutex_ before
     // notifying to prevent lost notifications on ARM where release/acquire

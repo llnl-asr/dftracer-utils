@@ -188,6 +188,10 @@ void for_each_partial(
                 throw DFTUtilsException(
                     ErrorCode::Parse, "aggregation partial: malformed record");
             const auto tail = key.substr(prefix.size());
+            if (static_cast<std::uint8_t>(tail[20]) >
+                static_cast<std::uint8_t>(PartialKind::Aggregated))
+                throw DFTUtilsException(ErrorCode::Parse,
+                                        "aggregation partial: unknown kind");
             return fn(
                 layout::read_u32(tail), layout::read_u32(tail.substr(4)),
                 layout::read_u32(tail.substr(8)),

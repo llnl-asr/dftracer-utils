@@ -15,7 +15,7 @@
 //
 // --memory-budget bounds the index build (IndexerOptions::memory_budget);
 // build_peak_rss_bytes is the peak before any query runs.
-// --aggregation-interval-us also builds the aggregation tier at that interval.
+// --aggregation-interval-us sets the interval of the aggregation tier.
 //
 // An INPUT is a .pfw.gz file or a directory scanned recursively. A genesis
 // output file (long or wide format) runs three filter queries and no
@@ -367,12 +367,9 @@ Result measure(const Options& opt, const std::string& input,
             options.index_dir = index_dir;
             options.bloom->required = false;
             options.memory_budget = opt.memory_budget;
-            if (opt.aggregation_interval_us > 0) {
-                dftracer::utils::index::schemas::dft::agg::AggregationConfig
-                    agg;
-                agg.time_interval_us = opt.aggregation_interval_us;
-                options.aggregation = agg;
-            }
+            if (opt.aggregation_interval_us > 0)
+                options.aggregation.time_interval_us =
+                    opt.aggregation_interval_us;
             auto indexer =
                 dftracer::utils::index::Indexer::open(files, options);
             run_scoped([&](CoroScope& scope) -> coro::CoroTask<void> {

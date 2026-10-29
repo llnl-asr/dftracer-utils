@@ -893,8 +893,9 @@ def build_index_distributed(
 ):
     """Build the dftracer index across a Dask cluster.
 
-    Workers write their files straight into the index. When `aggregation` is
-    given, the aggregation tier is filled in parallel.
+    Workers write their files straight into the index. Every build fills in the
+    aggregation tier; `aggregation` customizes its config and defaults to the
+    standard one.
 
     If `client` is None the active Dask client is looked up; if none exists
     (or `dask.distributed` is not installed), tasks run inline serially.

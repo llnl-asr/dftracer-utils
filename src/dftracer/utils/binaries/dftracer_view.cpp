@@ -9,7 +9,6 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
@@ -1005,27 +1004,16 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {
-                    if (counters || fg_mode) {
-                        // Event-only scans (counter/flamegraph partials) need
-                        // only the base index, not the aggregation tier.
-                        co_await dftracer::utils::index::build::
-                            ensure_indexes_fresh(&ctx, "", shard, rank_idx);
-                    } else {
-                        // Build the aggregation tier per rank so the partial -
-                        // and any later read of the auto-written shard set - is
-                        // answered from the index instead of re-scanning
-                        // traces.
-                        dftracer::utils::index::build::ResolveAndBuildInput bin;
-                        bin.files = shard;
-                        bin.index_dir = rank_idx;
-                        bin.checkpoint_size = checkpoint_size;
-                        bin.require_checkpoints = true;
-                        bin.require_aggregation = true;
-                        bin.aggregation_config = dftracer::utils::index::
-                            schemas::dft::agg::AggregationConfig{};
-                        co_await dftracer::utils::index::build::
-                            resolve_and_build_index(&ctx, std::move(bin));
-                    }
+                    // Build each rank's index with its aggregation tier, so a
+                    // partial and any later read of the auto-written shard
+                    // set are answered from the index.
+                    dftracer::utils::index::build::ResolveAndBuildInput bin;
+                    bin.files = shard;
+                    bin.index_dir = rank_idx;
+                    bin.checkpoint_size = checkpoint_size;
+                    bin.require_checkpoints = true;
+                    co_await dftracer::utils::index::build::
+                        resolve_and_build_index(&ctx, std::move(bin));
                 }
                 std::vector<ViewFile> shard_files_vf;
                 for (const auto& f : shard) {

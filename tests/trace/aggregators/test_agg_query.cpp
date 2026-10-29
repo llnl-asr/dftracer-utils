@@ -644,7 +644,6 @@ TEST_SUITE("AggQuery") {
         o.index_dir = index_dir;
         o.checkpoint_size = CHECKPOINT_SIZE;
         o.parallelism = 2;
-        o.aggregation = trace::comparator::comparison_index_config();
         auto ix = index::Indexer::open(files, o);
         ix.build();
 

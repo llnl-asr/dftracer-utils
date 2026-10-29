@@ -965,8 +965,8 @@ def _build_index_task(
     force_rebuild: bool,
     parallelism: int,
     build_bloom: bool = True,
-    # Opaque native aggregation-config object, forwarded straight to build_index_batch.
-    aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
+    # The aggregation config every build makes, forwarded to build_index_batch.
+    aggregation_config: "Optional[AggregationConfig]" = None,
     enable_det_ids: bool = False,
 ) -> bytes:
     """Dask worker task: index `files` straight into the index at `index_dir`.
@@ -1022,7 +1022,7 @@ def distributed_index(
     build_bloom: bool = True,
     partition: Literal["lpt", "round_robin"] = "lpt",
     parallelism_per_worker: int = 0,
-    aggregation_config: "Optional[Union[bool, AggregationConfig]]" = None,
+    aggregation_config: "Optional[AggregationConfig]" = None,
     progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> DistributedIndexResult:
     """Index a set of trace files using Dask workers that write in parallel.
@@ -1056,6 +1056,10 @@ def distributed_index(
     checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
     if not index_path:
         raise ValueError("index_path is required")
+    from .indexer import AggregationConfig as _AggregationConfig
+
+    # Every build makes the aggregation tier; a caller only customizes it.
+    agg_config = aggregation_config if aggregation_config is not None else _AggregationConfig()
     import logging as _logging
     import time as _time
 
@@ -1109,7 +1113,7 @@ def distributed_index(
             index_dir=index_path,
             require_checkpoint=True,
             require_bloom=True,
-            require_aggregation=aggregation_config,
+            aggregation_config=agg_config,
             force_rebuild=False,
         ) as _resolver:
             _status = _resolver.resolve()
@@ -1179,7 +1183,7 @@ def distributed_index(
                     force_rebuild,
                     parallelism_per_worker,
                     build_bloom,
-                    aggregation_config,
+                    agg_config,
                     False,
                 )
             )
@@ -1203,7 +1207,7 @@ def distributed_index(
                         force_rebuild,
                         parallelism_per_worker,
                         build_bloom,
-                        aggregation_config,
+                        agg_config,
                         True,
                         workers=target,
                         pure=False,
@@ -1218,9 +1222,9 @@ def distributed_index(
 
     tracker_blobs = [blob for blob in worker_results if blob]
     built = bool(worker_ids)
-    if aggregation_config is not None and built:
+    if built:
         _t_meta = _time.monotonic()
-        db.write_agg_config(aggregation_config)
+        db.write_agg_config(agg_config)
         if tracker_blobs:
             db.write_aggregation_tracker(tracker_blobs)
         _log.info(

@@ -39,10 +39,11 @@ struct ResolveAndBuildInput {
     /// of them, or was built with another budget, is rebuilt when
     /// require_bloom is set.
     ChunkIndexerConfig bloom_config;
-    bool require_aggregation = false;
 
-    std::optional<index::schemas::dft::agg::AggregationConfig>
-        aggregation_config;
+    /// The aggregation every build makes; see
+    /// IndexerOptions::aggregation.
+    index::schemas::dft::agg::AggregationConfig aggregation_config =
+        index::schemas::dft::agg::standard_aggregation_config();
 
     /// See IndexBuildBatchConfig::memory_budget.
     std::uint64_t memory_budget = 0;
@@ -68,8 +69,13 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
 /// same decision as resolve_and_build_index, with the size and mtime of
 /// `input.entries` when it holds them. An index in another format is removed
 /// first. Each entry holds the path, size and mtime.
-coro::CoroTask<std::vector<utilities::filesystem::FileEntry>>
-files_needing_index(ResolverInput input);
+struct IndexWork {
+    std::vector<utilities::filesystem::FileEntry> files;
+    /// Index roots whose aggregation tier was built with other settings; the
+    /// build clears each before it aggregates into it.
+    std::vector<std::string> stale_aggregation_roots;
+};
+coro::CoroTask<IndexWork> files_needing_index(ResolverInput input);
 
 /// Rebuilds any index root for `directory`/`files` that is missing or stale, so
 /// read-before-use entry points never see a changed source. Named coroutines

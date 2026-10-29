@@ -292,23 +292,20 @@ class TestDirectoryIndexer:
             )
             with dftu_utils.Indexer(
                 env.temp_dir,
-                require_aggregation=agg_config,
+                aggregation_config=agg_config,
             ) as indexer:
                 assert indexer.aggregation_config is not None
                 assert indexer.aggregation_config.time_interval_ms == 1000.0
 
     @pytest.mark.valgrind
-    def test_indexer_aggregation_true(self):
-        """Test indexer with require_aggregation=True uses defaults"""
+    def test_indexer_aggregation_default(self):
+        """Every indexer builds the tier with the standard config by default"""
         with Environment() as env:
             env.create_test_gzip_file()
 
-            with dftu_utils.Indexer(
-                env.temp_dir,
-                require_aggregation=True,
-            ) as indexer:
-                assert indexer.aggregation_config is not None
-                assert indexer.aggregation_config.time_interval_ms == 5000.0
+            with dftu_utils.Indexer(env.temp_dir) as indexer:
+                assert indexer.aggregation_config.time_interval_ms == 1000.0
+                assert indexer.aggregation_config.compute_percentiles
 
     def test_index_status_dataclass(self):
         """Test IndexStatus dataclass"""
@@ -329,7 +326,7 @@ class TestDirectoryIndexer:
             directory = env.create_indexed_traces(pids=[1])
             with dftu_utils.Indexer(
                 directory=directory,
-                require_aggregation=dftu_utils.AggregationConfig(time_interval_ms=5000),
+                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=5000),
             ) as indexer:
                 indexer.ensure_indexed()
                 assert indexer.resolve().aggregation_interval_us == 5_000_000
@@ -341,7 +338,7 @@ class TestDirectoryIndexer:
             directory = env.create_indexed_traces(pids=[1, 2])
             with dftu_utils.Indexer(
                 directory=directory,
-                require_aggregation=dftu_utils.AggregationConfig(time_interval_ms=1000),
+                aggregation_config=dftu_utils.AggregationConfig(time_interval_ms=1000),
             ) as indexer:
                 indexer.ensure_indexed()
                 status = indexer.resolve()
@@ -659,7 +656,7 @@ class TestOccupancyMetrics:
             f.write("\n".join(lines) + "\n")
         Indexer(
             files=[p],
-            require_aggregation=AggregationConfig(time_interval_ms=interval_ms),
+            aggregation_config=AggregationConfig(time_interval_ms=interval_ms),
             force_rebuild=True,
         ).ensure_indexed()
         return p
@@ -677,7 +674,7 @@ class TestOccupancyMetrics:
             paths.append(p)
         Indexer(
             files=paths,
-            require_aggregation=AggregationConfig(time_interval_ms=interval_ms),
+            aggregation_config=AggregationConfig(time_interval_ms=interval_ms),
             force_rebuild=True,
         ).ensure_indexed()
         return paths
@@ -1032,6 +1029,7 @@ class TestExtensions:
             "core.catalog",
             "core.profile",
             "dft.metadata",
+            "dftracer.agg",
         }
         assert all(e["current"] for e in entry["extensions"])
 

@@ -995,9 +995,13 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         }
     }
 
-    // A build wants full coverage: scan through the engine group-by to a
-    // complete mergeable AggState, then persist its per-group partials.
-    auto state = co_await build_engine_agg_state(plan);
+    // A build wants full coverage: the index partials give it without reading
+    // the traces when they answer the plan, else a scan through the engine
+    // group-by does; either leaves a complete mergeable AggState, whose
+    // per-group partials are persisted.
+    dataframe::AggStatePtr state;
+    const bool from_partials = co_await partials_collect(plan, state);
+    if (!from_partials) state = co_await build_engine_agg_state(plan);
     if (!rdir.empty()) {
         try {
             auto db = dftracer::utils::index::cache::open_rollup_db(

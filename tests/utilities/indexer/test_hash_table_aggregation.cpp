@@ -18,7 +18,6 @@
 using namespace dftracer::utils;
 using dftracer::utils::index::build::resolve_and_build_index;
 using dftracer::utils::index::build::ResolveAndBuildInput;
-using dftracer::utils::index::schemas::dft::agg::AggregationConfig;
 using dftracer::utils::index::store::IndexDatabase;
 using dftu_utils_test::run_coro;
 
@@ -58,9 +57,8 @@ std::string make_trace_with_fh(int n) {
 }  // namespace
 
 TEST_SUITE("hash_table_aggregation") {
-    // The aggregation-only build (no bloom) that dfanalyzer uses
-    // must still populate the file dictionary, or fhash -> file_name never
-    // resolves.
+    // A build that keeps only the aggregation tier (no bloom) must still
+    // populate the file dictionary, or fhash -> file_name never resolves.
     TEST_CASE("aggregation build populates the file hash table") {
         auto dir = dftu_utils_test::make_unique_test_path("hashagg");
         fs::create_directories(dir);
@@ -74,8 +72,6 @@ TEST_SUITE("hash_table_aggregation") {
         input.require_checkpoints = true;
         input.require_bloom = false;
         input.build_bloom = false;
-        input.require_aggregation = true;
-        input.aggregation_config = AggregationConfig{};
 
         std::string index_path;
         run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {

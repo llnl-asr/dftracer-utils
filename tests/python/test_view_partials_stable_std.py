@@ -138,7 +138,7 @@ def test_the_view_var_and_std_are_stable(tmp_path):
     files, values = write_trace(tmp_path)
     idx = str(tmp_path / "idx")
     with Indexer(
-        files=files, index_dir=idx, require_aggregation=AggregationConfig(time_interval_ms=100000)
+        files=files, index_dir=idx, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
         ix.ensure_indexed()
     check(
@@ -160,7 +160,7 @@ def test_the_distributed_view_merges_shards_stably(tmp_path):
     files, values = write_trace(tmp_path)
     idx = str(tmp_path / "idx")
     with Indexer(
-        files=files, index_dir=idx, require_aggregation=AggregationConfig(time_interval_ms=100000)
+        files=files, index_dir=idx, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
         ix.ensure_indexed()
     cluster = LocalCluster(n_workers=2, threads_per_worker=1, processes=False, silence_logs=40)

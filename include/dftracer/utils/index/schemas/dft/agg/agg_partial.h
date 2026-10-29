@@ -18,9 +18,14 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// What the events of a partial are: events, profiles (counters of a category
-/// other than sys) and the pre-aggregated sys counters. A name used as more
+/// other than sys), sys counters and aggregated records. A name used as more
 /// than one has one partial of each.
-enum class PartialKind : std::uint8_t { Event = 0, Profile = 1, System = 2 };
+enum class PartialKind : std::uint8_t {
+    Event = 0,
+    Profile = 1,
+    System = 2,
+    Aggregated = 3
+};
 
 /// A set of ids kept exactly up to this many ids.
 inline constexpr std::size_t DISTINCT_EXACT_CAPACITY = 256;

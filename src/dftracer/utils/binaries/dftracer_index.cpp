@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -12,6 +13,7 @@
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
@@ -19,6 +21,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <set>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
@@ -146,8 +149,8 @@ class IndexArgParse : public cli::ArgParse {
 
 // Split out so the run_single_task lambda holds no coroutine locals, which
 // ICEs GCC 12/13.
-static coro::CoroTask<int> select_stale_task(
-    ResolverInput input, std::vector<utilities::filesystem::FileEntry>* stale) {
+static coro::CoroTask<int> select_stale_task(ResolverInput input,
+                                             IndexWork* stale) {
     *stale = co_await files_needing_index(std::move(input));
     co_return 0;
 }
@@ -278,6 +281,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     // A file whose index is current is skipped: the freshness decision is the
     // resolver's, from the size and mtime the scan read.
     std::size_t skipped_fresh = 0;
+    std::set<std::string> stale_tiers;
     if (!force_rebuild) {
         ResolverInput resolve_input;
         resolve_input.entries = matched_entries;
@@ -287,13 +291,15 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         resolve_input.checkpoint_size = checkpoint_size;
         resolve_input.bloom_config = indexer_config;
         resolve_input.schema = cli->record_schema;
-        std::vector<utilities::filesystem::FileEntry> stale;
+        IndexWork stale;
         cli::run_single_task(
             "DFTracer Bloom Indexer", cli->pipeline, [&](CoroScope&) {
                 return select_stale_task(std::move(resolve_input), &stale);
             });
-        skipped_fresh = matched_entries.size() - stale.size();
-        matched_entries = std::move(stale);
+        skipped_fresh = matched_entries.size() - stale.files.size();
+        matched_entries = std::move(stale.files);
+        stale_tiers.insert(stale.stale_aggregation_roots.begin(),
+                           stale.stale_aggregation_roots.end());
         log_stage("resolve");
     }
 
@@ -350,6 +356,12 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     Pipeline pipeline(pipeline_config);
 
+    // A forced rebuild rebuilds every file whole, so its tier is stale too.
+    const std::string agg_index =
+        trace::internal::determine_index_path(input_files.front(), index_dir);
+    if (force_rebuild && fs::exists(agg_index)) stale_tiers.insert(agg_index);
+    for (const auto& root : stale_tiers) clear_aggregation(root);
+
     // The build's writes commit as they come: one handle is held from the id
     // assignment to the close.
     IndexDatabase store_db(index_dir);
@@ -374,6 +386,11 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->memory_budget = cli->memory_budget;
     batch_config->schema = cli->record_schema;
 
+    // The build folds every file into the aggregation tier of its index.
+    AggRun agg_run = start_aggregation(
+        agg_index, index::schemas::dft::agg::standard_aggregation_config());
+    batch_config->agg_fold_factory = agg_run.factory;
+
     IndexBuildBatchResult batch_result;
     auto streaming_task = make_task(
         [&batch_result,
@@ -387,6 +404,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     pipeline.set_destination(streaming_task);
     pipeline.execute();
     log_stage("build");
+    finish_aggregation(agg_run, batch_result);
+    log_stage("aggregate");
     DFTRACER_UTILS_LOG_DEBUG(
         "dftracer_index: thread_ms parse=%.2f schema=%.2f sink_commit=%.2f "
         "files_in_flight_max=%zu files_spilled=%zu spill_runs_max=%zu",

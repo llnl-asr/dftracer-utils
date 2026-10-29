@@ -54,9 +54,6 @@ coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
     in.files.push_back(std::move(gz));
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
-    in.require_aggregation = true;
-    in.aggregation_config =
-        dftracer::utils::index::schemas::dft::agg::AggregationConfig{};
     co_await dftracer::utils::run_coro_scope(
         [&](dftracer::utils::CoroScope& scope) -> coro::CoroTask<void> {
             co_await dftracer::utils::index::build::resolve_and_build_index(

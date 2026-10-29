@@ -84,7 +84,6 @@ struct Indexer::Impl {
         in.index_dir = options.index_dir;
         in.require_checkpoints = options.checkpoints;
         in.require_bloom = options.bloom && options.bloom->required;
-        in.require_aggregation = options.aggregation.has_value();
         in.checkpoint_size = options.checkpoint_size;
         in.aggregation_config = options.aggregation;
         if (options.bloom) in.bloom_config = bloom_config();
@@ -106,7 +105,6 @@ struct Indexer::Impl {
         in.require_bloom = options.bloom && options.bloom->required;
         in.build_bloom = options.bloom.has_value();
         if (options.bloom) in.bloom_config = bloom_config();
-        in.require_aggregation = options.aggregation.has_value();
         in.aggregation_config = options.aggregation;
         in.memory_budget = options.memory_budget;
         in.schema = options.schema;
@@ -336,14 +334,9 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        // dftracer.agg is current at the requested config, else at the one
-        // the tier holds.
-        std::optional<std::uint64_t> agg_params;
-        if (impl_->options.aggregation) {
-            agg_params = impl_->options.aggregation->params_hash();
-        } else if (auto stored = schemas::dft::agg::tier::read_config(db)) {
-            agg_params = stored->params_hash;
-        }
+        // dftracer.agg is current at the requested config.
+        const std::uint64_t agg_params =
+            impl_->options.aggregation.params_hash();
         for (const auto* p : traces) {
             const int fid =
                 db.get_file_info_id(store::internal::get_logical_path(*p));
@@ -360,7 +353,7 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
                 if (ext == store::IndexExtension::Profile)
                     want = schema ? schema->params_hash() : 0;
                 else if (ext == store::IndexExtension::Agg)
-                    want = agg_params ? *agg_params : 0;
+                    want = agg_params;
                 m.extensions.push_back({std::string(store::extension_name(ext)),
                                         state->version, state->params_hash,
                                         state->ready,

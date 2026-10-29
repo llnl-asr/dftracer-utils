@@ -116,11 +116,10 @@ dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
     return detail::apply_agg_post_ops(std::move(result), *v);
 }
 
-// Build the sidecar aggregation tier the way the aggregator does, so the
-// chunk partials can answer without a scan.
+// Build the aggregation tier every build makes, so the chunk partials can
+// answer without a scan.
 void build_tier_index(const std::string& gz) {
     dftracer::utils::index::IndexerOptions options;
-    options.aggregation.emplace();
     dftracer::utils::index::Indexer::open({gz}, options).build();
 }
 

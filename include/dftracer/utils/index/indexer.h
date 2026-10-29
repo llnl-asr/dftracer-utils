@@ -50,7 +50,10 @@ struct IndexerOptions {
     /// with the tier.
     std::vector<std::string> extensions = {"zonemap", "bloom", "counts",
                                            "postings"};
-    std::optional<schemas::dft::agg::AggregationConfig> aggregation;
+    /// The aggregation tier every build makes; a caller may change the
+    /// windows, the keys and the sketches but cannot turn it off.
+    schemas::dft::agg::AggregationConfig aggregation =
+        schemas::dft::agg::standard_aggregation_config();
     /// RecordSchema every trace is decoded with ("dftracer" or "generic");
     /// empty detects each file's from its first lines.
     std::string schema;

@@ -358,8 +358,6 @@ static int run_comparator(const ComparatorArgParse* cli) {
         input.parallelism = config.executor_threads;
         input.force_rebuild = config.force_rebuild;
         input.build_bloom = false;
-        input.require_aggregation = true;
-        input.aggregation_config = comparison_index_config();
 
         auto result =
             co_await resolve_and_build_index(&scope, std::move(input));

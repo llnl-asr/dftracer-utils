@@ -11,11 +11,12 @@
 namespace dftracer::utils::python {
 
 /// The aggregation config a Python AggregationConfig describes; a missing or
-/// unreadable attribute keeps its default. Builders and the coordinator of a
-/// distributed build use it alike, so they agree on the params hash.
+/// unreadable attribute keeps the standard value. Builders and the coordinator
+/// of a distributed build use it alike, so they agree on the params hash.
 inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
     PyObject *obj) {
-    index::schemas::dft::agg::AggregationConfig cfg;
+    index::schemas::dft::agg::AggregationConfig cfg =
+        index::schemas::dft::agg::standard_aggregation_config();
     auto attr = [obj](const char *name) -> PyObject * {
         PyObject *v = PyObject_GetAttrString(obj, name);
         if (!v || v == Py_None) {
@@ -66,9 +67,12 @@ inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
         return out;
     };
     cfg.time_interval_us = static_cast<std::uint64_t>(
-        pull_double("time_interval_ms", 5000.0) * 1000.0);
-    cfg.compute_percentiles = pull_bool("compute_percentiles", false);
-    cfg.group_by_file = pull_bool("group_by_file", true);
+        pull_double("time_interval_ms",
+                    static_cast<double>(cfg.time_interval_us) / 1000.0) *
+        1000.0);
+    cfg.compute_percentiles =
+        pull_bool("compute_percentiles", cfg.compute_percentiles);
+    cfg.group_by_file = pull_bool("group_by_file", cfg.group_by_file);
     cfg.extra_group_keys = pull_strings("group_keys");
     cfg.custom_metric_fields = pull_strings("custom_metric_fields");
     return cfg;

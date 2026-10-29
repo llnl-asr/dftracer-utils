@@ -1,5 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
@@ -187,6 +190,44 @@ TEST_SUITE("DFTracerIndex") {
         run(0, 2);
         REQUIRE(!create_pfw_gz(env, 120, 2).empty());
         run(1, 2);
+    }
+
+    TEST_CASE("a tier of other settings is cleared and built again") {
+        auto binary = find_index_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_index binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        const auto f = create_pfw_gz(env, 100, 0);
+        REQUIRE(!f.empty());
+        namespace ix = dftracer::utils::index;
+        ix::IndexerOptions o;
+        o.aggregation.time_interval_us = 5'000'000;
+        ix::Indexer::open({f}, o).build();
+
+        const auto index_path =
+            dftracer::utils::trace::internal::determine_index_path(f, "");
+        dftu_utils_test::set_test_library_path(binary);
+        int rc = -1;
+        const std::string out = dftu_utils_test::run_process_capture(
+            binary, {"-d", env.get_dir()}, true, &rc);
+        INFO(out);
+        CHECK(rc == 0);
+        CHECK(out.find("Clearing the aggregation tier of " + index_path) !=
+              std::string::npos);
+        CHECK(out.find("Files processed: 1\n") != std::string::npos);
+
+        ix::store::release_index(index_path);
+        ix::store::IndexDatabase db(index_path,
+                                    ix::store::IndexOpenMode::ReadOnly);
+        const auto config = ix::schemas::dft::agg::tier::read_config(db);
+        REQUIRE(config);
+        CHECK(config->time_interval_us ==
+              ix::schemas::dft::agg::standard_aggregation_config()
+                  .time_interval_us);
     }
 
     TEST_CASE("a plain trace makes the run fail and names the file") {

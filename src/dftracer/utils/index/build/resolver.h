@@ -45,7 +45,6 @@ struct ResolverInput {
 
     bool require_checkpoints = true;
     bool require_bloom = false;
-    bool require_aggregation = false;
 
     /// Checkpoint size the caller intends to build with. When non-zero, a file
     /// whose stored checkpoint size differs is rebuilt, so a changed
@@ -64,9 +63,10 @@ struct ResolverInput {
     /// with no current schema record, or another schema, is rebuilt whole.
     std::string schema;
 
-    /// Full config for computing hash with stored time_interval
-    std::optional<index::schemas::dft::agg::AggregationConfig>
-        aggregation_config;
+    /// The aggregation the tier is compared with: a file whose rows were
+    /// built with another config needs aggregation work.
+    index::schemas::dft::agg::AggregationConfig aggregation_config =
+        index::schemas::dft::agg::standard_aggregation_config();
 };
 
 struct ResolverResult {

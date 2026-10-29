@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make the aggregation tier part of every index build, with one standard config: 1 s windows and the percentile sketches on. `dftracer_index`, the freshness paths of the views and the other tools, the C++ `Indexer`, the C ABI, Python, the distributed build and the comparator all build it, and a caller may pass a customized config but cannot turn the tier off.
+  `require_aggregation` is gone from `IndexerOptions`, `ResolveAndBuildInput`, `ResolverInput`, the Python indexer and the batch indexer, and `comparison_index_config()` is gone in favor of `standard_aggregation_config()`.
+  The Python `AggregationConfig` default interval is 1 s, as in C++.
+- Keep counters, system samples and pre-aggregated (`ph:"A"`) records in the stored aggregation partials, so a group-by over every record kind reads only the index, and a query on the events phase no longer counts `ph:"A"` records.
+  Indexes built before this change rebuild their aggregation data once.
 - Keep per-thread time bins (count, duration sum and size sum per bin of the aggregation interval) in each stored aggregation partial, so `dftracer_comparator` reads its per-thread windows from the index and parses no trace when the index is warm.
   A warm comparator of the 8,404 minife traces against itself at 96 threads takes 11 s where it took 16 s and 87 CPU seconds where it took 505, the 7,742-trace set takes 59 s where it took 77 s, and the index build time and size do not change.
   Indexes built before this change rebuild their aggregation data once.
@@ -279,6 +284,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix a grouped view query whose filter reads a row set, such as `where fhash -> files.path == "/data/f10"`, failing with "'files' was read before its rows were bound" when the index holds aggregation data.
 - Fix `dftracer_stats` parsing every trace again the first time it ran on an index: the index summaries could not give the largest event start, so the whole query fell back to a scan.
   The view now answers the largest start from the summaries, and logs at debug level why it scans when the summaries cannot answer a query.
 - Fix `dftracer_comparator` reporting changes and regressions between two identical traces, and printing groups with equal changes in a different order from run to run.

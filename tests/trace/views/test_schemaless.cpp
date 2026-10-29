@@ -52,8 +52,7 @@ std::string write_indexed(TestEnvironment& env, const std::string& name,
     ix::IndexerOptions o;
     o.checkpoint_size = member_bytes;
     o.schema = schema;
-    if (tier_interval_us > 0)
-        o.aggregation.emplace().time_interval_us = tier_interval_us;
+    if (tier_interval_us > 0) o.aggregation.time_interval_us = tier_interval_us;
     ix::Indexer::open({gz}, o).build();
     return gz;
 }

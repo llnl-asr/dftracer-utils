@@ -200,8 +200,8 @@ std::string cell(const df::Series& c, std::int64_t i) {
     return s;
 }
 
-// Create a trace in its own subdir and build an aggregated index (tier) over it
-// via the aggregator; returns the shard's .dftindex path.
+// Create a trace in its own subdir and build its index, with the aggregation
+// tier every build makes, over it; returns the shard's .dftindex path.
 std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
                                    const std::string& tag, int num_events) {
     namespace internal = dftracer::utils::trace::internal;
@@ -212,7 +212,6 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
     fs::rename(src, gz);
 
     dftracer::utils::index::IndexerOptions options;
-    options.aggregation.emplace();
     dftracer::utils::index::Indexer::open({gz}, options).build();
     return internal::determine_index_path(gz, "");
 }
@@ -818,7 +817,7 @@ TEST_SUITE("DFTracerView") {
         CHECK(sorted_lines(baseline) == sorted_lines(requery));
     }
 
-    // No aggregation-index tier in this fixture, so the families are empty, but
+    // The build made the aggregation tier too, so the typed families exist;
     // the --collect-typed terminal must still run cleanly.
     TEST_CASE("collect-typed runs") {
         auto binary = find_view_binary();

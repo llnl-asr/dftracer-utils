@@ -16,9 +16,9 @@
  * from dftu_indexer_open or dftu_indexer_file_list_get is valid until the
  * next such call on the same thread.
  *
- * C++ only (dftracer::utils::index::Indexer): the aggregation tier, the bloom
- * false-positive rate and auto-field tuning, a caller-chosen runtime, the
- * async forms, and the ready / needs-work path lists of a status.
+ * C++ only (dftracer::utils::index::Indexer): the bloom false-positive rate
+ * and auto-field tuning, a caller-chosen runtime, the async forms, and the
+ * ready / needs-work path lists of a status.
  */
 
 #ifdef __cplusplus
@@ -57,6 +57,15 @@ typedef struct dftu_indexer_options {
      * naming stats_share. A registered schema's index.stats_share and
      * index.path_budget override both fields. */
     double bloom_stats_share;
+    /** The aggregation tier is built with every index; these fields adjust the
+     * config it is built with. 0 keeps the standard value. */
+    uint64_t aggregation_time_interval_us; /**< window; 0 = the standard 1 s */
+    int32_t aggregation_compute_percentiles; /**< 0 = the standard, which
+                                                stores them */
+    int32_t aggregation_group_by_file;       /**< 0 = the standard, which keys
+                                                rows by file */
+    int32_t aggregation_track_default_args;  /**< 0 = the standard, which
+                                                tracks them */
 } dftu_indexer_options;
 
 typedef struct dftu_indexer_report {
@@ -84,7 +93,8 @@ DFTU_RESULT_DECL(dftu_indexer_files_result, dftu_indexer_file_list*);
 DFTU_RESULT_DECL(dftu_indexer_file_result, dftu_indexer_file);
 DFTU_RESULT_DECL(dftu_indexer_string_result, char*);
 
-/** The defaults of IndexerOptions: checkpoints and bloom on and required. */
+/** The defaults of IndexerOptions: checkpoints and bloom on and required, and
+ * the aggregation tier built with the standard config. */
 DFTU_EXPORT void dftu_indexer_options_init(dftu_indexer_options* out);
 
 /** Open `n` trace files or directories (a directory contributes the trace

@@ -97,17 +97,16 @@ class PartialSink {
 /// records).
 template <class Acc>
 bool partial_holds(const Acc& acc) {
-    if (acc.is_metadata()) return false;
-    return !acc.is_system() || acc.arg_is_number("count") ||
-           acc.arg_is_number("dftu_cnt") || acc.arg_is_number("dft_cnt");
+    return !acc.is_metadata();
 }
 
 /// The kind of the partial an event that partial_holds belongs to.
 template <class Acc>
 PartialKind partial_kind(const Acc& acc) {
-    return acc.is_profile()  ? PartialKind::Profile
-           : acc.is_system() ? PartialKind::System
-                             : PartialKind::Event;
+    return acc.is_profile()      ? PartialKind::Profile
+           : acc.is_system()     ? PartialKind::System
+           : acc.is_aggregated() ? PartialKind::Aggregated
+                                 : PartialKind::Event;
 }
 
 /// The values of the extra group keys of `cfg` on an event, joined by 0x1F in

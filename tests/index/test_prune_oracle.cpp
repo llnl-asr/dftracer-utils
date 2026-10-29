@@ -536,22 +536,78 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     spill.index_dir = corpus.env.get_dir() + "/idx_spill";
     spill.memory_budget = 64 * 1024;
     index::Indexer::open(corpus.traces, spill).build();
+    // The aggregation tier keys its rows by interned string ids, which follow
+    // the order the build reads the files, and a memory budget changes that
+    // order: its bytes may differ, its answers may not.
     auto contents = [](const std::string& index_path) {
         store::release_index(index_path);
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
         std::vector<std::pair<std::string, std::string>> out;
         db.for_each_record(
             [&out](std::string_view key, std::string_view value) {
+                constexpr std::string_view AGG = "dftu.idx.dftracer.agg|";
+                if (key.rfind(AGG, 0) == 0) return;
                 out.emplace_back(std::string(key), std::string(value));
             });
         return out;
     };
     const auto& trace = corpus.traces.front();
+    const auto spilled =
+        trace::internal::determine_index_path(trace, spill.index_dir);
     const auto a = contents(corpus.index_of(trace));
-    const auto b =
-        contents(trace::internal::determine_index_path(trace, spill.index_dir));
+    const auto b = contents(spilled);
     CHECK(a.size() == b.size());
     CHECK(a == b);
+
+    using trace::views::AggOp;
+    using trace::views::GroupKey;
+    const auto summary = [&](const std::string& index_path) {
+        const auto df = trace::views::View::from_files({{trace, index_path}})
+                            .group_by({GroupKey::cat(), GroupKey::name(),
+                                       GroupKey::pid(), GroupKey::tid()})
+                            .agg({{AggOp::Count, "", "n"},
+                                  {AggOp::Sum, "dur", "dsum"},
+                                  {AggOp::Min, "dur", "dmin"},
+                                  {AggOp::Max, "dur", "dmax"},
+                                  {AggOp::Min, "ts", "tmin"},
+                                  {AggOp::Max, "ts", "tmax"}})
+                            .collect()
+                            .get();
+        std::map<std::string, std::vector<double>> rows;
+        for (std::int64_t r = 0; r < df.num_rows(); ++r) {
+            std::string key;
+            std::vector<double> values;
+            for (std::size_t i = 0; i < df.columns.size(); ++i) {
+                const auto c = df.columns[i].materialize();
+                double v = 0;
+                switch (c.type()) {
+                    case dataframe::TypeId::String:
+                        key.append(c.string_at(r)).push_back('|');
+                        continue;
+                    case dataframe::TypeId::Int64:
+                        v = static_cast<double>(c.data<std::int64_t>()[r]);
+                        break;
+                    case dataframe::TypeId::Uint64:
+                        v = static_cast<double>(c.data<std::uint64_t>()[r]);
+                        break;
+                    default:
+                        REQUIRE(c.type() == dataframe::TypeId::Float64);
+                        v = c.data<double>()[r];
+                }
+                if (df.names[i] == "pid" || df.names[i] == "tid")
+                    key.append(std::to_string(v)).push_back('|');
+                else
+                    values.push_back(v);
+            }
+            REQUIRE(rows.emplace(std::move(key), std::move(values)).second);
+        }
+        return rows;
+    };
+    // The traces are gone, so only the aggregation tier can answer.
+    for (const auto& t : corpus.traces) fs::remove(t);
+    const auto from_full = summary(corpus.index_of(trace));
+    CHECK_FALSE(from_full.empty());
+    CHECK(from_full == summary(spilled));
 }
 
 TEST_CASE("a name two traces hash differently is an arrow to both hashes") {

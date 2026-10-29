@@ -31,12 +31,11 @@ struct ResolveGroupInput {
     std::vector<PendingFile> files;
     bool require_checkpoints;
     bool require_bloom;
-    bool require_aggregation;
     std::size_t checkpoint_size = 0;
     std::optional<ChunkIndexerConfig> bloom_config;
     std::string schema;
-    std::optional<index::schemas::dft::agg::AggregationConfig>
-        aggregation_config;
+    index::schemas::dft::agg::AggregationConfig aggregation_config =
+        index::schemas::dft::agg::standard_aggregation_config();
 };
 
 struct ResolveGroupOutput {
@@ -165,20 +164,17 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         }
         auto registry = db.query_all_file_registry();
 
-        const bool aggregate =
-            input.require_aggregation && input.aggregation_config;
-        const std::uint64_t params =
-            aggregate ? input.aggregation_config->params_hash() : 0;
+        const std::uint64_t params = input.aggregation_config.params_hash();
         if (auto stored = index::schemas::dft::agg::tier::read_config(db)) {
             result.stored_time_interval_us = stored->time_interval_us;
-            if (aggregate && stored->params_hash != params) {
+            if (stored->params_hash != params) {
                 result.aggregation_stale = true;
-                auto same_interval = *input.aggregation_config;
+                auto same_interval = input.aggregation_config;
                 same_interval.time_interval_us = stored->time_interval_us;
                 result.needs_augmentation =
                     same_interval.params_hash() == stored->params_hash;
             }
-        } else if (aggregate) {
+        } else {
             // Partials with no config record are of a build that kept it in
             // another place, and their keys may be in another layout: they
             // are never read, and the tier is built again.
@@ -190,16 +186,6 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 }
         }
         std::vector<std::pair<FileWorkItem, bool>> agg_candidates;
-        // A file rebuilt whole writes its own partials and system rows again
-        // when the build aggregates, so only its own aggregation is replaced.
-        // A build that does not aggregate replaces nothing, and the whole
-        // tier is stale.
-        auto rebuilt_whole = [&](int file_id) {
-            if (file_id < 0 ||
-                !db.extension_state(file_id, index::store::IndexExtension::Agg))
-                return;
-            if (!aggregate) result.aggregation_stale = true;
-        };
 
         for (auto& f : input.files) {
             auto reg_it = registry.find(f.logical_path);
@@ -223,7 +209,6 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                     "rebuilding",
                     f.file_path.c_str());
                 result.stale_detected = true;
-                rebuilt_whole(reg.file_id);
                 result.needs_checkpoint.push_back(FileWorkItem{
                     f.file_index, std::move(f.file_path), reg.file_id, {}, {}});
                 continue;
@@ -235,7 +220,6 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 schema_current(db, reg.file_id, input.schema);
 
             if (input.require_checkpoints && !has_checkpoints) {
-                rebuilt_whole(reg.file_id);
                 result.needs_checkpoint.push_back(FileWorkItem{
                     f.file_index, std::move(f.file_path), reg.file_id, {}, {}});
                 continue;
@@ -247,7 +231,6 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             if (input.require_checkpoints && input.checkpoint_size != 0) {
                 const auto stored_ckpt = db.get_checkpoint_size(reg.file_id);
                 if (stored_ckpt != 0 && stored_ckpt != input.checkpoint_size) {
-                    rebuilt_whole(reg.file_id);
                     result.needs_checkpoint.push_back(
                         FileWorkItem{f.file_index,
                                      std::move(f.file_path),
@@ -261,25 +244,22 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             std::string schema =
                 db.file_schema(reg.file_id).value_or(std::string{});
             bool needs_agg = false;
-            if (aggregate) {
-                if (find_schema(schema)) {
-                    const auto agg_state = db.extension_state(
-                        reg.file_id, index::store::IndexExtension::Agg);
-                    // Rows stored by another version of the tier are of
-                    // another layout, and the index-wide records cannot hold
-                    // two layouts at once: the tier is cleared and rebuilt,
-                    // never merged onto.
-                    if (agg_state && agg_state->version !=
-                                         index::store::layout::ext_version(
-                                             index::store::IndexExtension::Agg))
-                        result.aggregation_stale = true;
-                    const bool current = agg_current(agg_state, params);
-                    agg_candidates.emplace_back(
-                        FileWorkItem{
-                            f.file_index, f.file_path, reg.file_id, {}, schema},
-                        current);
-                    needs_agg = !current;
-                }
+            if (find_schema(schema)) {
+                const auto agg_state = db.extension_state(
+                    reg.file_id, index::store::IndexExtension::Agg);
+                // Rows stored by another version of the tier are of another
+                // layout, and the index-wide records cannot hold two layouts
+                // at once: the tier is cleared and rebuilt, never merged onto.
+                if (agg_state && agg_state->version !=
+                                     index::store::layout::ext_version(
+                                         index::store::IndexExtension::Agg))
+                    result.aggregation_stale = true;
+                const bool current = agg_current(agg_state, params);
+                agg_candidates.emplace_back(
+                    FileWorkItem{
+                        f.file_index, f.file_path, reg.file_id, {}, schema},
+                    current);
+                needs_agg = !current;
             }
             if (input.require_bloom) {
                 auto tier = stale_tier(db, reg.file_id, input.bloom_config,
@@ -425,7 +405,6 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             group_input.files = std::move(files);
             group_input.require_checkpoints = input.require_checkpoints;
             group_input.require_bloom = input.require_bloom;
-            group_input.require_aggregation = input.require_aggregation;
             group_input.checkpoint_size = input.checkpoint_size;
             group_input.bloom_config = input.bloom_config;
             group_input.schema = input.schema;
@@ -448,7 +427,6 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             group_input.files = std::move(files);
             group_input.require_checkpoints = input.require_checkpoints;
             group_input.require_bloom = input.require_bloom;
-            group_input.require_aggregation = input.require_aggregation;
             group_input.checkpoint_size = input.checkpoint_size;
             group_input.bloom_config = input.bloom_config;
             group_input.schema = input.schema;

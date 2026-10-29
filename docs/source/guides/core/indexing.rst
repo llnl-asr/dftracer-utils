@@ -20,8 +20,8 @@ without worrying about redundant work.
 
    .. tab-item:: Python
 
-      ``Indexer`` builds the checkpoint and bloom-filter tiers (and,
-      optionally, the aggregation partials). ``ensure_indexed()`` checks what is
+      ``Indexer`` builds the checkpoint, bloom-filter and aggregation tiers.
+      ``ensure_indexed()`` checks what is
       already built and only builds what is missing:
 
       .. code-block:: python
@@ -43,7 +43,8 @@ without worrying about redundant work.
       exists.
 
       Both ``require_checkpoint`` and ``require_bloom`` default to ``True``.
-      Add the aggregation partials with ``require_aggregation``:
+      Every build also makes the aggregation tier, with one standard config
+      (1 s windows, percentiles on); ``aggregation_config`` customizes it:
 
       .. code-block:: python
 
@@ -51,7 +52,7 @@ without worrying about redundant work.
 
          with Indexer(
              "traces/",
-             require_aggregation=AggregationConfig(time_interval_ms=1000),
+             aggregation_config=AggregationConfig(time_interval_ms=5000),
          ) as ix:
              ix.ensure_indexed()  # one fused pass builds all three tiers
 
@@ -335,8 +336,8 @@ rebuilding the rest.
 (the chunks a View row or aggregation scan reads) and, for each pruning extension, the chunks it would rule
 out if it were the only one. It writes nothing. A dropped extension is built
 again by the next build only while ``extensions`` names it. ``core.members``,
-``core.rowset`` and ``dftracer.agg`` (the aggregation partials, rebuilt by a build
-with ``require_aggregation``) cannot be rebuilt or dropped alone.
+``core.rowset`` and ``dftracer.agg`` (the aggregation partials, which every build
+makes) cannot be rebuilt or dropped alone.
 
 Index traces that are not dftracer traces
 ------------------------------------------

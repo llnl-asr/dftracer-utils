@@ -30,6 +30,7 @@ using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::IndexExtension;
 using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::GroupKey;
+using dftracer::utils::trace::views::Phase;
 using dftracer::utils::trace::views::View;
 using dftracer::utils::trace::views::ViewFile;
 using dftu_utils_test::TestEnvironment;
@@ -119,6 +120,7 @@ double count_reads(const std::vector<std::string>& traces) {
     std::vector<ViewFile> files;
     for (const auto& t : traces) files.push_back({t, index_of(t)});
     const auto df = View::from_files(std::move(files))
+                        .phase(Phase::Events)
                         .group_by({GroupKey::name()})
                         .agg({{AggOp::Count, "", "n"}})
                         .collect()
@@ -267,8 +269,19 @@ TEST_SUITE("AggExtension") {
         // later build must still be able to open for writing.
         CHECK(count_reads({a}) == 30);
         const auto b = write_trace(env.get_dir(), "b", 20, 500'000);
-        // B joins the index without aggregation, so the tier holds only A.
-        Indexer::open({a, b}).build();
+        auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
+        ix.build();
+        // B loses its aggregation data, so the tier holds only A.
+        {
+            const int fid = file_id(b);
+            IndexDatabase db(index_of(b));
+            auto w = db.begin_write();
+            index::store::records::clear_file(
+                *w, index::store::layout::Ext::Agg, fid);
+            w->commit();
+        }
+        const auto entry = agg_entry(ix, b);
+        CHECK_FALSE((entry && entry->current));
         CHECK(count_reads({a, b}) == 50);
     }
 }

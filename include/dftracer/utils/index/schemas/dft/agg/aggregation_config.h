@@ -95,12 +95,21 @@ struct AggregationConfig {
             text(be.output_name);
         }
         h.update_value(track_process_parents);
-        // An aggregation built without chunk partials or their time bins is
-        // stale.
-        text("partials+bins");
+        // An aggregation built without chunk partials, their time bins or the
+        // partials of samples and aggregated records is stale.
+        text("partials+bins+samples");
         return h.finish();
     }
 };
+
+/// The aggregation every index build makes: the struct defaults with the
+/// percentile sketches on. A caller may pass a config of its own, but there is
+/// no build without the tier.
+inline AggregationConfig standard_aggregation_config() {
+    AggregationConfig config;
+    config.compute_percentiles = true;
+    return config;
+}
 
 /// The start of the window of `timestamp`: it is rounded down to a multiple of
 /// the interval, from the reference timestamp with relative time. An interval

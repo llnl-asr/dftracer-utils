@@ -209,6 +209,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/merged_statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/schemas/dft/chunk_statistics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/chunk_indexer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/aggregation_run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/batch_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/resolver.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/build/index_write_lock.cpp

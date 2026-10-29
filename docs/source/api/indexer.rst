@@ -26,11 +26,13 @@ How the indexer types relate:
    :undoc-members:
    :show-inheritance:
 
-Aggregation is enabled by passing ``require_aggregation=True`` (defaults) or
-``require_aggregation=AggregationConfig(...)``. The aggregation knobs
-(``time_interval_ms``, ``group_keys``, ``custom_metric_fields``,
-``compute_percentiles``, ``group_by_file``) are fields of
-:class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer`` arguments.
+Every index build makes the aggregation tier, with one standard config: 1 s
+windows, the percentile sketches on, and the file hash in the key. The
+aggregation knobs (``time_interval_ms``, ``group_keys``,
+``custom_metric_fields``, ``compute_percentiles``, ``group_by_file``) are
+fields of :class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer``
+arguments, and ``aggregation_config=AggregationConfig(...)`` customizes the
+tier. There is no switch that turns it off.
 
 Three arguments steer what the build keeps. ``extensions`` picks the pruning
 extensions from ``"zonemap"``, ``"bloom"``, ``"counts"`` and ``"postings"``
@@ -44,9 +46,9 @@ size string.
 AggregationConfig
 -----------------
 
-Configuration for the aggregation partials, passed via
-``require_aggregation=AggregationConfig(...)``. Exported from
-``dftracer.utils``.
+Configuration for the aggregation tier, passed via
+``aggregation_config=AggregationConfig(...)``. Its defaults are the standard
+config. Exported from ``dftracer.utils``.
 
 .. autoclass:: dftracer.utils.AggregationConfig
    :members:

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -64,43 +65,12 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_tier(
 
 namespace agg = index::schemas::dft::agg;
 
-// The aggregation of one build into one index's tier.
-struct AggRun {
-    std::shared_ptr<index::store::IndexDatabase> db;
-    IndexBuildBatchConfig::AggFoldFactory factory;
-};
-
-AggRun start_aggregation(const std::string& index_path,
-                         const agg::AggregationConfig& config) {
-    AggRun run;
-    run.db = std::make_shared<index::store::IndexDatabase>(
-        index_path, index::store::IndexOpenMode::ReadWrite);
-    auto intern = agg::intern_for_index(index_path);
-    agg::tier::load_dictionary(*run.db, *intern);
-    agg::tier::write_config(*run.db,
-                            {config.time_interval_us, config.params_hash(),
-                             config.group_by_file, config.extra_group_keys});
-    auto cfg = std::make_shared<agg::AggregationConfig>(config);
-    run.factory = [cfg, intern](
-                      dftracer::utils::dstd::StringIntern& build_intern,
-                      int file_id) {
-        return std::make_unique<agg::AggregationFold>(build_intern, intern,
-                                                      *cfg, file_id);
-    };
-    return run;
-}
-
-// Persists what the folds of `batch` left out of band.
-void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
-    agg::merge_aggregation_folds(batch.agg_outputs, *run.db);
-}
-
 // Aggregates files whose members are current, leaving every other extension.
 coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
     CoroScope* scope, std::vector<std::string> files,
     const ResolveAndBuildInput& input, const std::string& index_path,
     const std::string& schema, std::size_t parallelism) {
-    AggRun run = start_aggregation(index_path, *input.aggregation_config);
+    AggRun run = start_aggregation(index_path, input.aggregation_config);
     auto config = std::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
     config->index_dir = input.index_dir;
@@ -162,7 +132,6 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
     resolve_input.index_dir = input.index_dir;
     resolve_input.require_checkpoints = input.require_checkpoints;
     resolve_input.require_bloom = input.require_bloom;
-    resolve_input.require_aggregation = input.require_aggregation;
     resolve_input.checkpoint_size = input.checkpoint_size;
     resolve_input.aggregation_config = input.aggregation_config;
     resolve_input.schema = input.schema;
@@ -185,13 +154,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                 trace::internal::determine_index_path(file, input.index_dir);
             if (fs::exists(root)) stale_tiers.insert(std::move(root));
         }
-    for (const auto& root : stale_tiers) {
-        DFTRACER_UTILS_LOG_INFO("Clearing the aggregation tier of %s",
-                                root.c_str());
-        index::store::IndexDatabase db(root,
-                                       index::store::IndexOpenMode::ReadWrite);
-        agg::tier::clear(db);
-    }
+    for (const auto& root : stale_tiers) clear_aggregation(root);
 
     std::vector<std::string> files_needing_work;
     if (input.force_rebuild) {
@@ -227,17 +190,14 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             for (auto& f : failures) result.failures.push_back(std::move(f));
         }
 
-        if (input.require_aggregation && input.aggregation_config) {
-            std::map<std::string, std::vector<std::string>> agg_by_schema;
-            for (const auto& item : result.needs_aggregation)
-                agg_by_schema[item.schema].push_back(item.file_path);
-            for (auto& [schema, files] : agg_by_schema) {
-                auto failures = co_await build_aggregation(
-                    scope, std::move(files), input, result.index_path, schema,
-                    parallelism);
-                for (auto& f : failures)
-                    result.failures.push_back(std::move(f));
-            }
+        std::map<std::string, std::vector<std::string>> agg_by_schema;
+        for (const auto& item : result.needs_aggregation)
+            agg_by_schema[item.schema].push_back(item.file_path);
+        for (auto& [schema, files] : agg_by_schema) {
+            auto failures = co_await build_aggregation(scope, std::move(files),
+                                                       input, result.index_path,
+                                                       schema, parallelism);
+            for (auto& f : failures) result.failures.push_back(std::move(f));
         }
     }
 
@@ -288,10 +248,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         }
         const bool staging = scratch && scratch->valid();
 
-        std::optional<AggRun> agg_run;
-        if (input.require_aggregation && input.aggregation_config)
-            agg_run =
-                start_aggregation(build_index_path, *input.aggregation_config);
+        std::optional<AggRun> agg_run{
+            start_aggregation(build_index_path, input.aggregation_config)};
 
         auto batch_config =
             std::make_shared<index::build::IndexBuildBatchConfig>();
@@ -321,7 +279,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             input.bloom_config.extra_dimensions.begin(),
             input.bloom_config.extra_dimensions.end());
 
-        if (agg_run) batch_config->agg_fold_factory = agg_run->factory;
+        batch_config->agg_fold_factory = agg_run->factory;
 
         auto batch_result = co_await index::build::BatchBuilder::process(
             scope, std::move(batch_config));
@@ -330,7 +288,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                 result.failures.push_back({r.file_path, r.error_message});
         }
 
-        if (agg_run) finish_aggregation(*agg_run, batch_result);
+        finish_aggregation(*agg_run, batch_result);
 
         // Publish once every handle to the staged store is closed, so the
         // re-resolve below reads the destination.
@@ -371,15 +329,18 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
 
 }  // namespace
 
-coro::CoroTask<std::vector<utilities::filesystem::FileEntry>>
-files_needing_index(ResolverInput input) {
+coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
     auto result = co_await resolve_dropping_outdated(std::move(input), false);
     std::vector<FileWorkItem> items;
     std::set<std::size_t> seen;
-    for (const auto* group : {&result.needs_checkpoint, &result.needs_bloom})
+    for (const auto* group : {&result.needs_checkpoint, &result.needs_bloom,
+                              &result.needs_aggregation})
         for (const auto& item : *group)
             if (seen.insert(item.file_index).second) items.push_back(item);
-    co_return scanned_entries(result, items);
+    IndexWork work;
+    work.files = scanned_entries(result, items);
+    work.stale_aggregation_roots = std::move(result.stale_aggregation_roots);
+    co_return work;
 }
 
 coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,

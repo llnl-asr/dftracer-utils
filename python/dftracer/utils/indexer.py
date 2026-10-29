@@ -21,23 +21,26 @@ FileInfo = Tuple[Dict[int, str], Dict[int, Set[int]]]
 
 @dataclass
 class AggregationConfig:
-    """Configuration for aggregation tier indexing.
+    """Configuration for the aggregation tier every index build makes.
+
+    The defaults are the standard config: 1 s windows with the percentile
+    sketches on. A caller may change any field, but the tier is always built.
 
     Attributes:
-        time_interval_ms: Time bucket size in milliseconds (default 5000).
+        time_interval_ms: Time bucket size in milliseconds (default 1000).
         group_keys: Extra grouping dimensions (default None).
         custom_metric_fields: Extra numeric args fields to aggregate (default None).
-        compute_percentiles: Enable percentile sketch collection (default False).
+        compute_percentiles: Collect percentile sketches (default True).
         group_by_file: Keep the file hash in the aggregation key (default True).
             A trace touching millions of files makes that key nearly as fine as
             the events themselves; turning it off collapses the rows and counts
             distinct files with a sketch instead (`file_nunique`).
     """
 
-    time_interval_ms: Union[float, str] = 5000.0
+    time_interval_ms: Union[float, str] = 1000.0
     group_keys: Optional[List[str]] = None
     custom_metric_fields: Optional[List[str]] = None
-    compute_percentiles: bool = False
+    compute_percentiles: bool = True
     group_by_file: bool = True
 
 
@@ -119,7 +122,7 @@ class Indexer:
     Supports tiered indexing:
     - Tier 1: Checkpoints (for random access)
     - Tier 2: Bloom filters (for fast filtering)
-    - Tier 3: Aggregation data (config-dependent)
+    - Tier 3: Aggregation data, built by every build
 
     At least one of 'directory' or 'files' must be provided.
 
@@ -133,7 +136,8 @@ class Indexer:
             BloomConfig naming the args fields to index (default True).
         build_bloom: Build the bloom/stats/dimension tier (default True). Off
             for aggregation-only consumers that never read it.
-        require_aggregation: Aggregation config or True for defaults (default None).
+        aggregation_config: Settings of the aggregation tier, which every build
+            builds (default: the standard config).
         parallelism: Number of parallel workers (0 = all cores).
         force_rebuild: Force rebuild even if index exists.
         runtime: Runtime for executor parallelism (default: global runtime).
@@ -156,10 +160,10 @@ class Indexer:
         >>> indexer = Indexer(files=["/path/to/trace1.pfw.gz", "/path/to/trace2.pfw.gz"])
         >>> indexer.ensure_indexed()
 
-        >>> # With aggregation
+        >>> # With a customized aggregation
         >>> indexer = Indexer(
         ...     "/path/to/traces",
-        ...     require_aggregation=AggregationConfig(time_interval_ms=1000),
+        ...     aggregation_config=AggregationConfig(time_interval_ms=5000),
         ... )
         >>> indexer.ensure_indexed()  # fused pass with aggregation
     """
@@ -172,7 +176,7 @@ class Indexer:
         require_checkpoint: bool = True,
         require_bloom: Union[bool, BloomConfig] = True,
         build_bloom: bool = True,
-        require_aggregation: Optional[Union[bool, AggregationConfig]] = None,
+        aggregation_config: Optional[AggregationConfig] = None,
         checkpoint_size: Union[int, str] = DEFAULT_CHECKPOINT_SIZE,
         parallelism: int = 0,
         force_rebuild: bool = False,
@@ -183,13 +187,9 @@ class Indexer:
     ):
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
 
-        # Normalize aggregation config
-        if require_aggregation is True:
-            agg_config = AggregationConfig()
-        elif isinstance(require_aggregation, AggregationConfig):
-            agg_config = require_aggregation
-        else:
-            agg_config = None
+        # The aggregation tier is built by every build; a caller customizes it
+        # and otherwise gets the standard config.
+        agg_config = aggregation_config if aggregation_config is not None else AggregationConfig()
 
         bloom = require_bloom if isinstance(require_bloom, BloomConfig) else BloomConfig()
 
@@ -202,16 +202,11 @@ class Indexer:
             require_checkpoint=require_checkpoint,
             require_bloom=bool(require_bloom),
             build_bloom=build_bloom,
-            require_aggregation=agg_config is not None,
-            time_interval_ms=(
-                coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms")
-                if agg_config
-                else 5000.0
-            ),
-            group_keys=agg_config.group_keys if agg_config else None,
-            custom_metric_fields=agg_config.custom_metric_fields if agg_config else None,
-            compute_percentiles=agg_config.compute_percentiles if agg_config else False,
-            group_by_file=agg_config.group_by_file if agg_config else True,
+            time_interval_ms=coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms"),
+            group_keys=agg_config.group_keys,
+            custom_metric_fields=agg_config.custom_metric_fields,
+            compute_percentiles=agg_config.compute_percentiles,
+            group_by_file=agg_config.group_by_file,
             checkpoint_size=checkpoint_size,
             parallelism=parallelism,
             force_rebuild=force_rebuild,
@@ -242,8 +237,8 @@ class Indexer:
         self._closed = True
 
     @property
-    def aggregation_config(self) -> Optional[AggregationConfig]:
-        """Aggregation configuration, if enabled."""
+    def aggregation_config(self) -> AggregationConfig:
+        """The settings the aggregation tier is built with."""
         return self._aggregation_config
 
     def resolve(self) -> IndexStatus:
@@ -404,6 +399,5 @@ def _open_readonly_indexer(files, index_path: str) -> "Indexer":
         index_dir=os.path.dirname(index_path) if index_path else "",
         require_checkpoint=False,
         require_bloom=False,
-        require_aggregation=False,
         force_rebuild=False,
     )

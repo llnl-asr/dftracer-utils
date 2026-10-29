@@ -212,21 +212,23 @@ def test_tier_and_scan_give_the_same_std(tmp_path):
     ref = two_pass(durs.astype(np.float64))
     path = str(tmp_path / "t.pfw.gz")
     write_trace(path, durs)
-    agg, plain = str(tmp_path / "agg"), str(tmp_path / "plain")
+    agg = str(tmp_path / "agg")
     with du.Indexer(
-        files=[path], index_dir=agg, require_aggregation=AggregationConfig(time_interval_ms=100000)
+        files=[path], index_dir=agg, aggregation_config=AggregationConfig(time_interval_ms=100000)
     ) as ix:
         ix.ensure_indexed()
-    with du.Indexer(files=[path], index_dir=plain) as ix:
-        ix.ensure_indexed()
 
-    def run(idx):
-        tv = TraceViewer([path], index_path=idx).group_by("name").agg("std:dur", "var:dur")
-        r = tv.collect().to_pandas()
+    def run(scan):
+        tv = TraceViewer([path], index_path=agg)
+        # The tier cannot evaluate a filter on ts, so this one makes the view
+        # scan every record.
+        if scan:
+            tv = tv.filter("ts >= 0")
+        r = tv.group_by("name").agg("std:dur", "var:dur").collect().to_pandas()
         return float(r["std_dur"][0]), float(r["var_dur"][0])
 
-    tier_std, tier_var = run(agg)
-    scan_std, scan_var = run(plain)
+    tier_std, tier_var = run(False)
+    scan_std, scan_var = run(True)
     assert rel(scan_std, ref["std"]) < TOL
     assert rel(tier_std, ref["std"]) < TOL
     assert rel(tier_var, ref["var"]) < TOL

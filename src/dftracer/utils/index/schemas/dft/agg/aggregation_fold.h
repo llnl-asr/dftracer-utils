@@ -46,6 +46,9 @@ class PodAccessor {
         return ev_.phase == trace::RecordPhase::Metadata;
     }
     bool is_counter() const { return ev_.phase == trace::RecordPhase::Counter; }
+    bool is_aggregated() const {
+        return ev_.phase == trace::RecordPhase::Aggregated;
+    }
     bool is_profile() const { return is_counter() && cat() != "sys"; }
     bool is_system() const { return is_counter() && cat() == "sys"; }
     std::string_view name() const { return resolve(ev_.name_id); }

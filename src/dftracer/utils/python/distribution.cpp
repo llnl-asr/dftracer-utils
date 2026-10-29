@@ -241,7 +241,8 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         rt = dftracer::utils::python::get_default_runtime();
     }
 
-    // Optional aggregation config, extracted from the Python dataclass.
+    // The aggregation tier is built by every batch; the Python dataclass only
+    // customizes its config.
     std::shared_ptr<
         dftracer::utils::index::schemas::dft::agg::AggregationConfig>
         agg_config_ptr;
@@ -250,6 +251,11 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::index::schemas::dft::agg::AggregationConfig>(
             dftracer::utils::python::agg_config_from_py(
                 aggregation_config_obj));
+    else
+        agg_config_ptr = std::make_shared<
+            dftracer::utils::index::schemas::dft::agg::AggregationConfig>(
+            dftracer::utils::index::schemas::dft::agg::
+                standard_aggregation_config());
 
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(files);
@@ -286,7 +292,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         };
     }
 
-    if (agg_config_ptr) {
+    {
         auto agg_intern =
             dftracer::utils::index::schemas::dft::agg::intern_for_index(
                 index_dir);
@@ -377,9 +383,10 @@ static PyMethodDef DistributionMethods[] = {
      "build_index_batch(files, index_dir, ...) -> bytes\n"
      "Run the indexer pipeline on `files` into the index at `index_dir`, "
      "which this worker writes directly and numbers its own files in. "
+     "Its aggregation folds are always created; `aggregation_config` "
+     "customizes them and defaults to the standard config. "
      "Returns the serialized merged AssociationTracker of the batch's "
-     "aggregation folds (empty bytes when no aggregation_config was "
-     "passed)."},
+     "aggregation folds (empty bytes when the batch produced none)."},
     {"plan_lpt_partition", DFTU_PYCFUNCTION(plan_lpt_partition_fn),
      METH_VARARGS,
      "plan_lpt_partition(entries, num_workers) -> list[list[(path, size)]]\n"

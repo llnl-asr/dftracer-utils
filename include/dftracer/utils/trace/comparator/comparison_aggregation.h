@@ -54,11 +54,6 @@ struct ComparisonFilter {
     bool same_cut(const ComparisonFilter& other) const;
 };
 
-/// The aggregation config the comparator builds its indexes with and queries
-/// them with. Percentiles are on, so the partials hold the quantile stores and
-/// the quantile query merges them without a re-read.
-index::schemas::dft::agg::AggregationConfig comparison_index_config();
-
 /// The filter that `query` stands for. A conjunction of `cat`, `name` and
 /// `pid` equalities and `in` lists, of `ts` comparisons against integers, and
 /// of `or` between sets of one of those fields becomes sets and a range,

@@ -47,7 +47,7 @@ def build(files, index_dir):
     with Indexer(
         files=files,
         index_dir=index_dir,
-        require_aggregation=AggregationConfig(time_interval_ms=5000),
+        aggregation_config=AggregationConfig(time_interval_ms=5000),
     ) as ix:
         ix.ensure_indexed()
 
@@ -91,7 +91,7 @@ def test_an_index_built_by_the_released_version_is_reused_or_rebuilt(tmp_path):
         f"""
         from dftracer.utils import Indexer, AggregationConfig
         with Indexer(files=[{trace!r}], index_dir={index!r},
-                     require_aggregation=AggregationConfig(time_interval_ms=5000)) as ix:
+                     aggregation_config=AggregationConfig(time_interval_ms=5000)) as ix:
             ix.ensure_indexed()
         """
     )

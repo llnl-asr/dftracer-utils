@@ -71,7 +71,6 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->require_checkpoint = 1;
         self->require_bloom = 1;
         self->build_bloom = 1;
-        self->require_aggregation = 0;
         self->bloom_fields = nullptr;
         self->extensions = nullptr;
         self->memory_budget = 0;
@@ -82,10 +81,10 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->path_budget = ChunkIndexerConfig{}.path_budget;
         self->stats_share = ChunkIndexerConfig{}.stats_share;
         self->auto_max_distinct = ChunkIndexerConfig{}.auto_max_distinct;
-        self->time_interval_ms = 5000.0;
+        self->time_interval_ms = 1000.0;
         self->group_keys = nullptr;
         self->custom_metric_fields = nullptr;
-        self->compute_percentiles = 0;
+        self->compute_percentiles = 1;
         self->group_by_file = 1;
         self->checkpoint_size =
             dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE;
@@ -102,7 +101,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
                                    "require_checkpoint",
                                    "require_bloom",
                                    "build_bloom",
-                                   "require_aggregation",
                                    "time_interval_ms",
                                    "group_keys",
                                    "custom_metric_fields",
@@ -129,11 +127,10 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     int require_checkpoint = 1;
     int require_bloom = 1;
     int build_bloom = 1;
-    int require_aggregation = 0;
-    double time_interval_ms = 5000.0;
+    double time_interval_ms = 1000.0;
     PyObject* group_keys_obj = Py_None;
     PyObject* custom_metrics_obj = Py_None;
-    int compute_percentiles = 0;
+    int compute_percentiles = 1;
     int group_by_file = 1;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
         dftracer::utils::constants::indexer::DEFAULT_CHECKPOINT_SIZE);
@@ -153,10 +150,9 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* schema_obj = Py_None;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOsppppdOOppnnpOOdnndnOKO",
-            const_cast<char**>(kwlist), &directory, &files_obj, &index_dir,
-            &require_checkpoint, &require_bloom, &build_bloom,
-            &require_aggregation, &time_interval_ms, &group_keys_obj,
+            args, kwds, "|sOspppdOOppnnpOOdnndnOKO", const_cast<char**>(kwlist),
+            &directory, &files_obj, &index_dir, &require_checkpoint,
+            &require_bloom, &build_bloom, &time_interval_ms, &group_keys_obj,
             &custom_metrics_obj, &compute_percentiles, &group_by_file,
             &checkpoint_size, &parallelism, &force_rebuild, &runtime_arg,
             &bloom_fields_obj, &false_positive_rate, &expected_entries,
@@ -252,7 +248,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     self->require_checkpoint = require_checkpoint;
     self->require_bloom = require_bloom;
     self->build_bloom = build_bloom;
-    self->require_aggregation = require_aggregation;
     self->time_interval_ms = time_interval_ms;
     self->compute_percentiles = compute_percentiles;
     self->group_by_file = group_by_file;
@@ -310,12 +305,7 @@ static Runtime* get_batch_indexer_runtime(IndexerObject* self) {
     return dftracer::utils::python::get_default_runtime();
 }
 
-static std::optional<AggregationConfig> build_aggregation_config(
-    IndexerObject* self) {
-    if (!self->require_aggregation) {
-        return std::nullopt;
-    }
-
+static AggregationConfig build_aggregation_config(IndexerObject* self) {
     AggregationConfig config;
     config.time_interval_us =
         static_cast<std::uint64_t>(self->time_interval_ms * 1000.0);
@@ -870,8 +860,8 @@ PyTypeObject IndexerType = {
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
     "BatchIndexer(directory='', files=None, index_dir='',\n"
     "             require_checkpoint=True, require_bloom=True,\n"
-    "             time_interval_ms=5000.0, group_keys=None,\n"
-    "             custom_metric_fields=None, compute_percentiles=False,\n"
+    "             time_interval_ms=1000.0, group_keys=None,\n"
+    "             custom_metric_fields=None, compute_percentiles=True,\n"
     "             parallelism=0, force_rebuild=False, runtime=None)\n"
     "--\n\n"
     "Indexer with tiered index building.\n\n"
@@ -881,7 +871,10 @@ PyTypeObject IndexerType = {
     "Supports:\n"
     "- Tier 1: Checkpoints (require_checkpoint)\n"
     "- Tier 2: Bloom filters (require_bloom)\n"
-    "- Tier 3: Aggregation (require_aggregation + config params)\n",
+    "- Tier 3: Aggregation, which every build makes; the time_interval_ms,\n"
+    "  group_keys, custom_metric_fields, compute_percentiles and "
+    "group_by_file\n"
+    "  arguments set its config, whose defaults are the standard config\n",
     0,
     0,
     0,

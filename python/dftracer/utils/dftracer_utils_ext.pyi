@@ -101,11 +101,10 @@ class Indexer:
         require_checkpoint: bool = True,
         require_bloom: bool = True,
         build_bloom: bool = True,
-        require_aggregation: bool = False,
-        time_interval_ms: float = 5000.0,
+        time_interval_ms: float = 1000.0,
         group_keys: Optional[List[str]] = None,
         custom_metric_fields: Optional[List[str]] = None,
-        compute_percentiles: bool = False,
+        compute_percentiles: bool = True,
         group_by_file: bool = True,
         checkpoint_size: int = 32 * 1024 * 1024,
         parallelism: int = 0,
@@ -132,8 +131,8 @@ class Indexer:
                 directory-local paths.
             require_checkpoint: If True, build checkpoint index (tier 1).
             require_bloom: If True, build bloom filter data (tier 2).
-            require_aggregation: If True, build aggregation data (tier 3).
-            time_interval_ms: Time interval for aggregation in milliseconds.
+            time_interval_ms: Time interval for the aggregation tier, which
+                every build makes, in milliseconds.
             group_keys: Keys to group by for aggregation.
             custom_metric_fields: Custom metric fields for aggregation.
             compute_percentiles: If True, compute percentiles during aggregation.
@@ -432,9 +431,10 @@ def build_index_batch(
     progress: Optional[Callable[[int, int], None]] = None,
 ) -> bytes:
     """Run the indexer pipeline on `files` into the index at `index_dir`,
-    which this worker writes directly and numbers its own files in. Returns
-    the serialized merged AssociationTracker of the batch (empty bytes when
-    `aggregation_config` is None)."""
+    which this worker writes directly and numbers its own files in. Its
+    aggregation folds are always created; `aggregation_config` customizes
+    them and defaults to the standard config. Returns the serialized merged
+    AssociationTracker of the batch (empty bytes when it produced none)."""
     ...
 
 def plan_lpt_partition(

@@ -382,12 +382,6 @@ bool ComparisonFilter::same_cut(const ComparisonFilter& other) const {
            ts_begin == other.ts_begin && ts_end == other.ts_end;
 }
 
-index::schemas::dft::agg::AggregationConfig comparison_index_config() {
-    index::schemas::dft::agg::AggregationConfig config;
-    config.compute_percentiles = true;
-    return config;
-}
-
 Result<ComparisonFilter> filter_from_query(const duql::Query& query) {
     Translator t;
     auto f = t.node(query.root());
@@ -536,7 +530,7 @@ coro::CoroTask<Result<SideAggregate>> aggregate_side(
             base.sources[it->second].files.emplace_back(f);
         }
     }
-    base.config = comparison_index_config();
+    base.config = index::schemas::dft::agg::standard_aggregation_config();
     base.workers = workers;
 
     // Filters that cut the events alike share their queries.

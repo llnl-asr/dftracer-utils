@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -177,12 +178,37 @@ std::optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
     return keys;
 }
 
+bool reads_lookup(const duql::QueryNode& node) {
+    return std::visit(
+        [](const auto& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, duql::AndNode> ||
+                          std::is_same_v<T, duql::OrNode>) {
+                return reads_lookup(*n.left) || reads_lookup(*n.right);
+            } else if constexpr (std::is_same_v<T, duql::NotNode>) {
+                return reads_lookup(*n.operand);
+            } else if constexpr (std::is_same_v<T, duql::ExprLeaf>) {
+                bool found = false;
+                duql::for_each_term(*n.term, [&found](const duql::Term& t) {
+                    found =
+                        found || std::holds_alternative<duql::TLookup>(t.node);
+                });
+                return found;
+            } else {
+                return false;
+            }
+        },
+        node.data);
+}
+
 // Filter fields the partials answer: the ones a group key or a set of the
 // query names.
 bool query_answerable(const ViewPlan& plan) {
     const duql::Query& q = *plan.query;
     // Aggregated records keep no array elements.
     if (!q.any_paths().empty()) return false;
+    // The view binds a row set's rows only on the scan path.
+    if (reads_lookup(q.root())) return false;
     for (std::string_view f : q.fields()) {
         const std::string t = tier_field(plan, f);
         if (t != "name" && t != "pid" && t != "tid" && t != "fhash" &&
@@ -706,6 +732,17 @@ AggQueryResult run_or_throw(Result<AggQueryResult>&& r) {
     return std::move(*r);
 }
 
+// Says, at debug level, how the partials answered a query.
+void log_answer(const AggQueryStats& st) {
+    DFTRACER_UTILS_LOG_DEBUG(
+        "View: the index partials answered over %zu files: %zu partials read, "
+        "%zu merged, %zu pruned, %zu split by time bins, %zu re-read in %zu "
+        "chunks (%llu events), %zu unanswered",
+        st.files, st.partials_read, st.partials_merged, st.partials_pruned,
+        st.partials_binned, st.partials_reread, st.chunks_reread,
+        static_cast<unsigned long long>(st.events_read), st.unanswered);
+}
+
 }  // namespace
 
 coro::CoroTask<bool> partials_collect(const ViewPlan& plan,
@@ -714,13 +751,20 @@ coro::CoroTask<bool> partials_collect(const ViewPlan& plan,
     if (!prep) co_return false;
     auto ran = co_await run_agg_query(prep->query);
     AggQueryResult result = run_or_throw(std::move(ran));
-    if (result.stats.unanswered != 0) co_return false;
+    log_answer(result.stats);
+    if (result.stats.unanswered != 0) {
+        declined(
+            "partials that only a re-read could answer, which the "
+            "query may not do");
+        co_return false;
+    }
 
     Seeder seeder(plan, *prep, result);
     auto state = seeder.new_state();
     std::vector<std::string> keys;
+    const bool events_only = plan.phase == Phase::Events;
     for (const auto& [key, partial] : result.rows) {
-        if (key.kind != AggKind::Event) continue;
+        if (events_only && key.kind != AggKind::Event) continue;
         seeder.keys_of(key, keys);
         seeder.seed(*state, keys, partial);
     }
@@ -743,7 +787,13 @@ coro::CoroTask<bool> partials_collect_typed(
 
     auto ran = co_await run_agg_query(prep->query);
     AggQueryResult result = run_or_throw(std::move(ran));
-    if (result.stats.unanswered != 0) co_return false;
+    log_answer(result.stats);
+    if (result.stats.unanswered != 0) {
+        declined(
+            "partials that only a re-read could answer, which the "
+            "query may not do");
+        co_return false;
+    }
 
     Seeder seeder(plan, *prep, result);
     auto events = seeder.new_state();

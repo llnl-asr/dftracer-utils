@@ -99,8 +99,8 @@ struct Fixture {
             fs::remove(plain);
             ix::IndexerOptions o;
             o.checkpoint_size = MEMBER_BYTES;
-            o.aggregation.emplace().compute_percentiles = true;
-            if (extras) o.aggregation->extra_group_keys = {"epoch", "step"};
+            o.aggregation.compute_percentiles = true;
+            if (extras) o.aggregation.extra_group_keys = {"epoch", "step"};
             ix::Indexer::open({out}, o).build();
             gz.push_back(out);
         }
@@ -247,6 +247,57 @@ TEST_SUITE("ViewPartials") {
                 .collect()
                 .get();
         same_rows(got, expected, {"cat", "pid", "tid"});
+    }
+
+    TEST_CASE(
+        "a rollup materializes from the partials with the traces deleted") {
+        const std::vector<AggSpec> stats_specs{
+            {AggOp::Count, "", "n"},       {AggOp::Sum, "dur", "dsum"},
+            {AggOp::Min, "dur", "dmin"},   {AggOp::Max, "dur", "dmax"},
+            {AggOp::Mean, "dur", "dmean"}, {AggOp::Var, "dur", "dvar"},
+            {AggOp::Min, "ts", "tmin"},    {AggOp::Max, "ts", "tmax"}};
+        const std::vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
+                                         GroupKey::tid()};
+        // A rollup is stored beside one index, so the files share one.
+        Fixture fx;
+        const std::vector<ViewFile> one{fx.files().front()};
+        auto p = scan::from_files(one);
+        p = scan::group_by(p, keys);
+        const df::DataFrame expected = scan_only(scan::agg(p, stats_specs));
+
+        fx.delete_traces();
+        const View rollup =
+            View::from_files(one).group_by(keys).agg(stats_specs);
+        Runtime rt;
+        rt.run_blocking("materialize", [&](CoroScope&) -> coro::CoroTask<void> {
+            co_await rollup.materialize();
+        });
+        REQUIRE(rollup.reconstruct_if_cached().has_value());
+        const Rows got =
+            rows_of(*rollup.reconstruct_if_cached(), {"cat", "pid", "tid"});
+        const Rows want = rows_of(expected, {"cat", "pid", "tid"});
+        REQUIRE(got.size() == want.size());
+        for (const auto& [key, cells] : want) {
+            const auto it = got.find(key);
+            REQUIRE_MESSAGE(it != got.end(), key);
+            auto values = cells;
+            // A counter keeps its duration in args.dur, which the scan does
+            // not read as the duration.
+            if (key.rfind("app|", 0) == 0) {
+                CHECK(values.at("n") == COUNTERS);
+                values["dsum"] = 5.0 * COUNTERS;
+                values["dmin"] = 5;
+                values["dmax"] = 5;
+                values["dmean"] = 5;
+                values["dvar"] = 0;
+            }
+            for (const auto& [name, value] : values) {
+                const auto cell = it->second.find(name);
+                REQUIRE_MESSAGE(cell != it->second.end(), key, " ", name);
+                CHECK_MESSAGE(cell->second == doctest::Approx(value), key, " ",
+                              name, " ", cell->second, " vs ", value);
+            }
+        }
     }
 
     TEST_CASE("events with a time window and profiles answer without reads") {

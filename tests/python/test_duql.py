@@ -98,7 +98,7 @@ def test_flat_dotted_arg_key_resolves_at_runtime(tmp_path):
     with Indexer(
         directory=str(tmp_path),
         index_dir=idx,
-        require_aggregation=AggregationConfig(time_interval_ms=100000),
+        aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
         ix.ensure_indexed()
 
@@ -133,7 +133,7 @@ def test_traceviewer_filter_accepts_expr(tmp_path):
     with Indexer(
         directory=str(tmp_path),
         index_dir=idx,
-        require_aggregation=AggregationConfig(time_interval_ms=100000),
+        aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
         ix.ensure_indexed()
 
@@ -273,7 +273,7 @@ def test_traceviewer_filter_unified_predicates(tmp_path):
     with Indexer(
         directory=str(tmp_path),
         index_dir=idx,
-        require_aggregation=AggregationConfig(time_interval_ms=100000),
+        aggregation_config=AggregationConfig(time_interval_ms=100000),
     ) as ix:
         ix.ensure_indexed()
 

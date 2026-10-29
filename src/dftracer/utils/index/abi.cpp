@@ -154,7 +154,11 @@ void dftu_indexer_options_init(dftu_indexer_options* out) {
                                 d.memory_budget,
                                 nullptr,
                                 d.bloom ? d.bloom->path_budget : 0,
-                                d.bloom ? d.bloom->stats_share : 0.05};
+                                d.bloom ? d.bloom->stats_share : 0.05,
+                                d.aggregation.time_interval_us,
+                                d.aggregation.compute_percentiles ? 1 : 0,
+                                d.aggregation.group_by_file ? 1 : 0,
+                                d.aggregation.track_default_args ? 1 : 0};
 }
 
 dftu_indexer_open_result dftu_indexer_open(
@@ -203,6 +207,15 @@ dftu_indexer_open_result dftu_indexer_open(
             } else {
                 opts.bloom.reset();
             }
+            if (options->aggregation_time_interval_us)
+                opts.aggregation.time_interval_us =
+                    options->aggregation_time_interval_us;
+            if (options->aggregation_compute_percentiles)
+                opts.aggregation.compute_percentiles = true;
+            if (options->aggregation_group_by_file)
+                opts.aggregation.group_by_file = true;
+            if (options->aggregation_track_default_args)
+                opts.aggregation.track_default_args = true;
             if (options->extension_count && !options->extensions) {
                 r.u.err = invalid(handle_free_error,
                                   "extensions is NULL with a count");

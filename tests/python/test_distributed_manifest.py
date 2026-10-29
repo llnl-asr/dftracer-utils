@@ -66,7 +66,7 @@ class TestDistributedIndexUnified:
             uni_indexer = Indexer(
                 files=files_dist,
                 index_dir=uni_index_dir,
-                require_aggregation=AGG_CFG,
+                aggregation_config=AGG_CFG,
                 force_rebuild=True,
             )
             uni_indexer.ensure_indexed()
@@ -90,7 +90,7 @@ class TestDistributedIndexUnified:
                 index_dir=os.path.dirname(index_path),
                 require_checkpoint=True,
                 require_bloom=True,
-                require_aggregation=AGG_CFG,
+                aggregation_config=AGG_CFG,
                 force_rebuild=False,
             )
             status = indexer.ensure_indexed()
@@ -140,7 +140,7 @@ class TestDistributedWithDask:
                     index_dir=index_dir,
                     require_checkpoint=True,
                     require_bloom=True,
-                    require_aggregation=AGG_CFG,
+                    aggregation_config=AGG_CFG,
                     force_rebuild=False,
                 ).ensure_indexed()
                 assert len(status.ready) == len(files)
@@ -151,7 +151,7 @@ class TestDistributedWithDask:
                 Indexer(
                     files=files,
                     index_dir=serial_dir,
-                    require_aggregation=AGG_CFG,
+                    aggregation_config=AGG_CFG,
                     force_rebuild=True,
                 ).ensure_indexed()
                 serial_count = _agg_event_count(files, serial_dir)
@@ -198,7 +198,7 @@ class TestDistributedWholeFiles:
                 Indexer(
                     files=files,
                     index_dir=serial_dir,
-                    require_aggregation=AGG_CFG,
+                    aggregation_config=AGG_CFG,
                     force_rebuild=True,
                 ).ensure_indexed()
                 serial_count = _agg_event_count(files, serial_dir)

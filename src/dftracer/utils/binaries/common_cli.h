@@ -696,8 +696,9 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     CoroScope& ctx, std::string directory, std::vector<std::string> files,
     std::string index_dir, bool force_rebuild,
     std::vector<utilities::filesystem::FileEntry>* entries,
-    std::optional<dftracer::utils::index::schemas::dft::agg::AggregationConfig>
-        aggregation = std::nullopt,
+    dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
+        dftracer::utils::index::schemas::dft::agg::
+            standard_aggregation_config(),
     std::size_t checkpoint_size = 0) {
     if (!directory.empty()) {
         utilities::filesystem::PatternDirectoryScannerUtility scanner;
@@ -729,8 +730,9 @@ ensure_indexes_fresh_blocking(
     const std::string& name, const PipelineArgs& pipeline,
     const std::string& directory, std::vector<std::string> files,
     const std::string& index_dir, bool force_rebuild = false,
-    std::optional<dftracer::utils::index::schemas::dft::agg::AggregationConfig>
-        aggregation = std::nullopt,
+    dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
+        dftracer::utils::index::schemas::dft::agg::
+            standard_aggregation_config(),
     std::size_t checkpoint_size = 0) {
     std::vector<utilities::filesystem::FileEntry> entries;
     if (directory.empty() && files.empty()) return entries;

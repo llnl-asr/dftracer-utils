@@ -197,9 +197,8 @@ coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
     in.files = files;
     in.index_dir = out_root;
     in.require_checkpoints = true;
-    in.require_aggregation = true;
-    in.aggregation_config =
-        dftracer::utils::index::schemas::dft::agg::AggregationConfig{};
+    in.aggregation_config = dftracer::utils::index::schemas::dft::agg::
+        standard_aggregation_config();
     co_await dftracer::utils::index::build::resolve_and_build_index(
         scope, std::move(in));
 

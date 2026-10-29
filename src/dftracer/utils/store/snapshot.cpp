@@ -2222,7 +2222,16 @@ dstd::Expected<void, dstd::Error> Snapshot::read_big(
     if (!bytes) {
         return dstd::Unexpected<dstd::Error>(bytes.error());
     }
-    owned = std::move(*bytes);
+    if (bytes->empty()) return parse_error();
+    if (bytes->front() == static_cast<std::uint8_t>(PageCodec::None)) {
+        owned = std::move(*bytes);
+        view = ByteView{reinterpret_cast<const std::byte*>(owned.data() + 1),
+                        owned.size() - 1};
+        return {};
+    }
+    auto raw = decode_meta(bytes_of(*bytes));
+    if (!raw) return dstd::Unexpected<dstd::Error>(raw.error());
+    owned = std::move(*raw);
     view = bytes_of(owned);
     return {};
 }

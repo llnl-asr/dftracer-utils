@@ -136,12 +136,19 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
 inline constexpr int META_ZSTD_LEVEL = 3;
 /// The zstd level of a record body, written on every commit.
 inline constexpr int RECORD_ZSTD_LEVEL = 1;
+/// The zstd level of a big value, written outside the extents.
+inline constexpr int BIG_ZSTD_LEVEL = 1;
 
 /// The stored form of one metadata body (a block, a record body, a summary
 /// entry): a PageCodec byte, then for PageCodec::Zstd the raw length as a u32
 /// and one zstd frame, else the raw bytes. Compressed when that saves at least
 /// an eighth, at zstd `level`.
 dstd::Vector<std::uint8_t> encode_meta(ByteView raw, int level);
+
+/// The PageCodec::Zstd stored form of `raw` in `out`, as encode_meta writes
+/// it, when that saves at least an eighth; false, with `out` left empty, when
+/// it does not, so the caller stores the PageCodec::None form itself.
+bool compress_meta(ByteView raw, int level, dstd::Vector<std::uint8_t>& out);
 
 /// The raw body of a stored form encode_meta wrote. A Parse error for an
 /// unknown codec, a raw length past EXTENT_MAX_RAW_BYTES or a frame that does

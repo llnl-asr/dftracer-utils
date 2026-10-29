@@ -151,6 +151,9 @@ class DataFileWriter {
     /// an offset aligned to EXTENT_ALIGN_BYTES and returns its ref. Segment
     /// offsets inside the extent count from the raw bytes.
     dstd::Expected<ExtentRef, dstd::Error> append_extent(ByteView bytes);
+    /// Writes one value too big for an extent in the stored form encode_meta
+    /// gives it, compressed at BIG_ZSTD_LEVEL when that saves an eighth, and
+    /// returns the ref of the stored bytes.
     dstd::Expected<ExtentRef, dstd::Error> append_big(ByteView bytes);
     /// Writes the bytes of a page dictionary at an offset aligned to
     /// EXTENT_ALIGN_BYTES, padded to a multiple of it, and returns where they

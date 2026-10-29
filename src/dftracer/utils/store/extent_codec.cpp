@@ -355,28 +355,37 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> train_page_dict(
     return dict;
 }
 
-dstd::Vector<std::uint8_t> encode_meta(ByteView raw, int level) {
+bool compress_meta(ByteView raw, int level, dstd::Vector<std::uint8_t>& out) {
     const std::uint8_t* data = bytes_of(raw);
     const std::size_t length = raw.size();
-    dstd::Vector<std::uint8_t> out;
+    out.clear();
     thread_local CompressContext context;
-    if (context.ctx != nullptr && length > META_HEADER_BYTES &&
-        length <= EXTENT_MAX_RAW_BYTES) {
-        out.resize(META_HEADER_BYTES + ZSTD_compressBound(length));
-        const std::size_t compressed = ZSTD_compressCCtx(
-            context.ctx, out.data() + META_HEADER_BYTES,
-            out.size() - META_HEADER_BYTES, data, length, level);
-        if (ZSTD_isError(compressed) == 0 &&
-            META_HEADER_BYTES + compressed <= length - length / 8) {
-            out[0] = static_cast<std::uint8_t>(PageCodec::Zstd);
-            write_u32_le(out.data() + 1, static_cast<std::uint32_t>(length));
-            out.resize(META_HEADER_BYTES + compressed);
-            return out;
-        }
+    if (context.ctx == nullptr || length <= META_HEADER_BYTES ||
+        length > EXTENT_MAX_RAW_BYTES) {
+        return false;
     }
+    out.resize(META_HEADER_BYTES + ZSTD_compressBound(length));
+    const std::size_t compressed =
+        ZSTD_compressCCtx(context.ctx, out.data() + META_HEADER_BYTES,
+                          out.size() - META_HEADER_BYTES, data, length, level);
+    if (ZSTD_isError(compressed) != 0 ||
+        META_HEADER_BYTES + compressed > length - length / 8) {
+        out.clear();
+        return false;
+    }
+    out[0] = static_cast<std::uint8_t>(PageCodec::Zstd);
+    write_u32_le(out.data() + 1, static_cast<std::uint32_t>(length));
+    out.resize(META_HEADER_BYTES + compressed);
+    return true;
+}
+
+dstd::Vector<std::uint8_t> encode_meta(ByteView raw, int level) {
+    dstd::Vector<std::uint8_t> out;
+    if (compress_meta(raw, level, out)) return out;
+    const std::size_t length = raw.size();
     out.resize(1 + length);
     out[0] = static_cast<std::uint8_t>(PageCodec::None);
-    if (length > 0) std::memcpy(out.data() + 1, data, length);
+    if (length > 0) std::memcpy(out.data() + 1, bytes_of(raw), length);
     return out;
 }
 

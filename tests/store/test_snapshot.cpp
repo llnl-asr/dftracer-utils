@@ -1183,6 +1183,37 @@ TEST_SUITE("index store snapshot") {
         CHECK_FALSE(short_value->has_value());
     }
 
+    TEST_CASE("a big value that does not compress round trips") {
+        dftu_utils_test::ScopedTestDir dir("snapshot_big_raw");
+        const ScopeKey scope = file_scope("/traces/big_raw.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.put");
+
+        std::string big(2 * 1024 * 1024, '\0');
+        std::uint64_t state = 0x9E3779B97F4A7C15ULL;
+        for (char& c : big) {
+            state ^= state << 13U;
+            state ^= state >> 7U;
+            state ^= state << 17U;
+            c = static_cast<char>(state & 0xFFU);
+        }
+
+        auto writer = make_writer(dir);
+        auto id = writer->add_namespace(spec);
+        REQUIRE(id.has_value());
+        Batch batch = writer->batch(*id, scope, 0);
+        batch.put(view_of(std::string("big")), view_of(big));
+        REQUIRE(writer->commit(std::move(batch)).has_value());
+        REQUIRE(close_writer(*writer).has_value());
+
+        CHECK(read_file(to_std(writer->path())).size() > big.size());
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        auto found = snapshot->get(spec, scope, view_of(std::string("big")));
+        REQUIRE(found.has_value());
+        REQUIRE(found->has_value());
+        CHECK(to_std((*found)->bytes()) == big);
+    }
+
     TEST_CASE("a big value round trips and its crc is checked on read") {
         dftu_utils_test::ScopedTestDir dir("snapshot_big");
         dftu_utils_test::ScopedTestDir corrupt_dir("snapshot_big_corrupt");
@@ -1238,11 +1269,11 @@ TEST_SUITE("index store snapshot") {
             }
         }
         REQUIRE(found_ref);
-        CHECK(ref.length == big.size());
+        CHECK(ref.length < big.size() / 8);
 
         std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         REQUIRE(ref.offset + ref.length <= bytes.size());
-        bytes[static_cast<std::size_t>(ref.offset) + 4096U] ^= 0xFFU;
+        bytes[static_cast<std::size_t>(ref.offset + ref.length / 2)] ^= 0xFFU;
         const std::string corrupt_path = corrupt_dir.file("w-corrupt.dfs");
         write_file(corrupt_path, bytes);
 
@@ -4088,7 +4119,7 @@ TEST_SUITE("index store snapshot") {
             found_run = true;
         }
         REQUIRE(found_run);
-        CHECK(run.length >= big.size());
+        CHECK(run.length < big.size());
 
         std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         REQUIRE(run.offset + run.length <= bytes.size());

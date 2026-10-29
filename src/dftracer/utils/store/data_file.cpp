@@ -709,23 +709,38 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_big(
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() ||
-        bytes.size() > std::numeric_limits<std::uint32_t>::max()) {
+        bytes.size() >= std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    const std::uint64_t offset = reserve_range(bytes.size(), FILE_HEADER_BYTES,
-                                               io_fault::WriteKind::Big);
-    ExtentRef ref{offset, static_cast<std::uint32_t>(bytes.size()), 0};
-    ref.crc = crc32(0, bytes.data(), bytes.size());
-    auto written =
-        pwrite_all(fd_, reinterpret_cast<const std::uint8_t*>(bytes.data()),
-                   bytes.size(), offset);
-    if (!written) {
-        latch(written.error());
-        return dstd::Unexpected<dstd::Error>(written.error());
+    dstd::Vector<std::uint8_t> packed;
+    const bool compressed = compress_meta(bytes, BIG_ZSTD_LEVEL, packed);
+    const std::uint8_t none = static_cast<std::uint8_t>(PageCodec::None);
+    const std::size_t length = compressed ? packed.size() : 1 + bytes.size();
+    const std::uint64_t offset =
+        reserve_range(length, FILE_HEADER_BYTES, io_fault::WriteKind::Big);
+    ExtentRef ref{offset, static_cast<std::uint32_t>(length), 0};
+    const auto write = [this](const std::uint8_t* data, std::size_t size,
+                              std::uint64_t at) {
+        auto written = pwrite_all(fd_, data, size, at);
+        if (!written) {
+            latch(written.error());
+            return written;
+        }
+        io_fault::on_write(fd_, io_fault::WriteKind::Big, at, data, size);
+        return written;
+    };
+    if (compressed) {
+        ref.crc = crc32(0, packed.data(), packed.size());
+        auto written = write(packed.data(), packed.size(), offset);
+        if (!written) return dstd::Unexpected<dstd::Error>(written.error());
+        return ref;
     }
-    io_fault::on_write(fd_, io_fault::WriteKind::Big, offset,
-                       reinterpret_cast<const std::uint8_t*>(bytes.data()),
-                       bytes.size());
+    const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
+    ref.crc = crc32(crc32(0, &none, 1), data, bytes.size());
+    auto head = write(&none, 1, offset);
+    if (!head) return dstd::Unexpected<dstd::Error>(head.error());
+    auto body = write(data, bytes.size(), offset + 1);
+    if (!body) return dstd::Unexpected<dstd::Error>(body.error());
     return ref;
 }
 

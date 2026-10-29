@@ -184,6 +184,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Serve the counters family of `collect_typed()` from the per-chunk column blocks of the index instead of the stored per-second system rows, which no build stores now, so an index build is smaller and faster.
   The counters frame keeps its rows and columns, and its rows now sort by host, name and time bucket.
   A block whose byte budget left out an argument path cannot answer, and those counters are read from the trace itself.
+- Compress index values larger than 1 MB, which the store wrote raw before.
+  The index of a 69 GB trace set with every column kept drops from 3.3 GB to 1.4 GB.
 
 ### Added
 

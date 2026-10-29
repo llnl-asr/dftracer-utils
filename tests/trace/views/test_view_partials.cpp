@@ -105,7 +105,6 @@ struct Fixture {
             gz.push_back(out);
         }
         aggregation.compute_percentiles = true;
-        aggregation.column_budget_ratio = 1000.0;
         if (extras) aggregation.extra_group_keys = {"epoch", "step"};
         ix::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";

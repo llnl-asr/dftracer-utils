@@ -1,7 +1,6 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
-#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -10,23 +9,17 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/schema.h>
-#include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan.h>
-#include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/trace/views/view_system_collect.h>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 namespace dftracer::utils::trace::views::detail {
 
@@ -229,18 +222,6 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
     return b;
 }
 
-// The aggregation config the counters of `plan` group with, or nothing when the
-// plan does not span the files of one current aggregation tier.
-std::optional<agg::AggregationConfig> counter_config(const ViewPlan& plan) {
-    auto index = covering_index(plan);
-    if (!index) return std::nullopt;
-    const auto stored = agg::tier::read_config(*index);
-    if (!stored) return std::nullopt;
-    agg::AggregationConfig cfg;
-    cfg.time_interval_us = stored->time_interval_us;
-    return cfg;
-}
-
 }  // namespace
 
 bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
@@ -258,15 +239,12 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
         const int fid = index->get_file_info_id(
             store::internal::get_logical_path(f.file_path));
         if (fid < 0) return false;
-        bool answered = true;
         agg::tier::for_each_chunk_columns(
             *index, fid, [&](std::uint64_t, const agg::ChunkColumns& block) {
-                bool holds_counters = false;
-                for (std::uint64_t r = 0; r < block.rows && answered; ++r) {
+                for (std::uint64_t r = 0; r < block.rows; ++r) {
                     GroupKey key;
                     agg::SystemAggregationMetrics metrics;
                     if (!counter_group(block, r, cfg, key, metrics)) continue;
-                    holds_counters = true;
                     auto it = groups.find(key);
                     if (it == groups.end())
                         it = groups.emplace(std::move(key), std::move(metrics))
@@ -274,131 +252,12 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
                     else
                         it->second.merge_from(metrics);
                 }
-                // A dropped arg path may be a metric of one of those rows.
-                if (holds_counters && !block.dropped.empty()) answered = false;
-                return answered;
+                return true;
             });
-        if (!answered) return false;
     }
 
     out_table = build_counters_frame(groups, shard_begin, shard_end);
     return true;
-}
-
-namespace {
-
-// A string id of the scan's intern, empty when it names nothing.
-std::string_view text_of(const dftracer::utils::dstd::StringIntern& intern,
-                         std::uint32_t id) {
-    if (id == dftracer::utils::dstd::StringIntern::NO_ID) return {};
-    return intern.resolve(id);
-}
-
-// A value the counters keep as a metric: a real or an integer. A string id
-// (uint32) names a dimension of the record, not a number.
-bool is_metric(const FoldEvent::ArgValue& value) {
-    return !std::holds_alternative<std::uint32_t>(value);
-}
-
-double number_of(const FoldEvent::ArgValue& value) {
-    if (const auto* d = std::get_if<double>(&value)) return *d;
-    if (const auto* i = std::get_if<std::int64_t>(&value))
-        return static_cast<double>(*i);
-    return static_cast<double>(std::get<std::uint64_t>(value));
-}
-
-// The sys counters of a raw scan: the same groups the column blocks carry, read
-// from the trace when a block left one of their metrics out.
-class SystemCountersFold : public Fold {
-   public:
-    SystemCountersFold(const dftracer::utils::dstd::StringIntern& intern,
-                       const agg::AggregationConfig& cfg)
-        : intern_(&intern), cfg_(cfg) {}
-
-    bool accepts(const ScanShape&) const override { return true; }
-    bool needs_args() const override { return true; }
-    bool wants_metadata() const override { return false; }
-
-    std::unique_ptr<Fold> slice() const override {
-        return std::make_unique<SystemCountersFold>(*intern_, cfg_);
-    }
-
-    void step(const FoldBatch& batch) override {
-        for (const FoldEvent& ev : batch.events) {
-            if (ev.phase != RecordPhase::Counter) continue;
-            if (text_of(*intern_, ev.cat_id) != SYS_CATEGORY) continue;
-            bool preaggregated = false;
-            for (const auto& [key, value] : ev.args) {
-                if (!is_metric(value)) continue;
-                if (is_preagg_count(text_of(*intern_, key))) {
-                    preaggregated = true;
-                    break;
-                }
-            }
-            if (preaggregated) continue;
-            GroupKey key;
-            key.host = text_of(*intern_, ev.hhash_id);
-            key.name = text_of(*intern_, ev.name_id);
-            key.time_bucket = agg::compute_time_bucket(ev.ts, cfg_);
-            key.shard = agg::system_shard(key.host, key.name);
-            agg::SystemAggregationMetrics metrics;
-            metrics.count += 1;
-            metrics.update_timestamp(ev.ts);
-            for (const auto& [arg, value] : ev.args) {
-                if (!is_metric(value)) continue;
-                const std::string_view path = text_of(*intern_, arg);
-                if (is_hash_arg(path)) continue;
-                metrics.update_metric(path, number_of(value));
-            }
-            auto it = groups_.find(key);
-            if (it == groups_.end())
-                groups_.emplace(std::move(key), std::move(metrics));
-            else
-                it->second.merge_from(metrics);
-        }
-    }
-
-    void seal_unit(const ScanUnit&) override {}
-    void drop_unit(const ScanUnit&) override {}
-
-    void merge(Fold& other) override {
-        for (auto& [key, metrics] :
-             static_cast<SystemCountersFold&>(other).groups_) {
-            auto it = groups_.find(key);
-            if (it == groups_.end())
-                groups_.emplace(std::move(key), std::move(metrics));
-            else
-                it->second.merge_from(metrics);
-        }
-    }
-
-    coro::CoroTask<bool> finalize(const CoverageSet&) override {
-        co_return true;
-    }
-
-    const Groups& groups() const { return groups_; }
-
-   private:
-    const dftracer::utils::dstd::StringIntern* intern_;
-    agg::AggregationConfig cfg_;
-    Groups groups_;
-};
-
-}  // namespace
-
-coro::CoroTask<bool> system_scan_collect(const ViewPlan& plan,
-                                         dataframe::DataFrame& out_table,
-                                         int shard_begin, int shard_end,
-                                         const ProgressFn*) {
-    const auto config = counter_config(plan);
-    if (!config) co_return false;
-    dftracer::utils::dstd::StringIntern intern;
-    SystemCountersFold fold(intern, *config);
-    ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
-    std::array<Fold*, 1> folds{&fold};
-    co_await fuse(plan, vdef, folds, intern);
-    out_table = build_counters_frame(fold.groups(), shard_begin, shard_end);
-    co_return true;
 }
 
 }  // namespace dftracer::utils::trace::views::detail

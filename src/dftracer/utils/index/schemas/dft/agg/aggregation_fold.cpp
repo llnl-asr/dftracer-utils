@@ -16,15 +16,6 @@ namespace {
 constexpr std::uint32_t MAX_CACHED_BUILD_ID = 1u << 20;
 }  // namespace
 
-std::size_t AggregationFold::column_budget_for(
-    const trace::views::detail::ScanUnit& unit) const {
-    if (!(config_.column_budget_ratio > 0.0)) return NO_COLUMN_BUDGET;
-    const std::size_t bytes =
-        unit.end_byte > unit.start_byte ? unit.end_byte - unit.start_byte : 0;
-    return static_cast<std::size_t>(static_cast<double>(bytes) *
-                                    config_.column_budget_ratio);
-}
-
 std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
                                        std::uint32_t build_id, bool lower) {
     const bool cacheable = build_id < MAX_CACHED_BUILD_ID;
@@ -155,7 +146,7 @@ void AggregationFold::add_to_columns(
 void AggregationFold::close_columns() {
     if (columns_.empty()) return;
     const std::size_t offset = arena_.size();
-    columns_.encode_into(arena_, column_budget_);
+    columns_.encode_into(arena_);
     closed_columns_.push_back({chunk_, offset, arena_.size() - offset});
     referenced_.insert(referenced_.end(), columns_.ids().begin(),
                        columns_.ids().end());

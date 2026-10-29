@@ -189,7 +189,6 @@ class AggregationFold : public trace::views::detail::Fold {
                 if (batch.unit.checkpoint_idx != chunk_) {
                     close_chunk();
                     chunk_ = batch.unit.checkpoint_idx;
-                    column_budget_ = column_budget_for(batch.unit);
                 }
                 add_to_partial(ev, acc);
                 add_to_columns(ev);
@@ -295,9 +294,6 @@ class AggregationFold : public trace::views::detail::Fold {
     /// `lower`), cached by that id.
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
                           std::uint32_t build_id, bool lower);
-    /// Bytes the column block of the chunk of `unit` may take.
-    std::size_t column_budget_for(
-        const trace::views::detail::ScanUnit& unit) const;
     /// Serializes the partials of the current chunk into `arena_` and clears
     /// them, keeping their capacity.
     void close_chunk();
@@ -334,7 +330,6 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::Vector<Closed> closed_;
     index::schemas::dft::agg::ChunkColumnBuilder columns_;
     dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;
-    std::size_t column_budget_ = index::schemas::dft::agg::NO_COLUMN_BUDGET;
     /// Every dictionary id the partials and column blocks of this file
     /// reference, duplicates included; cleared once they are written.
     dftracer::utils::dstd::Vector<std::uint32_t> referenced_;

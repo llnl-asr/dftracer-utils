@@ -26,10 +26,6 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// FoldEvent args it holds.
 enum class ColumnKind : std::uint8_t { Int64 = 0, Uint64 = 1, Double = 2 };
 
-/// An encoder with no byte budget drops no column.
-inline constexpr std::size_t NO_COLUMN_BUDGET =
-    std::numeric_limits<std::size_t>::max();
-
 /// No dictionary id, so a block cannot name it.
 inline constexpr std::uint32_t NO_DICTIONARY_ID =
     std::numeric_limits<std::uint32_t>::max();
@@ -78,10 +74,6 @@ struct ChunkColumns {
     /// Every column of the block; a builder keeps unused slots past its live
     /// columns, which encode_chunk_columns is told the count of.
     dstd::Vector<ChunkColumn> columns;
-    /// The arg paths whose columns the byte budget dropped, as indexes into
-    /// `ids`; the block holds no column of theirs, so a reader parses the
-    /// chunk to read them.
-    dstd::Vector<std::uint32_t> dropped;
 
     /// Empties the block, keeping the storage of its columns for reuse.
     void clear();
@@ -107,10 +99,9 @@ class ChunkColumnBuilder {
 
     bool empty() const { return block_.rows == 0; }
 
-    /// Appends the encoded block to `out`, dropping whole arg path columns,
-    /// those with the fewest rows first, until the block fits `budget` bytes.
-    /// Returns false, appending nothing, when the block holds no row.
-    bool encode_into(dstd::Vector<std::uint8_t>& out, std::size_t budget);
+    /// Appends the encoded block to `out`. Returns false, appending nothing,
+    /// when the block holds no row.
+    bool encode_into(dstd::Vector<std::uint8_t>& out);
 
     /// The dictionary ids the block names, in `ids` order; each needs a
     /// dictionary entry in the file it is written under.
@@ -141,20 +132,16 @@ class ChunkColumnBuilder {
     std::uint32_t last_host_local_ = 0;
 };
 
-/// Appends the encoded block to `out`: its first `column_count` columns, with
-/// the paths of `block.dropped` left out and listed. `budget` caps the block's
-/// bytes, NO_COLUMN_BUDGET meaning no cap; over it, the block drops whole arg
-/// path columns, those with the fewest rows first, and lists their path ids
-/// with those already in `block.dropped`. The core columns are kept whatever
-/// the budget. Re-encoding a decoded block with NO_COLUMN_BUDGET gives back the
-/// same block, its dropped paths included, with the ids the block names.
+/// Appends the encoded block to `out`: its first `column_count` columns, each
+/// with the arg path of its column. Re-encoding a decoded block gives back the
+/// same block, with the ids the block names.
 void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
-                          dstd::Vector<std::uint8_t>& out, std::size_t budget);
+                          dstd::Vector<std::uint8_t>& out);
 
 /// The block of `bytes`, the payload of one chunk's column record, with its
 /// `ids`, `cat`, `name`, `host`, `ts`, `dur`, `has_dur`, `pid`, `tid`,
-/// `phase`, `columns` and `dropped` filled. `texts` stays empty and `chunk`
-/// stays 0: neither is in the bytes. Each value equals the one the record
+/// `phase` and `columns` filled. `texts` stays empty and `chunk` stays 0:
+/// neither is in the bytes. Each value equals the one the record
 /// held: an Int64 or Uint64 value is the same integer of the same variant
 /// kind, and a Double value is the same double bit for bit (-0.0 and NaN
 /// payloads included). A block with a format this code does not know, a

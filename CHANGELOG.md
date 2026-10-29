@@ -183,14 +183,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A `when_all` of 8 tasks that are already done now makes 9 frame allocations instead of 16.
 - Serve the counters family of `collect_typed()` from the per-chunk column blocks of the index instead of the stored per-second system rows, which no build stores now, so an index build is smaller and faster.
   The counters frame keeps its rows and columns, and its rows now sort by host, name and time bucket.
-  A block whose byte budget left out an argument path cannot answer, and those counters are read from the trace itself.
 - Compress index values larger than 1 MB, which the store wrote raw before.
   The index of a 69 GB trace set with every column kept drops from 3.3 GB to 1.4 GB.
 
 ### Added
 
 - Store every number field of the records of each chunk as an exact column in the index, with the time, duration, pid, tid, phase, category, name and host of each record, so later queries read these values without parsing the trace.
-  A new `column_budget_ratio` of `AggregationConfig` (0.02 by default) caps the columns of a chunk at that share of its text, and the fields with the fewest values are left out first.
   Indexes built before this change rebuild their aggregation data once.
 - Build the index on the index store from `dftracer_index` and from `distributed_index`, with no staged files and no ingest.
   Each `distributed_index` worker writes the index directly, and on the 8,404 minife traces `dftracer_index` takes 12 s where it took 36 s on RocksDB.

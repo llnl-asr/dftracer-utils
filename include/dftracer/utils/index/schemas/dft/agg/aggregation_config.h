@@ -36,12 +36,6 @@ struct AggregationConfig {
     double sketch_accuracy = 0.01;
     std::vector<double> percentiles = {0.25, 0.5, 0.75, 0.90};
 
-    /// Bytes the column block of a chunk may take, as a fraction of the
-    /// chunk's plaintext bytes. Over it, the block drops whole numeric
-    /// columns, those with the fewest rows first. A value that is not
-    /// positive leaves the block uncapped.
-    double column_budget_ratio = 0.02;
-
     std::vector<BoundaryEventConfig> boundary_events;
     bool track_process_parents = true;
 
@@ -95,7 +89,6 @@ struct AggregationConfig {
             text(be.output_name);
         }
         h.update_value(track_process_parents);
-        h.update_value(column_budget_ratio);
         // An aggregation built without chunk partials, their time bins, the
         // partials of samples and aggregated records or the per-chunk column
         // blocks is stale.

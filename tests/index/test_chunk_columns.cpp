@@ -1,7 +1,6 @@
 // The per-chunk numeric columns of the aggregation tier: that the codec gives
 // back every value bit for bit, that a chunk block holds the chunk's records
-// exactly, that the byte budget drops whole columns and lists them, and that a
-// sharded merge copies the blocks.
+// exactly, and that a sharded merge copies the blocks.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
@@ -56,16 +55,6 @@ agg::ChunkColumn column_of(std::uint32_t path, agg::ColumnKind kind,
     return column;
 }
 
-// `n` distinct integers from `first` on, so a column of them does not compress
-// to nothing.
-std::vector<std::uint64_t> ints(std::size_t n, std::int64_t first) {
-    std::vector<std::uint64_t> out;
-    for (std::size_t k = 0; k < n; ++k)
-        out.push_back(static_cast<std::uint64_t>(
-            first + static_cast<std::int64_t>(k) * 7));
-    return out;
-}
-
 // A block of `rows` rows whose core columns differ row by row and whose ids
 // name three dictionary entries.
 agg::ChunkColumns core_block(std::size_t rows) {
@@ -103,14 +92,14 @@ void check_core_columns(const agg::ChunkColumns& want,
 }
 
 agg::ChunkColumns encode_then_decode(
-    const agg::ChunkColumns& block, std::size_t budget = agg::NO_COLUMN_BUDGET,
+    const agg::ChunkColumns& block,
     std::size_t column_count = std::numeric_limits<std::size_t>::max()) {
     dstd::Vector<std::uint8_t> bytes;
     const std::size_t count =
         column_count == std::numeric_limits<std::size_t>::max()
             ? block.columns.size()
             : column_count;
-    agg::encode_chunk_columns(block, count, bytes, budget);
+    agg::encode_chunk_columns(block, count, bytes);
     auto got = agg::decode_chunk_columns(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()));
     REQUIRE(got.has_value());
@@ -145,7 +134,6 @@ agg::ChunkColumn roundtrip_column(agg::ColumnKind kind,
     CHECK(got.columns[0].kind == kind);
     CHECK(got.columns[0].rows == block.columns[0].rows);
     CHECK(same(got.columns[0].bits, bits));
-    CHECK(got.dropped.empty());
     return got.columns[0];
 }
 
@@ -398,21 +386,20 @@ std::string write_gzip(const std::string& dir, const std::string& name,
     return gz;
 }
 
-IndexerOptions options(const std::string& index_dir, double ratio) {
+IndexerOptions options(const std::string& index_dir) {
     IndexerOptions o;
     o.index_dir = index_dir;
     o.checkpoint_size = CHECKPOINT_SIZE;
     o.parallelism = 4;
     agg::AggregationConfig c;
     c.time_interval_us = 100'000;
-    c.column_budget_ratio = ratio;
     o.aggregation = c;
     return o;
 }
 
-void build(const std::vector<std::string>& files, const std::string& index_dir,
-           double ratio) {
-    Indexer::open(files, options(index_dir, ratio)).build();
+void build(const std::vector<std::string>& files,
+           const std::string& index_dir) {
+    Indexer::open(files, options(index_dir)).build();
 }
 
 // ---- the comparison -------------------------------------------------------
@@ -444,29 +431,15 @@ const agg::ChunkColumn* column_for(const agg::ChunkColumns& block,
     return nullptr;
 }
 
-bool is_dropped(const agg::ChunkColumns& block, std::string_view path) {
-    for (const std::uint32_t path_index : block.dropped)
-        if (block.texts[path_index] == path) return true;
-    return false;
-}
-
-// The value of every arg of `row` is on row r of `block`: with `strict` every
-// one has its column of its kind and the block drops no path at all, else a
-// missing column is a path the block lists as dropped.
+// The value of every arg of `row` is on row r of `block`, with its column of
+// its kind.
 void check_row_args(const agg::ChunkColumns& block, std::size_t r,
-                    const Row& row, bool strict) {
+                    const Row& row) {
     for (const auto& [path, value] : row.args) {
         const agg::ChunkColumn* column =
             column_for(block, path, value.column_kind());
         if (column == nullptr) {
-            if (strict) {
-                CHECK_MESSAGE(is_dropped(block, path) == false, "dropped ",
-                              path, " of row ", r);
-                CHECK_MESSAGE(false, "no column for ", path, " on row ", r);
-            } else {
-                CHECK_MESSAGE(is_dropped(block, path), "no column for ", path,
-                              " on row ", r);
-            }
+            CHECK_MESSAGE(false, "no column for ", path, " on row ", r);
             continue;
         }
         const auto at =
@@ -506,15 +479,14 @@ void check_columns_against(const agg::ChunkColumns& block,
 struct Decoded {
     std::size_t blocks = 0;
     std::size_t rows = 0;
-    std::size_t dropped_blocks = 0;
     std::vector<std::uint64_t> chunks;
 };
 
 // Reads every block of `file_id` and holds it against the records of `rows`:
-// with `strict` every numeric arg of every record has its column, no block
-// drops a path, and a block whose records hold args has columns.
+// every numeric arg of every record has its column, and a block whose records
+// hold args has columns.
 Decoded read_and_check(const IndexDatabase& db, int file_id,
-                       const std::vector<Row>& rows, bool strict) {
+                       const std::vector<Row>& rows) {
     Decoded out;
     std::size_t at = 0;
     agg::tier::for_each_chunk_columns(
@@ -523,25 +495,18 @@ Decoded read_and_check(const IndexDatabase& db, int file_id,
             out.chunks.push_back(chunk);
             CHECK(block.chunk == chunk);
             CHECK(block.texts.size() == block.ids.size());
-            for (const std::uint32_t path_index : block.dropped)
-                CHECK_FALSE(block.texts[path_index].empty());
-            if (strict) CHECK(block.dropped.empty());
             check_columns_against(block, rows, at);
             std::size_t args = 0;
             for (std::size_t r = 0; r < block.rows; ++r) {
                 REQUIRE(at < rows.size());
                 check_row_core(block, r, rows[at]);
-                check_row_args(block, r, rows[at], strict);
+                check_row_args(block, r, rows[at]);
                 args += rows[at].args.size();
                 ++at;
                 ++out.rows;
             }
-            if (strict) {
-                CHECK(args > 0);
-                CHECK_FALSE(block.columns.empty());
-            } else if (args > 0 && !block.dropped.empty()) {
-                ++out.dropped_blocks;
-            }
+            CHECK(args > 0);
+            CHECK_FALSE(block.columns.empty());
             return true;
         });
     CHECK(at == rows.size());
@@ -719,7 +684,6 @@ TEST_SUITE("ChunkColumns") {
         const auto got = encode_then_decode(block);
         check_core_columns(block, got);
         CHECK(got.columns.empty());
-        CHECK(got.dropped.empty());
     }
 
     TEST_CASE("several columns of one path of different kinds round trip") {
@@ -745,87 +709,13 @@ TEST_SUITE("ChunkColumns") {
         }
     }
 
-    TEST_CASE("a small budget drops the columns with the fewest rows first") {
-        auto block = core_block(20);
-        block.ids.assign({10, 12, 15, 20});
-        const std::uint32_t ROWS_16[] = {0, 1, 2,  3,  4,  5,  6,  7,
-                                         8, 9, 10, 11, 12, 13, 14, 15};
-        const std::uint32_t ROWS_8[] = {0, 2, 4, 6, 8, 10, 12, 14};
-        const std::uint32_t ROWS_3_A[] = {1, 5, 9};
-        const std::uint32_t ROWS_3_B[] = {2, 6, 10};
-        const auto as_rows = [](const std::uint32_t* rows, std::size_t n) {
-            return std::vector<std::uint64_t>(rows, rows + n);
-        };
-        block.columns.push_back(column_of(0, agg::ColumnKind::Int64,
-                                          as_rows(ROWS_16, 16), ints(16, 100)));
-        block.columns.push_back(column_of(1, agg::ColumnKind::Int64,
-                                          as_rows(ROWS_8, 8), ints(8, 100)));
-        block.columns.push_back(column_of(2, agg::ColumnKind::Int64,
-                                          as_rows(ROWS_3_A, 3), ints(3, 100)));
-        block.columns.push_back(column_of(3, agg::ColumnKind::Int64,
-                                          as_rows(ROWS_3_B, 3), ints(3, 100)));
-        // The two columns of three rows encode to the same bytes, so only the
-        // path id of their column decides which one goes first.
-        REQUIRE(block.columns[2].rows.size() == block.columns[3].rows.size());
-
-        struct State {
-            std::vector<std::uint32_t> kept;
-            std::vector<std::uint32_t> dropped;
-            bool operator==(const State&) const = default;
-        };
-        const auto state_at = [&block](std::size_t budget) {
-            const auto got = encode_then_decode(block, budget);
-            State state;
-            for (const agg::ChunkColumn& column : got.columns)
-                state.kept.push_back(column.path);
-            state.dropped.assign(got.dropped.begin(), got.dropped.end());
-            return std::make_pair(state, got);
-        };
-
-        dstd::Vector<std::uint8_t> bytes;
-        agg::encode_chunk_columns(block, block.columns.size(), bytes,
-                                  agg::NO_COLUMN_BUDGET);
-        const std::size_t full = bytes.size();
-        std::vector<State> states;
-        for (std::size_t budget = 0; budget <= full; ++budget) {
-            auto [state, got] = state_at(budget);
-            for (const std::uint32_t path : state.dropped)
-                CHECK(std::find(state.kept.begin(), state.kept.end(), path) ==
-                      state.kept.end());
-            if (!states.empty() && states.back() == state) continue;
-            // Every state holds the core columns whatever it kept.
-            check_core_columns(block, got);
-            states.push_back(state);
-        }
-        // One state per column dropped, so the budget takes them one at a time,
-        // and one with none left.
-        REQUIRE(states.size() == block.columns.size() + 1);
-        CHECK(states.front().kept.empty());
-        CHECK(states.back().kept == std::vector<std::uint32_t>{0, 1, 2, 3});
-        CHECK(states.back().dropped.empty());
-
-        // As the budget grows the columns come back from the one with the most
-        // rows to the one with the fewest, and of the two of three rows the one
-        // whose path id is larger comes back first: the other drops first.
-        const std::vector<std::vector<std::uint32_t>> kept = {
-            {}, {0}, {0, 1}, {0, 1, 3}, {0, 1, 2, 3}};
-        const std::vector<std::vector<std::uint32_t>> dropped = {
-            {2, 3, 1, 0}, {2, 3, 1}, {2, 3}, {2}, {}};
-        for (std::size_t k = 0; k < states.size(); ++k) {
-            CAPTURE(k);
-            CHECK(states[k].kept == kept[k]);
-            CHECK(states[k].dropped == dropped[k]);
-        }
-    }
-
     TEST_CASE("a malformed block is rejected") {
         auto block = core_block(3);
         block.columns.push_back(
             column_of(1, agg::ColumnKind::Int64, {0, 1},
                       {1, static_cast<std::uint64_t>(std::int64_t{-1})}));
         dstd::Vector<std::uint8_t> bytes;
-        agg::encode_chunk_columns(block, block.columns.size(), bytes,
-                                  agg::NO_COLUMN_BUDGET);
+        agg::encode_chunk_columns(block, block.columns.size(), bytes);
         const auto truncate = [&](std::size_t size) {
             auto got = agg::decode_chunk_columns(
                 dstd::Span<const std::uint8_t>(bytes.data(), size));
@@ -845,8 +735,7 @@ TEST_SUITE("ChunkColumns") {
             column_of(1, agg::ColumnKind::Int64, {0, 1},
                       {1, static_cast<std::uint64_t>(std::int64_t{-1})}));
         dstd::Vector<std::uint8_t> bytes;
-        agg::encode_chunk_columns(block, block.columns.size(), bytes,
-                                  agg::NO_COLUMN_BUDGET);
+        agg::encode_chunk_columns(block, block.columns.size(), bytes);
         const std::size_t ids = block.ids.size();
         const std::vector<std::uint8_t> values = {2, 3, 4, 0x7f, 0x80, 0xff};
         std::size_t accepted = 0;
@@ -889,87 +778,16 @@ TEST_SUITE("ChunkColumns") {
         const auto rows = parse_trace(text);
         REQUIRE(rows.size() > 0);
         const std::string index_dir = env.get_dir() + "/idx";
-        build({gz}, index_dir, 1000.0);
+        build({gz}, index_dir);
 
         const auto index_path =
             trace::internal::determine_index_path(gz, index_dir);
         IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
         const int fid = file_id_of(db, gz);
-        const auto decoded = read_and_check(db, fid, rows, true);
+        const auto decoded = read_and_check(db, fid, rows);
         CHECK(decoded.blocks > 1);
         CHECK(decoded.rows == rows.size());
-        CHECK(decoded.dropped_blocks == 0);
         CHECK(db.query_gzip_members(fid).size() >= decoded.blocks);
-    }
-
-    TEST_CASE("the default ratio of the fixture drops every numeric column") {
-        dftu_utils_test::TestEnvironment env(60);
-        REQUIRE(env.is_valid());
-        std::string text;
-        const std::string gz = write_trace(env.get_dir(), "trace", text);
-        const auto rows = parse_trace(text);
-        REQUIRE(rows.size() > 0);
-        agg::AggregationConfig config;
-        config.time_interval_us = 100'000;
-        REQUIRE(config.column_budget_ratio == 0.02);
-        const std::string index_dir = env.get_dir() + "/idx";
-        {
-            IndexerOptions o;
-            o.index_dir = index_dir;
-            o.checkpoint_size = CHECKPOINT_SIZE;
-            o.parallelism = 4;
-            o.aggregation = config;
-            Indexer::open({gz}, o).build();
-        }
-        const auto index_path =
-            trace::internal::determine_index_path(gz, index_dir);
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-        const int fid = file_id_of(db, gz);
-
-        std::size_t at = 0;
-        std::size_t blocks = 0;
-        std::size_t dropped_blocks = 0;
-        agg::tier::for_each_chunk_columns(
-            db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
-                ++blocks;
-                const auto begin =
-                    static_cast<std::size_t>(chunk) * CHECKPOINT_SIZE;
-                REQUIRE(begin < text.size());
-                const std::size_t bytes =
-                    std::min(CHECKPOINT_SIZE, text.size() - begin);
-                const auto budget = static_cast<std::size_t>(
-                    static_cast<double>(bytes) * config.column_budget_ratio);
-                // The core columns of the chunk's rows already take more than
-                // the budget, so the block cannot keep a numeric column.
-                dstd::Vector<std::uint8_t> core;
-                agg::encode_chunk_columns(block, 0, core,
-                                          agg::NO_COLUMN_BUDGET);
-                CHECK(core.size() > budget);
-                CHECK(block.columns.empty());
-                std::vector<std::string> want;
-                for (std::size_t r = 0; r < block.rows; ++r) {
-                    REQUIRE(at + r < rows.size());
-                    check_row_core(block, r, rows[at + r]);
-                    check_row_args(block, r, rows[at + r], false);
-                    for (const auto& [path, value] : rows[at + r].args)
-                        want.push_back(path);
-                }
-                std::vector<std::string> got;
-                for (const std::uint32_t path : block.dropped)
-                    got.emplace_back(block.texts[path]);
-                std::sort(want.begin(), want.end());
-                want.erase(std::unique(want.begin(), want.end()), want.end());
-                std::sort(got.begin(), got.end());
-                // Every arg path of the chunk, and no other, is listed once.
-                CHECK(got == want);
-                CHECK(block.dropped.size() == got.size());
-                dropped_blocks += got.empty() ? 0 : 1;
-                at += block.rows;
-                return true;
-            });
-        CHECK(at == rows.size());
-        CHECK(blocks > 1);
-        CHECK(dropped_blocks == blocks);
     }
 
     TEST_CASE("merge_shard_set copies the column blocks") {
@@ -983,8 +801,8 @@ TEST_SUITE("ChunkColumns") {
         const auto rows_b = parse_trace(text_b);
         const std::string ia = trace::internal::determine_index_path(a, "");
         const std::string ib = trace::internal::determine_index_path(b, "");
-        build({a}, "", 1000.0);
-        build({b}, "", 1000.0);
+        build({a}, "");
+        build({b}, "");
 
         std::map<std::uint64_t, std::vector<ColumnShape>> before_a;
         std::map<std::uint64_t, std::vector<ColumnShape>> before_b;
@@ -1009,8 +827,8 @@ TEST_SUITE("ChunkColumns") {
         IndexDatabase db(merged, index::store::IndexOpenMode::ReadOnly);
         const int merged_a = file_id_of(db, a);
         const int merged_b = file_id_of(db, b);
-        const auto decoded_a = read_and_check(db, merged_a, rows_a, true);
-        const auto decoded_b = read_and_check(db, merged_b, rows_b, true);
+        const auto decoded_a = read_and_check(db, merged_a, rows_a);
+        const auto decoded_b = read_and_check(db, merged_b, rows_b);
         CHECK(decoded_a.blocks > 1);
         CHECK(decoded_b.blocks > 1);
         // The merged blocks hold the columns of the blocks they came from,
@@ -1025,7 +843,7 @@ TEST_SUITE("ChunkColumns") {
         const std::string text = repeated_key_trace();
         const std::string gz = write_gzip(env.get_dir(), "repeat", text);
         const std::string index_dir = env.get_dir() + "/idx";
-        build({gz}, index_dir, 1000.0);
+        build({gz}, index_dir);
 
         const auto index_path =
             trace::internal::determine_index_path(gz, index_dir);
@@ -1037,7 +855,6 @@ TEST_SUITE("ChunkColumns") {
             db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
                 ++blocks;
                 CHECK(block.chunk == chunk);
-                CHECK(block.dropped.empty());
                 CHECK(block.rows > 0);
                 REQUIRE(at + block.rows <= RECORDS);
                 // One entry per row, holding the first value of the path.

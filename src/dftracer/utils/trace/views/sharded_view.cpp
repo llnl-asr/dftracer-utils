@@ -376,8 +376,7 @@ std::size_t merge_shard_set(const std::string& root,
                             }
                             bytes.clear();
                             agg::encode_chunk_columns(
-                                mapped, mapped.columns.size(), bytes,
-                                agg::NO_COLUMN_BUDGET);
+                                mapped, mapped.columns.size(), bytes);
                             dftracer::utils::index::store::records::
                                 put_agg_chunk_columns(
                                     *write, new_id, chunk,

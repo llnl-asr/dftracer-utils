@@ -17,15 +17,6 @@ constexpr double POW10[MAX_EXPONENT + 1] = {
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
 
-std::size_t varint_bytes(std::uint64_t v) {
-    std::size_t bytes = 1;
-    while (v >= 0x80U) {
-        v >>= 7U;
-        ++bytes;
-    }
-    return bytes;
-}
-
 /// Zigzag of the two's complement bit pattern of a signed value, so a
 /// difference that wrapped still round-trips exactly.
 std::uint64_t zigzag_bits(std::uint64_t bits) {
@@ -182,54 +173,16 @@ void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column) {
     }
 }
 
-struct ColumnSpan {
-    std::uint32_t path;
-    std::uint64_t rows;
-    std::size_t size;
-};
-
-struct BlockLayout {
-    /// Where the column count sits in the output.
-    std::size_t columns_at = 0;
-    dstd::Vector<ColumnSpan> columns;
-};
-
-bool lists(const dstd::Vector<std::uint32_t>& list, std::uint32_t value) {
-    return std::find(list.begin(), list.end(), value) != list.end();
-}
-
 void append_block(const ChunkColumns& block, std::size_t column_count,
-                  const dstd::Vector<std::uint32_t>& dropped,
-                  dstd::Vector<std::uint8_t>& out, BlockLayout* layout) {
+                  dstd::Vector<std::uint8_t>& out) {
     out.push_back(BLOCK_FORMAT);
     append_varint(out, block.rows);
     append_varint(out, block.ids.size());
     for (const std::uint32_t id : block.ids) append_varint(out, id);
     put_core(out, block);
-    const std::size_t columns_at = out.size();
-    std::size_t kept = 0;
+    append_varint(out, column_count);
     for (std::size_t k = 0; k < column_count; ++k)
-        if (!lists(dropped, block.columns[k].path)) ++kept;
-    append_varint(out, kept);
-    for (std::size_t k = 0; k < column_count; ++k) {
-        const ChunkColumn& column = block.columns[k];
-        if (lists(dropped, column.path)) continue;
-        const std::size_t at = out.size();
-        put_column(out, column);
-        if (layout != nullptr) {
-            layout->columns.push_back(
-                {column.path, column.rows.size(), out.size() - at});
-        }
-    }
-    append_varint(out, dropped.size());
-    for (const std::uint32_t path : dropped) append_varint(out, path);
-    if (layout != nullptr) layout->columns_at = columns_at;
-}
-
-std::size_t dropped_bytes(const dstd::Vector<std::uint32_t>& dropped) {
-    std::size_t bytes = varint_bytes(dropped.size());
-    for (const std::uint32_t path : dropped) bytes += varint_bytes(path);
-    return bytes;
+        put_column(out, block.columns[k]);
 }
 
 bool get_varint(LeReader& r, std::uint64_t& out) {
@@ -422,7 +375,6 @@ void ChunkColumns::clear() {
     pid.clear();
     tid.clear();
     phase.clear();
-    dropped.clear();
     for (ChunkColumn& column : columns) {
         column.rows.clear();
         column.bits.clear();
@@ -519,61 +471,15 @@ void ChunkColumnBuilder::add_double(std::uint32_t path, double v) {
     column.bits.push_back(double_bits(v));
 }
 
-bool ChunkColumnBuilder::encode_into(dstd::Vector<std::uint8_t>& out,
-                                     std::size_t budget) {
+bool ChunkColumnBuilder::encode_into(dstd::Vector<std::uint8_t>& out) {
     if (block_.rows == 0) return false;
-    encode_chunk_columns(block_, live_columns_, out, budget);
+    encode_chunk_columns(block_, live_columns_, out);
     return true;
 }
 
 void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
-                          dstd::Vector<std::uint8_t>& out, std::size_t budget) {
-    const std::size_t start = out.size();
-    dstd::Vector<std::uint32_t> dropped(block.dropped.begin(),
-                                        block.dropped.end());
-    BlockLayout layout;
-    append_block(block, column_count, dropped, out, &layout);
-    if (budget == NO_COLUMN_BUDGET || out.size() - start <= budget) return;
-
-    // Over budget: drop whole arg paths, those with the fewest rows first, and
-    // list them. The estimates are exact, so one more encode is the last.
-    const std::size_t prefix = layout.columns_at - start;
-    std::size_t kept_bytes = 0;
-    std::size_t kept_columns = 0;
-    for (const ColumnSpan& span : layout.columns) {
-        kept_bytes += span.size;
-        ++kept_columns;
-    }
-    while (true) {
-        const std::size_t size = prefix + varint_bytes(kept_columns) +
-                                 kept_bytes + dropped_bytes(dropped);
-        if (size <= budget) break;
-        bool found = false;
-        std::uint32_t next = 0;
-        std::uint64_t next_rows = 0;
-        for (const ColumnSpan& span : layout.columns) {
-            if (lists(dropped, span.path)) continue;
-            std::uint64_t rows = 0;
-            for (const ColumnSpan& other : layout.columns)
-                if (other.path == span.path) rows += other.rows;
-            if (found && (rows > next_rows ||
-                          (rows == next_rows && span.path >= next))) {
-                continue;
-            }
-            found = true;
-            next = span.path;
-            next_rows = rows;
-        }
-        if (!found) break;
-        dropped.push_back(next);
-        for (const ColumnSpan& span : layout.columns) {
-            if (span.path != next) continue;
-            kept_bytes -= span.size;
-            --kept_columns;
-        }
-    }
-    out.resize(start);
-    append_block(block, column_count, dropped, out, nullptr);
+                          dstd::Vector<std::uint8_t>& out) {
+    append_block(block, column_count, out);
 }
 
 dstd::Expected<ChunkColumns, ErrorCode> decode_chunk_columns(
@@ -602,14 +508,6 @@ dstd::Expected<ChunkColumns, ErrorCode> decode_chunk_columns(
     block.columns.resize(static_cast<std::size_t>(columns));
     for (ChunkColumn& column : block.columns) {
         if (!get_column(r, rows, block.ids.size(), column)) return bad();
-    }
-    std::uint64_t dropped = 0;
-    if (!get_count(r, r.remaining(), dropped)) return bad();
-    block.dropped.resize(static_cast<std::size_t>(dropped));
-    for (std::size_t k = 0; k < block.dropped.size(); ++k) {
-        std::uint64_t path = 0;
-        if (!get_varint(r, path) || path >= block.ids.size()) return bad();
-        block.dropped[k] = static_cast<std::uint32_t>(path);
     }
     if (r.remaining() != 0) return bad();
     return block;

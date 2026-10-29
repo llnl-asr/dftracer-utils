@@ -113,6 +113,8 @@ struct GroupHash {
 /// reads every group.
 struct ChunkJob {
     std::uint32_t chunk = 0;
+    /// The index file id the chunk's records are keyed under.
+    int file_id = -1;
     bool all = false;
     dstd::Vector<Group> groups;
 };
@@ -285,7 +287,7 @@ class Task {
     /// window of each bin.
     void take_bins(const agg::AggPartial& p, AggKey key);
 
-    coro::CoroTask<void> whole_file_chunks(const std::string& path,
+    coro::CoroTask<void> whole_file_chunks(const std::string& path, int fid,
                                            std::size_t chunk_count,
                                            dstd::Vector<ChunkJob>& jobs);
 
@@ -356,12 +358,19 @@ class Task {
     void add_event(const FoldEvent& ev,
                    const dstd::HashSet<Group, GroupHash>* wanted);
 
+    /// Answers the job from the column block of `chunk`: false, with nothing
+    /// added, when the index holds none.
+    bool add_chunk_columns(std::uint32_t chunk, int file_id,
+                           const dstd::HashSet<Group, GroupHash>* wanted);
+
     Runner& r_;
     Source& src_;
     IdCache root_cat_, root_name_, root_host_, root_extra_;
     IdCache build_cat_, build_name_, build_host_;
     dstd::Vector<Reread> rereads_;
     views::detail::FoldEventBuffer buffer_;
+    /// The event a column block row is rebuilt into.
+    FoldEvent column_event_;
     dstd::String extra_buf_;
     json::RecordParser parser_;
     std::shared_ptr<std::string> buf_ = std::make_shared<std::string>();
@@ -401,6 +410,7 @@ void Runner::merge(Task& task) {
     s.partials_reread += t.partials_reread;
     s.partials_binned += t.partials_binned;
     s.chunks_reread += t.chunks_reread;
+    s.chunks_from_columns += t.chunks_from_columns;
     s.unanswered += t.unanswered;
     s.events_read += t.events_read;
     s.max_batch_events = std::max(s.max_batch_events, t.max_batch_events);
@@ -556,13 +566,14 @@ coro::CoroTask<void> Task::scan_file(
             ++stats.unanswered;
             co_return;
         }
-        co_await whole_file_chunks(path, spans.size(), jobs);
+        co_await whole_file_chunks(path, fid, spans.size(), jobs);
         co_return;
     }
 
     for (std::size_t i = 0; i < rereads_.size();) {
         ChunkJob job;
         job.chunk = rereads_[i].chunk;
+        job.file_id = fid;
         if (job.chunk >= spans.size())
             throw DFTUtilsException::cat(
                 ErrorCode::Parse, "aggregation query: a partial of ", path,
@@ -576,7 +587,7 @@ coro::CoroTask<void> Task::scan_file(
 }
 
 // The chunks of a file with no partials: those the time range leaves.
-coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
+coro::CoroTask<void> Task::whole_file_chunks(const std::string& path, int fid,
                                              std::size_t chunk_count,
                                              dstd::Vector<ChunkJob>& jobs) {
     dstd::Vector<std::uint64_t> chunks;
@@ -605,6 +616,7 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
         if (c >= chunk_count) continue;
         ChunkJob job;
         job.chunk = static_cast<std::uint32_t>(c);
+        job.file_id = fid;
         job.all = true;
         jobs.push_back(std::move(job));
     }
@@ -818,6 +830,10 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
     dstd::HashSet<Group, GroupHash> wanted;
     if (!job.all) wanted.insert(job.groups.begin(), job.groups.end());
     const dstd::HashSet<Group, GroupHash>* filter = job.all ? nullptr : &wanted;
+    if (!r_.q.filter && r_.q.config.extra_group_keys.empty() &&
+        add_chunk_columns(job.chunk, job.file_id, filter)) {
+        co_return;
+    }
 
     auto reader = co_await open_reader(path);
     auto stream = reader->stream(rd::StreamConfig()
@@ -850,6 +866,59 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
         }
         parse_lines_of(pending, job.chunk, filter);
     }
+}
+
+// Rebuilds the events of `chunk` from its column block: every rule, limit and
+// key then stays in add_event, as on the parse path.
+bool Task::add_chunk_columns(std::uint32_t chunk, int file_id,
+                             const dstd::HashSet<Group, GroupHash>* wanted) {
+    agg::ChunkColumns block;
+    if (!agg::tier::get_chunk_columns(src_.idx, file_id, chunk, block))
+        return false;
+    // The id in `r_.read` of each id the block names, interned once per block.
+    dstd::Vector<std::uint32_t> read_ids(block.ids.size(), UNSET);
+    const auto read_id = [&](std::uint32_t local) {
+        std::uint32_t& id = read_ids[local];
+        if (id == UNSET) {
+            const dstd::String& text = block.texts[local];
+            id = text.empty() ? dstd::StringIntern::NO_ID
+                              : r_.read.get_or_insert(text);
+        }
+        return id;
+    };
+    dstd::Vector<std::uint32_t> path_ids(block.columns.size());
+    for (std::size_t c = 0; c < block.columns.size(); ++c)
+        path_ids[c] = r_.read.get_or_insert(block.texts[block.columns[c].path]);
+    // The entry of each column the next row visits.
+    dstd::Vector<std::size_t> at(block.columns.size(), 0);
+    for (std::size_t row = 0; row < block.rows; ++row) {
+        views::detail::reset_fold_event(column_event_);
+        column_event_.ts = block.ts[row];
+        column_event_.dur = block.dur[row];
+        column_event_.has_dur = block.has_dur[row] != 0;
+        column_event_.pid = block.pid[row];
+        column_event_.tid = block.tid[row];
+        column_event_.phase = static_cast<RecordPhase>(block.phase[row]);
+        column_event_.cat_id = read_id(block.cat[row]);
+        column_event_.name_id = read_id(block.name[row]);
+        column_event_.hhash_id = read_id(block.host[row]);
+        column_event_.fhash_id = read_id(block.file[row]);
+        for (std::size_t c = 0; c < block.columns.size(); ++c) {
+            const agg::ChunkColumn& column = block.columns[c];
+            if (at[c] >= column.rows.size() || column.rows[at[c]] != row)
+                continue;
+            const std::size_t k = at[c]++;
+            views::detail::FoldEvent::ArgValue value = column.double_at(k);
+            if (column.kind == agg::ColumnKind::Int64)
+                value = column.int64_at(k);
+            else if (column.kind == agg::ColumnKind::Uint64)
+                value = column.uint64_at(k);
+            column_event_.args.emplace_back(path_ids[c], value);
+        }
+        add_event(column_event_, wanted);
+    }
+    ++stats.chunks_from_columns;
+    return true;
 }
 
 void Task::add_event(const FoldEvent& ev,

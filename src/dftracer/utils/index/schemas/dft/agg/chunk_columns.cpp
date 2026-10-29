@@ -132,6 +132,7 @@ void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
     put_rle(out, block.cat, put_local);
     put_rle(out, block.name, put_local);
     put_rle(out, block.host, put_local);
+    put_rle(out, block.file, put_local);
 }
 
 void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column) {
@@ -298,7 +299,8 @@ bool get_core(LeReader& r, ChunkColumns& block, std::size_t id_count) {
            get_rle(r, rows, block.phase) &&
            get_rle(r, rows, id_count, block.cat) &&
            get_rle(r, rows, id_count, block.name) &&
-           get_rle(r, rows, id_count, block.host);
+           get_rle(r, rows, id_count, block.host) &&
+           get_rle(r, rows, id_count, block.file);
 }
 
 bool get_column(LeReader& r, std::uint64_t rows, std::size_t id_count,
@@ -369,6 +371,7 @@ void ChunkColumns::clear() {
     cat.clear();
     name.clear();
     host.clear();
+    file.clear();
     ts.clear();
     dur.clear();
     has_dur.clear();
@@ -431,13 +434,14 @@ void ChunkColumnBuilder::clear() {
     last_cat_ = NO_DICTIONARY_ID;
     last_name_ = NO_DICTIONARY_ID;
     last_host_ = NO_DICTIONARY_ID;
+    last_file_ = NO_DICTIONARY_ID;
 }
 
 void ChunkColumnBuilder::add_row(std::uint64_t ts, std::uint64_t dur,
                                  bool has_dur, std::uint64_t pid,
                                  std::uint64_t tid, std::uint8_t phase,
                                  std::uint32_t cat, std::uint32_t name,
-                                 std::uint32_t host) {
+                                 std::uint32_t host, std::uint32_t file) {
     block_.ts.push_back(ts);
     block_.dur.push_back(dur);
     block_.has_dur.push_back(has_dur ? 1 : 0);
@@ -447,6 +451,7 @@ void ChunkColumnBuilder::add_row(std::uint64_t ts, std::uint64_t dur,
     block_.cat.push_back(row_local_id(cat, last_cat_, last_cat_local_));
     block_.name.push_back(row_local_id(name, last_name_, last_name_local_));
     block_.host.push_back(row_local_id(host, last_host_, last_host_local_));
+    block_.file.push_back(row_local_id(file, last_file_, last_file_local_));
     ++block_.rows;
 }
 

@@ -88,6 +88,10 @@ struct AggregatedTraces {
     /// partials answered every (pid, bucket, cat, name) group.
     std::uint64_t chunks_reread = 0;
 
+    /// Of `chunks_reread`, the chunks answered from their index column block
+    /// without reading the trace.
+    std::uint64_t chunks_from_columns = 0;
+
     /// Time bucket width in microseconds (from the aggregation config).
     std::uint64_t time_interval_us = 0;
 };

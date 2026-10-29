@@ -26,6 +26,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -74,6 +75,7 @@ agg::ChunkColumns core_block(std::size_t rows) {
         block.cat.push_back(r < rows / 2 ? 0 : 1);
         block.name.push_back(2);
         block.host.push_back(static_cast<std::uint32_t>(r % 3));
+        block.file.push_back(r < rows / 2 ? 1 : 2);
     }
     return block;
 }
@@ -92,6 +94,7 @@ void check_core_columns(const agg::ChunkColumns& want,
     CHECK(got.cat == want.cat);
     CHECK(got.name == want.name);
     CHECK(got.host == want.host);
+    CHECK(got.file == want.file);
 }
 
 agg::ChunkColumns encode_then_decode(
@@ -182,6 +185,7 @@ struct Row {
     std::string cat;
     std::string name;
     std::string host;
+    std::string fhash;
     std::map<std::string, Num, std::less<>> args;
 };
 
@@ -264,6 +268,7 @@ Row parse_row(const std::string& line) {
     row.name = std::string(quoted(head, "name"));
     row.phase = phase_of(quoted(head, "ph"));
     row.host = std::string(quoted(args, "hhash"));
+    row.fhash = std::string(quoted(args, "fhash"));
     number(head, "pid", row.pid);
     number(head, "tid", row.tid);
     number(head, "ts", row.ts);
@@ -418,9 +423,11 @@ void check_row_core(const agg::ChunkColumns& block, std::size_t r,
     REQUIRE(block.cat[r] < block.texts.size());
     REQUIRE(block.name[r] < block.texts.size());
     REQUIRE(block.host[r] < block.texts.size());
+    REQUIRE(block.file[r] < block.texts.size());
     CHECK(block.texts[block.cat[r]] == row.cat.c_str());
     CHECK(block.texts[block.name[r]] == row.name.c_str());
     CHECK(block.texts[block.host[r]] == row.host.c_str());
+    CHECK(block.texts[block.file[r]] == row.fhash.c_str());
 }
 
 // The column of `path` of the kind `kind`: one arg path holds one column per
@@ -796,6 +803,74 @@ TEST_SUITE("ChunkColumns") {
         CHECK(decoded.blocks > 1);
         CHECK(decoded.rows == rows.size());
         CHECK(db.query_gzip_members(fid).size() >= decoded.blocks);
+    }
+
+    TEST_CASE("the file column names the file hash of a record, or no file") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        std::ostringstream text;
+        text << "[\n";
+        for (int i = 0; i < RECORDS; ++i) {
+            text << R"({"id":)" << i << R"(,"name":"read","cat":"POSIX")"
+                 << R"(,"pid":1,"tid":1,"ph":"X","ts":)" << 1000 + i * 7
+                 << R"(,"dur":1,"args":{"ret":)" << i;
+            if (i % 3 != 0) text << R"(,"fhash":"0123456789abcdef")";
+            text << "}}\n";
+        }
+        text << "]\n";
+        const std::string body = text.str();
+        const std::string gz = write_gzip(env.get_dir(), "file_column", body);
+        const std::string index_dir = env.get_dir() + "/idx";
+        build({gz}, index_dir);
+
+        const auto index_path =
+            trace::internal::determine_index_path(gz, index_dir);
+        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+        const int fid = file_id_of(db, gz);
+        const auto rows = parse_trace(body);
+        std::size_t at = 0;
+        std::size_t blocks = 0;
+        std::set<std::string> texts;
+        std::uint64_t first_chunk = 0;
+        dstd::Vector<std::uint32_t> first_file;
+        dstd::Vector<dstd::String> first_texts;
+        agg::tier::for_each_chunk_columns(
+            db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+                ++blocks;
+                if (blocks == 1) {
+                    first_chunk = chunk;
+                    first_file = block.file;
+                    first_texts = block.texts;
+                }
+                std::set<std::uint32_t> ids;
+                for (std::size_t r = 0; r < block.rows; ++r) {
+                    REQUIRE(at + r < rows.size());
+                    REQUIRE(block.file[r] < block.texts.size());
+                    CHECK(block.texts[block.file[r]] ==
+                          rows[at + r].fhash.c_str());
+                    ids.insert(block.file[r]);
+                    texts.insert(std::string(block.texts[block.file[r]]));
+                }
+                // Every block names the hash in one id and its absence in
+                // another.
+                CHECK(ids.size() == 2);
+                at += block.rows;
+                return true;
+            });
+        CHECK(blocks > 1);
+        CHECK(at == rows.size());
+        CHECK(texts.size() == 2);
+        CHECK(texts.count("0123456789abcdef") == 1);
+        CHECK(texts.count("") == 1);
+
+        // A point get of one chunk answers with the block the scan returned.
+        agg::ChunkColumns one;
+        REQUIRE(agg::tier::get_chunk_columns(db, fid, first_chunk, one));
+        CHECK(one.chunk == first_chunk);
+        CHECK(one.file == first_file);
+        CHECK(one.texts == first_texts);
+        agg::ChunkColumns absent;
+        CHECK_FALSE(agg::tier::get_chunk_columns(db, fid, 1000, absent));
     }
 
     TEST_CASE("merge_shard_set copies the column blocks") {

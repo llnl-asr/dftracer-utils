@@ -67,6 +67,32 @@ std::uint32_t entry_id(std::string_view prefix, std::string_view key) {
     return layout::read_u32(key.substr(prefix.size() + sizeof(std::uint32_t)));
 }
 
+/// The dictionary entries of `file_id`, keyed by id.
+void load_file_texts(const IndexDatabase& db, int file_id,
+                     dstd::HashMap<std::uint32_t, dstd::String>& texts) {
+    const auto entries = dict_prefix();
+    const auto range =
+        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
+                            static_cast<std::uint32_t>(file_id));
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::DICT, range,
+        [&](std::string_view dict_key, std::string_view text) {
+            texts.try_emplace(entry_id(entries, dict_key), dstd::String(text));
+            return true;
+        });
+}
+
+/// Fills the text of each id of `block`, empty for an id the file holds none
+/// for.
+void resolve_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
+                   ChunkColumns& block) {
+    block.texts.resize(block.ids.size());
+    for (std::size_t i = 0; i < block.ids.size(); ++i) {
+        const auto at = texts.find(block.ids[i]);
+        if (at != texts.end()) block.texts[i] = at->second;
+    }
+}
+
 }  // namespace
 
 std::optional<Config> read_config(const IndexDatabase& db) {
@@ -154,9 +180,6 @@ void for_each_chunk_columns(
     const auto prefix =
         layout::file_prefix(layout::Ext::Agg, layout::agg_kind::COLUMNS,
                             static_cast<std::uint32_t>(file_id));
-    const auto dict_range =
-        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
-                            static_cast<std::uint32_t>(file_id));
     dstd::HashMap<std::uint32_t, dstd::String> texts;
     bool texts_read = false;
     AggRowReader::for_each_row(
@@ -166,14 +189,7 @@ void for_each_chunk_columns(
                 throw DFTUtilsException(ErrorCode::Parse,
                                         "chunk columns: bad key");
             if (!texts_read) {
-                const auto entries = dict_prefix();
-                AggRowReader::for_each_row(
-                    db, layout::agg_kind::DICT, dict_range,
-                    [&](std::string_view dict_key, std::string_view text) {
-                        texts.try_emplace(entry_id(entries, dict_key),
-                                          dstd::String(text));
-                        return true;
-                    });
+                load_file_texts(db, file_id, texts);
                 texts_read = true;
             }
             auto block = decode_chunk_columns(std::span<const std::uint8_t>(
@@ -183,13 +199,30 @@ void for_each_chunk_columns(
                 throw DFTUtilsException(ErrorCode::Parse,
                                         "chunk columns: malformed record");
             block->chunk = layout::read_u32(key.substr(prefix.size()));
-            block->texts.resize(block->ids.size());
-            for (std::size_t i = 0; i < block->ids.size(); ++i) {
-                const auto at = texts.find(block->ids[i]);
-                if (at != texts.end()) block->texts[i] = at->second;
-            }
+            resolve_texts(texts, *block);
             return fn(block->chunk, *block);
         });
+}
+
+bool get_chunk_columns(const IndexDatabase& db, int file_id,
+                       std::uint64_t chunk, ChunkColumns& out) {
+    const auto body = AggRowReader::get_row(
+        db, layout::agg_kind::COLUMNS,
+        layout::granule_key(layout::Ext::Agg, layout::agg_kind::COLUMNS,
+                            static_cast<std::uint32_t>(file_id),
+                            static_cast<std::uint32_t>(chunk)));
+    if (!body) return false;
+    auto block = decode_chunk_columns(std::span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(body->data()), body->size()));
+    if (!block)
+        throw DFTUtilsException(ErrorCode::Parse,
+                                "chunk columns: malformed record");
+    block->chunk = chunk;
+    dstd::HashMap<std::uint32_t, dstd::String> texts;
+    load_file_texts(db, file_id, texts);
+    resolve_texts(texts, *block);
+    out = std::move(*block);
+    return true;
 }
 
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db) {

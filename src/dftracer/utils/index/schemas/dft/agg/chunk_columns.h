@@ -16,10 +16,11 @@
 // The column block of one (file, chunk) of the aggregation tier: the rows of
 // the chunk's records that the partials keep, in file order, as exact columns.
 // A block holds the core columns of every row (ts, dur, pid, tid, phase, cat,
-// name, host) and one numeric column per (arg path, value kind) that the
+// name, host, file) and one numeric column per (arg path, value kind) that the
 // chunk's records hold. Strings are indexes into a block-local table of the
 // index dictionary ids the block names, so a sharded merge remaps a block by
-// rewriting that table.
+// rewriting that table. The file column is the file hash text the record names,
+// the empty text standing for a record that names none.
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// The kind of the values of one numeric column: the variant kind of the
@@ -49,12 +50,15 @@ struct ChunkColumn {
 
 /// The decoded (or being built) column block of one chunk. Row r of the block
 /// is the r-th record of the chunk the partials keep, in file order; the
-/// column of row r is `cat[r]`, an index into `ids`.
+/// column of row r is `cat[r]`, an index into `ids`. `file[r]` is the id of the
+/// text of the record's file hash, whose text is empty for a record without
+/// one.
 struct ChunkColumns {
     std::uint64_t chunk = 0;
     std::size_t rows = 0;
-    /// The dictionary ids the block names: the texts of cat, name and host and
-    /// the arg paths of its columns, in the order the block first used them.
+    /// The dictionary ids the block names: the texts of cat, name, host and
+    /// file and the arg paths of its columns, in the order the block first used
+    /// them.
     dstd::Vector<std::uint32_t> ids;
     /// The text of each id of `ids`, resolved through the file's dictionary
     /// entries by the reader; empty when the file holds none.
@@ -64,6 +68,7 @@ struct ChunkColumns {
     dstd::Vector<std::uint32_t> cat;
     dstd::Vector<std::uint32_t> name;
     dstd::Vector<std::uint32_t> host;
+    dstd::Vector<std::uint32_t> file;
     dstd::Vector<std::uint64_t> ts;
     dstd::Vector<std::uint64_t> dur;
     /// 1 where the record carried a duration, 0 where it carried none.
@@ -89,7 +94,8 @@ class ChunkColumnBuilder {
 
     void add_row(std::uint64_t ts, std::uint64_t dur, bool has_dur,
                  std::uint64_t pid, std::uint64_t tid, std::uint8_t phase,
-                 std::uint32_t cat, std::uint32_t name, std::uint32_t host);
+                 std::uint32_t cat, std::uint32_t name, std::uint32_t host,
+                 std::uint32_t file);
     /// Adds the value of `path` on the row added last. `path` is the index
     /// dictionary id of the arg path. A row keeps the first value of a path,
     /// as the engine reads a record whose args repeat a key.
@@ -122,14 +128,16 @@ class ChunkColumnBuilder {
     std::uint32_t live_columns_ = 0;
     /// Per block-local id, the row count when that path last got a value.
     dstd::Vector<std::size_t> path_row_;
-    /// The dictionary id and local id the row before named as cat, name and
-    /// host, so a run of equal ids skips the hash lookup.
+    /// The dictionary id and local id the row before named as cat, name, host
+    /// and file, so a run of equal ids skips the hash lookup.
     std::uint32_t last_cat_ = NO_DICTIONARY_ID;
     std::uint32_t last_cat_local_ = 0;
     std::uint32_t last_name_ = NO_DICTIONARY_ID;
     std::uint32_t last_name_local_ = 0;
     std::uint32_t last_host_ = NO_DICTIONARY_ID;
     std::uint32_t last_host_local_ = 0;
+    std::uint32_t last_file_ = NO_DICTIONARY_ID;
+    std::uint32_t last_file_local_ = 0;
 };
 
 /// Appends the encoded block to `out`: its first `column_count` columns, each
@@ -139,7 +147,7 @@ void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
                           dstd::Vector<std::uint8_t>& out);
 
 /// The block of `bytes`, the payload of one chunk's column record, with its
-/// `ids`, `cat`, `name`, `host`, `ts`, `dur`, `has_dur`, `pid`, `tid`,
+/// `ids`, `cat`, `name`, `host`, `file`, `ts`, `dur`, `has_dur`, `pid`, `tid`,
 /// `phase` and `columns` filled. `texts` stays empty and `chunk` stays 0:
 /// neither is in the bytes. Each value equals the one the record
 /// held: an Int64 or Uint64 value is the same integer of the same variant

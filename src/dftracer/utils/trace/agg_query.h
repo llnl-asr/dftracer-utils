@@ -39,6 +39,12 @@
 // leaves. A query that sets `reread` false reads nothing but partials: what a
 // re-read would have answered is counted in the stats and left out.
 //
+// A re-read answers from the chunk's column block when the index holds one and
+// the query has neither an event filter nor extra group keys: the block holds
+// every column and numeric arg of the chunk's events, so the trace is not
+// parsed. A chunk the index holds no block for, and a query with a filter or
+// extra group keys, parses the chunk through the gzip index.
+//
 // An event belongs to the window of its ts, as in compute_time_bucket.
 // A chunk is the lines that END in its gzip member, the rule of the index
 // fold that builds the partials, the bloom filters and the chunk statistics.
@@ -172,6 +178,9 @@ struct AggQueryStats {
     std::size_t partials_binned = 0;
     /// Chunk reads; a chunk with several re-read partials is read once.
     std::size_t chunks_reread = 0;
+    /// Re-read chunks answered from their column block, without parsing the
+    /// trace.
+    std::size_t chunks_from_columns = 0;
     /// Partials and files that needed a re-read the query did not allow.
     std::size_t unanswered = 0;
     std::uint64_t events_read = 0;
@@ -208,10 +217,10 @@ class AggQueryResult {
 /// folding into a map of its own that is merged into the result when the task
 /// ends. Memory: the result map, plus at most `workers` task maps, each as
 /// large as the groups of one file (or one chunk), plus the re-read ids (12
-/// bytes per queued partial) of the files being scanned and one parsed batch
-/// of events per task. Fails with NotFound for a file that is not in its
-/// index, Parse for a malformed partial, and what the reader reports for a
-/// chunk.
+/// bytes per queued partial) of the files being scanned, plus one parsed batch
+/// of events or one chunk column block per task. Fails with NotFound for a file
+/// that is not in its index, Parse for a malformed partial or block, and what
+/// the reader reports for a chunk.
 coro::CoroTask<Result<AggQueryResult>> run_agg_query(const AggQuery& query);
 
 }  // namespace dftracer::utils::trace

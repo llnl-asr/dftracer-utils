@@ -356,9 +356,9 @@ std::size_t merge_shard_set(const std::string& root,
                             return true;
                         });
                 }
-                // A column block names its cat, name, host and arg paths in a
-                // block-local table of dictionary ids, so it copies under the
-                // new ids once that table is rewritten.
+                // A column block names its cat, name, host, file and arg
+                // paths in a block-local table of dictionary ids, so it copies
+                // under the new ids once that table is rewritten.
                 for (const int old_id : aggregated_old) {
                     const int new_id = remap[old_id];
                     agg::tier::for_each_chunk_columns(

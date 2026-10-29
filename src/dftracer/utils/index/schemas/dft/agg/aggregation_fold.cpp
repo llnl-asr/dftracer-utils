@@ -135,7 +135,8 @@ void AggregationFold::add_to_columns(
                      static_cast<std::uint8_t>(ev.phase),
                      root_id(cat_text_ids_, ev.cat_id, false),
                      root_id(name_ids_, ev.name_id, false),
-                     root_id(host_ids_, ev.hhash_id, false));
+                     root_id(host_ids_, ev.hhash_id, false),
+                     root_id(fhash_ids_, ev.fhash_id, false));
     for (const auto& [key_id, value] : ev.args) {
         const std::uint32_t path = root_id(path_ids_, key_id, false);
         if (const auto* d = std::get_if<double>(&value)) {

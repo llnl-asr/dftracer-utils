@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Answer the re-reads of an aggregation query from the chunk column blocks of the index instead of parsing the trace, when the query has no event filter and the build has no extra group keys.
+  A block now holds the file hash of each record as a core column, so `by_file` is answered from it too, and `AggQueryStats::chunks_from_columns` counts the re-read chunks that a block answered (`AggregatedTraces::chunks_from_columns` in the DLIO loader).
+  A query with an event filter or extra group keys still parses the chunk.
+  Indexes built before this change rebuild their aggregation data once.
 - Use less memory to build an index, because the aggregation data of each file is kept at its exact size with one copy less.
   File admission now counts these bytes, so a memory budget limits them too.
 - Make the aggregation tier part of every index build, with one standard config: 1 s windows and the percentile sketches on. `dftracer_index`, the freshness paths of the views and the other tools, the C++ `Indexer`, the C ABI, Python, the distributed build and the comparator all build it, and a caller may pass a customized config but cannot turn the tier off.

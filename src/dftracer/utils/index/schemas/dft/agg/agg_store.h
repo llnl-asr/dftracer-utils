@@ -85,6 +85,13 @@ void for_each_chunk_columns(
     const IndexDatabase& db, int file_id,
     const std::function<bool(std::uint64_t, const ChunkColumns&)>& fn);
 
+/// The column block of `chunk` of `file_id`, with its `chunk` and the texts of
+/// its ids filled as for_each_chunk_columns fills them. False, leaving `out`
+/// alone, when the index holds no block for the chunk. Throws on a read error
+/// or a malformed record.
+bool get_chunk_columns(const IndexDatabase& db, int file_id,
+                       std::uint64_t chunk, ChunkColumns& out);
+
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db);
 /// Stores the union of `bounds` and the stored bounds.
 void widen_time_bounds(IndexDatabase& db, TimeBounds bounds);

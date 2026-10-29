@@ -280,6 +280,7 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::Vector<std::uint32_t> cat_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> name_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> host_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> fhash_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> path_ids_;
     /// Root ids of the category texts of the column block, in their own case;
     /// the partials use the lower case of `cat_ids_`.

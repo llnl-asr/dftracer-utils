@@ -29,7 +29,9 @@ End-to-end the module composes five pieces:
    set by ``AggregationConfig::time_interval_us``. It reads the stored chunk
    partials and merges them; it re-reads a chunk only when a partial holds
    more than one pid or crosses a bucket boundary, and
-   ``AggregatedTraces::chunks_reread`` counts those reads. From the rows it
+   ``AggregatedTraces::chunks_reread`` counts those reads,
+   ``AggregatedTraces::chunks_from_columns`` the ones the index column blocks
+   answered without reading the trace. From the rows it
    synthesizes a flat per-rank sample stream per component (``fetch.block``,
    ``fetch.iter``, ``preprocess``, ``item`` by default; the selecting
    ``(cat, name)`` per component is configurable via ``TraceLoaderOptions`` /

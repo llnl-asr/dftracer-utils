@@ -560,6 +560,116 @@ std::size_t partial_count(const Fixture& fx) {
     return n;
 }
 
+// A trace of counters, pre-aggregated records and events over three processes,
+// two threads and five 5 s windows, some naming a file in fhash and some naming
+// none, with an int64, a uint64 and a double arg on nearly every record.
+std::string mixed_trace() {
+    std::ostringstream out;
+    out << "[\n";
+    for (int i = 0; i < 600; ++i) {
+        const std::uint64_t pid = 700 + static_cast<std::uint64_t>(i % 3);
+        const std::uint64_t tid = pid * 10 + static_cast<std::uint64_t>(i % 2);
+        const std::uint64_t ts =
+            BASE_TS + static_cast<std::uint64_t>(i) * 41'000;
+        out << R"({"id":)" << i << R"(,"pid":)" << pid << R"(,"tid":)" << tid
+            << R"(,"ts":)" << ts;
+        switch (i % 6) {
+            case 0:
+                out << R"(,"ph":"C","cat":"POSIX","name":"read","args":{)"
+                    << R"("dftu_cnt":3,"dur_sum":840,"dur_min":100,)"
+                    << R"("dur_max":900,"ret_sum":12288,"ret_min":4096,)"
+                    << R"("ret_max":8192,"offset_sum":6144,)"
+                    << R"("offset_min":2048,"offset_max":4096})";
+                break;
+            case 1:
+                out << R"(,"ph":"C","cat":"sys","name":"cpu","args":{)"
+                    << R"("dftu_cnt":2,"user_pct":)" << 10 + i
+                    << R"(,"sys_pct":5,"delta":-)" << i % 5 << "}";
+                break;
+            case 2:
+                out << R"(,"ph":"A","cat":"app","name":"step","dur":)" << 40 + i
+                    << R"(,"args":{"dftu_cnt":2,"delta":-)" << i % 7
+                    << R"(,"scale":0.5,"offset":)"
+                    << (std::uint64_t{1} << 40) + static_cast<std::uint64_t>(i);
+                if (i % 4 == 2) out << R"(,"fhash":"0123456789abcdef")";
+                out << "}";
+                break;
+            case 3:
+                out << R"(,"ph":"X","cat":"STDIO","name":"fread","dur":)"
+                    << 20 + i << R"(,"args":{"ret":8192,"offset":)" << i
+                    << R"(,"level":2,"fhash":"fedcba9876543210"})";
+                break;
+            case 4:
+                out << R"(,"ph":"X","cat":"app","name":"compute","dur":)"
+                    << 5 + i << R"(,"args":{"iter":)" << i << R"(,"delta":-)"
+                    << i % 3 << R"(,"scale":2.25,)"
+                    << R"("offset":)" << (std::uint64_t{1} << 50) + i << "}";
+                break;
+            default:
+                out << R"(,"ph":"X","cat":"POSIX","name":"write","dur":)"
+                    << 30 + i << R"(,"args":{"ret":4096,"offset":)" << 2 * i
+                    << R"(,"fhash":"0123456789abcdef"})";
+                break;
+        }
+        out << "}\n";
+    }
+    out << "]\n";
+    return out.str();
+}
+
+// The same stat of two answers of one query. Both fold the same values of the
+// same events, but the chunk tasks merge in their own order, and a sum of
+// doubles that outgrows its mantissa may differ in its last bits.
+void check_same_stat(const FieldStat& a, const FieldStat& b, const char* what) {
+    INFO("field: ", what);
+    REQUIRE(a.n == b.n);
+    if (a.n == 0) return;
+    CHECK(near(a.sum, b.sum, std::max(std::abs(a.sum), std::abs(b.sum)),
+               MOMENT_TOL));
+    CHECK(a.min == b.min);
+    CHECK(a.max == b.max);
+    const double s2 = std::max(std::abs(a.cm2), std::abs(b.cm2));
+    CHECK(near(a.cm2, b.cm2, s2, MOMENT_TOL));
+    CHECK(near(a.cm3, b.cm3, std::pow(s2, 1.5), MOMENT_TOL));
+    CHECK(near(a.cm4, b.cm4, s2 * s2, MOMENT_TOL));
+}
+
+void check_same_quantiles(const agg::QuantileStore& a,
+                          const agg::QuantileStore& b) {
+    REQUIRE(a.count() == b.count());
+    if (a.count() == 0) return;
+    for (double p : {0.0, 0.1, 0.5, 0.9, 0.99, 1.0})
+        CHECK(a.quantile(p) == b.quantile(p));
+}
+
+// Two answers of one query hold the same rows, stat for stat.
+void check_same_partial(const agg::AggPartial& a, const agg::AggPartial& b) {
+    CHECK(a.count == b.count);
+    CHECK(a.ts == b.ts);
+    CHECK(a.te == b.te);
+    CHECK(a.ts_last_start == b.ts_last_start);
+    check_same_stat(a.duration, b.duration, "duration");
+    check_same_stat(a.size, b.size, "size");
+    check_same_stat(a.offset, b.offset, "offset");
+    CHECK(a.duration_values == b.duration_values);
+    CHECK(a.size_values == b.size_values);
+    CHECK(a.offset_values == b.offset_values);
+    CHECK(a.pids.count() == b.pids.count());
+    CHECK(a.tids.count() == b.tids.count());
+    CHECK(a.files.count() == b.files.count());
+    CHECK(a.pid_tids.count() == b.pid_tids.count());
+    CHECK(a.pid_files.count() == b.pid_files.count());
+    REQUIRE(a.pid_spans.size() == b.pid_spans.size());
+    for (std::size_t i = 0; i < a.pid_spans.size(); ++i) {
+        CHECK(a.pid_spans[i].pid == b.pid_spans[i].pid);
+        CHECK(a.pid_spans[i].first == b.pid_spans[i].first);
+        CHECK(a.pid_spans[i].last == b.pid_spans[i].last);
+    }
+    check_same_quantiles(a.duration_q, b.duration_q);
+    check_same_quantiles(a.size_q, b.size_q);
+    check_same_quantiles(a.offset_q, b.offset_q);
+}
+
 }  // namespace
 
 TEST_SUITE("AggQuery") {
@@ -756,6 +866,71 @@ TEST_SUITE("AggQuery") {
         }
     }
 
+    TEST_CASE("a re-read answers from the chunk column blocks") {
+        auto fx = std::make_unique<Fixture>();
+        const std::string pfw = fx->env.get_dir() + "/mixed.pfw";
+        {
+            std::ofstream file(pfw);
+            file << mixed_trace();
+        }
+        const std::string gz = pfw + ".gz";
+        REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
+            pfw, gz, CHECKPOINT_SIZE));
+        fs::remove(pfw);
+        fx->files.push_back(gz);
+        fx->index_dir = fx->env.get_dir() + "/idx_mixed";
+        index::IndexerOptions o;
+        o.index_dir = fx->index_dir;
+        o.checkpoint_size = CHECKPOINT_SIZE;
+        o.aggregation = make_config(FIVE_SECONDS_US);
+        index::Indexer::open(fx->files, o).build();
+        fx->index_path =
+            trace::internal::determine_index_path(gz, fx->index_dir);
+
+        // Every key finer than category and name, with quantiles: the stored
+        // partials answer none of it whole, so every chunk is re-read.
+        Ask ask;
+        ask.by_pid = true;
+        ask.by_tid = true;
+        ask.by_file = true;
+        ask.window = FIVE_SECONDS_US;
+        ask.quantiles = true;
+
+        AggQueryResult by_columns = run(make_query(*fx, ask, FIVE_SECONDS_US));
+        REQUIRE(by_columns.stats.chunks_reread > 0);
+        CHECK(by_columns.stats.files_without_partials == 0);
+        CHECK(by_columns.stats.chunks_from_columns ==
+              by_columns.stats.chunks_reread);
+        CHECK(by_columns.stats.max_batch_events == 0);
+        CHECK(by_columns.rows.size() > 20);
+
+        // A filter keeps every record and so parses every re-read chunk.
+        AggQuery filtered = make_query(*fx, ask, FIVE_SECONDS_US);
+        filtered.filter = duql::parse_or_throw("ts >= 0");
+        AggQueryResult by_events = run(filtered);
+        CHECK(by_events.stats.chunks_from_columns == 0);
+        CHECK(by_events.stats.chunks_reread == by_columns.stats.chunks_reread);
+        CHECK(by_events.stats.max_batch_events > 0);
+        CHECK(by_events.stats.events_read == by_columns.stats.events_read);
+
+        REQUIRE(by_columns.rows.size() == by_events.rows.size());
+        for (const auto& [k, a] : by_columns.rows) {
+            const auto b = by_events.rows.find([&] {
+                trace::AggKey key = k;
+                key.cat =
+                    by_events.strings().get_or_insert(by_columns.text(k.cat));
+                key.name =
+                    by_events.strings().get_or_insert(by_columns.text(k.name));
+                return key;
+            }());
+            REQUIRE_MESSAGE(b != by_events.rows.end(), by_columns.text(k.cat),
+                            " ", by_columns.text(k.name), " pid ", k.pid,
+                            " tid ", k.tid, " file ", k.file, " window ",
+                            k.window);
+            check_same_partial(a, b->second);
+        }
+    }
+
     TEST_CASE("filters on category, name, pid and time") {
         auto fx = build(FIVE_SECONDS_US, "five");
         SUBCASE("category and name") {
@@ -825,6 +1000,7 @@ TEST_SUITE("AggQuery") {
         CHECK(r.stats.files_without_partials == FILES);
         CHECK(r.stats.partials_read == 0);
         CHECK(r.stats.chunks_reread > 0);
+        CHECK(r.stats.chunks_from_columns == r.stats.chunks_reread);
         CHECK(r.stats.events_read == fx->events.size());
     }
 
@@ -852,7 +1028,10 @@ TEST_SUITE("AggQuery") {
 
         AggQuery q = make_query(*fx, Ask{}, FIVE_SECONDS_US);
         q.config.compute_percentiles = false;
+        // A filter keeps every event and so answers from the parse alone.
+        q.filter = duql::parse_or_throw("ts >= 0");
         const AggQueryResult r = run(q);
+        CHECK(r.stats.chunks_from_columns == 0);
         CHECK(r.stats.events_read == TINY_EVENTS);
         CHECK(r.stats.max_batch_events > 0);
         CHECK(r.stats.max_batch_events <=

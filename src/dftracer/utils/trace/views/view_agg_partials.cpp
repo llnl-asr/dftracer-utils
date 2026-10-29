@@ -736,10 +736,11 @@ void log_answer(const AggQueryStats& st) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials answered over %zu files: %zu partials read, "
         "%zu merged, %zu pruned, %zu split by time bins, %zu re-read in %zu "
-        "chunks (%llu events), %zu unanswered",
+        "chunks (%zu from their column blocks, %llu events), %zu unanswered",
         st.files, st.partials_read, st.partials_merged, st.partials_pruned,
         st.partials_binned, st.partials_reread, st.chunks_reread,
-        static_cast<unsigned long long>(st.events_read), st.unanswered);
+        st.chunks_from_columns, static_cast<unsigned long long>(st.events_read),
+        st.unanswered);
 }
 
 }  // namespace

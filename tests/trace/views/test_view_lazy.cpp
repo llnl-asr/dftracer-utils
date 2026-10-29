@@ -961,6 +961,30 @@ TEST_SUITE("View - trace terminals") {
         CHECK(rows.num_rows() == 16);
     }
 
+    TEST_CASE("collect_typed leaves dur null where the record has none") {
+        TestEnvironment env(10);
+        const std::string pfw = env.get_dir() + "/dur_gap.pfw";
+        {
+            std::ofstream ofs(pfw);
+            ofs << R"({"ph":"X","name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
+                << "\n"
+                << R"({"ph":"X","name":"b","cat":"APP","pid":1,"tid":2,"ts":150,"args":{}})"
+                << "\n";
+        }
+        const std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        const TypedResult t =
+            run(scan::collect_typed(scan::from_file(gz), 0, 4096));
+        REQUIRE(t.regular.num_rows() == 2);
+        const dataframe::Series& dur =
+            t.regular.columns[static_cast<std::size_t>(bcol(t.regular, "dur"))];
+        REQUIRE(dur.length() == 2);
+        CHECK_FALSE(dur.is_null(0));
+        CHECK(dur.is_null(1));
+        CHECK(bnum(t.regular, 0, "dur") == 50.0);
+    }
+
     TEST_CASE("a session registers terminals and sinks") {
         View t = nested_viewer();
         TraceSession s = t.session();

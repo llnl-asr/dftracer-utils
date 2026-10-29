@@ -1338,6 +1338,10 @@ class DistinctRowFold : public Fold {
                     append_word(scratch_, '\1', scaled(ev.ts));
                     break;
                 case Kind::Dur:
+                    if (!ev.has_dur) {
+                        scratch_.push_back('\0');
+                        break;
+                    }
                     append_word(scratch_, '\1', scaled(ev.dur));
                     break;
                 case Kind::Ph:

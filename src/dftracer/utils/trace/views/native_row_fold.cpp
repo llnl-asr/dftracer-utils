@@ -419,6 +419,31 @@ df::Series u64_column(EventRows evs, std::uint64_t FoldEvent::* field,
                                      std::move(vals));
 }
 
+// The duration of each event, scaled: null where the record carried no
+// numeric dur, as number_typed("dur") reports it.
+df::Series dur_column(EventRows evs, double time_scale) {
+    std::vector<std::uint64_t> vals;
+    std::vector<bool> present;
+    vals.reserve(evs.size());
+    present.reserve(evs.size());
+    const auto scaled = [time_scale](std::uint64_t dur) {
+        return time_scale == 1.0
+                   ? dur
+                   : static_cast<std::uint64_t>(
+                         static_cast<double>(dur) * time_scale + 0.5);
+    };
+    for (const auto& ev : evs) {
+        vals.push_back(ev.has_dur ? scaled(ev.dur) : 0);
+        present.push_back(ev.has_dur);
+    }
+    if (vals.empty()) return df::Series::flat(df::TypeId::Uint64, nullptr, 0);
+    auto vbits = validity_of(present);
+    const void* p = vals.data();
+    return df::Series::from_borrowed(df::TypeId::Uint64, p, vals.size(),
+                                     std::move(vals),
+                                     vbits.empty() ? nullptr : vbits.data());
+}
+
 // First-seen id -> code table, reused per worker. A slot is live when its
 // stamp equals the current generation, so clearing is one increment.
 struct IdCodeTable {
@@ -786,7 +811,7 @@ df::Series top_column(EventRows evs, std::string_view name,
     if (name == "pid") return u64_column(evs, &FoldEvent::pid);
     if (name == "tid") return u64_column(evs, &FoldEvent::tid);
     if (name == "ts") return u64_column(evs, &FoldEvent::ts, time_scale);
-    if (name == "dur") return u64_column(evs, &FoldEvent::dur, time_scale);
+    if (name == "dur") return dur_column(evs, time_scale);
     // ph
     std::vector<std::int64_t> vals;
     vals.reserve(evs.size());

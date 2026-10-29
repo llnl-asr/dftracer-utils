@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,37 @@ TEST_SUITE("detail stats via View") {
         CHECK(d.events_scanned == 50);
         CHECK(d.duration.count() == 50);
         CHECK(d.grouped_duration.empty());
+    }
+
+    TEST_CASE("an event without dur adds no duration") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        const std::string pfw = env.get_dir() + "/instants.pfw";
+        {
+            std::ofstream ofs(pfw);
+            for (int i = 0; i < 5; ++i)
+                ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
+                    << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
+                    << (10 + i) << R"(,"args":{}})" << "\n";
+            for (int i = 0; i < 3; ++i)
+                ofs << R"({"ph":"i","name":"read","cat":"POSIX","pid":1,)"
+                    << R"("tid":1,"ts":)" << (2000 + i * 100)
+                    << R"(,"args":{}})" << "\n";
+        }
+        const std::string gz = pfw + ".gz";
+        dftu_utils_test::compress_file_to_gzip(pfw, gz);
+        fs::remove(pfw);
+        const std::string idx = determine_index_path(gz, "");
+
+        std::vector<std::string> group_by{"name"};
+        stats::DetailNeeds needs;
+        needs.group_by = &group_by;
+        stats::DetailedStatistics d =
+            run_detail(stats::DetailStatsView::from_file(gz, idx), needs);
+
+        CHECK(d.events_scanned == 8);
+        CHECK(d.duration.count() == 5);
+        CHECK(d.grouped_duration.at("read").count() == 5);
     }
 
     TEST_CASE("grouped by name") {

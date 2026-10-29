@@ -88,10 +88,12 @@ class TypedCollectFold : public Fold {
         std::vector<std::uint64_t> ts, dur, pid, tid;
         std::vector<std::uint32_t> name_id, cat_id;
         std::vector<std::int64_t> ph;
+        std::vector<std::uint8_t> has_dur;
 
         void push(const FoldEvent& ev) {
             ts.push_back(ev.ts);
             dur.push_back(ev.dur);
+            has_dur.push_back(ev.has_dur ? 1 : 0);
             pid.push_back(ev.pid);
             tid.push_back(ev.tid);
             name_id.push_back(ev.name_id);
@@ -105,6 +107,7 @@ class TypedCollectFold : public Fold {
             };
             ext(ts, o.ts);
             ext(dur, o.dur);
+            ext(has_dur, o.has_dur);
             ext(pid, o.pid);
             ext(tid, o.tid);
             ext(name_id, o.name_id);
@@ -126,6 +129,20 @@ class TypedCollectFold : public Fold {
                 return df::Series::from_borrowed(type, p, v.size(),
                                                  std::move(v));
             };
+            // A record without a numeric dur has no duration (null row), as
+            // a row-frame dur column reports it.
+            auto dur_cell_validity = [](const std::vector<std::uint8_t>& has) {
+                std::vector<std::uint8_t> v((has.size() + 7) / 8, 0);
+                bool any_missing = false;
+                for (std::size_t r = 0; r < has.size(); ++r) {
+                    if (has[r] != 0)
+                        v[r >> 3] |= static_cast<std::uint8_t>(1u << (r & 7));
+                    else
+                        any_missing = true;
+                }
+                if (!any_missing) v.clear();
+                return v;
+            };
             df::DataFrame out;
             out.names.emplace_back("name");
             out.columns.push_back(interned_column(name_id, intern));
@@ -138,7 +155,16 @@ class TypedCollectFold : public Fold {
             out.names.emplace_back("ts");
             out.columns.push_back(column(std::move(ts), df::TypeId::Uint64));
             out.names.emplace_back("dur");
-            out.columns.push_back(column(std::move(dur), df::TypeId::Uint64));
+            std::vector<std::uint8_t> bits = dur_cell_validity(has_dur);
+            if (dur.empty()) {
+                out.columns.push_back(
+                    df::Series::flat(df::TypeId::Uint64, nullptr, 0));
+            } else {
+                const void* p = dur.data();
+                out.columns.push_back(df::Series::from_borrowed(
+                    df::TypeId::Uint64, p, dur.size(), std::move(dur),
+                    bits.empty() ? nullptr : bits.data()));
+            }
             out.names.emplace_back("ph");
             out.columns.push_back(column(std::move(ph), df::TypeId::Int64));
             return out;

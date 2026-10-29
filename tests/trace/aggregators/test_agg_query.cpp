@@ -68,6 +68,7 @@ struct Ev {
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
+    bool has_dur = true;
     std::string fhash;
     std::vector<std::pair<std::string, std::uint64_t>> args;
 };
@@ -86,6 +87,7 @@ class Acc {
     std::uint64_t tid() const { return e_.tid; }
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
+    bool has_dur() const { return e_.has_dur; }
 
     bool arg_is_number(std::string_view k) const {
         return k != "fhash" && find(k) != nullptr;

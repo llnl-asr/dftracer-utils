@@ -82,13 +82,14 @@ static void update_event(
         return;
 
     const double dur = static_cast<double>(ev.dur);
-    acc.duration.update(dur);
+    if (ev.has_dur) acc.duration.update(dur);
 
     const bool has_grouping = group_by && !group_by->empty();
     const std::string* io_key_ptr;
     if (has_grouping) {
         build_group_key(group_key_buf, *group_by, ev);
-        acc.grouped_duration[group_key_buf].update(dur);
+        auto& grouped = acc.grouped_duration[group_key_buf];
+        if (ev.has_dur) grouped.update(dur);
         acc.group_key_category.try_emplace(group_key_buf, ev.cat);
         io_key_ptr = &group_key_buf;
     } else {
@@ -100,9 +101,11 @@ static void update_event(
         if (ret_opt.has_value() && ret_opt.value() > 0) {
             const double ret = static_cast<double>(ret_opt.value());
             auto& io = acc.grouped_io[*io_key_ptr];
-            io.duration.update(dur);
             io.size.update(ret);
-            if (dur > 0) io.bandwidth.update(ret * 1e6 / dur);
+            if (ev.has_dur) {
+                io.duration.update(dur);
+                if (dur > 0) io.bandwidth.update(ret * 1e6 / dur);
+            }
             auto offset_opt = ev.args["offset"].get_optional<std::uint64_t>();
             if (offset_opt.has_value())
                 io.offset.update(static_cast<double>(offset_opt.value()));

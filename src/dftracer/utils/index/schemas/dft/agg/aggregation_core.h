@@ -23,6 +23,7 @@
 // The Accessor concept:
 //   is_metadata()/is_system()/is_profile()/is_counter()/is_aggregated() -> bool
 //   name()/cat() -> string_view ; pid()/tid()/ts()/dur() -> uint64
+//   has_dur() -> bool (whether the record carried a duration)
 //   arg_is_number(key) -> bool
 //   arg_string(key) -> string_view (empty on miss / non-string)
 //   metric_args(MetricArgs&) fills the fixed metric args the event carries.
@@ -122,7 +123,8 @@ static_assert(METRIC_ARG_COUNT <= 32);
 ///   add_count(n) ; span(ts, len) ; duration(dur) ; size(v) ; offset(v)
 ///   merge_duration(FieldStat) ; merge_size(FieldStat) ;
 ///   merge_offset(FieldStat)
-/// duration(dur) counts the event; add_count(n) counts a pre-aggregated one.
+/// duration(dur) counts the event and its duration; add_count(n) counts
+/// events with no duration: a pre-aggregated count or a record without dur.
 template <class Acc, class Sink>
 void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
                               Sink& sink) {
@@ -193,7 +195,10 @@ void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
 
         sink.span(acc.ts(), cfg.time_interval_us);
     } else {
-        sink.duration(acc.dur());
+        if (acc.has_dur())
+            sink.duration(acc.dur());
+        else
+            sink.add_count(1);
         sink.span(acc.ts(), acc.dur());
 
         if (args.has(MetricArg::Ret) &&

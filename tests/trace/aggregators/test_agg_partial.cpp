@@ -40,6 +40,7 @@ struct Ev {
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
     std::uint64_t dur = 0;
+    bool has_dur = true;
     std::string fhash;
     std::vector<std::pair<std::string, std::uint64_t>> args;
 };
@@ -58,6 +59,7 @@ class Acc {
     std::uint64_t tid() const { return e_.tid; }
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
+    bool has_dur() const { return e_.has_dur; }
 
     bool arg_is_number(std::string_view k) const {
         return k != "fhash" && find(k) != nullptr;
@@ -539,6 +541,33 @@ TEST_SUITE("AggPartial") {
         CHECK(p.duration.n == 5);
         CHECK(p.size.n == 5);
         CHECK(p.offset.n == 5);
+    }
+
+    TEST_CASE("an event without a duration counts but adds no duration") {
+        const auto cfg = make_config(true);
+        AggPartial p;
+
+        Ev timed;
+        timed.cat = "POSIX";
+        timed.name = "open";
+        timed.pid = 1;
+        timed.tid = 2;
+        timed.ts = 1000;
+        timed.dur = 40;
+        REQUIRE(update_partial(p, Acc(timed), cfg));
+
+        Ev instant = timed;
+        instant.ts = 2000;
+        instant.dur = 0;
+        instant.has_dur = false;
+        REQUIRE(update_partial(p, Acc(instant), cfg));
+
+        CHECK(p.count == 2);
+        CHECK(p.duration.n == 1);
+        CHECK(p.duration.sum == 40.0);
+        CHECK(p.duration.min == 40.0);
+        CHECK(p.duration.max == 40.0);
+        CHECK(p.duration_values == 1);
     }
 
     TEST_CASE("the order of the merges does not change the exact fields") {

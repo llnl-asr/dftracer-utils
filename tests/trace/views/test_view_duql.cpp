@@ -238,6 +238,24 @@ View view_of_lines(TestEnvironment& env, const std::vector<std::string>& lines,
     return View::from_file(gz, determine_index_path(gz, ""));
 }
 
+// A 60-record trace whose every third record carries no dur, so the duration
+// aggregates read 40 values while the row count stays 60 (dur values sum to
+// 419).
+std::vector<std::string> null_dur_lines() {
+    std::vector<std::string> lines;
+    for (int i = 0; i < 60; ++i) {
+        std::string rec = R"({"ph":"X","name":")" +
+                          std::string(i % 2 ? "a" : "b") + R"(","pid":)" +
+                          std::to_string(i % 4) + R"(,"tid":1,"ts":)" +
+                          std::to_string(100 + i * 10);
+        if (i % 3 != 0) rec += R"(,"dur":)" + std::to_string(i * 7 % 23);
+        if (i % 5 != 0)
+            rec += R"(,"cat":")" + std::string(i % 4 ? "x" : "") + "\"";
+        lines.push_back(rec + R"(,"args":{}})");
+    }
+    return lines;
+}
+
 std::int32_t col_of(const View& v, std::string_view name) {
     const auto names = v.schema();
     for (std::size_t i = 0; i < names.size(); ++i)
@@ -884,18 +902,7 @@ TEST_SUITE("View duql aggregation") {
 
     TEST_CASE("every shared aggregate agrees across plans over nulls") {
         TestEnvironment env(10);
-        std::vector<std::string> lines;
-        for (int i = 0; i < 60; ++i) {
-            std::string rec = R"({"ph":"X","name":")" +
-                              std::string(i % 2 ? "a" : "b") + R"(","pid":)" +
-                              std::to_string(i % 4) + R"(,"tid":1,"ts":)" +
-                              std::to_string(100 + i * 10);
-            if (i % 3 != 0) rec += R"(,"dur":)" + std::to_string(i * 7 % 23);
-            if (i % 5 != 0)
-                rec += R"(,"cat":")" + std::string(i % 4 ? "x" : "") + "\"";
-            lines.push_back(rec + R"(,"args":{}})");
-        }
-        const View v = view_of_lines(env, lines);
+        const View v = view_of_lines(env, null_dur_lines());
         const std::string aggs =
             "{ n = count(), su = sum(dur), lo = min(dur), hi = max(dur),"
             " m = mean(dur), va = var(dur), sd = std(dur),"
@@ -930,6 +937,64 @@ TEST_SUITE("View duql aggregation") {
                 }
             }
         }
+    }
+
+    TEST_CASE("a record without dur has no duration on either plan") {
+        TestEnvironment env(10);
+        const View v = view_of_lines(env, null_dur_lines());
+        const auto agree = [&v](const std::string& stage, bool trace_plan) {
+            INFO(stage);
+            const std::string plan = v.explain_duql(stage);
+            CHECK(plan.find(trace_plan ? "(trace plan)" : "(frame plan)") !=
+                  std::string::npos);
+            const df::DataFrame f = frame(v.duql(stage));
+            REQUIRE(f.num_rows() == 1);
+            CHECK(bnum(f, 0, "n") == 60.0);
+            CHECK(bnum(f, 0, "m") == doctest::Approx(419.0 / 40));
+            if (bhas(f, "s")) CHECK(bnum(f, 0, "s") == 419.0);
+            if (bhas(f, "c")) CHECK(bnum(f, 0, "c") == 40.0);
+        };
+        agree("agg { s = sum(dur), m = mean(dur), n = count() }", true);
+        // count(field) counts the values that are there, and runs on the
+        // scanned columns, so it takes the frame plan.
+        agree("agg { c = count(dur), m = mean(dur), n = count() }", false);
+        agree(
+            "derive z = 1 | agg { c = count(dur), m = mean(dur), n = count() }",
+            false);
+    }
+
+    TEST_CASE("a dur column is null where the record has no dur") {
+        TestEnvironment env(10);
+        const View v = view_of_lines(env, null_dur_lines());
+        for (const std::string& q :
+             {std::string("select ts, dur"),
+              std::string("derive z = 1 | select ts, dur")}) {
+            INFO(q);
+            const df::DataFrame f = frame(v.duql(q));
+            REQUIRE(f.num_rows() == 60);
+            const df::Series& dur =
+                f.columns[static_cast<std::size_t>(bcol(f, "dur"))];
+            for (std::int64_t r = 0; r < 60; ++r) {
+                const bool missing = r % 3 == 0;
+                INFO("row ", r);
+                CHECK(dur.is_null(r) == missing);
+                if (!missing)
+                    CHECK(bnum(f, r, "dur") == static_cast<double>(r * 7 % 23));
+            }
+        }
+    }
+
+    TEST_CASE("distinct keeps a dur-less record apart from dur 0") {
+        TestEnvironment env(10);
+        const View v = view_of_lines(
+            env,
+            {R"({"ph":"X","name":"a","pid":1,"tid":1,"ts":100,"dur":0,"args":{}})",
+             R"({"ph":"X","name":"a","pid":1,"tid":1,"ts":200,"args":{}})"});
+        const df::DataFrame f = frame(v.duql("select dur | distinct"));
+        REQUIRE(f.num_rows() == 2);
+        const df::Series& dur =
+            f.columns[static_cast<std::size_t>(bcol(f, "dur"))];
+        CHECK(dur.null_count() == 1);
     }
 
     TEST_CASE("first, last, count_if and count(e) run on the columns") {

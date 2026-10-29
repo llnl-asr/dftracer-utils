@@ -58,6 +58,7 @@ class PodAccessor {
     std::uint64_t tid() const { return ev_.tid; }
     std::uint64_t ts() const { return ev_.ts; }
     std::uint64_t dur() const { return ev_.dur; }
+    bool has_dur() const { return ev_.has_dur; }
 
     std::string_view arg_string(std::string_view k) const {
         if (k == "hhash") return resolve(ev_.hhash_id);

@@ -233,6 +233,14 @@ void put_agg_system_row(IndexWrite& w, int file_id, std::string_view key,
     put_value(w, Ext::Agg, layout::agg_kind::SYSTEM, full, payload);
 }
 
+void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
+                           std::string_view payload) {
+    put_value(w, Ext::Agg, layout::agg_kind::COLUMNS,
+              layout::granule_key(Ext::Agg, layout::agg_kind::COLUMNS,
+                                  fid(file_id), granule(chunk)),
+              payload);
+}
+
 void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
                               std::string_view text) {
     auto key =

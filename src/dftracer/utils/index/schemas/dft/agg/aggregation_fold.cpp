@@ -17,6 +17,15 @@ namespace {
 constexpr std::uint32_t MAX_CACHED_BUILD_ID = 1u << 20;
 }  // namespace
 
+std::size_t AggregationFold::column_budget_for(
+    const trace::views::detail::ScanUnit& unit) const {
+    if (!(config_.column_budget_ratio > 0.0)) return NO_COLUMN_BUDGET;
+    const std::size_t bytes =
+        unit.end_byte > unit.start_byte ? unit.end_byte - unit.start_byte : 0;
+    return static_cast<std::size_t>(static_cast<double>(bytes) *
+                                    config_.column_budget_ratio);
+}
+
 std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
                                        std::uint32_t build_id, bool lower) {
     const bool cacheable = build_id < MAX_CACHED_BUILD_ID;
@@ -135,7 +144,39 @@ TimeBin& AggregationFold::bin_of(Slot& slot, std::uint64_t pid,
     return bins.back();
 }
 
+void AggregationFold::add_to_columns(
+    const trace::views::detail::FoldEvent& ev) {
+    // The column keeps the category text of the record itself; only the
+    // partials group by its lower case.
+    columns_.add_row(ev.ts, ev.dur, ev.has_dur, ev.pid, ev.tid,
+                     static_cast<std::uint8_t>(ev.phase),
+                     root_id(cat_text_ids_, ev.cat_id, false),
+                     root_id(name_ids_, ev.name_id, false),
+                     root_id(host_ids_, ev.hhash_id, false));
+    for (const auto& [key_id, value] : ev.args) {
+        const std::uint32_t path = root_id(path_ids_, key_id, false);
+        if (const auto* d = std::get_if<double>(&value)) {
+            columns_.add_double(path, *d);
+        } else if (const auto* i = std::get_if<std::int64_t>(&value)) {
+            columns_.add_int64(path, *i);
+        } else if (const auto* u = std::get_if<std::uint64_t>(&value)) {
+            columns_.add_uint64(path, *u);
+        }
+    }
+}
+
+void AggregationFold::close_columns() {
+    if (columns_.empty()) return;
+    const std::size_t offset = arena_.size();
+    columns_.encode_into(arena_, column_budget_);
+    closed_columns_.push_back({chunk_, offset, arena_.size() - offset});
+    referenced_.insert(referenced_.end(), columns_.ids().begin(),
+                       columns_.ids().end());
+    columns_.clear();
+}
+
 void AggregationFold::close_chunk() {
+    close_columns();
     for (Slot& slot : slots_) {
         if (!slot.used) continue;
         const std::size_t offset = arena_.size();
@@ -187,10 +228,15 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
         c.offset += base;
         closed_.push_back(c);
     }
+    for (ClosedColumns c : o.closed_columns_) {
+        c.offset += base;
+        closed_columns_.push_back(c);
+    }
     referenced_.insert(referenced_.end(), o.referenced_.begin(),
                        o.referenced_.end());
     o.arena_.clear();
     o.closed_.clear();
+    o.closed_columns_.clear();
     o.referenced_.clear();
 
     os.system_buffer.clear();
@@ -219,6 +265,13 @@ void AggregationFold::write(index::store::IndexWrite& w) {
                 reinterpret_cast<const char*>(arena_.data()) + c.offset,
                 c.size));
     closed_.clear();
+    for (const ClosedColumns& c : closed_columns_)
+        index::store::records::put_agg_chunk_columns(
+            w, file_id_, c.chunk,
+            std::string_view(
+                reinterpret_cast<const char*>(arena_.data()) + c.offset,
+                c.size));
+    closed_columns_.clear();
     arena_.clear();
     std::sort(referenced_.begin(), referenced_.end());
     referenced_.erase(std::unique(referenced_.begin(), referenced_.end()),

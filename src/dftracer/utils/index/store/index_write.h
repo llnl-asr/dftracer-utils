@@ -172,6 +172,11 @@ void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
 void put_agg_system_row(IndexWrite& w, int file_id, std::string_view key,
                         std::string_view payload);
 
+/// The column block of `chunk` of the file's aggregation, `payload` the
+/// encoded block (see schemas/dft/agg/chunk_columns.h).
+void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
+                           std::string_view payload);
+
 /// The dictionary text `id` stands for, as the file's partials use it.
 void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
                               std::string_view text);

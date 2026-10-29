@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
+#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -120,8 +121,11 @@ class PodAccessor {
 
     const trace::views::detail::FoldEvent::ArgValue* find(
         std::string_view key) const {
+        if (ev_.args.empty()) return nullptr;
+        const std::uint32_t id = intern_.find(key);
+        if (id == NO_ID) return nullptr;
         for (const auto& [kid, v] : ev_.args)
-            if (resolve(kid) == key) return &v;
+            if (kid == id) return &v;
         return nullptr;
     }
     std::string_view resolve(std::uint32_t id) const {
@@ -185,8 +189,10 @@ class AggregationFold : public trace::views::detail::Fold {
                 if (batch.unit.checkpoint_idx != chunk_) {
                     close_chunk();
                     chunk_ = batch.unit.checkpoint_idx;
+                    column_budget_ = column_budget_for(batch.unit);
                 }
                 add_to_partial(ev, acc);
+                add_to_columns(ev);
             }
         }
     }
@@ -271,6 +277,13 @@ class AggregationFold : public trace::views::detail::Fold {
         SlotKey key;
     };
 
+    /// A column block of a closed chunk, in `arena_`.
+    struct ClosedColumns {
+        std::uint64_t chunk;
+        std::size_t offset;
+        std::size_t size;
+    };
+
     struct ArgId {
         std::uint32_t length;
         std::uint32_t id;
@@ -278,6 +291,8 @@ class AggregationFold : public trace::views::detail::Fold {
 
     void add_to_partial(const trace::views::detail::FoldEvent& ev,
                         const PodAccessor& acc);
+    /// Adds the event to the column block of the current chunk.
+    void add_to_columns(const trace::views::detail::FoldEvent& ev);
     /// The bin of `slot` for the thread and bin of an event.
     TimeBin& bin_of(Slot& slot, std::uint64_t pid, std::uint64_t tid,
                     std::uint64_t bin);
@@ -286,9 +301,15 @@ class AggregationFold : public trace::views::detail::Fold {
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
                           std::uint32_t build_id, bool lower);
     std::uint32_t arg_id(std::string_view key);
+    /// Bytes the column block of the chunk of `unit` may take.
+    std::size_t column_budget_for(
+        const trace::views::detail::ScanUnit& unit) const;
     /// Serializes the partials of the current chunk into `arena_` and clears
     /// them, keeping their capacity.
     void close_chunk();
+    /// Encodes the column block of the current chunk into `arena_` and clears
+    /// it, keeping its capacity.
+    void close_columns();
 
     dftracer::utils::dstd::StringIntern* build_intern_;
     index::schemas::dft::agg::AggInternPtr agg_intern_;
@@ -311,13 +332,20 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::Vector<std::uint32_t> cat_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> name_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> host_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> path_ids_;
+    /// Root ids of the category texts of the column block, in their own case;
+    /// the partials use the lower case of `cat_ids_`.
+    dftracer::utils::dstd::Vector<std::uint32_t> cat_text_ids_;
     dftracer::utils::dstd::HashMap<const void*, ArgId, dftracer::utils::PtrHash,
                                    std::equal_to<const void*>>
         arg_ids_;
     dftracer::utils::dstd::Vector<std::uint8_t> arena_;
     dftracer::utils::dstd::Vector<Closed> closed_;
-    /// Every dictionary id the partials of this file reference, duplicates
-    /// included; cleared once they are written.
+    index::schemas::dft::agg::ChunkColumnBuilder columns_;
+    dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;
+    std::size_t column_budget_ = index::schemas::dft::agg::NO_COLUMN_BUDGET;
+    /// Every dictionary id the partials and column blocks of this file
+    /// reference, duplicates included; cleared once they are written.
     dftracer::utils::dstd::Vector<std::uint32_t> referenced_;
 };
 

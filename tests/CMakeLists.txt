@@ -313,6 +313,7 @@ set(TEST_CPP_SOURCES
     store/test_crash.cpp
     store/test_processes.cpp
     index/test_agg_extension.cpp
+    index/test_chunk_columns.cpp
     index/test_prune_oracle.cpp
     index/test_layout.cpp
     index/test_kinds.cpp

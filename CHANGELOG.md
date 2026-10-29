@@ -184,6 +184,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Store every number field of the records of each chunk as an exact column in the index, with the time, duration, pid, tid, phase, category, name and host of each record, so later queries read these values without parsing the trace.
+  A new `column_budget_ratio` of `AggregationConfig` (0.02 by default) caps the columns of a chunk at that share of its text, and the fields with the fewest values are left out first.
+  Indexes built before this change rebuild their aggregation data once.
 - Build the index on the index store from `dftracer_index` and from `distributed_index`, with no staged files and no ingest.
   Each `distributed_index` worker writes the index directly, and on the 8,404 minife traces `dftracer_index` takes 12 s where it took 36 s on RocksDB.
 - Add `IndexDatabase.close_writer()` and `IndexDatabase.refresh()` to the Python bindings.

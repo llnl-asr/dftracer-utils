@@ -393,6 +393,38 @@ std::size_t merge_shard_set(const std::string& root,
                             return true;
                         });
                 }
+                // A column block names its cat, name, host and arg paths in a
+                // block-local table of dictionary ids, so it copies under the
+                // new ids once that table is rewritten.
+                for (const int old_id : aggregated_old) {
+                    const int new_id = remap[old_id];
+                    agg::tier::for_each_chunk_columns(
+                        sdb, old_id,
+                        [&](std::uint64_t chunk,
+                            const agg::ChunkColumns& block) {
+                            agg::ChunkColumns mapped = block;
+                            for (std::uint32_t& id : mapped.ids) {
+                                id = out_intern.intern.get_or_insert(
+                                    shard_intern.intern.resolve(id));
+                                dftracer::utils::index::store::records::
+                                    put_agg_dictionary_entry(
+                                        *write, new_id, id,
+                                        out_intern.intern.resolve(id));
+                            }
+                            bytes.clear();
+                            agg::encode_chunk_columns(
+                                mapped, mapped.columns.size(), bytes,
+                                agg::NO_COLUMN_BUDGET);
+                            dftracer::utils::index::store::records::
+                                put_agg_chunk_columns(
+                                    *write, new_id, chunk,
+                                    std::string_view(
+                                        reinterpret_cast<const char*>(
+                                            bytes.data()),
+                                        bytes.size()));
+                            return true;
+                        });
+                }
                 write->commit();
             }
         }

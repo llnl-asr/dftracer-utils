@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -88,6 +89,18 @@ void for_each_partial(
     const std::function<bool(std::uint64_t, std::uint32_t, std::uint32_t,
                              std::uint32_t, std::uint32_t, PartialKind,
                              std::span<const std::uint8_t>)>& fn);
+
+/// Calls fn(chunk, block) for each column block of `file_id` in chunk order
+/// until fn returns false. `block.texts` then holds the text of each id of
+/// `block.ids`, resolved through the file's dictionary entries (empty where
+/// the file holds none), so `block.texts[block.cat[r]]` is the category text of
+/// row r and `block.texts[column.path]` the arg path of a column. Every value
+/// equals the one the record held: an Int64 or Uint64 value is the same integer
+/// of the same variant kind, and a Double value is the same double bit for bit.
+/// Throws on a read error or a malformed record.
+void for_each_chunk_columns(
+    const IndexDatabase& db, int file_id,
+    const std::function<bool(std::uint64_t, const ChunkColumns&)>& fn);
 
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db);
 /// Stores the union of `bounds` and the stored bounds.

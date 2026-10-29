@@ -83,12 +83,18 @@ inline constexpr std::uint8_t FRAME = 0;
 /// entries the file's partials and rows name, keyed [id u32], so a file's data
 /// is replaced without touching another file's. META is index-wide (file_id
 /// INDEX_WIDE) and holds named records (config, tracker, time bounds), keyed
-/// [name]; each name is its own store namespace.
+/// [name]; each name is its own store namespace. COLUMNS holds one record per
+/// file and chunk, keyed [chunk u32] like PARTIAL, with the rows of the
+/// chunk's records the partials keep as an exact column block: the core
+/// columns of every row and one numeric column per arg path, with the
+/// dictionary ids the block names in a block-local table (see
+/// schemas/dft/agg/chunk_columns.h).
 namespace agg_kind {
 inline constexpr std::uint8_t PARTIAL = 0;
 inline constexpr std::uint8_t META = 1;
 inline constexpr std::uint8_t DICT = 2;
 inline constexpr std::uint8_t SYSTEM = 3;
+inline constexpr std::uint8_t COLUMNS = 4;
 }  // namespace agg_kind
 
 /// file_id of data that belongs to the whole index rather than one file.

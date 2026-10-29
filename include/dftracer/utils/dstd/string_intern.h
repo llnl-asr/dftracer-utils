@@ -85,6 +85,10 @@ class StringIntern {
     /// std::length_error when the chunk table or the id space is exhausted.
     std::uint32_t get_or_insert(std::string_view sv);
 
+    /// The id of `sv`, or NO_ID when the table does not hold it. Takes no
+    /// lock.
+    std::uint32_t find(std::string_view sv) const;
+
     /// Insert at a specific id, for loading a persisted dictionary. Ids are
     /// index-local, so a conflicting id is reported rather than rebound to
     /// another index's string; `resolve(id)` then names the string it holds.

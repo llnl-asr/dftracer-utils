@@ -47,6 +47,19 @@ TEST_SUITE("StringIntern") {
         CHECK(intern.get_or_insert("value_7") == ids[7]);
     }
 
+    TEST_CASE("StringIntern - find gives the id of a held string only") {
+        StringIntern intern;
+        CHECK(intern.find("dur") == StringIntern::NO_ID);
+        const auto dur = intern.get_or_insert("dur");
+        const auto size = intern.get_or_insert("size");
+        CHECK(intern.find("dur") == dur);
+        CHECK(intern.find("size") == size);
+        CHECK(intern.find("du") == StringIntern::NO_ID);
+        CHECK(intern.find("dur_sum") == StringIntern::NO_ID);
+        CHECK(intern.find("") == StringIntern::NO_ID);
+        CHECK(intern.get_or_insert("dur") == dur);
+    }
+
     TEST_CASE("StringIntern - ids beyond the table are reported, not empty") {
         StringIntern intern;
         auto id = intern.get_or_insert("a");

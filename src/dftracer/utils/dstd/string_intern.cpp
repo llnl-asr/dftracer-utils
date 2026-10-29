@@ -45,6 +45,10 @@ StringIntern::~StringIntern() {
     free_directory(log_, BLOCK_SIZE);
 }
 
+std::uint32_t StringIntern::find(std::string_view sv) const {
+    return lookup(hash(sv), sv);
+}
+
 std::uint32_t StringIntern::get_or_insert(std::string_view sv) {
     const auto h = hash(sv);
     if (auto id = lookup(h, sv); id != NO_ID) return id;

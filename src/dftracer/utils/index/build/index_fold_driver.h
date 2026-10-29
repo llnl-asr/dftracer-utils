@@ -226,6 +226,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
                                   std::size_t checkpoint_idx) override {
+        const std::size_t chunk_begin = plain_offset_;
+        plain_offset_ += len;
         // A line straddling this chunk's end is carried into the next chunk, so
         // it is parsed once and attributed to the chunk where it completes.
         const std::size_t cut = std::string_view(data, len).rfind('\n');
@@ -243,6 +245,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 admit = co_await admit_piece(end - off + partial_.size());
             auto piece = std::make_unique<Parsed>();
             piece->checkpoint_idx = checkpoint_idx;
+            piece->chunk_begin = chunk_begin;
+            piece->chunk_end = plain_offset_;
             piece->batch = buffers_->take();
             piece->buf = std::make_shared<std::string>();
             piece->buf->reserve(partial_.size() + (end - off) +
@@ -332,6 +336,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
         std::shared_ptr<std::string> buf;
         std::size_t checkpoint_idx = 0;
+        // The plaintext byte range of the piece's chunk in its file.
+        std::size_t chunk_begin = 0;
+        std::size_t chunk_end = 0;
         std::unique_ptr<EventBuffer> batch;
         std::vector<std::string_view> lines;
         // The strings of a piece parsed ahead, interned here with ids of their
@@ -531,6 +538,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         unit.file_path = file_path_;
         unit.index_path = index_path_;
         unit.checkpoint_idx = c.checkpoint_idx;
+        unit.start_byte = c.chunk_begin;
+        unit.end_byte = c.chunk_end;
         return unit;
     }
 
@@ -822,6 +831,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     bool capture_schema_ = false;
     bool skip_never_indexed_ = true;
     std::string partial_;
+    std::size_t plain_offset_ = 0;
     std::string file_path_;
     std::string index_path_;
     std::vector<std::string> extra_fields_;

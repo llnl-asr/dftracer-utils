@@ -204,6 +204,51 @@ void for_each_partial(
         });
 }
 
+void for_each_chunk_columns(
+    const IndexDatabase& db, int file_id,
+    const std::function<bool(std::uint64_t, const ChunkColumns&)>& fn) {
+    constexpr std::size_t RECORD_BYTES = sizeof(std::uint32_t);
+    const auto prefix =
+        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::COLUMNS,
+                            static_cast<std::uint32_t>(file_id));
+    const auto dict_range =
+        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
+                            static_cast<std::uint32_t>(file_id));
+    ankerl::unordered_dense::map<std::uint32_t, std::string> texts;
+    bool texts_read = false;
+    AggRowReader::for_each_row(
+        db, layout::agg_kind::COLUMNS, prefix,
+        [&](std::string_view key, std::string_view body) {
+            if (key.size() != prefix.size() + RECORD_BYTES)
+                throw DFTUtilsException(ErrorCode::Parse,
+                                        "chunk columns: bad key");
+            if (!texts_read) {
+                const auto entries = dict_prefix();
+                AggRowReader::for_each_row(
+                    db, layout::agg_kind::DICT, dict_range,
+                    [&](std::string_view dict_key, std::string_view text) {
+                        texts.try_emplace(entry_id(entries, dict_key),
+                                          std::string(text));
+                        return true;
+                    });
+                texts_read = true;
+            }
+            auto block = decode_chunk_columns(std::span<const std::uint8_t>(
+                reinterpret_cast<const std::uint8_t*>(body.data()),
+                body.size()));
+            if (!block)
+                throw DFTUtilsException(ErrorCode::Parse,
+                                        "chunk columns: malformed record");
+            block->chunk = layout::read_u32(key.substr(prefix.size()));
+            block->texts.resize(block->ids.size());
+            for (std::size_t i = 0; i < block->ids.size(); ++i) {
+                const auto at = texts.find(block->ids[i]);
+                if (at != texts.end()) block->texts[i] = at->second;
+            }
+            return fn(block->chunk, *block);
+        });
+}
+
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db) {
     auto value = get_meta(db, TIME_BOUNDS_NAME);
     if (!value || value->size() < 16) return std::nullopt;

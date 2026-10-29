@@ -9,7 +9,7 @@ namespace dftracer::utils::index::store::layout {
 
 namespace {
 
-constexpr std::array<KindSpec, 28> KINDS = {{
+constexpr std::array<KindSpec, 27> KINDS = {{
     {Ext::Members, members::MEMBER},
     {Ext::Members, members::METADATA},
     {Ext::Members, members::RESTART},
@@ -36,7 +36,6 @@ constexpr std::array<KindSpec, 28> KINDS = {{
     {Ext::Agg, agg_kind::PARTIAL},
     {Ext::Agg, agg_kind::META},
     {Ext::Agg, agg_kind::DICT},
-    {Ext::Agg, agg_kind::SYSTEM},
     {Ext::Agg, agg_kind::COLUMNS},
 }};
 

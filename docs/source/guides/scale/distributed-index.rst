@@ -177,7 +177,7 @@ Three free functions manage the set:
 - ``merge_shard_set(root, out_root)`` - merge the shards' aggregation partials
   into one consolidated index at ``out_root`` **without** re-reading traces
   (re-keys each shard's interned strings into a unified dictionary and copies
-  the partials and the system metric rows). Answers partial-covered queries
+  the partials and the column blocks). Answers partial-covered queries
   from a single index, but does not serve scan-fallback queries the way
   ``consolidate_shard_set`` does.
 

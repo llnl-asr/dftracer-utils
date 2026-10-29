@@ -48,9 +48,9 @@ enum class IndexExtension : std::uint16_t {
     /// Plugin extensions (plugins/abi/index.h), each keyed by its name, with
     /// one manifest entry per name.
     Plugin = 12,
-    /// The dftracer pre-aggregation tier; its rows live in the aggregation
-    /// and system_metrics families without a file id, and this extension's
-    /// manifest entry marks a file's rows as merged into them.
+    /// The dftracer pre-aggregation tier; its records live in the file's own
+    /// partial, chunk column and dictionary families, and this extension's
+    /// manifest entry marks a file's records as current.
     Agg = 13,
     /// Per file and row set: the rows of each row set of the schema's source
     /// that the build evaluates, as an Arrow IPC frame keyed by its name.

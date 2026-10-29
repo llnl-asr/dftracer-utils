@@ -89,19 +89,6 @@ class Acc {
     const Ev& e_;
 };
 
-struct ArgIds {
-    std::map<std::string, std::uint32_t, std::less<>> ids;
-    std::uint32_t operator()(std::string_view k) {
-        auto it = ids.find(k);
-        if (it == ids.end()) {
-            it = ids.emplace(std::string(k),
-                             static_cast<std::uint32_t>(ids.size() * 3 + 1))
-                     .first;
-        }
-        return it->second;
-    }
-};
-
 using Key = std::pair<std::string, std::string>;
 
 std::uint64_t next(std::uint64_t& s) {
@@ -113,7 +100,6 @@ AggregationConfig make_config(bool percentiles) {
     AggregationConfig cfg;
     cfg.group_by_file = false;
     cfg.compute_percentiles = percentiles;
-    cfg.custom_metric_fields = {"flops"};
     return cfg;
 }
 
@@ -250,11 +236,11 @@ std::map<Key, AggregationMetrics> reference(const std::vector<Ev>& events,
 using Partials = std::map<Key, AggPartial>;
 
 void feed(Partials& into, const std::vector<Ev>& events, std::size_t b,
-          std::size_t e, const AggregationConfig& cfg, ArgIds& ids) {
+          std::size_t e, const AggregationConfig& cfg) {
     for (std::size_t i = b; i < e; ++i) {
         auto it =
             into.try_emplace(key_of(events[i]), cfg.sketch_accuracy).first;
-        REQUIRE(update_partial(it->second, Acc(events[i]), cfg, ids));
+        REQUIRE(update_partial(it->second, Acc(events[i]), cfg));
     }
 }
 
@@ -328,7 +314,7 @@ void check_quantiles(const QuantileStore& q, const std::vector<double>& truth,
 }
 
 void check_against_reference(const AggPartial& p, const AggregationMetrics& ref,
-                             const Truth& t, const ArgIds& ids) {
+                             const Truth& t) {
     CHECK(p.count == ref.count);
     CHECK(p.ts == ref.ts);
     CHECK(p.te == ref.te);
@@ -356,20 +342,6 @@ void check_against_reference(const AggPartial& p, const AggregationMetrics& ref,
     check_quantiles(p.duration_q, t.dur, "duration");
     check_quantiles(p.size_q, t.size, "size");
     check_quantiles(p.offset_q, t.off, "offset");
-
-    const std::size_t custom =
-        ref.custom_metrics ? ref.custom_metrics->size() : 0;
-    REQUIRE(p.args.size() == custom);
-    if (!ref.custom_metrics) return;
-    for (const auto& [name, stats] : *ref.custom_metrics) {
-        const auto id = ids.ids.find(name);
-        REQUIRE(id != ids.ids.end());
-        const auto arg =
-            std::find_if(p.args.begin(), p.args.end(),
-                         [&](const ArgStat& a) { return a.id == id->second; });
-        REQUIRE(arg != p.args.end());
-        check_stat(arg->stat, stats.stat, 1e-9, name.c_str());
-    }
 }
 
 void check_same(const AggPartial& a, const AggPartial& b, double tol) {
@@ -397,12 +369,6 @@ void check_same(const AggPartial& a, const AggPartial& b, double tol) {
         CHECK(a.pid_spans[i].first == b.pid_spans[i].first);
         CHECK(a.pid_spans[i].last == b.pid_spans[i].last);
     }
-    REQUIRE(a.args.size() == b.args.size());
-    for (std::size_t i = 0; i < a.args.size(); ++i) {
-        CHECK(a.args[i].id == b.args[i].id);
-        check_stat(a.args[i].stat, b.args[i].stat, tol, "arg");
-        CHECK(a.args[i].quantiles.count() == b.args[i].quantiles.count());
-    }
 }
 
 // Chunk bounds as event indexes.
@@ -415,14 +381,13 @@ std::vector<std::size_t> bounds(std::size_t n, std::size_t chunks) {
 }
 
 Partials merged_chunks(const std::vector<Ev>& events,
-                       const AggregationConfig& cfg, ArgIds& ids,
-                       std::size_t chunks,
+                       const AggregationConfig& cfg, std::size_t chunks,
                        const std::vector<std::size_t>& order,
                        bool through_wire) {
     const auto cut = bounds(events.size(), chunks);
     std::vector<Partials> per_chunk(chunks);
     for (std::size_t c = 0; c < chunks; ++c)
-        feed(per_chunk[c], events, cut[c], cut[c + 1], cfg, ids);
+        feed(per_chunk[c], events, cut[c], cut[c + 1], cfg);
     Partials out;
     for (std::size_t c : order) {
         for (auto& [k, p] : per_chunk[c]) {
@@ -452,17 +417,15 @@ TEST_SUITE("AggPartial") {
 
         for (std::size_t chunks : {3u, 4u, 5u}) {
             INFO("chunks: ", chunks);
-            ArgIds ids;
             std::vector<std::size_t> order;
             for (std::size_t c = 0; c < chunks; ++c) order.push_back(c);
-            const auto merged =
-                merged_chunks(events, cfg, ids, chunks, order, true);
+            const auto merged = merged_chunks(events, cfg, chunks, order, true);
             REQUIRE(merged.size() == ref.size());
             for (const auto& [k, p] : merged) {
                 INFO("group: ", k.first, " ", k.second);
                 const auto r = ref.find(k);
                 REQUIRE(r != ref.end());
-                check_against_reference(p, r->second, truth.at(k), ids);
+                check_against_reference(p, r->second, truth.at(k));
             }
         }
     }
@@ -472,25 +435,23 @@ TEST_SUITE("AggPartial") {
         const auto events = make_events(2500, 5);
         const auto ref = reference(events, cfg);
         const auto truth = truth_of(events, cfg);
-        ArgIds ids;
         Partials whole;
-        feed(whole, events, 0, events.size(), cfg, ids);
+        feed(whole, events, 0, events.size(), cfg);
         for (const auto& [k, p] : whole) {
             INFO("group: ", k.first, " ", k.second);
-            check_against_reference(p, ref.at(k), truth.at(k), ids);
+            check_against_reference(p, ref.at(k), truth.at(k));
         }
     }
 
     TEST_CASE("the order of the merges does not change the exact fields") {
         const auto cfg = make_config(true);
         const auto events = make_events(3000, 23);
-        ArgIds ids;
         const auto forward =
-            merged_chunks(events, cfg, ids, 5, {0, 1, 2, 3, 4}, false);
+            merged_chunks(events, cfg, 5, {0, 1, 2, 3, 4}, false);
         const auto shuffled =
-            merged_chunks(events, cfg, ids, 5, {3, 0, 4, 2, 1}, false);
+            merged_chunks(events, cfg, 5, {3, 0, 4, 2, 1}, false);
         const auto reverse =
-            merged_chunks(events, cfg, ids, 5, {4, 3, 2, 1, 0}, true);
+            merged_chunks(events, cfg, 5, {4, 3, 2, 1, 0}, true);
         REQUIRE(forward.size() == shuffled.size());
         REQUIRE(forward.size() == reverse.size());
         for (const auto& [k, p] : forward) {
@@ -503,9 +464,8 @@ TEST_SUITE("AggPartial") {
     TEST_CASE("a round trip keeps every field bit for bit") {
         const auto cfg = make_config(true);
         const auto events = make_events(3000, 31);
-        ArgIds ids;
         Partials whole;
-        feed(whole, events, 0, events.size(), cfg, ids);
+        feed(whole, events, 0, events.size(), cfg);
         for (const auto& [k, p] : whole) {
             INFO("group: ", k.first, " ", k.second);
             const AggPartial back = round_trip(p);
@@ -530,7 +490,6 @@ TEST_SUITE("AggPartial") {
         CHECK(back->duration.n == 0);
         CHECK(back->pids.empty());
         CHECK(back->pid_spans.empty());
-        CHECK(back->args.empty());
         CHECK_FALSE(back->has_estimate());
 
         AggPartial into;
@@ -543,12 +502,11 @@ TEST_SUITE("AggPartial") {
     TEST_CASE("deserialize refuses truncated and over-long bytes") {
         const auto cfg = make_config(true);
         const auto events = make_events(1500, 3);
-        ArgIds ids;
         Partials whole;
-        feed(whole, events, 0, events.size(), cfg, ids);
+        feed(whole, events, 0, events.size(), cfg);
         const AggPartial& p = whole.at({"posix", "read"});
         REQUIRE(p.size.n > 0);
-        REQUIRE_FALSE(p.args.empty());
+        REQUIRE(p.duration_q.count() > 0);
         Vector<std::uint8_t> bytes;
         p.serialize_into(bytes);
         REQUIRE(AggPartial::deserialize(Span<const std::uint8_t>(bytes))
@@ -665,11 +623,10 @@ TEST_SUITE("AggPartial") {
             }
             return out;
         };
-        ArgIds ids;
         auto build = [&](std::uint64_t lo, std::uint64_t hi) {
             AggPartial p;
             for (const Ev& e : tid_events(lo, hi))
-                REQUIRE(update_partial(p, Acc(e), cfg, ids));
+                REQUIRE(update_partial(p, Acc(e), cfg));
             return p;
         };
 
@@ -751,7 +708,6 @@ TEST_SUITE("AggPartial") {
         // Debug mode counts allocations; ctest sets
         // DFTRACER_UTILS_MEMORY_DEBUG=1.
         const auto cfg = make_config(true);
-        ArgIds ids;
         auto events = [&](std::size_t n) {
             std::vector<Ev> out;
             std::uint64_t s = 99;
@@ -775,7 +731,7 @@ TEST_SUITE("AggPartial") {
         const auto large = events(40000);
         {
             AggPartial warm;
-            update_partial(warm, Acc(small[0]), cfg, ids);
+            update_partial(warm, Acc(small[0]), cfg);
         }
         REQUIRE(dftracer::utils::memory::debug_allocation_count() > 0);
 
@@ -783,7 +739,7 @@ TEST_SUITE("AggPartial") {
             const auto before =
                 dftracer::utils::memory::debug_allocation_count();
             AggPartial p;
-            for (const Ev& e : evs) update_partial(p, Acc(e), cfg, ids);
+            for (const Ev& e : evs) update_partial(p, Acc(e), cfg);
             REQUIRE(p.count == evs.size());
             return dftracer::utils::memory::debug_allocation_count() - before;
         };
@@ -804,7 +760,6 @@ TEST_SUITE("AggPartial") {
 
     TEST_CASE("sizes and a typical serialized partial") {
         const auto cfg = make_config(false);
-        ArgIds ids;
         AggPartial p;
         std::uint64_t s = 5;
         for (std::size_t i = 0; i < 100; ++i) {
@@ -817,18 +772,18 @@ TEST_SUITE("AggPartial") {
             e.dur = 20 + next(s) % 400;
             e.fhash = "1a2b3c4d5e6f7081";
             e.args = {{"ret", 4096}, {"offset", i * 4096}};
-            REQUIRE(update_partial(p, Acc(e), cfg, ids));
+            REQUIRE(update_partial(p, Acc(e), cfg));
         }
         Vector<std::uint8_t> bytes;
         p.serialize_into(bytes);
         std::fprintf(stderr,
                      "sizeof AggPartial %zu FieldStat %zu QuantileStore %zu "
-                     "DistinctIds %zu PidSpan %zu ArgStat %zu\n"
+                     "DistinctIds %zu PidSpan %zu\n"
                      "typical partial (100 events, 1 pid, 2 tids, 1 file): "
                      "%zu bytes\n",
                      sizeof(AggPartial), sizeof(FieldStat),
                      sizeof(QuantileStore), sizeof(DistinctIds),
-                     sizeof(PidSpan), sizeof(ArgStat), bytes.size());
+                     sizeof(PidSpan), bytes.size());
         CHECK(bytes.size() < 400);
         check_same(p, round_trip(p), 0.0);
     }

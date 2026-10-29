@@ -74,7 +74,6 @@ inline index::schemas::dft::agg::AggregationConfig agg_config_from_py(
         pull_bool("compute_percentiles", cfg.compute_percentiles);
     cfg.group_by_file = pull_bool("group_by_file", cfg.group_by_file);
     cfg.extra_group_keys = pull_strings("group_keys");
-    cfg.custom_metric_fields = pull_strings("custom_metric_fields");
     return cfg;
 }
 

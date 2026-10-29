@@ -21,6 +21,7 @@
 
 namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;
+namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 namespace trace = dftracer::utils::trace;
 
@@ -42,11 +43,15 @@ std::uint64_t read_dur(int file, int j) { return 10 + (j * 7 + file * 3) % 40; }
 std::uint64_t write_dur(int j) { return 20 + j % 9; }
 
 // Three files, one process and one host each, whose events all start inside
-// one second. Each index is built with percentiles, so its partials hold the
-// quantile stores too.
+// one second. The three share one index, built with percentiles so its partials
+// hold the quantile stores too and with a column budget that keeps every arg
+// column, so the typed collect answers the counters from the column blocks as
+// well.
 struct Fixture {
     TestEnvironment env{200};
     std::vector<std::string> gz;
+    std::string index_path;
+    agg::AggregationConfig aggregation;
 
     // `extras` keeps the string args epoch and step as extra group keys and
     // writes them on the events and counters; `mixed` adds counters named
@@ -97,19 +102,22 @@ struct Fixture {
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
             fs::remove(plain);
-            ix::IndexerOptions o;
-            o.checkpoint_size = MEMBER_BYTES;
-            o.aggregation.compute_percentiles = true;
-            if (extras) o.aggregation.extra_group_keys = {"epoch", "step"};
-            ix::Indexer::open({out}, o).build();
             gz.push_back(out);
         }
+        aggregation.compute_percentiles = true;
+        aggregation.column_budget_ratio = 1000.0;
+        if (extras) aggregation.extra_group_keys = {"epoch", "step"};
+        ix::IndexerOptions o;
+        o.index_dir = env.get_dir() + "/idx";
+        o.checkpoint_size = MEMBER_BYTES;
+        o.aggregation = aggregation;
+        ix::Indexer::open(gz, o).build();
+        index_path = determine_index_path(gz.front(), o.index_dir);
     }
 
     std::vector<ViewFile> files() const {
         std::vector<ViewFile> out;
-        for (const auto& g : gz)
-            out.push_back({g, determine_index_path(g, "")});
+        for (const auto& g : gz) out.push_back({g, index_path});
         return out;
     }
 
@@ -356,8 +364,9 @@ TEST_SUITE("ViewPartials") {
             trace::AggQuery q;
             for (int i = 0; i < FILES; ++i) {
                 trace::AggQuerySource src;
-                const std::string idx = determine_index_path(fx.gz[i], "");
-                src.index_path = dstd::String(idx.data(), idx.size());
+                src.index_path =
+                    dstd::String(fx.index_path.data(), fx.index_path.size());
+                src.params_hash = fx.aggregation.params_hash();
                 src.files.emplace_back(fx.gz[i].data(), fx.gz[i].size());
                 q.sources.push_back(std::move(src));
             }
@@ -399,8 +408,9 @@ TEST_SUITE("ViewPartials") {
         trace::AggQuery q;
         for (int i = 0; i < FILES; ++i) {
             trace::AggQuerySource src;
-            const std::string idx = determine_index_path(fx.gz[i], "");
-            src.index_path = dstd::String(idx.data(), idx.size());
+            src.index_path =
+                dstd::String(fx.index_path.data(), fx.index_path.size());
+            src.params_hash = fx.aggregation.params_hash();
             src.files.emplace_back(fx.gz[i].data(), fx.gz[i].size());
             q.sources.push_back(std::move(src));
         }
@@ -471,8 +481,9 @@ TEST_SUITE("ViewPartials") {
         trace::AggQuery q;
         for (int i = 0; i < FILES; ++i) {
             trace::AggQuerySource src;
-            const std::string idx = determine_index_path(fx.gz[i], "");
-            src.index_path = dstd::String(idx.data(), idx.size());
+            src.index_path =
+                dstd::String(fx.index_path.data(), fx.index_path.size());
+            src.params_hash = fx.aggregation.params_hash();
             src.files.emplace_back(fx.gz[i].data(), fx.gz[i].size());
             q.sources.push_back(std::move(src));
         }

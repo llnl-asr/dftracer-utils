@@ -130,7 +130,6 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
     query.by_pid = true;
     query.window_us = config.time_interval_us;
     query.quantiles = true;
-    query.args = false;
     for (const auto* sel : selectors) {
         const dstd::String name(sel->name);
         if (std::find(query.names.begin(), query.names.end(), name) ==

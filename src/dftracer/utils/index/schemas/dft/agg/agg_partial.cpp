@@ -349,7 +349,6 @@ void AggPartial::clear() {
     pid_tids = DistinctIds();
     pid_files = DistinctIds();
     pid_spans.clear();
-    args.clear();
     bins.clear();
     bin_interval = 0;
 }
@@ -379,14 +378,6 @@ void AggPartial::add_span(std::uint64_t pid, std::uint64_t ts_in,
         return;
     }
     pid_spans.insert(it, PidSpan{pid, ts_in, end});
-}
-
-ArgStat& AggPartial::arg(std::uint32_t id) {
-    const auto it = std::lower_bound(
-        args.begin(), args.end(), id,
-        [](const ArgStat& a, std::uint32_t v) { return a.id < v; });
-    if (it != args.end() && it->id == id) return *it;
-    return *args.emplace(it, id, accuracy);
 }
 
 void AggPartial::merge(const AggPartial& other) {
@@ -443,45 +434,6 @@ void AggPartial::merge(const AggPartial& other) {
                 --b;
             } else {
                 pid_spans[--w] = o;
-                --b;
-            }
-        }
-    }
-
-    if (!other.args.empty()) {
-        const std::size_t na = args.size();
-        const std::size_t nb = other.args.size();
-        std::size_t i = 0, j = 0, shared = 0;
-        while (i < na && j < nb) {
-            if (args[i].id < other.args[j].id) {
-                ++i;
-            } else if (args[i].id > other.args[j].id) {
-                ++j;
-            } else {
-                ++shared;
-                ++i;
-                ++j;
-            }
-        }
-        const std::size_t total = na + nb - shared;
-        args.resize(total);
-        std::size_t a = na, b = nb, w = total;
-        while (b > 0) {
-            const ArgStat& o = other.args[b - 1];
-            if (a > 0 && args[a - 1].id > o.id) {
-                args[--w] = std::move(args[--a]);
-            } else if (a > 0 && args[a - 1].id == o.id) {
-                args[--w] = std::move(args[--a]);
-                args[w].stat.merge(o.stat);
-                args[w].quantiles.merge(o.quantiles);
-                args[w].values += o.values;
-                --b;
-            } else {
-                ArgStat fresh(o.id, accuracy);
-                fresh.stat = o.stat;
-                fresh.quantiles.merge(o.quantiles);
-                fresh.values = o.values;
-                args[--w] = std::move(fresh);
                 --b;
             }
         }
@@ -556,16 +508,6 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
         append_varint(buf, s.first);
         append_varint(buf, s.last - s.first);
         prev = s.pid;
-    }
-
-    append_varint(buf, args.size());
-    std::uint32_t prev_id = 0;
-    for (const ArgStat& a : args) {
-        append_varint(buf, a.id - prev_id);
-        put_stat(buf, a.stat);
-        put_quantiles(buf, a.quantiles);
-        append_varint(buf, a.values);
-        prev_id = a.id;
     }
 
     if ((flags & HAS_BINS) == 0) return;
@@ -650,36 +592,6 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
         if (len > UINT64_MAX - first) return bad();
         prev += d;
         p.pid_spans.push_back(PidSpan{prev, first, first + len});
-    }
-
-    if (!get_count(r, UINT64_MAX, n)) return bad();
-    if (keep.args) p.args.reserve(n);
-    std::uint64_t prev_id = 0;
-    for (std::uint64_t i = 0; i < n; ++i) {
-        std::uint64_t d = 0;
-        if (!get_varint(r, d)) return bad();
-        if ((i > 0 && d == 0) ||
-            d > std::numeric_limits<std::uint32_t>::max() - prev_id) {
-            return bad();
-        }
-        prev_id += d;
-        if (!keep.args) {
-            FieldStat skipped;
-            QuantileStore unused(relative_accuracy);
-            std::uint64_t values = 0;
-            if (!get_stat(r, skipped) || !get_quantiles(r, unused, false) ||
-                !get_varint(r, values)) {
-                return bad();
-            }
-            continue;
-        }
-        ArgStat a(static_cast<std::uint32_t>(prev_id), relative_accuracy);
-        if (!get_stat(r, a.stat) ||
-            !get_quantiles(r, a.quantiles, keep.quantiles) ||
-            !get_varint(r, a.values)) {
-            return bad();
-        }
-        p.args.push_back(std::move(a));
     }
 
     if ((flags & HAS_BINS) != 0) {

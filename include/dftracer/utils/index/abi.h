@@ -64,8 +64,6 @@ typedef struct dftu_indexer_options {
                                                 stores them */
     int32_t aggregation_group_by_file;       /**< 0 = the standard, which keys
                                                 rows by file */
-    int32_t aggregation_track_default_args;  /**< 0 = the standard, which
-                                                tracks them */
 } dftu_indexer_options;
 
 typedef struct dftu_indexer_report {

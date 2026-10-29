@@ -29,7 +29,6 @@ class AggregationConfig:
     Attributes:
         time_interval_ms: Time bucket size in milliseconds (default 1000).
         group_keys: Extra grouping dimensions (default None).
-        custom_metric_fields: Extra numeric args fields to aggregate (default None).
         compute_percentiles: Collect percentile sketches (default True).
         group_by_file: Keep the file hash in the aggregation key (default True).
             A trace touching millions of files makes that key nearly as fine as
@@ -39,7 +38,6 @@ class AggregationConfig:
 
     time_interval_ms: Union[float, str] = 1000.0
     group_keys: Optional[List[str]] = None
-    custom_metric_fields: Optional[List[str]] = None
     compute_percentiles: bool = True
     group_by_file: bool = True
 
@@ -204,7 +202,6 @@ class Indexer:
             build_bloom=build_bloom,
             time_interval_ms=coerce_duration(agg_config.time_interval_ms, 1e3, "time_interval_ms"),
             group_keys=agg_config.group_keys,
-            custom_metric_fields=agg_config.custom_metric_fields,
             compute_percentiles=agg_config.compute_percentiles,
             group_by_file=agg_config.group_by_file,
             checkpoint_size=checkpoint_size,

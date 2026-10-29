@@ -78,8 +78,7 @@ inline constexpr std::uint8_t FRAME = 0;
 /// u32][host id u32][extra id u32][kind u8] after the file id, so a file's
 /// partials are one range in chunk order. The ids are the index root's
 /// dictionary ids; the extra id is that of the extra group key values joined
-/// by 0x1F, the empty text when there are none. SYSTEM holds the file's system
-/// metric rows, keyed by their serialized key; DICT holds the dictionary
+/// by 0x1F, the empty text when there are none. DICT holds the dictionary
 /// entries the file's partials and rows name, keyed [id u32], so a file's data
 /// is replaced without touching another file's. META is index-wide (file_id
 /// INDEX_WIDE) and holds named records (config, tracker, time bounds), keyed
@@ -93,7 +92,10 @@ namespace agg_kind {
 inline constexpr std::uint8_t PARTIAL = 0;
 inline constexpr std::uint8_t META = 1;
 inline constexpr std::uint8_t DICT = 2;
-inline constexpr std::uint8_t SYSTEM = 3;
+/// No kind: this was the per-second system metric rows, which the column
+/// blocks answer. The value stays unused, so a kind added later does not take
+/// the id of an older store's namespace.
+inline constexpr std::uint8_t UNUSED_SYSTEM = 3;
 inline constexpr std::uint8_t COLUMNS = 4;
 }  // namespace agg_kind
 

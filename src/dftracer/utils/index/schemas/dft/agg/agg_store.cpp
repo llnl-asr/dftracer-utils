@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <array>
-#include <map>
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
@@ -69,14 +68,6 @@ std::uint32_t entry_id(std::string_view prefix, std::string_view key) {
     return layout::read_u32(key.substr(prefix.size() + sizeof(std::uint32_t)));
 }
 
-std::string_view row_key_of(std::string_view key, std::string_view prefix) {
-    return key.substr(prefix.size() + sizeof(std::uint32_t));
-}
-
-std::uint16_t shard_of(std::string_view row) {
-    return read_u16_be(reinterpret_cast<const std::uint8_t*>(row.data()));
-}
-
 }  // namespace
 
 std::optional<Config> read_config(const IndexDatabase& db) {
@@ -124,53 +115,6 @@ void put_files(IndexDatabase& db, std::span<const int> file_ids,
     write->commit();
 }
 
-std::vector<SystemRow> system_rows(const IndexDatabase& db, std::uint16_t begin,
-                                   std::uint16_t end) {
-    const auto prefix =
-        layout::kind_prefix(layout::Ext::Agg, layout::agg_kind::SYSTEM);
-    std::map<std::string, SystemAggregationMetrics, std::less<>> merged;
-    // The rows of one file are in shard order, so each file's scan stops at
-    // the end of the range.
-    for (const std::uint32_t file_id : AggRowReader::file_ids(db)) {
-        AggRowReader::for_each_row(
-            db, layout::agg_kind::SYSTEM,
-            layout::file_prefix(layout::Ext::Agg, layout::agg_kind::SYSTEM,
-                                file_id),
-            [&](std::string_view key, std::string_view body) {
-                const std::string_view row = row_key_of(key, prefix);
-                if (row.size() < 2) return true;
-                const std::uint16_t shard = shard_of(row);
-                if (shard >= end || shard >= AGG_KEY_NUM_SHARDS) return false;
-                if (shard < begin) return true;
-                auto at = merged.find(row);
-                if (at == merged.end())
-                    merged.emplace(std::string(row),
-                                   deserialize_system_value(body));
-                else
-                    at->second.merge_from(deserialize_system_value(body));
-                return true;
-            });
-    }
-    std::vector<SystemRow> out;
-    out.reserve(merged.size());
-    for (auto& [row, metrics] : merged)
-        out.emplace_back(row, serialize_system_value(metrics));
-    return out;
-}
-
-void for_each_system_row(
-    const IndexDatabase& db, int file_id,
-    const std::function<bool(std::string_view, std::string_view)>& fn) {
-    const auto prefix =
-        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::SYSTEM,
-                            static_cast<std::uint32_t>(file_id));
-    AggRowReader::for_each_row(
-        db, layout::agg_kind::SYSTEM, prefix,
-        [&](std::string_view key, std::string_view body) {
-            return fn(row_key_of(key, prefix), body);
-        });
-}
-
 void for_each_partial(
     const IndexDatabase& db, int file_id,
     const std::function<bool(std::uint64_t, std::uint32_t, std::uint32_t,
@@ -214,7 +158,7 @@ void for_each_chunk_columns(
     const auto dict_range =
         layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
                             static_cast<std::uint32_t>(file_id));
-    ankerl::unordered_dense::map<std::uint32_t, std::string> texts;
+    dstd::HashMap<std::uint32_t, dstd::String> texts;
     bool texts_read = false;
     AggRowReader::for_each_row(
         db, layout::agg_kind::COLUMNS, prefix,
@@ -228,7 +172,7 @@ void for_each_chunk_columns(
                     db, layout::agg_kind::DICT, dict_range,
                     [&](std::string_view dict_key, std::string_view text) {
                         texts.try_emplace(entry_id(entries, dict_key),
-                                          std::string(text));
+                                          dstd::String(text));
                         return true;
                     });
                 texts_read = true;

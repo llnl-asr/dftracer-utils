@@ -1,7 +1,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -40,17 +39,6 @@ std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
     if (lower) text = trace::internal::to_lower_ascii(text, storage);
     const std::uint32_t id = agg_intern_->intern.get_or_insert(text);
     if (cacheable) cache[build_id] = id;
-    return id;
-}
-
-std::uint32_t AggregationFold::arg_id(std::string_view key) {
-    // Arg names are views into the build intern or the config, which keep
-    // their bytes, so the address names the string.
-    auto it = arg_ids_.find(key.data());
-    if (it != arg_ids_.end() && it->second.length == key.size())
-        return it->second.id;
-    const std::uint32_t id = agg_intern_->intern.get_or_insert(key);
-    arg_ids_[key.data()] = {static_cast<std::uint32_t>(key.size()), id};
     return id;
 }
 
@@ -98,8 +86,7 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
         bin =
             &bin_of(slot, acc.pid(), acc.tid(), ts / config_.time_interval_us);
     }
-    auto id_of = [this](std::string_view k) { return arg_id(k); };
-    fold_into_partial(slot.partial, acc, config_, id_of, bin);
+    fold_into_partial(slot.partial, acc, config_, bin);
     slot.used = true;
 }
 
@@ -187,8 +174,6 @@ void AggregationFold::close_chunk() {
         referenced_.push_back(slot.key.name);
         referenced_.push_back(slot.key.host);
         referenced_.push_back(slot.key.extra);
-        for (const ArgStat& arg : slot.partial.args)
-            referenced_.push_back(arg.id);
         slot.partial.clear();
         slot.threads.clear();
         slot.last_thread = 0;
@@ -200,13 +185,6 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     auto& o = static_cast<AggregationFold&>(other);
     auto& os = o.state_;
 
-    for (auto& [k, m] : os.system_buffer) {
-        auto it = state_.system_buffer.find(k);
-        if (it == state_.system_buffer.end())
-            state_.system_buffer.emplace(k, std::move(m));
-        else
-            it->second.merge_from(m);
-    }
     state_.min_time_bucket =
         std::min(state_.min_time_bucket, os.min_time_bucket);
     state_.max_time_bucket =
@@ -238,8 +216,6 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     o.closed_.clear();
     o.closed_columns_.clear();
     o.referenced_.clear();
-
-    os.system_buffer.clear();
 }
 
 void AggregationFold::write(index::store::IndexWrite& w) {
@@ -249,14 +225,9 @@ void AggregationFold::write(index::store::IndexWrite& w) {
             "an aggregation fold writes the data of one file, and has none");
     }
     close_chunk();
-    // The clear covers every kind of the file's aggregation data, its
-    // system rows included, so it comes before any of them is put.
+    // The clear covers every kind of the file's aggregation data, so it comes
+    // before any of them is put.
     index::store::records::clear_file(w, layout::Ext::Agg, file_id_);
-    std::string sys_val_buf;
-    for (auto& [k, m] : state_.system_buffer) {
-        serialize_system_value_into(sys_val_buf, m);
-        index::store::records::put_agg_system_row(w, file_id_, k, sys_val_buf);
-    }
     for (const Closed& c : closed_)
         index::store::records::put_agg_partial(
             w, file_id_, c.chunk, c.key.cat, c.key.name, c.key.host,

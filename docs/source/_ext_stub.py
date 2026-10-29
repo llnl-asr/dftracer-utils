@@ -186,7 +186,6 @@ def install_extension_stub() -> None:
             require_manifest: bool = True,
             time_interval_ms: float = 1000.0,
             group_keys: list[str] | None = None,
-            custom_metric_fields: list[str] | None = None,
             compute_percentiles: bool = True,
             checkpoint_size: int = 32 * 1024 * 1024,
             parallelism: int = 0,
@@ -208,7 +207,6 @@ def install_extension_stub() -> None:
                 time_interval_ms: Time interval for the aggregation tier, which
                     every build makes, in milliseconds.
                 group_keys: Keys to group by for aggregation.
-                custom_metric_fields: Custom metric fields for aggregation.
                 compute_percentiles: If True, compute percentiles during aggregation.
                 parallelism: Number of parallel indexers. 0 = auto.
                 force_rebuild: If True, rebuild indices even if they exist.

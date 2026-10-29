@@ -12,16 +12,13 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// The sink that folds one event into an AggPartial, and its counts and sums
-/// into `bin` when it is not null. `arg_id` maps an arg name to its per-root
-/// id.
-template <class IdOf>
+/// into `bin` when it is not null.
 class PartialSink {
    public:
     PartialSink(AggPartial& partial, std::uint64_t pid,
-                const AggregationConfig& cfg, IdOf& arg_id, TimeBin* bin)
+                const AggregationConfig& cfg, TimeBin* bin)
         : p_(partial),
           bin_(bin),
-          arg_id_(arg_id),
           pid_(pid),
           percentiles_(cfg.compute_percentiles) {}
 
@@ -73,28 +70,16 @@ class PartialSink {
         }
     }
     void merge_offset(const dataframe::FieldStat& s) { p_.offset.merge(s); }
-    void custom(std::string_view key, std::uint64_t u) {
-        ArgStat& a = p_.arg(arg_id_(key));
-        a.stat.add(u);
-        ++a.values;
-        if (percentiles_) a.quantiles.add(static_cast<double>(u));
-    }
-    dataframe::FieldStat& custom_stat(std::string_view key) {
-        return p_.arg(arg_id_(key)).stat;
-    }
-    void note_custom(std::string_view) {}
 
    private:
     AggPartial& p_;
     TimeBin* bin_;
-    IdOf& arg_id_;
     std::uint64_t pid_;
     bool percentiles_;
 };
 
-/// Whether the per-name partial holds the event: not metadata, and not a
-/// system event that is not pre-aggregated (those keep their own per-bucket
-/// records).
+/// Whether the per-name partial holds the event: any event but a metadata
+/// record.
 template <class Acc>
 bool partial_holds(const Acc& acc) {
     return !acc.is_metadata();
@@ -129,15 +114,13 @@ void extra_values(const Acc& acc, const AggregationConfig& cfg,
 
 /// Folds an event that partial_holds into `partial` by the rules of
 /// aggregate_event, and its counts and sums into `bin` when it is not null.
-/// `arg_id(std::string_view) -> std::uint32_t` maps an arg name to its id.
-template <class Acc, class IdOf>
+template <class Acc>
 void fold_into_partial(AggPartial& partial, const Acc& acc,
-                       const AggregationConfig& cfg, IdOf&& arg_id,
-                       TimeBin* bin = nullptr) {
+                       const AggregationConfig& cfg, TimeBin* bin = nullptr) {
     const auto fhash = acc.arg_string("fhash");
     partial.observe(acc.pid(), acc.tid(),
                     fhash.empty() ? 0 : agg_hash_of_hex(fhash));
-    PartialSink<IdOf> sink(partial, acc.pid(), cfg, arg_id, bin);
+    PartialSink sink(partial, acc.pid(), cfg, bin);
     accumulate_event_metrics(acc, cfg, sink);
 }
 
@@ -145,11 +128,11 @@ void fold_into_partial(AggPartial& partial, const Acc& acc,
 /// false, and leaves `partial` alone, for an event the per-name partial does
 /// not hold (see partial_holds). The caller picks the partial by the
 /// lower-cased category and the name.
-template <class Acc, class IdOf>
+template <class Acc>
 bool update_partial(AggPartial& partial, const Acc& acc,
-                    const AggregationConfig& cfg, IdOf&& arg_id) {
+                    const AggregationConfig& cfg) {
     if (!partial_holds(acc)) return false;
-    fold_into_partial(partial, acc, cfg, arg_id);
+    fold_into_partial(partial, acc, cfg);
     return true;
 }
 

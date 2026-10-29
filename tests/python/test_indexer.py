@@ -357,12 +357,10 @@ class TestDirectoryIndexer:
         config = dftu_utils.AggregationConfig(
             time_interval_ms=2000.0,
             group_keys=["host", "rank"],
-            custom_metric_fields=["bytes"],
             compute_percentiles=True,
         )
         assert config.time_interval_ms == 2000.0
         assert config.group_keys == ["host", "rank"]
-        assert config.custom_metric_fields == ["bytes"]
         assert config.compute_percentiles is True
 
     def test_indexer_with_files_list(self):

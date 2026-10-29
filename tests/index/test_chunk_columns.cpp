@@ -28,6 +28,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace dftracer::utils;
@@ -370,10 +371,19 @@ std::string make_trace(int n) {
     return text.str();
 }
 
+// The trace text `text` written in `dir`/`name` and gzipped in one member.
+std::string write_gzip(const std::string& dir, const std::string& name,
+                       const std::string& text);
+
 // A trace of its own in `dir`/`name`, so each one's sidecar index is distinct.
 std::string write_trace(const std::string& dir, const std::string& name,
                         std::string& text) {
     text = make_trace(RECORDS);
+    return write_gzip(dir, name, text);
+}
+
+std::string write_gzip(const std::string& dir, const std::string& name,
+                       const std::string& text) {
     const std::string sub = dir + "/" + name;
     fs::create_directories(sub);
     const std::string pfw = sub + "/trace.pfw";
@@ -418,9 +428,9 @@ void check_row_core(const agg::ChunkColumns& block, std::size_t r,
     REQUIRE(block.cat[r] < block.texts.size());
     REQUIRE(block.name[r] < block.texts.size());
     REQUIRE(block.host[r] < block.texts.size());
-    CHECK(block.texts[block.cat[r]] == row.cat);
-    CHECK(block.texts[block.name[r]] == row.name);
-    CHECK(block.texts[block.host[r]] == row.host);
+    CHECK(block.texts[block.cat[r]] == row.cat.c_str());
+    CHECK(block.texts[block.name[r]] == row.name.c_str());
+    CHECK(block.texts[block.host[r]] == row.host.c_str());
 }
 
 // The column of `path` of the kind `kind`: one arg path holds one column per
@@ -476,7 +486,7 @@ void check_row_args(const agg::ChunkColumns& block, std::size_t r,
 void check_columns_against(const agg::ChunkColumns& block,
                            const std::vector<Row>& rows, std::size_t at) {
     for (const agg::ChunkColumn& column : block.columns) {
-        const std::string& path = block.texts[column.path];
+        const auto& path = block.texts[column.path];
         CHECK_FALSE(path.empty());
         CHECK(column.rows.size() == column.bits.size());
         CHECK(column.rows.size() <= block.rows);
@@ -484,8 +494,8 @@ void check_columns_against(const agg::ChunkColumns& block,
         for (std::size_t k = 0; k < column.rows.size(); ++k) {
             REQUIRE(at + column.rows[k] < rows.size());
             const Row& row = rows[at + column.rows[k]];
-            const auto found = row.args.find(path);
-            REQUIRE_MESSAGE(found != row.args.end(), "no arg ", path,
+            const auto found = row.args.find(std::string(path));
+            REQUIRE_MESSAGE(found != row.args.end(), "no arg ", path.c_str(),
                             " on row ", column.rows[k]);
             CHECK(column.kind == found->second.column_kind());
             CHECK(column.bits[k] == found->second.bits());
@@ -551,13 +561,54 @@ int file_id_of(const IndexDatabase& db, const std::string& path) {
 // One column of a block, named by the text of its path and holding its rows
 // and values, so two indexes are compared without their block-local ids.
 struct ColumnShape {
-    std::string path;
+    dstd::String path;
     agg::ColumnKind kind = agg::ColumnKind::Int64;
     std::vector<std::uint64_t> rows;
     std::vector<std::uint64_t> bits;
 
     bool operator==(const ColumnShape&) const = default;
 };
+
+// The trace of a real DFTracer record, whose args repeat a key: `used` twice at
+// the top of args and `nested` holding `CPP_APP` twice. The first value of each
+// repeated path is the one the block keeps.
+std::string repeated_key_trace() {
+    std::ostringstream text;
+    text << "[\n";
+    text << R"({"id":0,"name":"meta","cat":"dftracer","ph":"M","ts":1)"
+         << R"(,"args":{"version":"1.0"}})" << "\n";
+    for (int i = 0; i < RECORDS; ++i) {
+        text << R"({"id":)" << i + 1 << R"(,"name":"cpu","cat":"sys")"
+             << R"(,"pid":1,"tid":1,"ph":"C","ts":)" << 5000 + i * 7
+             << R"(,"args":{"hhash":"h1","used":)" << 10 + i << R"(,"used":)"
+             << 90 + i << R"(,"nested":{"CPP_APP":)" << 100 + i
+             << R"(,"CPP_APP":)" << 200 + i << "}}}\n";
+    }
+    text << "]\n";
+    return text.str();
+}
+
+// The rows and values the column of `path` of `kind` holds.
+std::vector<std::pair<std::uint64_t, std::uint64_t>> values_of(
+    const agg::ChunkColumns& block, std::string_view path,
+    agg::ColumnKind kind) {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    const agg::ChunkColumn* column = column_for(block, path, kind);
+    if (column == nullptr) return out;
+    REQUIRE(column->rows.size() == column->bits.size());
+    for (std::size_t k = 0; k < column->rows.size(); ++k)
+        out.emplace_back(column->rows[k], column->bits[k]);
+    return out;
+}
+
+std::vector<std::pair<std::uint64_t, std::uint64_t>> first_values(
+    std::size_t rows, std::size_t at, std::int64_t first) {
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> out;
+    for (std::size_t r = 0; r < rows; ++r)
+        out.emplace_back(r, static_cast<std::uint64_t>(
+                                first + static_cast<std::int64_t>(at + r)));
+    return out;
+}
 
 std::map<std::uint64_t, std::vector<ColumnShape>> columns_of(
     const IndexDatabase& db, int file_id) {
@@ -566,7 +617,8 @@ std::map<std::uint64_t, std::vector<ColumnShape>> columns_of(
         db, file_id, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
             std::vector<ColumnShape> shapes;
             for (const agg::ChunkColumn& column : block.columns)
-                shapes.push_back({block.texts[column.path], column.kind,
+                shapes.push_back({dstd::String(block.texts[column.path]),
+                                  column.kind,
                                   std::vector<std::uint64_t>(
                                       column.rows.begin(), column.rows.end()),
                                   std::vector<std::uint64_t>(
@@ -904,7 +956,7 @@ TEST_SUITE("ChunkColumns") {
                 }
                 std::vector<std::string> got;
                 for (const std::uint32_t path : block.dropped)
-                    got.push_back(block.texts[path]);
+                    got.emplace_back(block.texts[path]);
                 std::sort(want.begin(), want.end());
                 want.erase(std::unique(want.begin(), want.end()), want.end());
                 std::sort(got.begin(), got.end());
@@ -965,5 +1017,39 @@ TEST_SUITE("ChunkColumns") {
         // path text, rows and values included.
         CHECK(columns_of(db, merged_a) == before_a);
         CHECK(columns_of(db, merged_b) == before_b);
+    }
+
+    TEST_CASE("a record that repeats an arg key keeps its first value") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        const std::string text = repeated_key_trace();
+        const std::string gz = write_gzip(env.get_dir(), "repeat", text);
+        const std::string index_dir = env.get_dir() + "/idx";
+        build({gz}, index_dir, 1000.0);
+
+        const auto index_path =
+            trace::internal::determine_index_path(gz, index_dir);
+        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+        const int fid = file_id_of(db, gz);
+        std::size_t at = 0;
+        std::size_t blocks = 0;
+        agg::tier::for_each_chunk_columns(
+            db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+                ++blocks;
+                CHECK(block.chunk == chunk);
+                CHECK(block.dropped.empty());
+                CHECK(block.rows > 0);
+                REQUIRE(at + block.rows <= RECORDS);
+                // One entry per row, holding the first value of the path.
+                CHECK(values_of(block, "used", agg::ColumnKind::Int64) ==
+                      first_values(block.rows, at, 10));
+                CHECK(values_of(block, "nested.CPP_APP",
+                                agg::ColumnKind::Int64) ==
+                      first_values(block.rows, at, 100));
+                at += block.rows;
+                return true;
+            });
+        CHECK(blocks > 0);
+        CHECK(at == RECORDS);
     }
 }

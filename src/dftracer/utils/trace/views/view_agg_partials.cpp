@@ -13,7 +13,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -529,7 +529,6 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
     q.config.time_interval_us = interval_us;
     for (const auto& k : p.extra) q.config.extra_group_keys.push_back(k);
     q.by_kind = true;
-    q.args = false;
     q.quantiles = wants_quantiles(plan);
     // A path-decoded file is not read by the dftracer line parser, so what a
     // re-read would answer is left to the scan.

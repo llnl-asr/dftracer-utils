@@ -78,7 +78,6 @@ TEST_SUITE("dlio trace loader") {
         config.compute_statistics = true;
         config.compute_percentiles = true;
         config.track_process_parents = true;
-        config.track_default_args = true;
 
         index::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";

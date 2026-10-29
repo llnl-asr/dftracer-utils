@@ -167,11 +167,6 @@ void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
                      std::uint32_t host_id, std::uint32_t extra_id,
                      std::uint8_t kind, std::string_view payload);
 
-/// One system metric row of the file's aggregation, `payload` the serialized
-/// SystemAggregationMetrics and `key` the serialized system key it belongs to.
-void put_agg_system_row(IndexWrite& w, int file_id, std::string_view key,
-                        std::string_view payload);
-
 /// The column block of `chunk` of the file's aggregation, `payload` the
 /// encoded block (see schemas/dft/agg/chunk_columns.h).
 void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,

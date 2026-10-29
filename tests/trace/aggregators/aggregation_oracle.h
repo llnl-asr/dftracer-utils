@@ -20,10 +20,6 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-using CustomMetricsMap =
-    ankerl::unordered_dense::map<std::string, MetricStats,
-                                 TransparentStringHash, TransparentStringEqual>;
-
 struct AggregationMetrics {
     std::uint64_t count = 0;
     MetricStats duration;
@@ -31,7 +27,6 @@ struct AggregationMetrics {
     MetricStats offset;
     std::uint64_t ts = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t te = 0;
-    std::unique_ptr<CustomMetricsMap> custom_metrics;
     utilities::common::statistics::DistinctSketch distinct_files;
     double sketch_accuracy = 0.01;
 
@@ -54,13 +49,6 @@ struct AggregationMetrics {
         ts = std::min(ts, other.ts);
         te = std::max(te, other.te);
         distinct_files.merge_from(other.distinct_files);
-        if (other.custom_metrics) {
-            if (!custom_metrics)
-                custom_metrics = std::make_unique<CustomMetricsMap>();
-            for (const auto& [name, metric] : *other.custom_metrics)
-                find_or_create(*custom_metrics, name, sketch_accuracy)
-                    .merge_from(metric);
-        }
     }
 };
 
@@ -68,9 +56,7 @@ struct AggregationMetrics {
 class OracleSink {
    public:
     OracleSink(AggregationMetrics& entry, const AggregationConfig& cfg)
-        : entry_(entry),
-          accuracy_(cfg.sketch_accuracy),
-          percentiles_(cfg.compute_percentiles) {}
+        : entry_(entry), percentiles_(cfg.compute_percentiles) {}
 
     void add_count(std::uint64_t n) { entry_.count += n; }
     void span(std::uint64_t ts, std::uint64_t len) {
@@ -91,22 +77,9 @@ class OracleSink {
     void merge_offset(const dataframe::FieldStat& s) {
         entry_.offset.stat.merge(s);
     }
-    void custom(std::string_view key, std::uint64_t u) {
-        if (!entry_.custom_metrics)
-            entry_.custom_metrics = std::make_unique<CustomMetricsMap>();
-        find_or_create(*entry_.custom_metrics, key, accuracy_)
-            .update(u, percentiles_);
-    }
-    dataframe::FieldStat& custom_stat(std::string_view key) {
-        if (!entry_.custom_metrics)
-            entry_.custom_metrics = std::make_unique<CustomMetricsMap>();
-        return find_or_create(*entry_.custom_metrics, key, accuracy_).stat;
-    }
-    void note_custom(std::string_view) {}
 
    private:
     AggregationMetrics& entry_;
-    double accuracy_;
     bool percentiles_;
 };
 

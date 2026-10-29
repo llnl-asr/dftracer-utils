@@ -138,10 +138,6 @@ class Runner {
         std::sort(pids.begin(), pids.end());
         window_cfg.time_interval_us = q.window_us;
         read_cfg.compute_percentiles = q.quantiles;
-        if (!q.args) {
-            read_cfg.track_default_args = false;
-            read_cfg.custom_metric_fields.clear();
-        }
         has_time = q.ts_begin > 0 || q.ts_end < UINT64_MAX;
         reread_only = q.by_file || q.filter.has_value();
     }
@@ -232,11 +228,6 @@ class Task {
                                     const index::gzip::ChunkSpan* spans);
 
    private:
-    struct ArgId {
-        std::uint32_t length;
-        std::uint32_t id;
-    };
-
     struct Reread {
         std::uint32_t chunk;
         Group group;
@@ -255,17 +246,6 @@ class Task {
         return r_.strings.get_or_insert(*text);
     }
 
-    std::uint32_t map_root_arg(std::uint32_t id) {
-        return root_arg_.get(id, [&](std::uint32_t i) {
-            const std::string* text = src_.dict.find(i);
-            if (!text)
-                throw DFTUtilsException::cat(
-                    ErrorCode::Parse, "aggregation query: dictionary id ", i,
-                    " is missing in ", src_.path);
-            return r_.strings.get_or_insert(*text);
-        });
-    }
-
     PidFit pid_fit(const agg::AggPartial& p) const {
         if (r_.pids.empty()) return PidFit::All;
         if (!p.pids.is_exact()) return PidFit::Mixed;
@@ -280,13 +260,9 @@ class Task {
 
     // Values were added event by event, and no quantile store holds them.
     static bool quantiles_missing(const agg::AggPartial& p) {
-        if ((p.duration_values != 0 && p.duration_q.count() == 0) ||
-            (p.size_values != 0 && p.size_q.count() == 0) ||
-            (p.offset_values != 0 && p.offset_q.count() == 0))
-            return true;
-        for (const auto& a : p.args)
-            if (a.values != 0 && a.quantiles.count() == 0) return true;
-        return false;
+        return (p.duration_values != 0 && p.duration_q.count() == 0) ||
+               (p.size_values != 0 && p.size_q.count() == 0) ||
+               (p.offset_values != 0 && p.offset_q.count() == 0);
     }
 
     void queue_reread(std::uint32_t chunk, const Group& group) {
@@ -359,17 +335,6 @@ class Task {
         });
     }
 
-    std::uint32_t arg_id(std::string_view key) {
-        // Arg names are views into the read intern or the config, which keep
-        // their bytes, so the address names the string.
-        auto it = arg_ids_.find(key.data());
-        if (it != arg_ids_.end() && it->second.length == key.size())
-            return it->second.id;
-        const std::uint32_t id = r_.strings.get_or_insert(key);
-        arg_ids_[key.data()] = {static_cast<std::uint32_t>(key.size()), id};
-        return id;
-    }
-
     std::uint32_t extra_id(const agg::PodAccessor& acc) {
         extra_buf_.clear();
         bool any = false;
@@ -390,13 +355,10 @@ class Task {
 
     Runner& r_;
     Source& src_;
-    IdCache root_cat_, root_name_, root_host_, root_extra_, root_arg_;
+    IdCache root_cat_, root_name_, root_host_, root_extra_;
     IdCache build_cat_, build_name_, build_host_;
     dstd::Vector<Reread> rereads_;
     views::detail::FoldEventBuffer buffer_;
-    dstd::HashMap<const void*, ArgId, dftracer::utils::PtrHash,
-                  std::equal_to<const void*>>
-        arg_ids_;
     dstd::String extra_buf_;
     json::RecordParser parser_;
     std::shared_ptr<std::string> buf_ = std::make_shared<std::string>();
@@ -655,7 +617,6 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
     }
     agg::AggPartial::Fields keep;
     keep.quantiles = r_.q.quantiles && !r_.reread_only;
-    keep.args = r_.q.args && !r_.reread_only;
     keep.bins = r_.q.sums_only && !r_.reread_only;
     auto parsed = agg::AggPartial::deserialize(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
@@ -723,13 +684,6 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
         return;
     }
 
-    if (r_.q.args && !p.args.empty()) {
-        for (auto& a : p.args) a.id = map_root_arg(a.id);
-        std::sort(p.args.begin(), p.args.end(),
-                  [](const agg::ArgStat& a, const agg::ArgStat& b) {
-                      return a.id < b.id;
-                  });
-    }
     ++stats.partials_merged;
     auto it = rows.find(key);
     if (it == rows.end())
@@ -739,7 +693,7 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
 }
 
 bool Task::bins_answer(const agg::AggPartial& p) const {
-    if (!r_.q.sums_only || r_.q.quantiles || r_.q.args) return false;
+    if (!r_.q.sums_only || r_.q.quantiles) return false;
     if (p.bin_interval == 0 || p.bins.empty()) return false;
     return r_.q.window_us == 0 || r_.q.window_us % p.bin_interval == 0;
 }
@@ -935,8 +889,7 @@ void Task::add_event(const FoldEvent& ev,
     if (it == rows.end())
         it = rows.emplace(key, agg::AggPartial(r_.q.config.sketch_accuracy))
                  .first;
-    auto id_of = [this](std::string_view k) { return arg_id(k); };
-    agg::fold_into_partial(it->second, acc, r_.read_cfg, id_of);
+    agg::fold_into_partial(it->second, acc, r_.read_cfg);
     ++stats.events_read;
 }
 

@@ -1,15 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
-#include <ankerl/unordered_dense.h>
-#include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
-#include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
-#include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
@@ -54,52 +47,19 @@ inline std::uint64_t agg_hash_of_hex(std::string_view sv) {
     return v ? v : 1;
 }
 
-/// The mutable accumulation state of the fold: the system metric rows and the
-/// time range of the events.
+/// The mutable accumulation state of the fold: the time range of the events.
 struct AggState {
-    ankerl::unordered_dense::segmented_map<
-        std::string, SystemAggregationMetrics, TransparentStringHash,
-        TransparentStringEqual>
-        system_buffer;
-    std::string system_key_buf;
     std::uint64_t min_time_bucket = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_time_bucket = 0;
     std::size_t events_processed = 0;
 };
-
-/// Non-preaggregated system events: keyed by hhash + name + time_bucket, every
-/// numeric arg (except hhash/fhash) folded into a SystemAggregationMetrics.
-template <class Acc>
-void aggregate_system_event(const Acc& acc, AggState& st,
-                            const AggregationConfig& cfg) {
-    auto hhash = acc.arg_string("hhash");
-    auto time_bucket = compute_time_bucket(acc.ts(), cfg);
-    if (time_bucket < st.min_time_bucket) st.min_time_bucket = time_bucket;
-    if (time_bucket > st.max_time_bucket) st.max_time_bucket = time_bucket;
-
-    serialize_system_key_into(st.system_key_buf, hhash, acc.name(),
-                              time_bucket);
-    auto [it, inserted] =
-        st.system_buffer.try_emplace(st.system_key_buf, cfg.sketch_accuracy);
-    auto& entry = it->second;
-    entry.count++;
-    entry.update_timestamp(acc.ts());
-    const bool compute_percentiles = cfg.compute_percentiles;
-
-    acc.for_each_numeric_arg([&](std::string_view k, std::uint64_t, double d) {
-        if (k == "hhash" || k == "fhash") return;
-        entry.update_metric(k, d, compute_percentiles);
-    });
-    st.events_processed++;
-}
 
 /// Applies one event's metric rules to `sink`. The rules live here once; the
 /// Sink decides where the numbers go (a partial).
 /// A Sink provides:
 ///   add_count(n) ; span(ts, len) ; duration(dur) ; size(v) ; offset(v)
 ///   merge_duration(FieldStat) ; merge_size(FieldStat) ;
-///   merge_offset(FieldStat) custom(key, u) ; custom_stat(key) -> FieldStat& ;
-///   note_custom(key)
+///   merge_offset(FieldStat)
 /// duration(dur) counts the event; add_count(n) counts a pre-aggregated one.
 template <class Acc, class Sink>
 void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
@@ -185,79 +145,14 @@ void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
             sink.offset(acc.arg_uint("offset"));
         }
     }
-
-    if (cfg.track_default_args) {
-        const bool is_counter_ev = acc.is_counter();
-        acc.for_each_numeric_arg(
-            [&](std::string_view k, std::uint64_t u, double) {
-                if (is_reserved_arg(k)) return;
-                if (is_counter_ev && is_preagg_suffix(k)) return;
-                for (const auto& gk : cfg.extra_group_keys)
-                    if (gk == k) return;
-                for (const auto& cf : cfg.custom_metric_fields)
-                    if (cf == k) return;
-                sink.custom(k, u);
-            });
-    }
-
-    for (const auto& field : cfg.custom_metric_fields) {
-        if (acc.is_counter()) {
-            // Each of sum/min/max reads its "<field>_sum|min|max" arg, falling
-            // back to the bare "<field>" arg when that suffix is absent (the
-            // visitor's a_sum/a_min/a_max = args[suffix] else args[field]).
-            const std::string sum_suffix = std::string(field) + "_sum";
-            const std::string min_suffix = std::string(field) + "_min";
-            const std::string max_suffix = std::string(field) + "_max";
-            const std::string_view sum_k = acc.arg_exists(sum_suffix)
-                                               ? std::string_view(sum_suffix)
-                                               : field;
-            if (acc.arg_exists(sum_k) && acc.arg_is_number(sum_k)) {
-                FieldStat& stats = sink.custom_stat(field);
-                FieldStat add;
-                add.n = ev_count;
-                add.sum = static_cast<double>(acc.arg_uint(sum_k));
-                const std::string_view min_k =
-                    acc.arg_exists(min_suffix) ? std::string_view(min_suffix)
-                                               : field;
-                add.min = (acc.arg_exists(min_k) && acc.arg_is_number(min_k))
-                              ? static_cast<double>(acc.arg_uint(min_k))
-                          : stats.n ? stats.min
-                                    : add.sum;
-                const std::string_view max_k =
-                    acc.arg_exists(max_suffix) ? std::string_view(max_suffix)
-                                               : field;
-                add.max = (acc.arg_exists(max_k) && acc.arg_is_number(max_k))
-                              ? static_cast<double>(acc.arg_uint(max_k))
-                          : stats.n ? stats.max
-                                    : add.sum;
-                stats.merge(add);
-                sink.note_custom(field);
-            }
-        } else {
-            if (acc.arg_exists(field) && acc.arg_is_number(field)) {
-                sink.custom(field, acc.arg_uint(field));
-            }
-        }
-    }
 }
 
-/// Accounts one event in `st`: a system event that is not pre-aggregated
-/// folds into the system metric rows, any other widens the time range (its
+/// Accounts one event in `st`: it widens the time range of the fold (its
 /// metrics are the partials', see agg_partial_update.h).
 template <class Acc>
 void aggregate_event(const Acc& acc, AggState& st,
                      const AggregationConfig& cfg) {
     if (acc.is_metadata()) return;
-
-    if (acc.is_system()) {
-        const bool is_preaggregated = acc.arg_is_number("count") ||
-                                      acc.arg_is_number("dftu_cnt") ||
-                                      acc.arg_is_number("dft_cnt");
-        if (!is_preaggregated) {
-            aggregate_system_event(acc, st, cfg);
-            return;
-        }
-    }
 
     const auto time_bucket = compute_time_bucket(acc.ts(), cfg);
     if (time_bucket < st.min_time_bucket) st.min_time_bucket = time_bucket;

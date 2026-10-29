@@ -143,13 +143,13 @@ class PodAccessor {
     const dftracer::utils::dstd::StringIntern& intern_;
 };
 
-/// Builds the system metric rows, the chunk partials and the dictionary
+/// Builds the chunk partials, the chunk column blocks and the dictionary
 /// entries they use for a file (when the fold has a file id) as a fold on the
 /// fused scan, so it rides the same single parse as BloomFold / DictFold.
 /// `build_intern` is the fused-scan intern that produced the events (resolves
 /// the POD's ids); `agg_intern` is the per-index aggregation intern table
-/// whose ids the partial keys embed. write emits the system rows, the
-/// partials, the dictionary entries the partials reference and the file's
+/// whose ids the partial keys embed. write emits the partials, the column
+/// blocks, the dictionary entries the partials reference and the file's
 /// manifest; the tracker and time-bound outputs are returned out-of-band.
 class AggregationFold : public trace::views::detail::Fold {
    public:
@@ -206,9 +206,9 @@ class AggregationFold : public trace::views::detail::Fold {
         co_return false;
     }
 
-    /// Emit the accumulated system metric rows, the partials and the
-    /// dictionary entries the partials reference into `w`, with the
-    /// dftracer.agg manifest entry of the fold's file when it has one.
+    /// Emit the partials and the chunk column blocks of the fold, with the
+    /// dictionary entries they reference, into `w`, and the dftracer.agg
+    /// manifest entry of the fold's file when it has one.
     void write(index::store::IndexWrite& w);
 
     std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
@@ -284,11 +284,6 @@ class AggregationFold : public trace::views::detail::Fold {
         std::size_t size;
     };
 
-    struct ArgId {
-        std::uint32_t length;
-        std::uint32_t id;
-    };
-
     void add_to_partial(const trace::views::detail::FoldEvent& ev,
                         const PodAccessor& acc);
     /// Adds the event to the column block of the current chunk.
@@ -300,7 +295,6 @@ class AggregationFold : public trace::views::detail::Fold {
     /// `lower`), cached by that id.
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
                           std::uint32_t build_id, bool lower);
-    std::uint32_t arg_id(std::string_view key);
     /// Bytes the column block of the chunk of `unit` may take.
     std::size_t column_budget_for(
         const trace::views::detail::ScanUnit& unit) const;
@@ -336,9 +330,6 @@ class AggregationFold : public trace::views::detail::Fold {
     /// Root ids of the category texts of the column block, in their own case;
     /// the partials use the lower case of `cat_ids_`.
     dftracer::utils::dstd::Vector<std::uint32_t> cat_text_ids_;
-    dftracer::utils::dstd::HashMap<const void*, ArgId, dftracer::utils::PtrHash,
-                                   std::equal_to<const void*>>
-        arg_ids_;
     dftracer::utils::dstd::Vector<std::uint8_t> arena_;
     dftracer::utils::dstd::Vector<Closed> closed_;
     index::schemas::dft::agg::ChunkColumnBuilder columns_;

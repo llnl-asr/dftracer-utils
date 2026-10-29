@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -292,21 +291,6 @@ std::size_t merge_shard_set(const std::string& root,
                 write->commit();
             }
 
-            // System metrics keys carry raw hhash/name, so a file's rows copy
-            // verbatim under its new id.
-            {
-                auto write = out_db.begin_write();
-                for (const auto& [old_id, new_id] : remap)
-                    agg::tier::for_each_system_row(
-                        sdb, old_id,
-                        [&](std::string_view key, std::string_view value) {
-                            dftracer::utils::index::store::records::
-                                put_agg_system_row(*write, new_id, key, value);
-                            return true;
-                        });
-                write->commit();
-            }
-
             // The dftracer.agg entry of a file follows its new id.
             if (config) {
                 std::vector<int> aggregated;
@@ -358,22 +342,6 @@ std::size_t merge_shard_set(const std::string& root,
                                 throw DFTUtilsException(
                                     ErrorCode::Parse,
                                     "aggregation partial: malformed record");
-                            if (!parsed->args.empty()) {
-                                for (auto& a : parsed->args)
-                                    a.id = out_intern.intern.get_or_insert(
-                                        shard_intern.intern.resolve(a.id));
-                                std::sort(parsed->args.begin(),
-                                          parsed->args.end(),
-                                          [](const agg::ArgStat& x,
-                                             const agg::ArgStat& y) {
-                                              return x.id < y.id;
-                                          });
-                                bytes.clear();
-                                parsed->serialize_into(bytes);
-                                payload = std::string_view(
-                                    reinterpret_cast<const char*>(bytes.data()),
-                                    bytes.size());
-                            }
                             dftracer::utils::index::store::records::
                                 put_agg_partial(*write, new_id, chunk, new_cat,
                                                 new_name, new_host, new_extra,
@@ -385,11 +353,6 @@ std::size_t merge_shard_set(const std::string& root,
                                     put_agg_dictionary_entry(
                                         *write, new_id, id,
                                         out_intern.intern.resolve(id));
-                            for (const auto& a : parsed->args)
-                                dftracer::utils::index::store::records::
-                                    put_agg_dictionary_entry(
-                                        *write, new_id, a.id,
-                                        out_intern.intern.resolve(a.id));
                             return true;
                         });
                 }

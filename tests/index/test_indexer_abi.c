@@ -424,7 +424,6 @@ static void test_aggregation_settings(void) {
     TEST_ASSERT_EQUAL_UINT64(1000000, opts.aggregation_time_interval_us);
     TEST_ASSERT_EQUAL_INT(1, opts.aggregation_compute_percentiles);
     TEST_ASSERT_EQUAL_INT(1, opts.aggregation_group_by_file);
-    TEST_ASSERT_EQUAL_INT(1, opts.aggregation_track_default_args);
 
     dftu_indexer_open_result o = dftu_indexer_open(paths, 1, &opts);
     TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));

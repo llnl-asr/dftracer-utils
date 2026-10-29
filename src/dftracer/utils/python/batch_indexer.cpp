@@ -11,7 +11,6 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/dataframe.h>
@@ -54,7 +53,6 @@ static void Indexer_dealloc(IndexerObject* self) {
     Py_XDECREF(self->files);
     Py_XDECREF(self->index_dir);
     Py_XDECREF(self->group_keys);
-    Py_XDECREF(self->custom_metric_fields);
     Py_XDECREF(self->bloom_fields);
     Py_XDECREF(self->extensions);
     Py_XDECREF(self->schema);
@@ -83,7 +81,6 @@ static PyObject* Indexer_new(PyTypeObject* type, PyObject*, PyObject*) {
         self->auto_max_distinct = ChunkIndexerConfig{}.auto_max_distinct;
         self->time_interval_ms = 1000.0;
         self->group_keys = nullptr;
-        self->custom_metric_fields = nullptr;
         self->compute_percentiles = 1;
         self->group_by_file = 1;
         self->checkpoint_size =
@@ -103,7 +100,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
                                    "build_bloom",
                                    "time_interval_ms",
                                    "group_keys",
-                                   "custom_metric_fields",
                                    "compute_percentiles",
                                    "group_by_file",
                                    "checkpoint_size",
@@ -129,7 +125,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     int build_bloom = 1;
     double time_interval_ms = 1000.0;
     PyObject* group_keys_obj = Py_None;
-    PyObject* custom_metrics_obj = Py_None;
     int compute_percentiles = 1;
     int group_by_file = 1;
     Py_ssize_t checkpoint_size = static_cast<Py_ssize_t>(
@@ -150,14 +145,13 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
     PyObject* schema_obj = Py_None;
 
     if (!PyArg_ParseTupleAndKeywords(
-            args, kwds, "|sOspppdOOppnnpOOdnndnOKO", const_cast<char**>(kwlist),
+            args, kwds, "|sOspppdOppnnpOOdnndnOKO", const_cast<char**>(kwlist),
             &directory, &files_obj, &index_dir, &require_checkpoint,
             &require_bloom, &build_bloom, &time_interval_ms, &group_keys_obj,
-            &custom_metrics_obj, &compute_percentiles, &group_by_file,
-            &checkpoint_size, &parallelism, &force_rebuild, &runtime_arg,
-            &bloom_fields_obj, &false_positive_rate, &expected_entries,
-            &path_budget, &stats_share, &auto_max_distinct, &extensions_obj,
-            &memory_budget, &schema_obj)) {
+            &compute_percentiles, &group_by_file, &checkpoint_size,
+            &parallelism, &force_rebuild, &runtime_arg, &bloom_fields_obj,
+            &false_positive_rate, &expected_entries, &path_budget, &stats_share,
+            &auto_max_distinct, &extensions_obj, &memory_budget, &schema_obj)) {
         return -1;
     }
     if (!(false_positive_rate > 0.0 && false_positive_rate < 1.0)) {
@@ -271,14 +265,6 @@ static int Indexer_init(IndexerObject* self, PyObject* args, PyObject* kwds) {
         self->group_keys = nullptr;
     }
 
-    // Store custom_metric_fields
-    if (custom_metrics_obj && custom_metrics_obj != Py_None) {
-        Py_INCREF(custom_metrics_obj);
-        self->custom_metric_fields = custom_metrics_obj;
-    } else {
-        self->custom_metric_fields = nullptr;
-    }
-
     return 0;
 }
 
@@ -315,15 +301,6 @@ static AggregationConfig build_aggregation_config(IndexerObject* self) {
         for (Py_ssize_t i = 0; i < n; i++) {
             const char* s = as_utf8(PyList_GetItem(self->group_keys, i));
             if (s) config.extra_group_keys.emplace_back(s);
-        }
-    }
-    if (self->custom_metric_fields &&
-        PyList_Check(self->custom_metric_fields)) {
-        Py_ssize_t n = PyList_Size(self->custom_metric_fields);
-        for (Py_ssize_t i = 0; i < n; i++) {
-            const char* s =
-                as_utf8(PyList_GetItem(self->custom_metric_fields, i));
-            if (s) config.custom_metric_fields.emplace_back(s);
         }
     }
 
@@ -861,8 +838,8 @@ PyTypeObject IndexerType = {
     "BatchIndexer(directory='', files=None, index_dir='',\n"
     "             require_checkpoint=True, require_bloom=True,\n"
     "             time_interval_ms=1000.0, group_keys=None,\n"
-    "             custom_metric_fields=None, compute_percentiles=True,\n"
-    "             parallelism=0, force_rebuild=False, runtime=None)\n"
+    "             compute_percentiles=True, parallelism=0,\n"
+    "             force_rebuild=False, runtime=None)\n"
     "--\n\n"
     "Indexer with tiered index building.\n\n"
     "At least one of 'directory' or 'files' must be provided.\n"
@@ -872,9 +849,8 @@ PyTypeObject IndexerType = {
     "- Tier 1: Checkpoints (require_checkpoint)\n"
     "- Tier 2: Bloom filters (require_bloom)\n"
     "- Tier 3: Aggregation, which every build makes; the time_interval_ms,\n"
-    "  group_keys, custom_metric_fields, compute_percentiles and "
-    "group_by_file\n"
-    "  arguments set its config, whose defaults are the standard config\n",
+    "  group_keys, compute_percentiles and group_by_file arguments set its\n"
+    "  config, whose defaults are the standard config\n",
     0,
     0,
     0,

@@ -6,6 +6,7 @@
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 
 #include <cstddef>
@@ -61,7 +62,7 @@ struct ChunkColumns {
     dstd::Vector<std::uint32_t> ids;
     /// The text of each id of `ids`, resolved through the file's dictionary
     /// entries by the reader; empty when the file holds none.
-    dstd::Vector<std::string> texts;
+    dstd::Vector<dstd::String> texts;
     /// The category of row r as its record spells it, in its own case, not the
     /// lower case the partials group by.
     dstd::Vector<std::uint32_t> cat;
@@ -98,7 +99,8 @@ class ChunkColumnBuilder {
                  std::uint64_t pid, std::uint64_t tid, std::uint8_t phase,
                  std::uint32_t cat, std::uint32_t name, std::uint32_t host);
     /// Adds the value of `path` on the row added last. `path` is the index
-    /// dictionary id of the arg path.
+    /// dictionary id of the arg path. A row keeps the first value of a path,
+    /// as the engine reads a record whose args repeat a key.
     void add_int64(std::uint32_t path, std::int64_t v);
     void add_uint64(std::uint32_t path, std::uint64_t v);
     void add_double(std::uint32_t path, double v);
@@ -120,11 +122,15 @@ class ChunkColumnBuilder {
     std::uint32_t row_local_id(std::uint32_t id, std::uint32_t& last,
                                std::uint32_t& last_local);
     ChunkColumn& column_of(std::uint32_t path, ColumnKind kind);
+    /// Whether the current row holds no value of `path` yet.
+    bool first_in_row(std::uint32_t path);
 
     ChunkColumns block_;
     dstd::HashMap<std::uint32_t, std::uint32_t> local_of_;
     dstd::HashMap<std::uint64_t, std::uint32_t> column_of_;
     std::uint32_t live_columns_ = 0;
+    /// Per block-local id, the row count when that path last got a value.
+    dstd::Vector<std::size_t> path_row_;
     /// The dictionary id and local id the row before named as cat, name and
     /// host, so a run of equal ids skips the hash lookup.
     std::uint32_t last_cat_ = NO_DICTIONARY_ID;

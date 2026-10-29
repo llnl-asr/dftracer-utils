@@ -34,8 +34,7 @@ struct IndexerObject {
 
     // The aggregation tier's settings; every build makes the tier
     double time_interval_ms;
-    PyObject* group_keys;            // Python list or None
-    PyObject* custom_metric_fields;  // Python list or None
+    PyObject* group_keys;  // Python list or None
     int compute_percentiles;
     int group_by_file;
 

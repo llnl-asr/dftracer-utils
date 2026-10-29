@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -210,100 +209,5 @@ TEST_SUITE("SystemAggregationMetrics") {
         CHECK(a.metrics->size() == 2);
         CHECK(a.metrics->at("cpu").count() == 3);
         CHECK(a.metrics->at("memory").count() == 1);
-    }
-
-    TEST_CASE("copy construction") {
-        SystemAggregationMetrics original;
-        original.count = 5;
-        original.ts = 100;
-        original.te = 500;
-        original.update_metric("cpu", 50.0);
-
-        SystemAggregationMetrics copy(original);
-
-        CHECK(copy.count == original.count);
-        CHECK(copy.ts == original.ts);
-        CHECK(copy.te == original.te);
-        CHECK(copy.metrics != nullptr);
-        CHECK(copy.metrics != original.metrics);
-        CHECK(copy.metrics->at("cpu").count() == 1);
-    }
-}
-
-TEST_SUITE("SystemMetricsSerialization") {
-    TEST_CASE("key serialization round-trip") {
-        std::string hhash = "host123";
-        std::string name = "cpu";
-        std::uint64_t time_bucket = 42;
-
-        std::string serialized = serialize_system_key(hhash, name, time_bucket);
-        auto deserialized = deserialize_system_key(serialized);
-
-        CHECK(deserialized.key.hhash == hhash);
-        CHECK(deserialized.key.name == name);
-        CHECK(deserialized.key.time_bucket == time_bucket);
-    }
-
-    TEST_CASE("value serialization round-trip - empty metrics") {
-        SystemAggregationMetrics original;
-        original.count = 10;
-        original.ts = 1000;
-        original.te = 2000;
-
-        std::string serialized = serialize_system_value(original);
-        auto deserialized = deserialize_system_value(serialized);
-
-        CHECK(deserialized.count == original.count);
-        CHECK(deserialized.ts == original.ts);
-        CHECK(deserialized.te == original.te);
-        CHECK(deserialized.metrics == nullptr);
-    }
-
-    TEST_CASE("value serialization round-trip - with metrics") {
-        SystemAggregationMetrics original;
-        original.count = 10;
-        original.ts = 1000;
-        original.te = 2000;
-        original.update_metric("cpu_user", 25.5);
-        original.update_metric("cpu_user", 30.0);
-        original.update_metric("cpu_system", 5.0);
-        original.update_metric("memory_available", 8000000.0);
-
-        std::string serialized = serialize_system_value(original);
-        auto deserialized = deserialize_system_value(serialized);
-
-        CHECK(deserialized.count == original.count);
-        CHECK(deserialized.ts == original.ts);
-        CHECK(deserialized.te == original.te);
-        REQUIRE(deserialized.metrics != nullptr);
-        CHECK(deserialized.metrics->size() == 3);
-
-        auto& cpu_user = deserialized.metrics->at("cpu_user");
-        CHECK(cpu_user.count() == 2);
-        CHECK(cpu_user.mean() == doctest::Approx(27.75));
-        CHECK(cpu_user.min() == doctest::Approx(25.5));
-        CHECK(cpu_user.max() == doctest::Approx(30.0));
-
-        auto& cpu_system = deserialized.metrics->at("cpu_system");
-        CHECK(cpu_system.count() == 1);
-        CHECK(cpu_system.mean() == doctest::Approx(5.0));
-
-        auto& memory = deserialized.metrics->at("memory_available");
-        CHECK(memory.count() == 1);
-        CHECK(memory.mean() == doctest::Approx(8000000.0));
-    }
-
-    TEST_CASE("value serialization preserves variance") {
-        SystemAggregationMetrics original;
-        original.count = 3;
-        original.update_metric("test", 10.0);
-        original.update_metric("test", 20.0);
-        original.update_metric("test", 30.0);
-
-        std::string serialized = serialize_system_value(original);
-        auto deserialized = deserialize_system_value(serialized);
-
-        auto& test_stats = deserialized.metrics->at("test");
-        CHECK(test_stats.get_stddev() == doctest::Approx(10.0));
     }
 }

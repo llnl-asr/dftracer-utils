@@ -129,7 +129,6 @@ agg::AggregationConfig make_config(std::uint64_t interval_us) {
     cfg.time_interval_us = interval_us;
     cfg.group_by_file = false;
     cfg.compute_percentiles = true;
-    cfg.custom_metric_fields = {"flops"};
     return cfg;
 }
 
@@ -409,8 +408,7 @@ Key row_key(const AggQueryResult& r, const trace::AggKey& k) {
             k.window};
 }
 
-void check_group(const AggQueryResult& r, const agg::AggPartial& p,
-                 const Truth& t, bool quantiles, bool args) {
+void check_group(const agg::AggPartial& p, const Truth& t, bool quantiles) {
     const agg::AggregationMetrics& ref = t.metrics;
 
     CHECK(p.count == ref.count);
@@ -441,23 +439,6 @@ void check_group(const AggQueryResult& r, const agg::AggPartial& p,
         check_quantiles(p.offset_q, t.off, "offset");
     } else {
         CHECK(p.duration_q.count() == 0);
-    }
-
-    if (!args) {
-        CHECK(p.args.empty());
-        return;
-    }
-    const std::size_t custom =
-        ref.custom_metrics ? ref.custom_metrics->size() : 0;
-    REQUIRE(p.args.size() == custom);
-    if (!ref.custom_metrics) return;
-    for (const auto& [name, stats] : *ref.custom_metrics) {
-        const auto arg = std::find_if(
-            p.args.begin(), p.args.end(), [&](const agg::ArgStat& a) {
-                return r.text(a.id) == std::string_view(name);
-            });
-        REQUIRE(arg != p.args.end());
-        check_stat(arg->stat, stats.stat, std::string(name).c_str());
     }
 }
 
@@ -553,7 +534,7 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
         const auto t = truth.find(key);
         REQUIRE_MESSAGE(t != truth.end(), std::get<0>(key), " ",
                         std::get<1>(key));
-        check_group(r, p, t->second, ask.quantiles, q.args);
+        check_group(p, t->second, ask.quantiles);
     }
     const auto& s = r.stats;
     MESSAGE(std::string(what), ": files ", s.files, ", without partials ",
@@ -699,7 +680,6 @@ TEST_SUITE("AggQuery") {
             [](const Fixture& fx, const Ask& ask,
                std::uint64_t interval_us) -> AggQueryResult {
             AggQuery q = make_query(fx, ask, interval_us);
-            q.args = false;
             q.sums_only = true;
             AggQueryResult r = run(q);
             const auto truth =
@@ -847,7 +827,7 @@ TEST_SUITE("AggQuery") {
         Ask ask;
         // The query asks with another config than the index was built with.
         AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
-        q.config.track_default_args = false;
+        q.config.compute_percentiles = false;
         const AggQueryResult r = run(q);
         CHECK(r.stats.files_without_partials == FILES);
         CHECK(r.stats.partials_read == 0);
@@ -878,7 +858,7 @@ TEST_SUITE("AggQuery") {
             trace::internal::determine_index_path(fx->files[0], fx->index_dir);
 
         AggQuery q = make_query(*fx, Ask{}, FIVE_SECONDS_US);
-        q.config.track_default_args = false;
+        q.config.compute_percentiles = false;
         const AggQueryResult r = run(q);
         CHECK(r.stats.events_read == TINY_EVENTS);
         CHECK(r.stats.max_batch_events > 0);

@@ -16,6 +16,7 @@
 #include <testing_utilities.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <optional>
@@ -76,12 +77,33 @@ std::string index_of(const std::string& trace) {
     return trace::internal::determine_index_path(trace, "");
 }
 
-/// Every merged system row of the index of `trace`, all shards.
-std::vector<index::schemas::dft::agg::tier::SystemRow> system_rows_of(
-    const std::string& trace) {
-    IndexDatabase db(index_of(trace), index::store::IndexOpenMode::ReadOnly);
-    return index::schemas::dft::agg::tier::system_rows(
-        db, 0, index::schemas::dft::agg::AGG_KEY_NUM_SHARDS);
+/// The counters of a typed collect over `traces`, all shards.
+dataframe::DataFrame counters_of(const std::vector<std::string>& traces) {
+    std::vector<ViewFile> files;
+    for (const auto& t : traces) files.push_back({t, index_of(t)});
+    return View::from_files(std::move(files)).collect_typed().get().counters;
+}
+
+bool same_counters(const dataframe::DataFrame& a,
+                   const dataframe::DataFrame& b) {
+    if (a.names != b.names || a.num_rows() != b.num_rows()) return false;
+    for (std::size_t c = 0; c < a.columns.size(); ++c) {
+        const auto x = a.columns[c].materialize();
+        const auto y = b.columns[c].materialize();
+        if (x.type() != y.type()) return false;
+        for (std::int64_t r = 0; r < a.num_rows(); ++r) {
+            if (x.is_null(r) != y.is_null(r)) return false;
+            if (x.type() == dataframe::TypeId::String) {
+                if (x.string_at(r) != y.string_at(r)) return false;
+            } else {
+                const double xv = x.data<double>()[r];
+                const double yv = y.data<double>()[r];
+                if (xv != yv && !(std::isnan(xv) && std::isnan(yv)))
+                    return false;
+            }
+        }
+    }
+    return true;
 }
 
 int file_id(const std::string& trace) {
@@ -237,7 +259,7 @@ TEST_SUITE("AggExtension") {
 
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
         // The build aggregates `b` as it rebuilds it whole, which replaces its
-        // own partials and system rows, so no whole-tier rebuild is due.
+        // own partials and column blocks, so no whole-tier rebuild is due.
         CHECK_FALSE(ix.status().aggregation_needs_rebuild);
         ix.build();
         CHECK(has_sentinel(a));
@@ -255,10 +277,10 @@ TEST_SUITE("AggExtension") {
         fs::copy_file(b, fb);
         Indexer::open({fa, fb}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({fa, fb}) == 75);
-        // The rebuild replaced b's system rows rather than dropping them.
-        const auto rebuilt = system_rows_of(a);
-        CHECK_FALSE(rebuilt.empty());
-        CHECK(rebuilt == system_rows_of(fa));
+        // The rebuild replaced b's counters rather than dropping them.
+        const auto rebuilt = counters_of({a, b});
+        CHECK(rebuilt.num_rows() > 0);
+        CHECK(same_counters(rebuilt, counters_of({fa, fb})));
     }
 
     TEST_CASE("a file without a current entry makes readers scan") {

@@ -231,7 +231,6 @@ int main(int argc, char** argv) {
             agg_config.sketch_accuracy = 0.01;
             agg_config.percentiles = {0.25, 0.5, 0.75, 0.90};
             agg_config.track_process_parents = true;
-            agg_config.track_default_args = true;
 
             const agg::AggregationConfig query_config = agg_config;
 

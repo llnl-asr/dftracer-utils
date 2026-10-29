@@ -462,8 +462,17 @@ std::uint32_t ChunkColumnBuilder::row_local_id(std::uint32_t id,
     return last_local;
 }
 
+bool ChunkColumnBuilder::first_in_row(std::uint32_t path) {
+    const std::uint32_t local = local_id(path);
+    if (local >= path_row_.size()) path_row_.resize(local + 1, 0);
+    if (path_row_[local] == block_.rows) return false;
+    path_row_[local] = block_.rows;
+    return true;
+}
+
 void ChunkColumnBuilder::clear() {
     block_.clear();
+    path_row_.clear();
     local_of_.clear();
     column_of_.clear();
     live_columns_ = 0;
@@ -490,18 +499,21 @@ void ChunkColumnBuilder::add_row(std::uint64_t ts, std::uint64_t dur,
 }
 
 void ChunkColumnBuilder::add_int64(std::uint32_t path, std::int64_t v) {
+    if (!first_in_row(path)) return;
     ChunkColumn& column = column_of(path, ColumnKind::Int64);
     column.rows.push_back(block_.rows - 1);
     column.bits.push_back(static_cast<std::uint64_t>(v));
 }
 
 void ChunkColumnBuilder::add_uint64(std::uint32_t path, std::uint64_t v) {
+    if (!first_in_row(path)) return;
     ChunkColumn& column = column_of(path, ColumnKind::Uint64);
     column.rows.push_back(block_.rows - 1);
     column.bits.push_back(v);
 }
 
 void ChunkColumnBuilder::add_double(std::uint32_t path, double v) {
+    if (!first_in_row(path)) return;
     ChunkColumn& column = column_of(path, ColumnKind::Double);
     column.rows.push_back(block_.rows - 1);
     column.bits.push_back(double_bits(v));

@@ -29,9 +29,6 @@ struct AggregationConfig {
     bool group_by_file = true;
 
     std::vector<std::string> extra_group_keys;
-    std::vector<std::string> custom_metric_fields;
-
-    bool track_default_args = true;
 
     bool compute_statistics = true;
 
@@ -84,9 +81,6 @@ struct AggregationConfig {
         h.update_value(group_by_file);
         h.update_value(extra_group_keys.size());
         for (const auto& k : extra_group_keys) text(k);
-        h.update_value(custom_metric_fields.size());
-        for (const auto& m : custom_metric_fields) text(m);
-        h.update_value(track_default_args);
         h.update_value(compute_statistics);
         h.update_value(compute_percentiles);
         if (compute_percentiles) {
@@ -105,7 +99,7 @@ struct AggregationConfig {
         // An aggregation built without chunk partials, their time bins, the
         // partials of samples and aggregated records or the per-chunk column
         // blocks is stale.
-        text("partials+bins+samples+columns");
+        text("partials+bins+columns");
         return h.finish();
     }
 };

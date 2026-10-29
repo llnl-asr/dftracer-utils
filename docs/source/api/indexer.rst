@@ -29,7 +29,7 @@ How the indexer types relate:
 Every index build makes the aggregation tier, with one standard config: 1 s
 windows, the percentile sketches on, and the file hash in the key. The
 aggregation knobs (``time_interval_ms``, ``group_keys``,
-``custom_metric_fields``, ``compute_percentiles``, ``group_by_file``) are
+``compute_percentiles``, ``group_by_file``) are
 fields of :class:`~dftracer.utils.AggregationConfig`, not direct ``Indexer``
 arguments, and ``aggregation_config=AggregationConfig(...)`` customizes the
 tier. There is no switch that turns it off.

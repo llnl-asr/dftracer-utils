@@ -14,7 +14,8 @@ namespace dftracer::utils::index::schemas::dft::agg {
 class AssociationTracker;
 
 /// The out-of-band outputs an AggregationFold produces per file (the partials
-/// and system rows are written to the index write by AggregationFold::write).
+/// and the column blocks are written to the index write by
+/// AggregationFold::write).
 struct AggFoldOutput {
     std::string file_path;
     std::shared_ptr<AssociationTracker> tracker;

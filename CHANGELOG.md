@@ -181,6 +181,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make `StringIntern::insert_at_id` return `Ok`, `Conflict` or `OutOfRange` instead of throwing.
 - Speed up `when_all` and `when_any` over a list of tasks, because tasks that end at once now share one wrapper coroutine.
   A `when_all` of 8 tasks that are already done now makes 9 frame allocations instead of 16.
+- Serve the counters family of `collect_typed()` from the per-chunk column blocks of the index instead of the stored per-second system rows, which no build stores now, so an index build is smaller and faster.
+  The counters frame keeps its rows and columns, and its rows now sort by host, name and time bucket.
+  A block whose byte budget left out an argument path cannot answer, and those counters are read from the trace itself.
 
 ### Added
 
@@ -284,6 +287,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Read the bytes of each pool with `memory::pool_stats()` instead.
 - Remove `MemoryPool` (`memory_pool.h`).
   Use a `memory::Pool` child with a limit and a `memory::Reservation` instead.
+- Remove `track_default_args`, `custom_metric_fields` and the C ABI field `aggregation_track_default_args`.
+  They fed per-argument stats that every index build stored and no query read.
 
 ### Fixed
 

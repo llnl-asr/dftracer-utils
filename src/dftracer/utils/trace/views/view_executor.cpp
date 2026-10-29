@@ -1124,12 +1124,25 @@ coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
     const bool from_partials = co_await partials_collect_typed(
         plan, out.regular, out.aggregated, shard_begin, shard_end, progress);
     if (from_partials) {
-        system_collect(plan, out.counters, shard_begin, shard_end, progress);
-        co_return out;
+        const bool from_columns = system_collect(
+            plan, out.counters, shard_begin, shard_end, progress);
+        if (!from_columns) {
+            // A block left a metric of the sys counters out, so they are read
+            // from the trace; the other families stay on the index.
+            dataframe::DataFrame counters;
+            const bool scanned = co_await system_scan_collect(
+                plan, counters, shard_begin, shard_end, progress);
+            if (scanned) {
+                out.counters = std::move(counters);
+                co_return out;
+            }
+        } else {
+            co_return out;
+        }
     }
-    // The partials could not answer (a ph/ts predicate they cannot key on, or
-    // no tier built); scan the raw trace so collect_typed
-    // returns rows rather than silently empty.
+    // The partials or the column blocks could not answer (a ph/ts predicate
+    // they cannot key on, or no tier built); scan the raw trace so
+    // collect_typed returns rows rather than silently empty.
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::dstd::StringIntern intern;
     TypedCollectFold fold(intern);

@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
-#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -24,11 +23,10 @@
 #include <vector>
 
 // The only code that reads or writes the aggregation extension's storage: the
-// chunk partials, the per-file system metric rows, the per-file dictionary
+// chunk partials, the per-file chunk column blocks, the per-file dictionary
 // entries and the index-wide records (config, tracker, time bounds). Reads go
 // through an IndexDatabase, writes through an IndexWrite, so the tier runs on
-// whichever backend holds the index. System rows are keyed by a big-endian
-// shard below AGG_KEY_NUM_SHARDS.
+// whichever backend holds the index.
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
 using index::store::IndexDatabase;
@@ -61,21 +59,6 @@ void put_file(IndexWrite& w, int file_id, std::uint64_t params_hash);
 /// As put_file, for files whose partials were written another way.
 void put_files(IndexDatabase& db, std::span<const int> file_ids,
                std::uint64_t params_hash);
-
-/// One system metric row: the serialized system key and the serialized
-/// SystemAggregationMetrics of every file that holds that key.
-using SystemRow = std::pair<std::string, std::string>;
-
-/// Every system metric row of the index whose shard is in [begin, end), in
-/// row-key order, with the rows the files share a key for merged.
-std::vector<SystemRow> system_rows(const IndexDatabase& db, std::uint16_t begin,
-                                   std::uint16_t end);
-
-/// Calls fn(row key, serialized metrics) for each system metric row of
-/// `file_id` in row-key order until fn returns false. Throws on a read error.
-void for_each_system_row(
-    const IndexDatabase& db, int file_id,
-    const std::function<bool(std::string_view, std::string_view)>& fn);
 
 /// Calls fn(chunk, cat_id, name_id, host_id, extra_id, kind, bytes) for each
 /// partial of `file_id` in chunk order until fn returns false; `bytes` is the
@@ -128,8 +111,8 @@ class Dictionary {
 std::optional<std::string> read_dictionary_entry(const IndexDatabase& db,
                                                  std::uint32_t id);
 
-/// Removes every partial, system row, dictionary entry and manifest entry of
-/// the index, and its index-wide records.
+/// Removes every partial, chunk column block, dictionary entry and manifest
+/// entry of the index, and its index-wide records.
 void clear(IndexDatabase& db);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier

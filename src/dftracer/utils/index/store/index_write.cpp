@@ -225,14 +225,6 @@ void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
     put_value(w, Ext::Agg, layout::agg_kind::PARTIAL, key, payload);
 }
 
-void put_agg_system_row(IndexWrite& w, int file_id, std::string_view key,
-                        std::string_view payload) {
-    auto full =
-        layout::file_prefix(Ext::Agg, layout::agg_kind::SYSTEM, fid(file_id));
-    full.append(key);
-    put_value(w, Ext::Agg, layout::agg_kind::SYSTEM, full, payload);
-}
-
 void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
                            std::string_view payload) {
     put_value(w, Ext::Agg, layout::agg_kind::COLUMNS,

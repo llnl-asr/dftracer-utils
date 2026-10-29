@@ -122,20 +122,6 @@ struct TimeBin {
     std::uint64_t size_sum = 0;
 };
 
-/// The stats of one numeric arg, keyed by the arg name's per-root id.
-struct ArgStat {
-    dataframe::FieldStat stat;
-    QuantileStore quantiles;
-    /// Values added one event at a time. The quantile store holds exactly
-    /// these when it is filled; a pre-aggregated counter adds to `stat` only.
-    std::uint64_t values = 0;
-    std::uint32_t id = 0;
-
-    explicit ArgStat(std::uint32_t arg_id = 0,
-                     double accuracy = QuantileStore::DEFAULT_ACCURACY)
-        : quantiles(accuracy), id(arg_id) {}
-};
-
 /// Everything the index keeps of the events of one (chunk, category, name),
 /// as a value that merges in place. The category and name are the key of the
 /// caller and are not stored. Merging the partials of the chunks of a file
@@ -180,7 +166,6 @@ struct AggPartial {
     DistinctIds pid_files;
 
     dstd::Vector<PidSpan> pid_spans;  ///< sorted by pid
-    dstd::Vector<ArgStat> args;       ///< sorted by id
     /// The count, duration and size sums per thread and time bin, sorted by
     /// (pid, tid, bin) with no key twice once normalize_bins ran. Empty when
     /// the build had no interval. A merge drops them: they answer a split
@@ -194,7 +179,7 @@ struct AggPartial {
         double relative_accuracy = QuantileStore::DEFAULT_ACCURACY);
 
     /// Back to the state of a new partial, keeping the capacity of the pid
-    /// spans and the args.
+    /// spans.
     void clear();
 
     /// Counts the event under pid/tid/file (file_id 0 means no file).
@@ -202,9 +187,6 @@ struct AggPartial {
 
     /// Widens ts, te and the span of `pid` to [ts, end].
     void add_span(std::uint64_t pid, std::uint64_t ts_in, std::uint64_t end);
-
-    /// The stats of arg `id`, inserted in sorted place when absent.
-    ArgStat& arg(std::uint32_t id);
 
     /// Merges `other` in place; `other` must not be `*this`. Both must use
     /// one quantile accuracy. Drops the bins of both.
@@ -228,7 +210,6 @@ struct AggPartial {
     /// skipped in the bytes, not built, and reads as absent.
     struct Fields {
         bool quantiles = true;  ///< the duration, size and offset stores
-        bool args = true;       ///< the per-arg stats
         bool bins = true;       ///< the time bins
     };
 

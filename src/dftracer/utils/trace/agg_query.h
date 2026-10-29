@@ -62,11 +62,10 @@ struct AggQuery {
     dstd::Vector<AggQuerySource> sources;
 
     /// The config the indexes were built with. Its params hash decides
-    /// whether a file's partials are usable, its custom metric fields and
-    /// track_default_args shape the per-arg stats of a re-read, its
-    /// extra_group_keys are the extra keys of the partials (string args), its
-    /// time_interval_us is the span of a pre-aggregated counter, and its
-    /// sketch_accuracy the accuracy of the quantile stores.
+    /// whether a file's partials are usable, its extra_group_keys are the
+    /// extra keys of the partials (string args), its time_interval_us is the
+    /// span of a pre-aggregated counter, and its sketch_accuracy the accuracy
+    /// of the quantile stores.
     index::schemas::dft::agg::AggregationConfig config;
 
     bool by_pid = false;
@@ -107,14 +106,12 @@ struct AggQuery {
 
     /// The quantile stores of the rows; without them none are merged.
     bool quantiles = false;
-    /// The per-arg stats of the rows.
-    bool args = true;
     /// The rows need only the count and the n and sum of duration and size,
     /// so means come out exact. A partial that a split by pid, tid or window
     /// would re-read is then split by its time bins when the window is a
     /// multiple of the bin interval of the build; its rows have no times,
     /// minima, maxima, moments or distinct ids. Takes effect only without
-    /// quantiles and args.
+    /// quantiles.
     bool sums_only = false;
 
     /// False reads no chunk: a partial or a file that only a re-read could

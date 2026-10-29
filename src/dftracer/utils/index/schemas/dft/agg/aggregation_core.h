@@ -21,7 +21,8 @@
 // differ in how they read fields/args. AggregationFold drives it with a
 // POD-backed accessor.
 // The Accessor concept:
-//   is_metadata()/is_system()/is_profile()/is_counter()/is_aggregated() -> bool
+//   has_phase()/is_metadata()/is_system()/is_profile()/is_counter()/
+//   is_aggregated() -> bool
 //   name()/cat() -> string_view ; pid()/tid()/ts()/dur() -> uint64
 //   has_dur() -> bool (whether the record carried a duration)
 //   arg_is_number(key) -> bool

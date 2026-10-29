@@ -75,8 +75,9 @@ struct AggregationConfig {
         }
         // An aggregation built without chunk partials, their time bins, the
         // partials of samples and aggregated records or the per-chunk column
-        // blocks with their file column is stale.
-        text("partials+bins+columns+file");
+        // blocks with their file column, or one that held records of an
+        // unknown phase, is stale.
+        text("partials+bins+columns+file+phase");
         return h.finish();
     }
 };

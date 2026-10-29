@@ -353,14 +353,16 @@ void agg_seed_begin(AggState& state, std::size_t nkeys);
 /// for a fast path that reads per-group stats (the aggregation tier) instead of
 /// events. `state` must have been built by agg_new with the same specs the
 /// equivalent scan uses. `str_keys` is the composite key, one string per key
-/// column (every seeded key column is a String column). `count` is the group's
+/// column (every seeded key column is a String column); a key k with
+/// `null_keys[k]` set is null, as a scan keys a row that lacks the value.
+/// `null_keys` is empty or has one entry per key. `count` is the group's
 /// row count; each `values` entry merges its FieldStat (and sketch) into the
 /// value column's per-group slot. Repeated calls for the same composite key
 /// merge (FieldStat/sketch merge), exactly like accumulating then merging the
 /// equivalent events. Call agg_seed_finalize once, after all agg_seed_group
 /// calls and before agg_finalize/agg_serialize.
 void agg_seed_group(AggState& state, const std::vector<std::string>& str_keys,
-                    std::uint64_t count,
+                    const std::vector<bool>& null_keys, std::uint64_t count,
                     const std::vector<AggSeedValue>& values);
 
 /// Fix each value column's finalized integer/float domain from the seeded

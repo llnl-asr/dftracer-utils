@@ -299,6 +299,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix index answers that differed from a scan of the trace: records of a phase the View drops, such as instants, are left out of the index too, and a group by file keys a record without a file hash as null, not as an empty string.
 - Fix an event with no `dur` reading as a duration of 0 on the scan, frame, index and `dftracer_stats` detail paths: a frame's `dur` column is null there and every `dur` aggregate (`count(dur)` included) skips the row, while `count()` still counts it.
 - Fix a grouped view query whose filter reads a row set, such as `where fhash -> files.path == "/data/f10"`, failing with "'files' was read before its rows were bound" when the index holds aggregation data.
 - Fix `dftracer_stats` parsing every trace again the first time it ran on an index: the index summaries could not give the largest event start, so the whole query fell back to a scan.

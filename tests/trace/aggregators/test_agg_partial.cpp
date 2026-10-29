@@ -49,6 +49,7 @@ class Acc {
    public:
     explicit Acc(const Ev& e) : e_(e) {}
 
+    bool has_phase() const { return true; }
     bool is_metadata() const { return false; }
     bool is_counter() const { return e_.counter; }
     bool is_profile() const { return e_.counter && e_.cat != "sys"; }

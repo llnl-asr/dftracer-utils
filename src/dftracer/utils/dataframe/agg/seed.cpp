@@ -309,7 +309,7 @@ void agg_seed_begin(AggState& st, std::size_t nkeys) {
 }
 
 void agg_seed_group(AggState& st, const std::vector<std::string>& str_keys,
-                    std::uint64_t count,
+                    const std::vector<bool>& null_keys, std::uint64_t count,
                     const std::vector<AggSeedValue>& values) {
     if (!st.inited) agg_seed_begin(st, str_keys.size());
     for (const AggSpec& sp : st.specs)
@@ -321,7 +321,7 @@ void agg_seed_group(AggState& st, const std::vector<std::string>& str_keys,
     const std::int64_t g = st.find_or_add_group(
         [](std::size_t) -> std::int64_t { return 0; },
         [&](std::size_t k) -> std::string_view { return str_keys[k]; },
-        [](std::size_t) { return false; });
+        [&](std::size_t k) { return k < null_keys.size() && null_keys[k]; });
     st.counts[static_cast<std::size_t>(g)] += count;
     for (const AggSeedValue& v : values) {
         int fj = -1;

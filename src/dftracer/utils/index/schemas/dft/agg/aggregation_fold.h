@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
@@ -43,6 +44,7 @@ class PodAccessor {
                 const MetricArgIds& metric_ids)
         : ev_(ev), intern_(intern), metric_ids_(metric_ids) {}
 
+    bool has_phase() const { return ev_.phase != trace::RecordPhase::Unknown; }
     bool is_metadata() const {
         return ev_.phase == trace::RecordPhase::Metadata;
     }
@@ -150,7 +152,7 @@ class AggregationFold : public trace::views::detail::Fold {
     void step(const trace::views::detail::FoldBatch& batch) override {
         for (const auto& ev : batch.events) {
             PodAccessor acc(ev, *build_intern_, metric_ids_);
-            if (acc.is_metadata()) continue;
+            if (!partial_holds(acc)) continue;
             index::schemas::dft::agg::aggregate_event(acc, state_, config_);
             if (file_id_ >= 0) {
                 if (batch.unit.checkpoint_idx != chunk_) {

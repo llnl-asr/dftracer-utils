@@ -78,11 +78,13 @@ class PartialSink {
     bool percentiles_;
 };
 
-/// Whether the per-name partial holds the event: any event but a metadata
-/// record.
+/// Whether the per-name partial holds the event: any record with a phase the
+/// View reads, but a metadata record. A record whose phase the View drops (an
+/// unknown letter, such as an instant) is left out, so the index answers as a
+/// scan does.
 template <class Acc>
 bool partial_holds(const Acc& acc) {
-    return !acc.is_metadata();
+    return acc.has_phase() && !acc.is_metadata();
 }
 
 /// The kind of the partial an event that partial_holds belongs to.

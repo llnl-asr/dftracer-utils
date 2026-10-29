@@ -624,11 +624,20 @@ class Seeder {
         return state;
     }
 
-    // The key texts of a row, [time_bucket?, group_by...].
-    void keys_of(const AggKey& key, std::vector<std::string>& out) const {
+    // The key texts of a row, [time_bucket?, group_by...], and which of them
+    // are null: a file key of a row without a file hash, as a scan keys it.
+    void keys_of(const AggKey& key, std::vector<std::string>& out,
+                 std::vector<bool>& nulls) const {
         out.clear();
-        if (has_bucket_) out.push_back(std::to_string(key.window));
+        nulls.clear();
+        if (has_bucket_) {
+            out.push_back(std::to_string(key.window));
+            nulls.push_back(false);
+        }
         for (const auto& gk : prep_.keys) {
+            nulls.push_back(is_file_key(gk.kind) &&
+                            key.file_text == dstd::StringIntern::NO_ID &&
+                            key.file == 0);
             std::string v = group_value(gk, key);
             if (gk.transform != GroupKey::Transform::None) {
                 if (resolver_ && key_is_resolved(gk.kind))
@@ -640,7 +649,7 @@ class Seeder {
     }
 
     void seed(dataframe::AggState& state, const std::vector<std::string>& keys,
-              const agg::AggPartial& p) {
+              const std::vector<bool>& nulls, const agg::AggPartial& p) {
         std::vector<dataframe::AggSeedValue> values;
         values.reserve(cols_.size());
         for (std::size_t i = 0; i < cols_.size(); ++i) {
@@ -661,10 +670,16 @@ class Seeder {
             }
             values.push_back(std::move(v));
         }
-        dataframe::agg_seed_group(state, keys, p.count, values);
+        dataframe::agg_seed_group(state, keys, nulls, p.count, values);
     }
 
    private:
+    static bool is_file_key(GroupKey::Kind kind) {
+        return kind == GroupKey::Kind::Fhash ||
+               kind == GroupKey::Kind::FilePath ||
+               kind == GroupKey::Kind::FileName;
+    }
+
     std::string group_value(const GroupKey& gk, const AggKey& k) const {
         switch (gk.kind) {
             case GroupKey::Kind::Name:
@@ -762,11 +777,12 @@ coro::CoroTask<bool> partials_collect(const ViewPlan& plan,
     Seeder seeder(plan, *prep, result);
     auto state = seeder.new_state();
     std::vector<std::string> keys;
+    std::vector<bool> nulls;
     const bool events_only = plan.phase == Phase::Events;
     for (const auto& [key, partial] : result.rows) {
         if (events_only && key.kind != AggKind::Event) continue;
-        seeder.keys_of(key, keys);
-        seeder.seed(*state, keys, partial);
+        seeder.keys_of(key, keys, nulls);
+        seeder.seed(*state, keys, nulls, partial);
     }
     dataframe::agg_seed_finalize(*state);
     out = std::move(state);
@@ -799,10 +815,11 @@ coro::CoroTask<bool> partials_collect_typed(
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
     std::vector<std::string> keys;
+    std::vector<bool> nulls;
     std::string joined;
     for (const auto& [key, partial] : result.rows) {
         if (key.kind == AggKind::System) continue;
-        seeder.keys_of(key, keys);
+        seeder.keys_of(key, keys, nulls);
         if (!whole) {
             joined.clear();
             for (const auto& k : keys) {
@@ -816,7 +833,7 @@ coro::CoroTask<bool> partials_collect_typed(
             if (shard < shard_begin || shard >= shard_end) continue;
         }
         seeder.seed(key.kind == AggKind::Event ? *events : *profiles, keys,
-                    partial);
+                    nulls, partial);
     }
     dataframe::agg_seed_finalize(*events);
     dataframe::agg_seed_finalize(*profiles);

@@ -2,6 +2,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -14,6 +15,10 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 // Build ids past this are looked up each time instead of cached.
 constexpr std::uint32_t MAX_CACHED_BUILD_ID = 1u << 20;
+
+std::string_view bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+    return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+}
 }  // namespace
 
 std::uint32_t AggregationFold::root_id(dstd::Vector<std::uint32_t>& cache,
@@ -144,23 +149,34 @@ void AggregationFold::add_to_columns(
 }
 
 void AggregationFold::close_columns() {
+    namespace layout = index::store::layout;
     if (columns_.empty()) return;
-    const std::size_t offset = arena_.size();
-    columns_.encode_into(arena_);
-    closed_columns_.push_back({chunk_, offset, arena_.size() - offset});
+    scratch_.clear();
+    columns_.encode_into(scratch_);
+    ClosedColumns closed;
+    closed.chunk = chunk_;
+    layout::append_value(closed.value, layout::Ext::Agg,
+                         layout::agg_kind::COLUMNS, bytes_of(scratch_));
+    closed_columns_.push_back(std::move(closed));
     referenced_.insert(referenced_.end(), columns_.ids().begin(),
                        columns_.ids().end());
     columns_.clear();
 }
 
 void AggregationFold::close_chunk() {
+    namespace layout = index::store::layout;
     close_columns();
     for (Slot& slot : slots_) {
         if (!slot.used) continue;
-        const std::size_t offset = arena_.size();
         slot.partial.normalize_bins();
-        slot.partial.serialize_into(arena_);
-        closed_.push_back({chunk_, offset, arena_.size() - offset, slot.key});
+        scratch_.clear();
+        slot.partial.serialize_into(scratch_);
+        Closed closed;
+        closed.chunk = chunk_;
+        closed.key = slot.key;
+        layout::append_value(closed.value, layout::Ext::Agg,
+                             layout::agg_kind::PARTIAL, bytes_of(scratch_));
+        closed_.push_back(std::move(closed));
         referenced_.push_back(slot.key.cat);
         referenced_.push_back(slot.key.name);
         referenced_.push_back(slot.key.host);
@@ -191,19 +207,11 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
 
     close_chunk();
     o.close_chunk();
-    const std::size_t base = arena_.size();
-    arena_.insert(arena_.end(), o.arena_.begin(), o.arena_.end());
-    for (Closed c : o.closed_) {
-        c.offset += base;
-        closed_.push_back(c);
-    }
-    for (ClosedColumns c : o.closed_columns_) {
-        c.offset += base;
-        closed_columns_.push_back(c);
-    }
+    for (Closed& closed : o.closed_) closed_.push_back(std::move(closed));
+    for (ClosedColumns& closed : o.closed_columns_)
+        closed_columns_.push_back(std::move(closed));
     referenced_.insert(referenced_.end(), o.referenced_.begin(),
                        o.referenced_.end());
-    o.arena_.clear();
     o.closed_.clear();
     o.closed_columns_.clear();
     o.referenced_.clear();
@@ -219,22 +227,16 @@ void AggregationFold::write(index::store::IndexWrite& w) {
     // The clear covers every kind of the file's aggregation data, so it comes
     // before any of them is put.
     index::store::records::clear_file(w, layout::Ext::Agg, file_id_);
-    for (const Closed& c : closed_)
-        index::store::records::put_agg_partial(
-            w, file_id_, c.chunk, c.key.cat, c.key.name, c.key.host,
-            c.key.extra, static_cast<std::uint8_t>(c.key.kind),
-            std::string_view(
-                reinterpret_cast<const char*>(arena_.data()) + c.offset,
-                c.size));
+    for (const Closed& closed : closed_)
+        index::store::records::put_agg_partial_value(
+            w, file_id_, closed.chunk, closed.key.cat, closed.key.name,
+            closed.key.host, closed.key.extra,
+            static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
     closed_.clear();
-    for (const ClosedColumns& c : closed_columns_)
-        index::store::records::put_agg_chunk_columns(
-            w, file_id_, c.chunk,
-            std::string_view(
-                reinterpret_cast<const char*>(arena_.data()) + c.offset,
-                c.size));
+    for (const ClosedColumns& closed : closed_columns_)
+        index::store::records::put_agg_chunk_columns_value(
+            w, file_id_, closed.chunk, bytes_of(closed.value));
     closed_columns_.clear();
-    arena_.clear();
     std::sort(referenced_.begin(), referenced_.end());
     referenced_.erase(std::unique(referenced_.begin(), referenced_.end()),
                       referenced_.end());

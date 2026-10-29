@@ -117,7 +117,8 @@ class FileAdmission {
         const std::uint64_t elastic = std::max(
             std::min(plaintext * fa::ELASTIC_PERCENT / 100, max_elastic),
             fa::MIN_ELASTIC_BYTES);
-        return {fa::FIXED_BYTES + piece + elastic, elastic};
+        const std::uint64_t agg = plaintext * fa::AGG_PERCENT / 100;
+        return {fa::FIXED_BYTES + piece + agg + elastic, elastic};
     }
 
     /// Bytes a file inflates to, as far as admission can tell before it

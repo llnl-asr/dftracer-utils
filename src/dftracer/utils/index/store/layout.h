@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_LAYOUT_H
 #define DFTRACER_UTILS_INDEX_STORE_LAYOUT_H
 
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/file.h>
 
 #include <cstdint>
@@ -136,6 +137,11 @@ inline constexpr std::size_t VALUE_HEADER_BYTES = 9;
 
 /// Prepends the value header for (ext, kind) to `payload`.
 std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload);
+
+/// Appends the value header for (ext, kind) and then `payload` to `out`: the
+/// bytes with_header(ext, kind, payload) gives, written in place.
+void append_value(dstd::Vector<std::uint8_t>& out, Ext ext, std::uint8_t kind,
+                  std::string_view payload);
 
 /// The payload of a value written for (ext, kind); nullopt when the header is
 /// missing, truncated or names another type or version.

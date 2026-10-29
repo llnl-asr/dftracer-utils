@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 
 namespace dftracer::utils::index::store::layout {
 
@@ -177,6 +178,20 @@ std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload) {
     append_u32_be(value, static_cast<std::uint32_t>(payload.size()));
     value.append(payload);
     return value;
+}
+
+void append_value(dstd::Vector<std::uint8_t>& out, Ext ext, std::uint8_t kind,
+                  std::string_view payload) {
+    out.reserve(out.size() + VALUE_HEADER_BYTES + payload.size());
+    append_u16_be(out, type_id(ext, kind));
+    out.push_back(PAYLOAD_VERSION);
+    out.push_back(CODEC_RAW);
+    out.push_back(0);
+    append_u32_be(out, static_cast<std::uint32_t>(payload.size()));
+    const std::size_t at = out.size();
+    out.resize(at + payload.size());
+    if (!payload.empty())
+        std::memcpy(out.data() + at, payload.data(), payload.size());
 }
 
 std::optional<std::string_view> payload(std::string_view value, Ext ext,

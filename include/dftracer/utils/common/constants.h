@@ -94,6 +94,9 @@ inline constexpr std::uint64_t PLAINTEXT_PER_COMPRESSED_BYTE = 16;
 inline constexpr std::uint64_t ELASTIC_PERCENT = 150;
 inline constexpr std::uint64_t MIN_ELASTIC_BYTES = std::uint64_t{4} << 20;
 inline constexpr std::uint64_t ELASTIC_POOL_DIVISOR = 4;
+/// The share of the plaintext the aggregation tier holds per file until the
+/// file is written; measured at 6 to 7%.
+inline constexpr std::uint64_t AGG_PERCENT = 8;
 /// The sinks of the workers take at most 1 / SINK_BUDGET_DIVISOR of a budget,
 /// each at least MIN_SINK_BYTES, so a budget too small for that runs fewer
 /// workers.

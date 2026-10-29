@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Use less memory to build an index, because the aggregation data of each file is kept at its exact size with one copy less.
+  File admission now counts these bytes, so a memory budget limits them too.
 - Make the aggregation tier part of every index build, with one standard config: 1 s windows and the percentile sketches on. `dftracer_index`, the freshness paths of the views and the other tools, the C++ `Indexer`, the C ABI, Python, the distributed build and the comparator all build it, and a caller may pass a customized config but cannot turn the tier off.
   `require_aggregation` is gone from `IndexerOptions`, `ResolveAndBuildInput`, `ResolverInput`, the Python indexer and the batch indexer, and `comparison_index_config()` is gone in favor of `standard_aggregation_config()`.
   The Python `AggregationConfig` default interval is 1 s, as in C++.

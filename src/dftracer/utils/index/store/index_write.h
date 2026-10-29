@@ -167,10 +167,23 @@ void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
                      std::uint32_t host_id, std::uint32_t extra_id,
                      std::uint8_t kind, std::string_view payload);
 
+/// The same partial record, `value` its whole stored value, the layout header
+/// of (Agg, PARTIAL) included (layout::append_value), so it is stored without
+/// a second copy.
+void put_agg_partial_value(IndexWrite& w, int file_id, std::uint64_t chunk,
+                           std::uint32_t cat_id, std::uint32_t name_id,
+                           std::uint32_t host_id, std::uint32_t extra_id,
+                           std::uint8_t kind, std::string_view value);
+
 /// The column block of `chunk` of the file's aggregation, `payload` the
 /// encoded block (see schemas/dft/agg/chunk_columns.h).
 void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
                            std::string_view payload);
+
+/// The same column block, `value` its whole stored value, the layout header
+/// of (Agg, COLUMNS) included (layout::append_value).
+void put_agg_chunk_columns_value(IndexWrite& w, int file_id,
+                                 std::uint64_t chunk, std::string_view value);
 
 /// The dictionary text `id` stands for, as the file's partials use it.
 void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,

@@ -6,11 +6,13 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
@@ -33,6 +35,7 @@
 using namespace dftracer::utils;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace views = dftracer::utils::trace::views;
+namespace layout = dftracer::utils::index::store::layout;
 using index::Indexer;
 using index::IndexerOptions;
 using index::store::IndexDatabase;
@@ -523,6 +526,11 @@ int file_id_of(const IndexDatabase& db, const std::string& path) {
     return id;
 }
 
+dstd::Span<const std::uint8_t> span_of(std::string_view bytes) {
+    return dstd::Span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
+}
+
 // One column of a block, named by the text of its path and holding its rows
 // and values, so two indexes are compared without their block-local ids.
 struct ColumnShape {
@@ -868,5 +876,55 @@ TEST_SUITE("ChunkColumns") {
             });
         CHECK(blocks > 0);
         CHECK(at == RECORDS);
+    }
+
+    TEST_CASE(
+        "a stored partial or block is its layout header and its payload") {
+        dftu_utils_test::TestEnvironment env(60);
+        REQUIRE(env.is_valid());
+        std::string text;
+        const std::string gz = write_trace(env.get_dir(), "trace", text);
+        const std::string index_dir = env.get_dir() + "/idx";
+        build({gz}, index_dir);
+
+        const auto index_path =
+            trace::internal::determine_index_path(gz, index_dir);
+        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+        std::size_t blocks = 0;
+        std::size_t partials = 0;
+        const auto stored = [](std::string_view value, std::uint8_t kind) {
+            const auto payload = layout::payload(value, layout::Ext::Agg, kind);
+            REQUIRE_MESSAGE(payload.has_value(), "the header of kind ",
+                            static_cast<int>(kind));
+            CHECK(value ==
+                  layout::with_header(layout::Ext::Agg, kind, *payload));
+            return *payload;
+        };
+        db.for_each_record([&](std::string_view key, std::string_view value) {
+            constexpr std::string_view AGG = "dftu.idx.dftracer.agg|";
+            if (key.rfind(AGG, 0) != 0) return;
+            const auto columns = layout::payload(value, layout::Ext::Agg,
+                                                 layout::agg_kind::COLUMNS);
+            const auto partial = layout::payload(value, layout::Ext::Agg,
+                                                 layout::agg_kind::PARTIAL);
+            if (columns) {
+                const auto body = stored(value, layout::agg_kind::COLUMNS);
+                auto decoded = agg::decode_chunk_columns(span_of(body));
+                REQUIRE(decoded.has_value());
+                ++blocks;
+            } else if (partial) {
+                const auto body = stored(value, layout::agg_kind::PARTIAL);
+                REQUIRE(
+                    agg::AggPartial::deserialize(span_of(body)).has_value());
+                ++partials;
+            } else {
+                CHECK_MESSAGE(layout::payload(value, layout::Ext::Agg,
+                                              layout::agg_kind::DICT)
+                                  .has_value(),
+                              key);
+            }
+        });
+        CHECK(blocks > 0);
+        CHECK(partials > 0);
     }
 }

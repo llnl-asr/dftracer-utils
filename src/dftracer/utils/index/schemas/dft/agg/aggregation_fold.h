@@ -268,19 +268,18 @@ class AggregationFold : public trace::views::detail::Fold {
         Slot(double accuracy, SlotKey k) : partial(accuracy), key(k) {}
     };
 
-    /// A serialized partial of a closed chunk, in `arena_`.
+    /// A serialized partial of a closed chunk: its stored value, the layout
+    /// header included, in a buffer of exactly its size.
     struct Closed {
+        dftracer::utils::dstd::Vector<std::uint8_t> value;
         std::uint64_t chunk;
-        std::size_t offset;
-        std::size_t size;
         SlotKey key;
     };
 
-    /// A column block of a closed chunk, in `arena_`.
+    /// A column block of a closed chunk, in a buffer of exactly its size.
     struct ClosedColumns {
+        dftracer::utils::dstd::Vector<std::uint8_t> value;
         std::uint64_t chunk;
-        std::size_t offset;
-        std::size_t size;
     };
 
     void add_to_partial(const trace::views::detail::FoldEvent& ev,
@@ -294,11 +293,11 @@ class AggregationFold : public trace::views::detail::Fold {
     /// `lower`), cached by that id.
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
                           std::uint32_t build_id, bool lower);
-    /// Serializes the partials of the current chunk into `arena_` and clears
-    /// them, keeping their capacity.
+    /// Serializes the partials of the current chunk into buffers of their own
+    /// and clears them, keeping their capacity.
     void close_chunk();
-    /// Encodes the column block of the current chunk into `arena_` and clears
-    /// it, keeping its capacity.
+    /// Encodes the column block of the current chunk into a buffer of its own
+    /// and clears it, keeping its capacity.
     void close_columns();
 
     dftracer::utils::dstd::StringIntern* build_intern_;
@@ -326,7 +325,8 @@ class AggregationFold : public trace::views::detail::Fold {
     /// Root ids of the category texts of the column block, in their own case;
     /// the partials use the lower case of `cat_ids_`.
     dftracer::utils::dstd::Vector<std::uint32_t> cat_text_ids_;
-    dftracer::utils::dstd::Vector<std::uint8_t> arena_;
+    /// The payload being encoded, reused for every closed value.
+    dftracer::utils::dstd::Vector<std::uint8_t> scratch_;
     dftracer::utils::dstd::Vector<Closed> closed_;
     index::schemas::dft::agg::ChunkColumnBuilder columns_;
     dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;

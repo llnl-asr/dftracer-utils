@@ -220,6 +220,35 @@ TEST_SUITE("ViewPartials") {
         }
     }
 
+    TEST_CASE(
+        "the stats rollup answers from the partials with the traces deleted") {
+        // The aggregates dftracer_stats groups by category, pid and tid.
+        const std::vector<AggSpec> stats_specs{
+            {AggOp::Count, "", "n"},       {AggOp::Sum, "dur", "dsum"},
+            {AggOp::Min, "dur", "dmin"},   {AggOp::Max, "dur", "dmax"},
+            {AggOp::Mean, "dur", "dmean"}, {AggOp::Var, "dur", "dvar"},
+            {AggOp::Min, "ts", "tmin"},    {AggOp::Max, "ts", "tmax"}};
+        const std::vector<GroupKey> keys{GroupKey::cat(), GroupKey::pid(),
+                                         GroupKey::tid()};
+        Fixture fx;
+        auto p = scan::from_files(fx.files());
+        p = scan::filter(
+            p, Query::from_string(R"(cat in ["POSIX", "STDIO"])").value());
+        p = scan::group_by(p, keys);
+        const df::DataFrame expected = scan_only(scan::agg(p, stats_specs));
+
+        fx.delete_traces();
+        const df::DataFrame got =
+            fx.view()
+                .filter(
+                    Query::from_string(R"(cat in ["POSIX", "STDIO"])").value())
+                .group_by(keys)
+                .agg(stats_specs)
+                .collect()
+                .get();
+        same_rows(got, expected, {"cat", "pid", "tid"});
+    }
+
     TEST_CASE("events with a time window and profiles answer without reads") {
         Fixture fx;
         auto typed_view = [&] {

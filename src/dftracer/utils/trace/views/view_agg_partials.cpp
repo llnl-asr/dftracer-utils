@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -118,7 +119,7 @@ bool roles_complete(const ViewPlan& plan) {
 }
 
 // Fields the partials answer: ts is only its min, te only its max, so those
-// ops are gated in aggs_and_fields_answerable.
+// ops are gated in unanswered_agg.
 bool answerable_field(const std::string& f) {
     return f == "dur" || f == "size" || f == "offset" || f == "ts" || f == "te";
 }
@@ -220,34 +221,43 @@ bool serves_op(AggOp op) {
     return false;
 }
 
-bool aggs_and_fields_answerable(const ViewPlan& plan, const AggSchema& sch) {
-    if (!rows_match(plan)) return false;
+// The aggregate or field of `plan` the partials cannot answer, as a phrase
+// for the decline log; empty when they answer every one.
+std::string unanswered_agg(const ViewPlan& plan, const AggSchema& sch) {
+    if (!rows_match(plan)) return "rows of another kind than the partials";
     for (const auto& s : plan.agg) {
-        if (!serves_op(s.op)) return false;
         const std::string field = tier_field(plan, s.field);
         const std::string by = tier_field(plan, s.by);
+        const auto refused = [&] {
+            return "aggregate " + std::to_string(static_cast<int>(s.op)) +
+                   " of field '" + s.field + "'";
+        };
+        if (!serves_op(s.op)) return refused();
         if (field.empty() != s.field.empty() || by.empty() != s.by.empty())
-            return false;
+            return refused();
         // Only dur and size keep their values for quantiles and moments past
         // two; skew, kurtosis, percentiles and histograms on any other field
         // must scan.
         if ((s.op == AggOp::Skew || s.op == AggOp::Kurt || s.op == AggOp::Pct ||
              s.op == AggOp::Hist) &&
             field != "dur" && field != "size")
-            return false;
-        if (s.op == AggOp::Count && !field.empty()) return false;
-        if (field == "ts" && s.op != AggOp::Min) return false;
-        if (field == "te" && s.op != AggOp::Max) return false;
+            return refused();
+        if (s.op == AggOp::Count && !field.empty()) return refused();
+        // A partial knows the first and the last start of its events, and
+        // the last end.
+        if (field == "ts" && s.op != AggOp::Min && s.op != AggOp::Max)
+            return refused();
+        if (field == "te" && s.op != AggOp::Max) return refused();
         // The scan scales ts/dur/te by time_scale; the partials hold raw
         // values, so a scaled-field agg would diverge. Decline it.
         if (plan.time_scale != 1.0 &&
             (field == "ts" || field == "dur" || field == "te" || by == "ts" ||
              by == "dur" || by == "te"))
-            return false;
+            return refused();
     }
     for (const auto& f : sch.fields)
-        if (!answerable_field(tier_field(plan, f))) return false;
-    return true;
+        if (!answerable_field(tier_field(plan, f))) return "field '" + f + "'";
+    return {};
 }
 
 bool wants_quantiles(const ViewPlan& plan) {
@@ -359,18 +369,33 @@ struct Prepared {
     bool by_path = false;
 };
 
+// Says, at debug level, why the partials cannot answer a plan: the view then
+// scans every trace file it reads.
+std::nullopt_t declined(const std::string& why) {
+    DFTRACER_UTILS_LOG_DEBUG(
+        "View: the index partials cannot answer this query (%s); the traces "
+        "are scanned",
+        why.c_str());
+    return std::nullopt;
+}
+
 // nullopt when the partials cannot answer `plan`; see partials_collect.
 std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
-    if (plan.files.empty() || !plan.computed.empty() || plan.time_range ||
-        plan.all_records || plan.auto_numeric_metrics ||
-        !plan.numeric_arg_aggs.empty())
-        return std::nullopt;
+    if (plan.files.empty()) return declined("no files");
+    if (!plan.computed.empty()) return declined("computed columns");
+    if (plan.time_range) return declined("a time range");
+    if (plan.all_records) return declined("every record is asked for");
+    if (plan.auto_numeric_metrics || !plan.numeric_arg_aggs.empty())
+        return declined("aggregates over numeric args");
     if (plan.phase != Phase::Any && (typed || plan.phase != Phase::Events))
-        return std::nullopt;
+        return declined("a phase filter");
     const AggSchema& sch = ensure_schema(plan);
-    if (plan.query && !query_answerable(plan)) return std::nullopt;
+    if (plan.query && !query_answerable(plan))
+        return declined("a filter the partials cannot evaluate");
     auto keys = partial_keys(plan);
-    if (!keys || !aggs_and_fields_answerable(plan, sch)) return std::nullopt;
+    if (!keys) return declined("a group key the partials do not hold");
+    if (const std::string why = unanswered_agg(plan, sch); !why.empty())
+        return declined(why);
 
     Prepared p;
     p.by_path = plan_by_path(plan);
@@ -379,16 +404,17 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
         // The partials are keyed from time 0 in the trace's own unit.
         if (plan.bucket_origin_us != 0 || plan.bucket_origin_min ||
             plan.time_scale != 1.0)
-            return std::nullopt;
+            return declined("a shifted or scaled time bucket");
         // A path plan buckets on its time role, which the partials hold in
         // microseconds only when it maps to ts.
         if (p.by_path &&
             tier_field(plan, plan_record_schema(plan).roles.time) != "ts")
-            return std::nullopt;
+            return declined("a time bucket on a time role other than ts");
     } else if (plan.time_bucket_us != 0) {
-        return std::nullopt;
+        return declined("a time bucket on an untyped plan");
     }
-    if (p.by_path && !roles_complete(plan)) return std::nullopt;
+    if (p.by_path && !roles_complete(plan))
+        return declined("a schema without every trace role");
 
     AggQuery& q = p.query;
     std::uint64_t interval_us = 0;
@@ -396,13 +422,14 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
         std::map<std::string, std::size_t> root_of;
         std::map<std::string, std::unique_ptr<IndexDatabase>> dbs;
         for (const auto& f : plan.files) {
-            if (f.index_path.empty()) return std::nullopt;
+            if (f.index_path.empty()) return declined("a file with no index");
             auto it = root_of.find(f.index_path);
             if (it == root_of.end()) {
                 auto db = std::make_unique<IndexDatabase>(
                     f.index_path, store::IndexOpenMode::ReadOnly);
                 const auto config = agg::tier::read_config(*db);
-                if (!config) return std::nullopt;
+                if (!config)
+                    return declined("an index with no aggregation config");
                 AggQuerySource src;
                 src.index_path =
                     dstd::String(f.index_path.data(), f.index_path.size());
@@ -412,7 +439,7 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
                     p.extra = config->extra_group_keys;
                 } else if (config->extra_group_keys != p.extra) {
                     // The sources keep their extra values under other keys.
-                    return std::nullopt;
+                    return declined("indexes with other extra group keys");
                 }
                 it = root_of.emplace(f.index_path, q.sources.size()).first;
                 q.sources.push_back(std::move(src));
@@ -420,21 +447,21 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
             }
             const IndexDatabase& db = *dbs.at(f.index_path);
             const int fid = db.get_file_info_id(get_logical_path(f.file_path));
-            if (fid < 0) return std::nullopt;
+            if (fid < 0) return declined("a file missing from its index");
             const auto state =
                 db.extension_state(fid, store::IndexExtension::Agg);
             if (!state || !state->ready ||
                 state->version !=
                     store::layout::ext_version(store::layout::Ext::Agg) ||
                 state->params_hash != *q.sources[it->second].params_hash)
-                return std::nullopt;
+                return declined("a file whose aggregation data is stale");
             q.sources[it->second].files.emplace_back(f.file_path.data(),
                                                      f.file_path.size());
         }
-    } catch (const std::exception&) {
+    } catch (const std::exception& e) {
         // An index that cannot be read cannot be answered from; the scan
         // reports it.
-        return std::nullopt;
+        return declined(std::string("an unreadable index: ") + e.what());
     }
 
     for (const auto& gk : p.keys) {
@@ -458,7 +485,9 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
                 // Only a key the build kept the values of is in the partials.
                 if (std::find(p.extra.begin(), p.extra.end(), gk.arg) ==
                     p.extra.end())
-                    return std::nullopt;
+                    return declined(
+                        "a group key on an arg the build did "
+                        "not keep");
                 q.by_extra = true;
                 break;
             case GroupKey::Kind::Name:
@@ -491,7 +520,7 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
         } else if (p.by_path || plan.query->references("cat")) {
             // A category compares lower-cased in the partials, which only a
             // set of equal values can say.
-            return std::nullopt;
+            return declined("a category filter that is not a set of values");
         } else {
             q.filter = *plan.query;
         }
@@ -511,12 +540,18 @@ dataframe::FieldStat field_stat(const std::string& field,
         fs = p.size;
     } else if (field == "offset") {
         fs = p.offset;
-    } else if (field == "ts" || field == "te") {
-        const std::uint64_t at = field == "ts" ? p.ts : p.te;
+    } else if (field == "ts") {
         fs.n = p.count;
-        fs.min = fs.max = static_cast<double>(at);
+        fs.min = static_cast<double>(p.ts);
+        fs.max = static_cast<double>(p.ts_last_start);
         fs.domain = domain;
-        fs.esum = fs.emin = fs.emax = std::bit_cast<std::int64_t>(at);
+        fs.esum = fs.emin = std::bit_cast<std::int64_t>(p.ts);
+        fs.emax = std::bit_cast<std::int64_t>(p.ts_last_start);
+    } else if (field == "te") {
+        fs.n = p.count;
+        fs.min = fs.max = static_cast<double>(p.te);
+        fs.domain = domain;
+        fs.esum = fs.emin = fs.emax = std::bit_cast<std::int64_t>(p.te);
     }
     if (domain == dataframe::FieldStatDomain::I64 &&
         fs.domain == dataframe::FieldStatDomain::U64)

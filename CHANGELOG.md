@@ -279,6 +279,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftracer_stats` parsing every trace again the first time it ran on an index: the index summaries could not give the largest event start, so the whole query fell back to a scan.
+  The view now answers the largest start from the summaries, and logs at debug level why it scans when the summaries cannot answer a query.
 - Fix `dftracer_comparator` reporting changes and regressions between two identical traces, and printing groups with equal changes in a different order from run to run.
   Means and totals now come from the exact integer sums and sum their values in a fixed order, so the same input gives the same output.
 - Fix an index build that stalled for about 100 s on Lustre: it looked for the index's `schemas` folder once for every input file, from every worker at once, and one such lookup could block.

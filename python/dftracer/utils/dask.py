@@ -968,10 +968,8 @@ def _build_index_task(
     # The aggregation config every build makes, forwarded to build_index_batch.
     aggregation_config: "Optional[AggregationConfig]" = None,
     enable_det_ids: bool = False,
-) -> bytes:
-    """Dask worker task: index `files` straight into the index at `index_dir`.
-
-    Returns the serialized aggregation tracker of the batch."""
+) -> None:
+    """Dask worker task: index `files` straight into the index at `index_dir`."""
     import logging as _logging
     import socket as _socket
     import time as _time
@@ -989,7 +987,7 @@ def _build_index_task(
 
         enable_aggregation_deterministic_ids()
 
-    tracker_blob = build_index_batch(
+    build_index_batch(
         files,
         index_dir,
         checkpoint_size,
@@ -1008,7 +1006,6 @@ def _build_index_task(
         len(files),
         _time.monotonic() - t0,
     )
-    return tracker_blob
 
 
 def distributed_index(
@@ -1035,8 +1032,8 @@ def distributed_index(
       3. Submit one Dask task per non-empty worker that runs the indexer
          pipeline straight into the index. Each worker numbers its own files,
          and nothing is staged or ingested.
-      4. The coordinator writes the aggregation config and trackers, then
-         refreshes its view of the index.
+      4. The coordinator writes the aggregation config, then refreshes its
+         view of the index.
 
     Args:
         directory: Directory containing trace files.
@@ -1166,26 +1163,22 @@ def distributed_index(
 
     _t_build = _time.monotonic()
     worker_ids: List[int] = []
-    # The tracker blob each worker's _build_index_task returned.
-    worker_results: List[bytes] = []
     if client is None:
         for w, paths_w in enumerate(worker_file_lists):
             if not paths_w:
                 continue
             worker_ids.append(w)
-            worker_results.append(
-                _build_index_task(
-                    paths_w,
-                    f"worker_{w}",
-                    index_dir,
-                    checkpoint_size,
-                    bloom_dimensions,
-                    force_rebuild,
-                    parallelism_per_worker,
-                    build_bloom,
-                    agg_config,
-                    False,
-                )
+            _build_index_task(
+                paths_w,
+                f"worker_{w}",
+                index_dir,
+                checkpoint_size,
+                bloom_dimensions,
+                force_rebuild,
+                parallelism_per_worker,
+                build_bloom,
+                agg_config,
+                False,
             )
     else:
         worker_addrs = list(client.nthreads().keys())
@@ -1213,24 +1206,20 @@ def distributed_index(
                         pure=False,
                     )
                 )
-            worker_results = client.gather(futures)
+            client.gather(futures)
     _log.info(
         "distributed_index: build dispatch+gather done in %.1fs (%d workers)",
         _time.monotonic() - _t_build,
         len(worker_ids),
     )
 
-    tracker_blobs = [blob for blob in worker_results if blob]
     built = bool(worker_ids)
     if built:
         _t_meta = _time.monotonic()
         db.write_agg_config(agg_config)
-        if tracker_blobs:
-            db.write_aggregation_tracker(tracker_blobs)
         _log.info(
-            "distributed_index: agg meta writes done in %.2fs (trackers=%d)",
+            "distributed_index: agg meta writes done in %.2fs",
             _time.monotonic() - _t_meta,
-            len(tracker_blobs),
         )
 
     # The coordinator's own writes end in a complete data file, and reads in

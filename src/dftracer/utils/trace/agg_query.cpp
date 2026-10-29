@@ -125,6 +125,7 @@ class Runner {
         : q(query),
           out(result),
           strings(result.strings()),
+          read_metric_ids(read),
           window_cfg(query.config),
           read_cfg(query.config) {
         for (const auto& c : q.categories) {
@@ -160,6 +161,8 @@ class Runner {
     dstd::StringIntern& strings;
     /// Ids of the events a re-read decodes; shared by the tasks.
     dstd::StringIntern read;
+    /// The ids of the fixed metric args in `read`.
+    agg::MetricArgIds read_metric_ids;
     agg::AggregationConfig window_cfg;
     agg::AggregationConfig read_cfg;
     dstd::HashSet<dstd::String> categories;
@@ -851,7 +854,7 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
 
 void Task::add_event(const FoldEvent& ev,
                      const dstd::HashSet<Group, GroupHash>* wanted) {
-    const agg::PodAccessor acc(ev, r_.read);
+    const agg::PodAccessor acc(ev, r_.read, r_.read_metric_ids);
     if (!agg::partial_holds(acc)) return;
     if (ev.ts < r_.q.ts_begin || ev.ts >= r_.q.ts_end) return;
     if (!r_.pids.empty() &&

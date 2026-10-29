@@ -1,6 +1,5 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/index_database.h>
 #include <dftracer/utils/python/py_agg_config.h>
@@ -126,47 +125,6 @@ static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
     Py_RETURN_NONE;
 }
 
-static PyObject *IndexDatabase_write_aggregation_tracker(
-    IndexDatabaseObject *self, PyObject *args) {
-    PyObject *blobs_obj;
-    if (!PyArg_ParseTuple(args, "O", &blobs_obj)) return NULL;
-    PyObject *seq = PySequence_Fast(blobs_obj, "blobs must be an iterable");
-    if (!seq) return NULL;
-    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
-    std::vector<std::string> blobs;
-    blobs.reserve(static_cast<std::size_t>(n));
-    for (Py_ssize_t i = 0; i < n; ++i) {
-        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
-        if (item == Py_None) continue;
-        char *buf = nullptr;
-        Py_ssize_t len = 0;
-        if (PyBytes_Check(item)) {
-            if (PyBytes_AsStringAndSize(item, &buf, &len) < 0) {
-                Py_DECREF(seq);
-                return NULL;
-            }
-        } else {
-            Py_DECREF(seq);
-            PyErr_SetString(PyExc_TypeError,
-                            "blobs entries must be bytes or None");
-            return NULL;
-        }
-        if (len > 0) blobs.emplace_back(buf, static_cast<std::size_t>(len));
-    }
-    Py_DECREF(seq);
-    if (!run_blocking([&] {
-            using dftracer::utils::index::schemas::dft::agg::AssociationTracker;
-            AssociationTracker unified;
-            for (const auto &b : blobs)
-                unified.merge(AssociationTracker::deserialize(b));
-            unified.finalize();
-            dftracer::utils::index::schemas::dft::agg::tier::write_tracker(
-                *self->db, unified.serialize());
-        }))
-        return NULL;
-    Py_RETURN_NONE;
-}
-
 static PyObject *IndexDatabase_find_stale_files(IndexDatabaseObject *self,
                                                 PyObject *args,
                                                 PyObject *kwds) {
@@ -240,11 +198,6 @@ static PyMethodDef IndexDatabase_methods[] = {
      "write_agg_config(aggregation_config) -> None\n"
      "Record the aggregation config a distributed build aggregated its "
      "files with. Each file's dftracer.agg entry comes with its data."},
-    {"write_aggregation_tracker",
-     DFTU_PYCFUNCTION(IndexDatabase_write_aggregation_tracker), METH_VARARGS,
-     "write_aggregation_tracker(blobs) -> None\n"
-     "Merge a list of serialized AssociationTracker bytes and write the "
-     "result to the aggregation tier."},
     {NULL}};
 
 PyTypeObject IndexDatabaseType = {

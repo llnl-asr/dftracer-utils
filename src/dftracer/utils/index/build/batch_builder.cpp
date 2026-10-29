@@ -362,7 +362,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                     if (job.agg_fold) {
                         index::schemas::dft::agg::AggFoldOutput ao;
                         ao.file_path = pf.file_path;
-                        ao.tracker = job.agg_fold->take_tracker();
                         ao.min_time_bucket = job.agg_fold->min_time_bucket();
                         ao.max_time_bucket = job.agg_fold->max_time_bucket();
                         ao.events_processed = job.agg_fold->events_processed();

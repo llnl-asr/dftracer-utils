@@ -161,8 +161,8 @@ struct IndexBuildBatchResult {
     std::uint64_t total_events = 0;
     IndexBuildBatchMetrics metrics;
 
-    /// Per-file aggregation-fold out-of-band outputs (tracker, time bounds),
-    /// for callers using agg_fold_factory. Drained via
+    /// Per-file aggregation-fold out-of-band outputs (time bounds), for callers
+    /// using agg_fold_factory. Drained via
     /// aggregators::merge_aggregation_folds.
     std::vector<index::schemas::dft::agg::AggFoldOutput> agg_outputs;
 };

@@ -198,13 +198,6 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
         std::max(state_.max_time_bucket, os.max_time_bucket);
     state_.events_processed += os.events_processed;
 
-    if (o.tracker_) {
-        if (tracker_)
-            tracker_->merge(*o.tracker_);
-        else
-            tracker_ = std::move(o.tracker_);
-    }
-
     close_chunk();
     o.close_chunk();
     for (Closed& closed : o.closed_) closed_.push_back(std::move(closed));

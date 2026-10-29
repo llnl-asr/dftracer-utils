@@ -267,7 +267,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Remove RocksDB: the index store is the only index backend, and an index that RocksDB built is built again on first use.
   The environment variables `DFTRACER_UTILS_INDEX_BACKEND`, `DFTRACER_UTILS_ROCKSDB_CACHE` and `DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES` and the CMake settings `DFTRACER_UTILS_ROCKSDB_VERSION` and `DFTRACER_UTILS_ROCKSDB_PREFIX` are gone.
 - Remove `build_sst_batch`, `SstArtifactRegistry`, `move_artifacts`, `index_backend`, `IndexDatabase.bulk_ingest()` and `IndexDatabase.init_schema()` from the Python bindings and `resolve_local_staging` from `dftracer.utils.dask`.
-  `build_index_batch` replaces `build_sst_batch`: it writes the index directly and returns the aggregation tracker.
+  `build_index_batch` replaces `build_sst_batch`: it writes the index directly.
 - Remove the `local_staging`, `shared_staging` and `flush_every_files` arguments of `distributed_index` and `build_index_distributed`, and `artifact_batches` from the result of `distributed_index`, since each worker writes the index directly.
 - Remove `set_default_runtime()`, `try_install_default_runtime()` and `clear_default_runtime_if()` from C++, `dftracer.utils.set_default_runtime()` from Python and `dftu_set_default_runtime()` from the C ABI.
   Configure the one runtime with `configure_default_runtime()`, `Runtime(threads=...)` or `dftu_runtime_new()` instead.
@@ -291,6 +291,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Use a `memory::Pool` child with a limit and a `memory::Reservation` instead.
 - Remove `track_default_args`, `custom_metric_fields` and the C ABI field `aggregation_track_default_args`.
   They fed per-argument stats that every index build stored and no query read.
+- Remove `IndexDatabase.write_aggregation_tracker` and the process-parent tracking of the aggregation tier, which every index build stored and no query read.
 
 ### Fixed
 

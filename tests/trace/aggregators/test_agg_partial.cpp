@@ -1,10 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/memory/heap.h>
 #include <doctest/doctest.h>
@@ -57,27 +59,20 @@ class Acc {
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
 
-    bool arg_exists(std::string_view k) const {
-        if (k == "fhash") return !e_.fhash.empty();
-        return find(k) != nullptr;
-    }
     bool arg_is_number(std::string_view k) const {
         return k != "fhash" && find(k) != nullptr;
-    }
-    std::uint64_t arg_uint(std::string_view k) const {
-        const auto* v = find(k);
-        return v ? *v : 0;
-    }
-    double arg_double(std::string_view k) const {
-        return static_cast<double>(arg_uint(k));
     }
     std::string_view arg_string(std::string_view k) const {
         return k == "fhash" ? std::string_view(e_.fhash) : std::string_view{};
     }
-    template <class Fn>
-    void for_each_numeric_arg(Fn&& fn) const {
-        for (const auto& [k, v] : e_.args)
-            fn(std::string_view(k), v, static_cast<double>(v));
+    void metric_args(MetricArgs& m) const {
+        for (const auto& [name, v] : e_.args) {
+            for (std::size_t i = 0; i < METRIC_ARG_COUNT; ++i)
+                if (name == METRIC_ARG_NAMES[i]) {
+                    m.add(static_cast<MetricArg>(i), v);
+                    break;
+                }
+        }
     }
 
    private:
@@ -441,6 +436,109 @@ TEST_SUITE("AggPartial") {
             INFO("group: ", k.first, " ", k.second);
             check_against_reference(p, ref.at(k), truth.at(k));
         }
+    }
+
+    TEST_CASE("the metric args of a POD event clamp like get<uint64>") {
+        dftracer::utils::dstd::StringIntern intern;
+        const MetricArgIds ids(intern);
+        const auto id = [&intern](std::string_view name) {
+            return intern.get_or_insert(name);
+        };
+        dftracer::utils::trace::views::detail::FoldEvent ev;
+        // A repeated arg keeps its first value; a negative or too large number
+        // clamps to 0; a string arg is present with no number; an arg the
+        // metric rules do not read is left alone.
+        ev.args.emplace_back(id("dur_sum"), 12.0);
+        ev.args.emplace_back(id("dur_sum"), 99.0);
+        ev.args.emplace_back(id("dur_min"), -3.0);
+        ev.args.emplace_back(id("dur_max"), 1e30);
+        ev.args.emplace_back(id("dur"), 3.5);
+        ev.args.emplace_back(id("ret_sum"), std::int64_t{-5});
+        ev.args.emplace_back(id("ret_min"), std::int64_t{7});
+        ev.args.emplace_back(id("offset_sum"), id("text"));
+        ev.args.emplace_back(id("offset_max"), std::uint64_t{1} << 63);
+        ev.args.emplace_back(id("flops"), 1234.0);
+
+        const PodAccessor acc(ev, intern, ids);
+        MetricArgs m;
+        acc.metric_args(m);
+        CHECK(m.has(MetricArg::DurSum));
+        CHECK(m.get(MetricArg::DurSum) == 12);
+        CHECK(m.has(MetricArg::DurMin));
+        CHECK(m.get(MetricArg::DurMin) == 0);
+        CHECK(m.has(MetricArg::DurMax));
+        CHECK(m.get(MetricArg::DurMax) == 0);
+        CHECK(m.get(MetricArg::Dur) == 3);
+        CHECK(m.has(MetricArg::RetSum));
+        CHECK(m.get(MetricArg::RetSum) == 0);
+        CHECK(m.get(MetricArg::RetMin) == 7);
+        CHECK(m.has(MetricArg::OffsetSum));
+        CHECK(m.get(MetricArg::OffsetSum) == 0);
+        CHECK(m.get(MetricArg::OffsetMax) == (std::uint64_t{1} << 63));
+        CHECK_FALSE(m.has(MetricArg::Count));
+        CHECK_FALSE(m.has(MetricArg::DftCnt));
+        CHECK_FALSE(m.has(MetricArg::Offset));
+        CHECK_FALSE(m.has(MetricArg::Ret));
+    }
+
+    TEST_CASE("a counter's fixed args give the partial their sums and bounds") {
+        const auto cfg = make_config(false);
+        AggPartial p;
+
+        Ev preaggregated;
+        preaggregated.cat = "POSIX";
+        preaggregated.name = "read";
+        preaggregated.pid = 1;
+        preaggregated.tid = 2;
+        preaggregated.ts = 1000;
+        preaggregated.counter = true;
+        preaggregated.args = {{"count", 4},          {"dur_sum", 400},
+                              {"dur_min", 90},       {"dur_max", 110},
+                              {"ret_sum", 8192},     {"ret_min", 2048},
+                              {"ret_max", 4096},     {"offset_sum", 65536},
+                              {"offset_min", 16384}, {"offset_max", 32768}};
+        REQUIRE(update_partial(p, Acc(preaggregated), cfg));
+        CHECK(p.count == 4);
+        CHECK(p.duration.n == 4);
+        CHECK(p.duration.sum == 400.0);
+        CHECK(p.duration.min == 90.0);
+        CHECK(p.duration.max == 110.0);
+        CHECK(p.size.n == 4);
+        CHECK(p.size.sum == 8192.0);
+        CHECK(p.size.min == 2048.0);
+        CHECK(p.size.max == 4096.0);
+        CHECK(p.offset.n == 4);
+        CHECK(p.offset.sum == 65536.0);
+        CHECK(p.offset.min == 16384.0);
+        CHECK(p.offset.max == 32768.0);
+
+        // Without a sum, min and max of a field, its plain arg gives all three,
+        // and an event without count args counts once.
+        Ev plain = preaggregated;
+        plain.args = {{"dur", 50}, {"ret", 100}, {"offset", 7}};
+        REQUIRE(update_partial(p, Acc(plain), cfg));
+        CHECK(p.count == 5);
+        CHECK(p.duration.n == 5);
+        CHECK(p.duration.sum == 450.0);
+        CHECK(p.duration.min == 50.0);
+        CHECK(p.duration.max == 110.0);
+        CHECK(p.size.n == 5);
+        CHECK(p.size.sum == 8292.0);
+        CHECK(p.size.min == 100.0);
+        CHECK(p.size.max == 4096.0);
+        CHECK(p.offset.n == 5);
+        CHECK(p.offset.sum == 65543.0);
+        CHECK(p.offset.min == 7.0);
+        CHECK(p.offset.max == 32768.0);
+
+        // dftu_cnt wins over count, and neither touches the other fields.
+        Ev counted = preaggregated;
+        counted.args = {{"dftu_cnt", 2}, {"count", 9}};
+        REQUIRE(update_partial(p, Acc(counted), cfg));
+        CHECK(p.count == 7);
+        CHECK(p.duration.n == 5);
+        CHECK(p.size.n == 5);
+        CHECK(p.offset.n == 5);
     }
 
     TEST_CASE("the order of the merges does not change the exact fields") {

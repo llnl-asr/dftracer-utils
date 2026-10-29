@@ -467,11 +467,6 @@ def install_extension_stub() -> None:
             file's ``dftracer.agg`` entry comes with its data."""
             return None
 
-        def write_aggregation_tracker(self, blobs: list[bytes]) -> None:
-            """Merge serialized AssociationTracker blobs and write the result
-            to the index."""
-            return None
-
     def merge_flamegraph_partials(partials: list[bytes]) -> object:
         """Merge serialized flamegraph partials into the node DataFrame."""
         return None
@@ -532,14 +527,12 @@ def install_extension_stub() -> None:
         runtime: Runtime | object | None = None,
         aggregation_config: object = None,
         progress: object = None,
-    ) -> bytes:
+    ) -> None:
         """Run the indexer pipeline on `files` into the index at `index_dir`,
         which this worker writes directly and numbers its own files in. Its
         aggregation folds are always created; `aggregation_config` customizes
-        them and defaults to the standard config. Returns the serialized
-        merged AssociationTracker of the batch (empty bytes when it produced
-        none)."""
-        return b""
+        them and defaults to the standard config."""
+        return None
 
     def plan_lpt_partition(
         entries: list[tuple[str, int]], num_workers: int

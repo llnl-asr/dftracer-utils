@@ -411,11 +411,6 @@ class IndexDatabase:
         file's ``dftracer.agg`` entry comes with its data."""
         ...
 
-    def write_aggregation_tracker(self, blobs: List[bytes]) -> None:
-        """Merge serialized AssociationTracker blobs and write the result
-        to the aggregation tier."""
-        ...
-
 def build_index_batch(
     files: List[str],
     index_dir: str,
@@ -427,12 +422,11 @@ def build_index_batch(
     runtime: Optional[Union[Runtime, object]] = None,
     aggregation_config: Optional[object] = None,
     progress: Optional[Callable[[int, int], None]] = None,
-) -> bytes:
+) -> None:
     """Run the indexer pipeline on `files` into the index at `index_dir`,
     which this worker writes directly and numbers its own files in. Its
     aggregation folds are always created; `aggregation_config` customizes
-    them and defaults to the standard config. Returns the serialized merged
-    AssociationTracker of the batch (empty bytes when it produced none)."""
+    them and defaults to the standard config."""
     ...
 
 def plan_lpt_partition(

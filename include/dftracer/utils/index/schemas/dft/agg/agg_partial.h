@@ -133,8 +133,8 @@ struct TimeBin {
 /// absent for most names); the serialized form omits it. The quantile stores
 /// are filled only when the caller asks for percentiles.
 ///
-/// Not held: boundary associations and parent pid, which the trace writer
-/// fills from the association tracker at output time.
+/// Only the metrics of the events are held: no boundary associations and no
+/// process tree.
 struct AggPartial {
     std::uint64_t count = 0;
     std::uint64_t ts = UINT64_MAX;  ///< smallest ts; UINT64_MAX when empty

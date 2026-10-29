@@ -87,27 +87,20 @@ class Acc {
     std::uint64_t ts() const { return e_.ts; }
     std::uint64_t dur() const { return e_.dur; }
 
-    bool arg_exists(std::string_view k) const {
-        if (k == "fhash") return !e_.fhash.empty();
-        return find(k) != nullptr;
-    }
     bool arg_is_number(std::string_view k) const {
         return k != "fhash" && find(k) != nullptr;
-    }
-    std::uint64_t arg_uint(std::string_view k) const {
-        const auto* v = find(k);
-        return v ? *v : 0;
-    }
-    double arg_double(std::string_view k) const {
-        return static_cast<double>(arg_uint(k));
     }
     std::string_view arg_string(std::string_view k) const {
         return k == "fhash" ? std::string_view(e_.fhash) : std::string_view{};
     }
-    template <class Fn>
-    void for_each_numeric_arg(Fn&& fn) const {
-        for (const auto& [k, v] : e_.args)
-            fn(std::string_view(k), v, static_cast<double>(v));
+    void metric_args(agg::MetricArgs& m) const {
+        for (const auto& [name, v] : e_.args) {
+            for (std::size_t i = 0; i < agg::METRIC_ARG_COUNT; ++i)
+                if (name == agg::METRIC_ARG_NAMES[i]) {
+                    m.add(static_cast<agg::MetricArg>(i), v);
+                    break;
+                }
+        }
     }
 
    private:

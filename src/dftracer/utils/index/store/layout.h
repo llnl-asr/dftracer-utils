@@ -82,7 +82,7 @@ inline constexpr std::uint8_t FRAME = 0;
 /// by 0x1F, the empty text when there are none. DICT holds the dictionary
 /// entries the file's partials and rows name, keyed [id u32], so a file's data
 /// is replaced without touching another file's. META is index-wide (file_id
-/// INDEX_WIDE) and holds named records (config, tracker, time bounds), keyed
+/// INDEX_WIDE) and holds named records (config, time bounds), keyed
 /// [name]; each name is its own store namespace. COLUMNS holds one record per
 /// file and chunk, keyed [chunk u32] like PARTIAL, with the rows of the
 /// chunk's records the partials keep as an exact column block: the core

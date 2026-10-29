@@ -1,12 +1,15 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -20,13 +23,9 @@
 // The Accessor concept:
 //   is_metadata()/is_system()/is_profile()/is_counter()/is_aggregated() -> bool
 //   name()/cat() -> string_view ; pid()/tid()/ts()/dur() -> uint64
-//   arg_exists(key) -> bool
 //   arg_is_number(key) -> bool
-//   arg_uint(key) -> uint64      (get<uint64> semantics: clamp, 0 on miss)
-//   arg_double(key) -> double    (get<double> semantics: 0 on miss)
 //   arg_string(key) -> string_view (empty on miss / non-string)
-//   for_each_numeric_arg(fn) with fn(string_view key, uint64 u, double d) over
-//     every numeric arg (non-numbers skipped by the accessor).
+//   metric_args(MetricArgs&) fills the fixed metric args the event carries.
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// dftracer hashes are hex; reuse their bits rather than hashing again.
@@ -54,6 +53,69 @@ struct AggState {
     std::size_t events_processed = 0;
 };
 
+/// The arg names the metric rules read, in the order of METRIC_ARG_NAMES.
+enum class MetricArg : std::uint8_t {
+    DftuCnt,
+    DftCnt,
+    Count,
+    DurSum,
+    Dur,
+    DurMin,
+    DurMax,
+    RetSum,
+    Ret,
+    RetMin,
+    RetMax,
+    OffsetSum,
+    Offset,
+    OffsetMin,
+    OffsetMax,
+};
+
+inline constexpr std::size_t METRIC_ARG_COUNT = 15;
+
+inline constexpr std::array<std::string_view, METRIC_ARG_COUNT>
+    METRIC_ARG_NAMES = {"dftu_cnt", "dft_cnt",    "count",     "dur_sum",
+                        "dur",      "dur_min",    "dur_max",   "ret_sum",
+                        "ret",      "ret_min",    "ret_max",   "offset_sum",
+                        "offset",   "offset_min", "offset_max"};
+
+/// The intern ids of METRIC_ARG_NAMES, resolved once per fold: the metric rules
+/// then match the args of an event by id instead of hashing a name per event.
+struct MetricArgIds {
+    std::array<std::uint32_t, METRIC_ARG_COUNT> ids;
+
+    explicit MetricArgIds(dftracer::utils::dstd::StringIntern& intern) {
+        for (std::size_t i = 0; i < METRIC_ARG_COUNT; ++i)
+            ids[i] = intern.get_or_insert(METRIC_ARG_NAMES[i]);
+    }
+};
+
+/// The fixed metric args an event carries, gathered by one pass over its args.
+/// A value is 0 for an arg that is not a number, as a get<uint64> miss was.
+struct MetricArgs {
+    std::array<std::uint64_t, METRIC_ARG_COUNT> values{};
+    std::uint32_t present = 0;
+
+    bool has(MetricArg a) const { return (present & bit(a)) != 0; }
+    std::uint64_t get(MetricArg a) const {
+        return values[static_cast<std::size_t>(a)];
+    }
+    /// Records `v` for `a`, keeping the first value of a repeated arg.
+    void add(MetricArg a, std::uint64_t v) {
+        if (present & bit(a)) return;
+        present |= bit(a);
+        values[static_cast<std::size_t>(a)] = v;
+    }
+
+   private:
+    static std::uint32_t bit(MetricArg a) {
+        return 1U << static_cast<unsigned>(a);
+    }
+};
+
+static_assert(METRIC_ARG_COUNT <= 32);
+
 /// Applies one event's metric rules to `sink`. The rules live here once; the
 /// Sink decides where the numbers go (a partial).
 /// A Sink provides:
@@ -65,69 +127,66 @@ template <class Acc, class Sink>
 void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
                               Sink& sink) {
     using dftracer::utils::dataframe::FieldStat;
-    std::uint64_t ev_count = 1;
+    MetricArgs args;
+    acc.metric_args(args);
     if (acc.is_counter()) {
-        ev_count = acc.arg_exists("dftu_cnt")  ? acc.arg_uint("dftu_cnt")
-                   : acc.arg_exists("dft_cnt") ? acc.arg_uint("dft_cnt")
-                   : acc.arg_exists("count")   ? acc.arg_uint("count")
-                                               : 1;
+        const std::uint64_t ev_count =
+            args.has(MetricArg::DftuCnt)  ? args.get(MetricArg::DftuCnt)
+            : args.has(MetricArg::DftCnt) ? args.get(MetricArg::DftCnt)
+            : args.has(MetricArg::Count)  ? args.get(MetricArg::Count)
+                                          : 1;
         sink.add_count(ev_count);
 
-        const bool has_dur_sum = acc.arg_exists("dur_sum");
-        if (has_dur_sum || acc.arg_exists("dur")) {
+        const bool has_dur_sum = args.has(MetricArg::DurSum);
+        if (has_dur_sum || args.has(MetricArg::Dur)) {
+            const std::uint64_t sum =
+                args.get(has_dur_sum ? MetricArg::DurSum : MetricArg::Dur);
             FieldStat tmp;
             tmp.n = ev_count;
-            tmp.sum = static_cast<double>(has_dur_sum ? acc.arg_uint("dur_sum")
-                                                      : acc.arg_uint("dur"));
-            tmp.min =
-                static_cast<double>(acc.arg_exists("dur_min")
-                                        ? acc.arg_uint("dur_min")
-                                        : (has_dur_sum ? acc.arg_uint("dur_sum")
-                                                       : acc.arg_uint("dur")));
-            tmp.max =
-                static_cast<double>(acc.arg_exists("dur_max")
-                                        ? acc.arg_uint("dur_max")
-                                        : (has_dur_sum ? acc.arg_uint("dur_sum")
-                                                       : acc.arg_uint("dur")));
+            tmp.sum = static_cast<double>(sum);
+            tmp.min = static_cast<double>(args.has(MetricArg::DurMin)
+                                              ? args.get(MetricArg::DurMin)
+                                              : sum);
+            tmp.max = static_cast<double>(args.has(MetricArg::DurMax)
+                                              ? args.get(MetricArg::DurMax)
+                                              : sum);
             sink.merge_duration(tmp);
         }
 
-        const bool has_ret_sum = acc.arg_exists("ret_sum");
-        if (has_ret_sum || acc.arg_exists("ret")) {
+        const bool has_ret_sum = args.has(MetricArg::RetSum);
+        if (has_ret_sum || args.has(MetricArg::Ret)) {
+            const std::uint64_t sum =
+                args.get(has_ret_sum ? MetricArg::RetSum : MetricArg::Ret);
             FieldStat tmp;
             tmp.n = ev_count;
-            tmp.sum = static_cast<double>(has_ret_sum ? acc.arg_uint("ret_sum")
-                                                      : acc.arg_uint("ret"));
-            tmp.min =
-                static_cast<double>(acc.arg_exists("ret_min")
-                                        ? acc.arg_uint("ret_min")
-                                        : (has_ret_sum ? acc.arg_uint("ret_sum")
-                                                       : acc.arg_uint("ret")));
-            tmp.max =
-                static_cast<double>(acc.arg_exists("ret_max")
-                                        ? acc.arg_uint("ret_max")
-                                        : (has_ret_sum ? acc.arg_uint("ret_sum")
-                                                       : acc.arg_uint("ret")));
+            tmp.sum = static_cast<double>(sum);
+            tmp.min = static_cast<double>(args.has(MetricArg::RetMin)
+                                              ? args.get(MetricArg::RetMin)
+                                              : sum);
+            tmp.max = static_cast<double>(args.has(MetricArg::RetMax)
+                                              ? args.get(MetricArg::RetMax)
+                                              : sum);
             sink.merge_size(tmp);
         }
 
-        const bool off_sum = acc.arg_exists("offset_sum");
-        const bool off_plain = acc.arg_exists("offset");
-        const bool off_min = acc.arg_exists("offset_min");
-        const bool off_max = acc.arg_exists("offset_max");
+        const bool off_sum = args.has(MetricArg::OffsetSum);
+        const bool off_plain = args.has(MetricArg::Offset);
+        const bool off_min = args.has(MetricArg::OffsetMin);
+        const bool off_max = args.has(MetricArg::OffsetMax);
         if (off_sum || off_plain || off_min || off_max) {
             FieldStat tmp;
             tmp.n = ev_count;
-            tmp.sum = static_cast<double>(off_sum ? acc.arg_uint("offset_sum")
-                                          : off_plain ? acc.arg_uint("offset")
-                                                      : 0);
+            tmp.sum =
+                static_cast<double>(off_sum     ? args.get(MetricArg::OffsetSum)
+                                    : off_plain ? args.get(MetricArg::Offset)
+                                                : 0);
             tmp.min = static_cast<double>(
-                off_min     ? acc.arg_uint("offset_min")
-                : off_plain ? acc.arg_uint("offset")
+                off_min     ? args.get(MetricArg::OffsetMin)
+                : off_plain ? args.get(MetricArg::Offset)
                             : static_cast<std::uint64_t>(tmp.sum));
             tmp.max = static_cast<double>(
-                off_max     ? acc.arg_uint("offset_max")
-                : off_plain ? acc.arg_uint("offset")
+                off_max     ? args.get(MetricArg::OffsetMax)
+                : off_plain ? args.get(MetricArg::Offset)
                             : static_cast<std::uint64_t>(tmp.sum));
             sink.merge_offset(tmp);
         }
@@ -137,12 +196,12 @@ void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
         sink.duration(acc.dur());
         sink.span(acc.ts(), acc.dur());
 
-        if (acc.arg_exists("ret") &&
+        if (args.has(MetricArg::Ret) &&
             trace::internal::is_data_transfer_op(acc.cat(), acc.name())) {
-            sink.size(acc.arg_uint("ret"));
+            sink.size(args.get(MetricArg::Ret));
         }
-        if (acc.arg_exists("offset")) {
-            sink.offset(acc.arg_uint("offset"));
+        if (args.has(MetricArg::Offset)) {
+            sink.offset(args.get(MetricArg::Offset));
         }
     }
 }

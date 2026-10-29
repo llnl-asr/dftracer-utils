@@ -26,8 +26,8 @@ std::string plugin_namespace_name(std::string_view plugin);
 /// The prefix of the namespace of every index-wide aggregation record.
 inline constexpr std::string_view AGG_META_NAMESPACE_PREFIX = "dftu.idx.agg.";
 
-/// The store namespace holding aggregation record `record` (config, tracker,
-/// time bounds). Every record has its own, so writing one never hides another.
+/// The store namespace holding aggregation record `record` (config, time
+/// bounds). Every record has its own, so writing one never hides another.
 std::string agg_meta_namespace_name(std::string_view record);
 
 /// The format version of the namespace of `ext`. A plugin namespace is at the

@@ -11,12 +11,6 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-struct BoundaryEventConfig {
-    std::string event_name;
-    std::string value_field;
-    std::string output_name;
-};
-
 struct AggregationConfig {
     std::uint64_t time_interval_us = 1000000;
     bool use_relative_time = false;
@@ -35,9 +29,6 @@ struct AggregationConfig {
     bool compute_percentiles = false;
     double sketch_accuracy = 0.01;
     std::vector<double> percentiles = {0.25, 0.5, 0.75, 0.90};
-
-    std::vector<BoundaryEventConfig> boundary_events;
-    bool track_process_parents = true;
 
     std::string output_format = FORMAT_JSON;
 
@@ -82,13 +73,6 @@ struct AggregationConfig {
             h.update_value(percentiles.size());
             for (double p : percentiles) h.update_value(p);
         }
-        h.update_value(boundary_events.size());
-        for (const auto& be : boundary_events) {
-            text(be.event_name);
-            text(be.value_field);
-            text(be.output_name);
-        }
-        h.update_value(track_process_parents);
         // An aggregation built without chunk partials, their time bins, the
         // partials of samples and aggregated records or the per-chunk column
         // blocks is stale.

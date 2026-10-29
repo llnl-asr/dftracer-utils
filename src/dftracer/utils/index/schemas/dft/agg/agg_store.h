@@ -24,7 +24,7 @@
 
 // The only code that reads or writes the aggregation extension's storage: the
 // chunk partials, the per-file chunk column blocks, the per-file dictionary
-// entries and the index-wide records (config, tracker, time bounds). Reads go
+// entries and the index-wide records (config, time bounds). Reads go
 // through an IndexDatabase, writes through an IndexWrite, so the tier runs on
 // whichever backend holds the index.
 namespace dftracer::utils::index::schemas::dft::agg::tier {
@@ -88,9 +88,6 @@ void for_each_chunk_columns(
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db);
 /// Stores the union of `bounds` and the stored bounds.
 void widen_time_bounds(IndexDatabase& db, TimeBounds bounds);
-
-std::optional<std::string> read_tracker(const IndexDatabase& db);
-void write_tracker(IndexDatabase& db, std::string_view bytes);
 
 void load_dictionary(const IndexDatabase& db, AggInternTable& table);
 

@@ -3,7 +3,6 @@
 #include <dftracer/utils/index/build/file_partition.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/py_agg_config.h>
@@ -210,7 +209,7 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         if (!parse_string_seq(files_obj, "files must be a sequence", files))
             return NULL;
     }
-    if (files.empty()) return PyBytes_FromStringAndSize(nullptr, 0);
+    if (files.empty()) Py_RETURN_NONE;
 
     // Optional bloom dimensions override.
     std::vector<std::string> bloom_dims;
@@ -343,27 +342,8 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         }
     }
 
-    // Combine the per-file trackers the folds produced out-of-band.
-    using dftracer::utils::index::schemas::dft::agg::AssociationTracker;
-    AssociationTracker combined;
-    bool any_tracker = false;
-    for (auto &ao : result.agg_outputs) {
-        if (ao.tracker) {
-            ao.tracker->finalize();
-            combined.merge(*ao.tracker);
-            any_tracker = true;
-        }
-    }
-    PyObject *tracker_bytes = nullptr;
-    if (any_tracker) {
-        combined.finalize();
-        std::string blob = combined.serialize();
-        tracker_bytes = PyBytes_FromStringAndSize(
-            blob.data(), static_cast<Py_ssize_t>(blob.size()));
-    } else {
-        tracker_bytes = PyBytes_FromStringAndSize(nullptr, 0);
-    }
-    return tracker_bytes;
+    // Each file's aggregation data is in the index already.
+    Py_RETURN_NONE;
 }
 
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
@@ -380,13 +360,11 @@ static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
 static PyMethodDef DistributionMethods[] = {
     {"build_index_batch", DFTU_PYCFUNCTION(build_index_batch_fn),
      METH_VARARGS | METH_KEYWORDS,
-     "build_index_batch(files, index_dir, ...) -> bytes\n"
+     "build_index_batch(files, index_dir, ...) -> None\n"
      "Run the indexer pipeline on `files` into the index at `index_dir`, "
      "which this worker writes directly and numbers its own files in. "
      "Its aggregation folds are always created; `aggregation_config` "
-     "customizes them and defaults to the standard config. "
-     "Returns the serialized merged AssociationTracker of the batch's "
-     "aggregation folds (empty bytes when the batch produced none)."},
+     "customizes them and defaults to the standard config."},
     {"plan_lpt_partition", DFTU_PYCFUNCTION(plan_lpt_partition_fn),
      METH_VARARGS,
      "plan_lpt_partition(entries, num_workers) -> list[list[(path, size)]]\n"

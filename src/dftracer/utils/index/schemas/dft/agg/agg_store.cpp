@@ -17,13 +17,12 @@ namespace {
 
 constexpr std::string_view CONFIG_NAME = "config";
 constexpr std::string_view TIME_BOUNDS_NAME = "time_bounds";
-constexpr std::string_view TRACKER_NAME = "tracker";
 constexpr std::size_t CONFIG_FIXED_BYTES = 17;
 constexpr char KEY_SEP = '\x1f';
 constexpr std::uint8_t FLAG_GROUP_BY_FILE = 1U << 0;
 
-constexpr std::array<std::string_view, 3> META_NAMES = {
-    CONFIG_NAME, TIME_BOUNDS_NAME, TRACKER_NAME};
+constexpr std::array<std::string_view, 2> META_NAMES = {CONFIG_NAME,
+                                                        TIME_BOUNDS_NAME};
 
 std::string meta_key(std::string_view name) {
     auto key = layout::file_prefix(layout::Ext::Agg, layout::agg_kind::META,
@@ -209,14 +208,6 @@ void widen_time_bounds(IndexDatabase& db, TimeBounds bounds) {
     append_u64_be(value, bounds.min_bucket);
     append_u64_be(value, bounds.max_bucket);
     put_meta(db, TIME_BOUNDS_NAME, value);
-}
-
-std::optional<std::string> read_tracker(const IndexDatabase& db) {
-    return get_meta(db, TRACKER_NAME);
-}
-
-void write_tracker(IndexDatabase& db, std::string_view bytes) {
-    put_meta(db, TRACKER_NAME, bytes);
 }
 
 void load_dictionary(const IndexDatabase& db, AggInternTable& table) {

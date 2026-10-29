@@ -189,7 +189,7 @@ void put_agg_chunk_columns_value(IndexWrite& w, int file_id,
 void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
                               std::string_view text);
 
-/// Index-wide aggregation record `name` (config, tracker, time bounds).
+/// Index-wide aggregation record `name` (config, time bounds).
 void put_agg_meta(IndexWrite& w, std::string_view name,
                   std::string_view payload);
 /// Removes index-wide aggregation record `name`.

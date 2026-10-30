@@ -1325,6 +1325,29 @@ install(
   FILES_MATCHING
   PATTERN "*.h")
 
+# RocksDB's headers, at <includedir>/rocksdb: the public
+# <dftracer/utils/index/store/database.h> includes <rocksdb/db.h>, so a consumer
+# of RocksDatabase needs the headers of the RocksDB it was built with. A system
+# RocksDB already has its headers installed.
+set(_rocksdb_include_dir "")
+if(TARGET rocksdb)
+  get_target_property(_rocksdb_imported rocksdb IMPORTED)
+  if(NOT _rocksdb_imported)
+    get_target_property(_rocksdb_source_dir rocksdb SOURCE_DIR)
+    set(_rocksdb_include_dir "${_rocksdb_source_dir}/include")
+  endif()
+endif()
+if(NOT _rocksdb_include_dir AND DFTRACER_UTILS_ROCKSDB_PREFIX)
+  set(_rocksdb_include_dir "${DFTRACER_UTILS_ROCKSDB_PREFIX}/include")
+endif()
+if(_rocksdb_include_dir)
+  install(
+    DIRECTORY "${_rocksdb_include_dir}/rocksdb"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING
+    PATTERN "*.h")
+endif()
+
 # ##############################################################################
 # Executables
 # ##############################################################################

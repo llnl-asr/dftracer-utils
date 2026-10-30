@@ -1969,6 +1969,25 @@ dstd::Expected<const detail::ExtentSlot*, dstd::Error> Snapshot::loaded_extent(
     return &commit.extent_slots[slot.block];
 }
 
+dstd::Expected<ByteView, dstd::Error> Snapshot::read_head(
+    const detail::FileData& file, const detail::ExtentSlot& extent,
+    const detail::SegmentSlot& slot, std::size_t first_page,
+    std::size_t end_page, detail::PageHold& hold) const {
+    // The writer gives the header and index pages of their own.
+    const ExtentPages& pages = *extent.pages;
+    for (std::size_t page = first_page; page < end_page; ++page) {
+        const PageEntry& entry = pages.entry(page);
+        const std::uint32_t upto = std::min<std::uint32_t>(
+            entry.raw_offset + entry.raw_length - slot.offset_in_extent,
+            slot.length);
+        auto bytes = read_raw(file, extent, slot.offset_in_extent, upto, hold);
+        if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+        const std::uint32_t head_length = SegmentView::head_length(*bytes);
+        if (head_length != 0) return ByteView{bytes->data(), head_length};
+    }
+    return ByteView{};
+}
+
 dstd::Expected<dstd::UniquePtr<detail::SegmentBody>, dstd::Error>
 Snapshot::open_segment(const detail::FileData& file, detail::LazyBlock& block,
                        std::size_t index, ByteView begin, ByteView end) const {
@@ -2000,25 +2019,12 @@ Snapshot::open_segment(const detail::FileData& file, detail::LazyBlock& block,
     if (covered.first >= covered.second) return bad_extent_error();
     if (covered.second - covered.first <= 2) return whole();
 
-    // The writer gives the header and index pages of their own.
     detail::PageHold head_hold;
-    ByteView head;
-    for (std::size_t page = covered.first; page < covered.second; ++page) {
-        const PageEntry& entry = pages.entry(page);
-        const std::uint32_t upto = std::min<std::uint32_t>(
-            entry.raw_offset + entry.raw_length - slot.offset_in_extent,
-            slot.length);
-        auto bytes =
-            read_raw(file, extent, slot.offset_in_extent, upto, head_hold);
-        if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-        const std::uint32_t head_length = SegmentView::head_length(*bytes);
-        if (head_length != 0) {
-            head = ByteView{bytes->data(), head_length};
-            break;
-        }
-    }
-    if (head.empty()) return whole();
-    auto opened = SegmentView::open_head(head, slot.length);
+    auto head =
+        read_head(file, extent, slot, covered.first, covered.second, head_hold);
+    if (!head) return dstd::Unexpected<dstd::Error>(head.error());
+    if (head->empty()) return whole();
+    auto opened = SegmentView::open_head(*head, slot.length);
     if (!opened) return bad_extent_error();
     if (opened->granule_count() == 0) return whole();
     const SegmentView::GranuleSpan span = opened->range_span(begin, end);
@@ -2060,19 +2066,12 @@ Snapshot::find_in_segment(const detail::FileData& file,
     if (covered.first >= covered.second) return bad_extent_error();
     if (covered.second - covered.first == 1) return whole();
 
-    // The header and the index lie in the first page the segment spans, which
-    // the writer gives them alone.
-    const PageEntry& head_page = pages.entry(covered.first);
-    const std::uint32_t head_end = head_page.raw_offset + head_page.raw_length;
-    if (slot.offset_in_extent >= head_end) return bad_extent_error();
     detail::PageHold head_hold;
-    auto head = read_raw(file, extent, slot.offset_in_extent,
-                         head_end - slot.offset_in_extent, head_hold);
+    auto head =
+        read_head(file, extent, slot, covered.first, covered.second, head_hold);
     if (!head) return dstd::Unexpected<dstd::Error>(head.error());
-    const std::uint32_t head_length = SegmentView::head_length(*head);
-    if (head_length == 0) return whole();
-    auto granule = SegmentView::find_granule(
-        ByteView{head->data(), head_length}, slot.length, key);
+    if (head->empty()) return whole();
+    auto granule = SegmentView::find_granule(*head, slot.length, key);
     if (!granule) return bad_extent_error();
     if (!granule->has_value()) return dstd::Optional<SegmentView::Entry>{};
     const SegmentView::GranuleSpan span = **granule;

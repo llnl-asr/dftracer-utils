@@ -853,6 +853,12 @@ class Snapshot {
         const detail::FileData& file, const detail::ExtentSlot& extent,
         std::uint32_t offset_in_extent, std::uint32_t length,
         detail::PageHold& hold) const;
+    /// The header and index of a segment over pages [first_page, end_page) of
+    /// `extent`, read page by page until they parse. Empty when they never do.
+    dstd::Expected<ByteView, dstd::Error> read_head(
+        const detail::FileData& file, const detail::ExtentSlot& extent,
+        const detail::SegmentSlot& slot, std::size_t first_page,
+        std::size_t end_page, detail::PageHold& hold) const;
     /// Reads the extent refs of a summary commit once, under its index mutex,
     /// and builds its blocks, extents and segments.
     detail::LoadStatus load_index(detail::Commit& commit) const;

@@ -19,6 +19,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -120,9 +121,7 @@ coro::CoroTask<ResolverResult> resolve_dropping_outdated(ResolverInput input,
 coro::CoroTask<ResolverResult> resolve_and_build_once(
     CoroScope* scope, ResolveAndBuildInput input) {
     std::size_t parallelism = input.parallelism;
-    if (parallelism == 0) {
-        parallelism = hardware_concurrency();
-    }
+    if (parallelism == 0) parallelism = default_runtime().threads();
 
     Resolver resolver;
     ResolverInput resolve_input;

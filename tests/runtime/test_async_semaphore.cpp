@@ -13,3 +13,13 @@ TEST_CASE("try_acquire takes free permits and never waits") {
     sem.release(10);
     CHECK(sem.try_acquire(10));
 }
+
+TEST_CASE("a release above the capacity returns the capacity") {
+    // An acquire of more than the capacity takes the capacity, so the release
+    // of the same request must not add permits past it.
+    CoroSemaphore sem(10);
+    CHECK(sem.try_acquire(10));
+    sem.release(25);
+    CHECK(sem.try_acquire(10));
+    CHECK_FALSE(sem.try_acquire(1));
+}

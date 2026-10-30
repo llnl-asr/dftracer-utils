@@ -117,8 +117,10 @@ class CoroSemaphore {
         return true;
     }
 
-    /// Return `n` permits and wake any waiters that now fit, in FIFO order.
+    /// Return `n` permits and wake any waiters that now fit, in FIFO order. `n`
+    /// above capacity is clamped, as acquire clamps it.
     void release(std::uint64_t n) {
+        if (n > capacity_) n = capacity_;
         Waiter wake_local[8];
         std::size_t wake_n = 0;
         std::deque<Waiter> wake_overflow;

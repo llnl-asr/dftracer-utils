@@ -1225,6 +1225,14 @@ coro::CoroTask<void> fuse_worker(FuseWorkerCtx ctx, std::size_t w) {
                 : 0;
         co_await ctx.budget_sem.acquire(reserve);
         ScanPermit permit{ctx.budget_sem, reserve};
+        // A narrow() may land while this unit waits for the budget, and with
+        // many workers every unit is claimed before the first one runs.
+        if (ctx.dyn_prune &&
+            ctx.dyn_prune->is_excluded(unit.file_path, unit.checkpoint_idx)) {
+            ctx.dyn_prune->record_skip();
+            co_await for_slices(slices, [&](Fold& s) { s.skip_unit(unit); });
+            continue;
+        }
 
         ViewScannerInput sin =
             make_scanner_input(ctx.units[i], ctx.vdef, ctx.vdef.query);

@@ -157,6 +157,14 @@ foreach(threads 1 2 8)
     ENVIRONMENT "DFTRACER_UTILS_THREADS=${threads}")
 endforeach()
 
+# With more workers than units, every unit is claimed before narrow() lands.
+add_test(NAME trace/views/test_dynamic_prune_t224
+         COMMAND trace_views_test_dynamic_prune)
+set_tests_properties(trace/views/test_dynamic_prune_t224 PROPERTIES
+  WORKING_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/workdirs/trace_views_test_dynamic_prune"
+  ENVIRONMENT "DFTRACER_UTILS_THREADS=224")
+
 
 # The parity test replays references recorded from the CLI tools and the View.
 target_compile_definitions(trace_aggregators_test_agg_parity PRIVATE

@@ -1434,6 +1434,10 @@ dftracer::utils::dataframe::ScanResult ViewSource::scan(
                            : dftracer::utils::dataframe::Pushed::Inexact;
     }
     if (!req.projection.empty()) v = scan::select(v, req.projection);
+    // The scan's own gate then bounds the units in flight, not the core count.
+    if (req.memory_budget != 0 &&
+        (v->memory_budget == 0 || req.memory_budget < v->memory_budget))
+        v = scan::memory_budget(v, req.memory_budget);
 
     r.cursor = open_stream(v, req.memory_budget, fnames);
     return r;

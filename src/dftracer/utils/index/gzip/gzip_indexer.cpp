@@ -173,6 +173,9 @@ constexpr std::size_t RESTART_WINDOW = 32768;
 // from its restart points, so a file in flight holds a few pieces and not a
 // checkpoint's worth of text per message.
 constexpr std::size_t SHIP_BYTES = std::size_t{4} << 20;
+// A member that inflates past this is streamed rather than decoded whole, so a
+// file in flight does not hold several whole members at once.
+constexpr std::size_t WHOLE_MEMBER_BYTES = std::size_t{8} << 20;
 
 // No deflate stream expands past 1032 output bytes per input byte.
 constexpr std::uint64_t MAX_DEFLATE_RATIO = 1032;
@@ -445,8 +448,10 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         // A member larger than a piece is streamed. The header scan gives its
         // size (ISIZE) when the trailer can be trusted. Otherwise the decode
         // below stops at the bound and the member is streamed from its start.
-        const std::size_t bound = static_cast<std::size_t>(
-            std::max<std::uint64_t>(ckpt_size, RESTART_WINDOW));
+        const std::size_t bound =
+            std::min(static_cast<std::size_t>(
+                         std::max<std::uint64_t>(ckpt_size, RESTART_WINDOW)),
+                     WHOLE_MEMBER_BYTES);
         const GzipMember* known = next != candidates.begin() &&
                                           next != candidates.end() &&
                                           std::prev(next)->c_offset == c_off

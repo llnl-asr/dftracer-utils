@@ -15,6 +15,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The fresh check of the 2,376 amg traces takes 1.4 s where it took 3.0 s with the index in the cache.
 - Inflate a gzip member that grows past 8 MiB in 1 MiB pieces, where a build held whole members of up to the checkpoint size for each file in flight.
   A cold `dftracer_index` of the 2,376 amg traces at 96 threads peaks at 8.3 GB where it peaked at 11.2 GB, and the 7,742 minife traces at 3.5 GB where they peaked at 4.9 GB, in the same time.
+- Write the aggregation rows of a file to the index in 4 MiB runs as the build closes its chunks, where a build held every row of each file in flight until the file ended.
+  A cold `dftracer_index` of the 2,376 amg traces at 96 threads peaks at 5.2 GB where it peaked at 8.1 GB, in the same time.
+  Sets of many small files peak a little higher: 3.7 GB where they peaked at 3.4 GB for the 7,742 minife traces and 2.0 GB where they peaked at 1.8 GB for the 14,117 minife traces.
 - Count the memory zlib-ng, zstd and libdeflate allocate against the memory pool that uses it, so the memory budget and the memory reports include it.
 - Bound the memory the allocator keeps after a free, so peak memory no longer grows with the thread count: past 64 MiB of freed but still backed pages, a thread that frees gives its idle pages back at once, and an idle worker or I/O thread gives back its own.
   An index build of 2,000 files at 224 threads peaks at 325 MB where it took 623 MB, in the same time.

@@ -232,8 +232,9 @@ std::size_t members_lines(const std::string& path) {
 
 struct Indexed {
     std::shared_ptr<GzipIndexer> indexer;
-    Indexed(const std::string& path, const std::string& index_path) {
-        indexer = std::make_shared<GzipIndexer>(path, index_path, CKPT, true);
+    Indexed(const std::string& path, const std::string& index_path,
+            std::uint64_t ckpt = CKPT) {
+        indexer = std::make_shared<GzipIndexer>(path, index_path, ckpt, true);
         run_coro([&](CoroScope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
@@ -384,6 +385,29 @@ TEST_SUITE("BigMemberReads") {
         CHECK(compared == pieces.size());
         MESSAGE("line reader peak: " << before);
         CHECK(before <= BUDGET_BYTES + BOUND_BYTES * 4);
+    }
+
+    TEST_CASE("restart points past shipped pieces read back their lines") {
+        Files fx(BIG_BYTES, 9, "w");
+        // Wider than the pieces a streamed member ships in, so each restart
+        // window spans bytes already shipped.
+        constexpr std::uint64_t WIDE_CKPT = std::uint64_t{10} << 20;
+        Indexed big(fx.big, fx.dir + "/idx_wide", WIDE_CKPT);
+        const auto pieces = big.indexer->get_members();
+        std::size_t restarts = 0;
+        for (const auto& p : pieces)
+            restarts += p.kind == GzipRecordKind::Restart;
+        REQUIRE(restarts >= 4);
+        CHECK(big.indexer->get_num_lines() == fx.trace.lines);
+
+        const std::size_t total = fx.trace.lines;
+        for (const auto& p : pieces) {
+            const std::size_t first = std::min<std::size_t>(
+                static_cast<std::size_t>(p.first_line_num) + 3, total - 4);
+            CAPTURE(p.member_idx);
+            CHECK(big.read_lines(first, first + 3) ==
+                  lines_of(fx.trace.text, first, first + 3));
+        }
     }
 
     TEST_CASE(

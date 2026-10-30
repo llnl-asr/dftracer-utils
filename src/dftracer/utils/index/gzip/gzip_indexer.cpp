@@ -169,6 +169,10 @@ static std::uint64_t count_newlines(const unsigned char* p, std::size_t n) {
 }
 
 constexpr std::size_t RESTART_WINDOW = 32768;
+// A streamed member goes to the dispatcher in pieces of about this size, apart
+// from its restart points, so a file in flight holds a few pieces and not a
+// checkpoint's worth of text per message.
+constexpr std::size_t SHIP_BYTES = std::size_t{4} << 20;
 
 // No deflate stream expands past 1032 output bytes per input byte.
 constexpr std::uint64_t MAX_DEFLATE_RATIO = 1032;
@@ -257,16 +261,33 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     Bytes in(READ_CHUNK);
     InflateBuffer buf = buffers.take();
     buf->clear();
-    // Growing a piece by doubling would leave a 64 MB buffer for a 32 MB one.
-    buf->reserve(split_at + OUT_STEP);
+    // Growing a piece by doubling would leave an 8 MB buffer for a 4 MB one.
+    buf->reserve(SHIP_BYTES + OUT_STEP);
     std::uint64_t next_read = c_off;
     bool strip = strip_leading_partial;
     bool cut = false;
     std::uint64_t since_newline = 0;
+    std::uint64_t since_restart = 0;
+    // The last RESTART_WINDOW bytes of output already shipped, for the window
+    // of a restart point whose piece holds less than that.
+    std::string shipped_tail;
     stop = false;
+
+    auto remember = [&](const Bytes& data) {
+        const char* bytes = reinterpret_cast<const char*>(data.data());
+        if (data.size() >= RESTART_WINDOW) {
+            shipped_tail.assign(bytes + data.size() - RESTART_WINDOW,
+                                RESTART_WINDOW);
+            return;
+        }
+        shipped_tail.append(bytes, data.size());
+        if (shipped_tail.size() > RESTART_WINDOW)
+            shipped_tail.erase(0, shipped_tail.size() - RESTART_WINDOW);
+    };
 
     auto emit = [&](ParallelInflateMsg& msg) {
         Bytes& data = *buf;
+        remember(data);
         std::size_t start = 0;
         if (strip) {
             start = data.size();
@@ -289,7 +310,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
             drop_front(data, start);
             msg.data = std::move(buf);
             buf = buffers.take();
-            buf->reserve(split_at + OUT_STEP);
+            buf->reserve(SHIP_BYTES + OUT_STEP);
         }
         buf->clear();
     };
@@ -312,6 +333,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
         const compress::InflateStatus rc =
             gz.inflate(compress::InflateFlush::Block);
         piece.resize(old + (OUT_STEP - gz.avail_out()));
+        since_restart += piece.size() - old;
 
         if (rc == compress::InflateStatus::StreamEnd) break;
         if (rc != compress::InflateStatus::Ok &&
@@ -326,14 +348,30 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
 
         const int data_type = gz.data_type();
         if ((data_type & 128) && !(data_type & 64) &&
-            piece.size() >= split_at) {
+            since_restart >= split_at) {
             ParallelInflateMsg msg;
             msg.restart = true;
             msg.bits = static_cast<std::uint8_t>(data_type & 7);
             msg.member_c_end = c_off + gz.total_in();
-            msg.window.assign(reinterpret_cast<const char*>(piece.data()) +
-                                  piece.size() - RESTART_WINDOW,
-                              RESTART_WINDOW);
+            const char* bytes = reinterpret_cast<const char*>(piece.data());
+            if (piece.size() >= RESTART_WINDOW) {
+                msg.window.assign(bytes + piece.size() - RESTART_WINDOW,
+                                  RESTART_WINDOW);
+            } else {
+                const std::size_t from_tail = RESTART_WINDOW - piece.size();
+                msg.window.assign(shipped_tail, shipped_tail.size() - from_tail,
+                                  from_tail);
+                msg.window.append(bytes, piece.size());
+            }
+            since_restart = 0;
+            emit(msg);
+            const auto send_ok = co_await producer.send(std::move(msg));
+            if (!send_ok) {
+                stop = true;
+                co_return true;
+            }
+        } else if (piece.size() >= SHIP_BYTES) {
+            ParallelInflateMsg msg;
             emit(msg);
             const auto send_ok = co_await producer.send(std::move(msg));
             if (!send_ok) {

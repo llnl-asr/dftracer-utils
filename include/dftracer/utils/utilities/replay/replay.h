@@ -274,9 +274,9 @@ class ReplayEngine {
 
     /**
      * Replay files in parallel, one lane per file, at most one file per
-     * executor thread. Waits of a millisecond or more suspend on the timer.
-     * @param result Per-file results merged in input order. Must outlive the
-     *               awaited coroutine.
+     * executor thread, with the file workers spawned on `scope`. Waits of a
+     * millisecond or more suspend on the timer. `result` gets the per-file
+     * results merged in input order and must outlive the awaited coroutine.
      */
     coro::CoroTask<void> run_pipelined(dftracer::utils::CoroScope& scope,
                                        const std::vector<std::string>& files,

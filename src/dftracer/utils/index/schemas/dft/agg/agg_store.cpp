@@ -65,20 +65,6 @@ std::uint32_t entry_id(std::string_view prefix, std::string_view key) {
     return layout::read_u32(key.substr(prefix.size() + sizeof(std::uint32_t)));
 }
 
-void load_file_texts(const IndexDatabase& db, int file_id,
-                     dstd::HashMap<std::uint32_t, dstd::String>& texts) {
-    const auto entries = dict_prefix();
-    const auto range =
-        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
-                            static_cast<std::uint32_t>(file_id));
-    AggRowReader::for_each_row(
-        db, layout::agg_kind::DICT, range,
-        [&](std::string_view dict_key, std::string_view text) {
-            texts.try_emplace(entry_id(entries, dict_key), dstd::String(text));
-            return true;
-        });
-}
-
 /// An id the file holds no entry for gets the empty text.
 void resolve_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
                    ChunkColumns& block) {
@@ -260,36 +246,18 @@ void load_dictionary(const IndexDatabase& db, AggInternTable& table) {
         });
 }
 
-Dictionary::Dictionary(const IndexDatabase& db) {
-    const auto prefix = dict_prefix();
+void load_file_texts(const IndexDatabase& db, int file_id,
+                     dstd::HashMap<std::uint32_t, dstd::String>& texts) {
+    const auto entries = dict_prefix();
+    const auto range =
+        layout::file_prefix(layout::Ext::Agg, layout::agg_kind::DICT,
+                            static_cast<std::uint32_t>(file_id));
     AggRowReader::for_each_row(
-        db, layout::agg_kind::DICT, prefix,
-        [&](std::string_view key, std::string_view body) {
-            const std::uint32_t id = entry_id(prefix, key);
-            auto [at, inserted] = entries_.try_emplace(id, body);
-            if (!inserted && at->second != body)
-                throw_conflict(id, at->second, body);
+        db, layout::agg_kind::DICT, range,
+        [&](std::string_view dict_key, std::string_view text) {
+            texts.try_emplace(entry_id(entries, dict_key), dstd::String(text));
             return true;
         });
-}
-
-const std::string* Dictionary::find(std::uint32_t id) const {
-    auto at = entries_.find(id);
-    return at == entries_.end() ? nullptr : &at->second;
-}
-
-std::optional<std::string> read_dictionary_entry(const IndexDatabase& db,
-                                                 std::uint32_t id) {
-    const auto prefix = dict_prefix();
-    std::optional<std::string> out;
-    AggRowReader::for_each_row(
-        db, layout::agg_kind::DICT, prefix,
-        [&](std::string_view key, std::string_view body) {
-            if (entry_id(prefix, key) != id) return true;
-            out = std::string(body);
-            return false;
-        });
-    return out;
 }
 
 void clear(IndexDatabase& db) {

@@ -59,12 +59,10 @@ struct Source {
           params_hash(s.params_hash ? *s.params_hash : default_params_hash) {
         if (path.empty() || !dftracer::utils::input_exists(path)) return;
         idx.emplace(path, index::store::IndexOpenMode::ReadOnly);
-        dict.emplace(*idx);
     }
 
     std::string path;
     dstd::Optional<index::store::IndexDatabase> idx;
-    dstd::Optional<agg::tier::Dictionary> dict;
     std::uint64_t params_hash;
 };
 
@@ -172,15 +170,19 @@ class Task {
 
     template <class Filter>
     std::uint32_t map_root(std::uint32_t id, const Filter& filter) {
-        const std::string* text = src_.dict->find(id);
-        if (!text)
+        const std::string_view text = text_of(id);
+        if (!filter.empty() && filter.find(text) == filter.end())
+            return AGG_REJECT;
+        return r_.rules.strings.get_or_insert(text);
+    }
+
+    std::string_view text_of(std::uint32_t id) const {
+        const auto at = texts_.find(id);
+        if (at == texts_.end())
             throw DFTUtilsException::cat(ErrorCode::Parse,
                                          "aggregation query: dictionary id ",
                                          id, " is missing in ", src_.path);
-        if (!filter.empty() &&
-            filter.find(std::string_view(*text)) == filter.end())
-            return AGG_REJECT;
-        return r_.rules.strings.get_or_insert(*text);
+        return std::string_view(at->second.data(), at->second.size());
     }
 
     PidFit pid_fit(const agg::AggPartial& p) const {
@@ -240,6 +242,7 @@ class Task {
     Source& src_;
     AggEventFolder folder_;
     AggIdCache root_cat_, root_name_, root_host_, root_extra_;
+    dstd::HashMap<std::uint32_t, dstd::String> texts_;
     dstd::Vector<Reread> rereads_;
     views::detail::FoldEventBuffer buffer_;
     FoldEvent column_event_;
@@ -403,6 +406,7 @@ coro::CoroTask<void> Task::scan_file(
 
     std::size_t seen = 0;
     if (usable) {
+        agg::tier::load_file_texts(idx, fid, texts_);
         agg::tier::for_each_partial(
             *src_.idx, fid,
             [&](std::uint32_t chunk, std::uint32_t cat_root,
@@ -430,15 +434,10 @@ coro::CoroTask<void> Task::scan_file(
                 }
                 const std::uint32_t extra =
                     root_extra_.get(extra_root, [&](std::uint32_t id) {
-                        const std::string* text = src_.dict->find(id);
-                        if (!text)
-                            throw DFTUtilsException::cat(
-                                ErrorCode::Parse,
-                                "aggregation query: dictionary id ", id,
-                                " is missing in ", src_.path);
-                        return text->empty()
+                        const std::string_view text = text_of(id);
+                        return text.empty()
                                    ? dstd::StringIntern::NO_ID
-                                   : r_.rules.strings.get_or_insert(*text);
+                                   : r_.rules.strings.get_or_insert(text);
                     });
                 take_partial(chunk, {cat, name, host, extra, kind}, bytes);
                 return true;

@@ -1,9 +1,10 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGG_STORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGG_STORE_H
 
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
@@ -82,20 +83,10 @@ void widen_time_bounds(IndexDatabase& db, TimeBounds bounds);
 
 void load_dictionary(const IndexDatabase& db, AggInternTable& table);
 
-/// The index dictionary read once, for a reader that looks up many ids.
-class Dictionary {
-   public:
-    explicit Dictionary(const IndexDatabase& db);
-
-    /// nullptr when the index holds none.
-    const std::string* find(std::uint32_t id) const;
-
-   private:
-    ankerl::unordered_dense::map<std::uint32_t, std::string> entries_;
-};
-
-std::optional<std::string> read_dictionary_entry(const IndexDatabase& db,
-                                                 std::uint32_t id);
+/// Adds the dictionary entries `file_id` wrote, one for each id its records
+/// use, to `texts`. Throws on a read error or a malformed entry.
+void load_file_texts(const IndexDatabase& db, int file_id,
+                     dstd::HashMap<std::uint32_t, dstd::String>& texts);
 
 /// Removes every record of the aggregation tier from the index.
 void clear(IndexDatabase& db);

@@ -179,6 +179,24 @@ class SegmentView {
     static dstd::Expected<dstd::Optional<GranuleSpan>, dstd::Error>
     find_granule(ByteView head, std::uint32_t segment_length, ByteView key);
 
+    /// The header and granule index `head` of a segment of `segment_length`,
+    /// checked as find_granule checks them, with no entry bytes. Its first keys
+    /// point into `head`. Use it for range_span and with_window only.
+    static dstd::Expected<SegmentView, dstd::Error> open_head(
+        ByteView head, std::uint32_t segment_length);
+
+    /// The granules of a view from open_head that can hold a key in
+    /// [begin, end), as one span. An empty `end` is unbounded. The view must
+    /// have a granule.
+    GranuleSpan range_span(ByteView begin, ByteView end) const;
+
+    /// A view of the granules of a view from open_head that `window` holds,
+    /// the bytes at `window_offset` of the segment. `window` and the head must
+    /// outlive it. A Parse error when `window` does not start and end on
+    /// granule bounds.
+    dstd::Expected<SegmentView, dstd::Error> with_window(
+        ByteView window, std::uint32_t window_offset) &&;
+
     /// The entry of `key` among the bytes of one granule, which the returned
     /// entry points into, or nullopt when the granule does not hold it. A Parse
     /// error when an entry does not parse or runs past the granule.

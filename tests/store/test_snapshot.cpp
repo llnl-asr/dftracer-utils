@@ -4481,6 +4481,72 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().pages_decoded == pages->size());
     }
 
+    TEST_CASE(
+        "a range scan of a segment over pages decodes only its granules") {
+        const ScopeKey scope = file_scope("/traces/range_granules.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.range_granules");
+        constexpr std::size_t KEY_COUNT = 700;
+        const std::string value(400, 'v');
+        const auto key_at = [](std::size_t index) {
+            const std::string digits = std::to_string(index);
+            return "key-" + std::string(6 - digits.size(), '0') + digits;
+        };
+
+        dftu_utils_test::ScopedTestDir dir("snapshot_range_granules");
+        WriterOptions options = small_extents();
+        options.extent_size = 8U * 1024U * 1024U;
+        std::string path;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch batch = writer->batch(*id, scope, 0);
+            for (std::size_t index = 0; index < KEY_COUNT; ++index) {
+                batch.put(view_of(key_at(index)), view_of(value));
+            }
+            REQUIRE(writer->commit(std::move(batch)).has_value());
+            REQUIRE(flush_writer(*writer).has_value());
+            path = to_std(writer->path());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        auto reader = DataFileReader::open(path);
+        REQUIRE(reader.has_value());
+        const auto refs = extent_refs_of(*reader);
+        REQUIRE(refs.size() == 1);
+        REQUIRE(refs[0].ref.segments.size() == 1);
+        auto stored = reader->read_extent(
+            {refs[0].ref.offset, refs[0].ref.length, refs[0].ref.crc});
+        REQUIRE(stored.has_value());
+        auto pages = store::ExtentPages::open(view_of(*stored));
+        REQUIRE(pages.has_value());
+        REQUIRE(pages->size() > 4);
+
+        const auto scan_range = [&](std::size_t from, std::size_t to,
+                                    bool bounded) {
+            auto snapshot = Snapshot::open(dir.str());
+            REQUIRE(snapshot.has_value());
+            const std::string begin = key_at(from);
+            const std::string end = bounded ? key_at(to) : std::string();
+            auto cursor = snapshot->scan(spec, scope, view_of(begin),
+                                         bounded ? view_of(end) : ByteView{});
+            const std::vector<std::pair<std::string, std::string>> rows =
+                collect(cursor);
+            REQUIRE(rows.size() == to - from);
+            for (std::size_t i = 0; i < rows.size(); ++i) {
+                CHECK(rows[i].first == key_at(from + i));
+                CHECK(rows[i].second == value);
+            }
+            return snapshot->read_stats().pages_decoded;
+        };
+
+        // The header and index page, and the one or two granule pages.
+        CHECK(scan_range(300, 320, true) <= 3);
+        CHECK(scan_range(0, 5, true) <= 3);
+        CHECK(scan_range(690, KEY_COUNT, false) <= 3);
+        CHECK(scan_range(0, KEY_COUNT, false) == pages->size());
+    }
+
     TEST_CASE("a point read of a granule over a page reads the whole segment") {
         const ScopeKey scope = file_scope("/traces/wide_granule.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.wide_granule");

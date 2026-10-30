@@ -210,10 +210,14 @@ struct PageHold {
 /// The pages one segment spans and the view of the segment over them, owned by
 /// the cursor that reads the segment.
 struct SegmentBody {
-    SegmentBody(PageHold held, SegmentView opened)
-        : hold(std::move(held)), view(std::move(opened)) {}
+    SegmentBody(PageHold held, SegmentView opened, PageHold head_held = {})
+        : hold(std::move(held)),
+          head(std::move(head_held)),
+          view(std::move(opened)) {}
 
     PageHold hold;
+    /// The header and index pages, when `view` covers only some granules.
+    PageHold head;
     SegmentView view;
 };
 
@@ -852,11 +856,12 @@ class Snapshot {
     /// Reads the extent refs of a summary commit once, under its index mutex,
     /// and builds its blocks, extents and segments.
     detail::LoadStatus load_index(detail::Commit& commit) const;
-    /// The pages of one segment and its view over them, for a cursor to own.
-    /// An extent that failed its crc is a Parse error.
+    /// The pages of one segment that can hold a key in [begin, end) and its
+    /// view over them, for a cursor to own. An empty `end` is unbounded. An
+    /// extent that failed its crc is a Parse error.
     dstd::Expected<dstd::UniquePtr<detail::SegmentBody>, dstd::Error>
     open_segment(const detail::FileData& file, detail::LazyBlock& block,
-                 std::size_t index) const;
+                 std::size_t index, ByteView begin, ByteView end) const;
     /// The extent holding one segment, loaded once: the extent of a closed file
     /// or the block of the commit that holds it. An extent that failed its crc
     /// is a Parse error.

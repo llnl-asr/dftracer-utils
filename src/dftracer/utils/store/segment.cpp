@@ -543,6 +543,112 @@ SegmentView::find_granule(ByteView head, std::uint32_t segment_length,
     return found;
 }
 
+dstd::Expected<SegmentView, dstd::Error> SegmentView::open_head(
+    ByteView head, std::uint32_t segment_length) {
+    if (head.size() < HEADER_BYTES) return parse_error();
+    const auto* data = byte_data(head);
+    if (std::memcmp(data, SEGMENT_MAGIC.data(), SEGMENT_MAGIC.size()) != 0) {
+        return parse_error();
+    }
+    if (dftracer::utils::read_u32_le(data + 4U) != segment_length) {
+        return parse_error();
+    }
+    if (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
+        return parse_error();
+    }
+    const std::uint32_t entry_count = dftracer::utils::read_u32_le(data + 8U);
+    const std::uint32_t granule_count =
+        dftracer::utils::read_u32_le(data + 12U);
+    if (granule_count >
+        (head.size() - HEADER_BYTES) / MIN_GRANULE_INDEX_BYTES) {
+        return parse_error();
+    }
+
+    std::size_t at = HEADER_BYTES;
+    dstd::Vector<Granule> granules;
+    granules.reserve(granule_count);
+    std::size_t expected_offset = 0;
+    for (std::uint32_t i = 0; i < granule_count; ++i) {
+        if (head.size() - at < 8U) return parse_error();
+        const std::uint32_t offset = dftracer::utils::read_u32_le(data + at);
+        const std::uint32_t length =
+            dftracer::utils::read_u32_le(data + at + 4U);
+        at += 8U;
+        const auto key_length = decode_varint(head, at);
+        if (!key_length || at > head.size()) return parse_error();
+        if (*key_length > head.size() - at) return parse_error();
+        const ByteView first_key = {data + at,
+                                    static_cast<std::size_t>(*key_length)};
+        at += static_cast<std::size_t>(*key_length);
+
+        if (length == 0 || offset > segment_length ||
+            length > segment_length - offset) {
+            return parse_error();
+        }
+        if (i != 0 && offset != expected_offset) return parse_error();
+        if (i != 0 &&
+            compare_bytes(granules.back().first_key, first_key) >= 0) {
+            return parse_error();
+        }
+        expected_offset = static_cast<std::size_t>(offset) + length;
+        granules.push_back({offset, length, first_key});
+    }
+    if (at != head.size()) return parse_error();
+    if (!granules.empty() && granules.front().offset != at) {
+        return parse_error();
+    }
+    return SegmentView(ByteView{}, std::move(granules), entry_count);
+}
+
+SegmentView::GranuleSpan SegmentView::range_span(ByteView begin,
+                                                 ByteView end) const {
+    const auto first_after = [&](ByteView key) {
+        return static_cast<std::size_t>(
+            std::upper_bound(granules_.begin(), granules_.end(), key,
+                             [](ByteView k, const Granule& g) {
+                                 return compare_bytes(k, g.first_key) < 0;
+                             }) -
+            granules_.begin());
+    };
+    const std::size_t after_begin = first_after(begin);
+    const std::size_t first = after_begin == 0 ? 0 : after_begin - 1U;
+    std::size_t last = granules_.size() - 1U;
+    if (!end.empty()) {
+        const auto below_end = static_cast<std::size_t>(
+            std::lower_bound(granules_.begin(), granules_.end(), end,
+                             [](const Granule& g, ByteView k) {
+                                 return compare_bytes(g.first_key, k) < 0;
+                             }) -
+            granules_.begin());
+        last = below_end == 0 ? 0 : below_end - 1U;
+    }
+    if (last < first) last = first;
+    const Granule& low = granules_[first];
+    const Granule& high = granules_[last];
+    return GranuleSpan{
+        static_cast<std::uint32_t>(low.offset),
+        static_cast<std::uint32_t>(high.offset + high.length - low.offset)};
+}
+
+dstd::Expected<SegmentView, dstd::Error> SegmentView::with_window(
+    ByteView window, std::uint32_t window_offset) && {
+    const std::size_t low = window_offset;
+    const std::size_t high = low + window.size();
+    dstd::Vector<Granule> kept;
+    for (const Granule& granule : granules_) {
+        if (granule.offset < low || granule.offset + granule.length > high) {
+            continue;
+        }
+        kept.push_back(
+            {granule.offset - low, granule.length, granule.first_key});
+    }
+    if (kept.empty() || kept.front().offset != 0 ||
+        kept.back().offset + kept.back().length != window.size()) {
+        return parse_error();
+    }
+    return SegmentView(window, std::move(kept), entry_count_);
+}
+
 dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
 SegmentView::find_in_granule(ByteView granule, ByteView key) {
     std::size_t at = 0;

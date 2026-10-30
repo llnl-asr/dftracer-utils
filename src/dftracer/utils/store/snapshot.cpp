@@ -1971,19 +1971,65 @@ dstd::Expected<const detail::ExtentSlot*, dstd::Error> Snapshot::loaded_extent(
 
 dstd::Expected<dstd::UniquePtr<detail::SegmentBody>, dstd::Error>
 Snapshot::open_segment(const detail::FileData& file, detail::LazyBlock& block,
-                       std::size_t index) const {
+                       std::size_t index, ByteView begin, ByteView end) const {
     if (index >= block.segments.size()) return bad_extent_error();
     const detail::SegmentSlot& slot = block.segments[index];
-    auto extent = loaded_extent(file, block, index);
-    if (!extent) return dstd::Unexpected<dstd::Error>(extent.error());
-    detail::PageHold hold;
-    auto bytes =
-        read_raw(file, **extent, slot.offset_in_extent, slot.length, hold);
-    if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
-    auto opened = SegmentView::open_index(*bytes);
+    auto loaded = loaded_extent(file, block, index);
+    if (!loaded) return dstd::Unexpected<dstd::Error>(loaded.error());
+    const detail::ExtentSlot& extent = **loaded;
+    if (!extent.pages.has_value()) return bad_extent_error();
+    const ExtentPages& pages = *extent.pages;
+    if (slot.offset_in_extent > pages.raw_length() ||
+        slot.length > pages.raw_length() - slot.offset_in_extent) {
+        return bad_extent_error();
+    }
+    const auto whole = [&]()
+        -> dstd::Expected<dstd::UniquePtr<detail::SegmentBody>, dstd::Error> {
+        detail::PageHold hold;
+        auto bytes =
+            read_raw(file, extent, slot.offset_in_extent, slot.length, hold);
+        if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+        auto opened = SegmentView::open_index(*bytes);
+        if (!opened) return bad_extent_error();
+        return dstd::make_unique<detail::SegmentBody>(std::move(hold),
+                                                      std::move(*opened));
+    };
+    // A segment of many pages is decoded only where the range can lie, since
+    // every scope of a file can share it.
+    const auto covered = pages.covering(slot.offset_in_extent, slot.length);
+    if (covered.first >= covered.second) return bad_extent_error();
+    if (covered.second - covered.first <= 2) return whole();
+
+    // The writer gives the header and index pages of their own.
+    detail::PageHold head_hold;
+    ByteView head;
+    for (std::size_t page = covered.first; page < covered.second; ++page) {
+        const PageEntry& entry = pages.entry(page);
+        const std::uint32_t upto = std::min<std::uint32_t>(
+            entry.raw_offset + entry.raw_length - slot.offset_in_extent,
+            slot.length);
+        auto bytes =
+            read_raw(file, extent, slot.offset_in_extent, upto, head_hold);
+        if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
+        const std::uint32_t head_length = SegmentView::head_length(*bytes);
+        if (head_length != 0) {
+            head = ByteView{bytes->data(), head_length};
+            break;
+        }
+    }
+    if (head.empty()) return whole();
+    auto opened = SegmentView::open_head(head, slot.length);
     if (!opened) return bad_extent_error();
-    return dstd::make_unique<detail::SegmentBody>(std::move(hold),
-                                                  std::move(*opened));
+    if (opened->granule_count() == 0) return whole();
+    const SegmentView::GranuleSpan span = opened->range_span(begin, end);
+    detail::PageHold hold;
+    auto window = read_raw(file, extent, slot.offset_in_extent + span.offset,
+                           span.length, hold);
+    if (!window) return dstd::Unexpected<dstd::Error>(window.error());
+    auto view = std::move(*opened).with_window(*window, span.offset);
+    if (!view) return bad_extent_error();
+    return dstd::make_unique<detail::SegmentBody>(
+        std::move(hold), std::move(*view), std::move(head_hold));
 }
 
 dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
@@ -2508,7 +2554,7 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
 bool ScopeCursor::load(std::size_t index) {
     const detail::SegmentLocation& at = segments_[index];
     auto body = snapshot_->open_segment(snapshot_->files_[copy_->file_index],
-                                        *at.block, at.index);
+                                        *at.block, at.index, begin_, end_);
     if (!body) {
         error_ = body.error();
         at_end_ = true;

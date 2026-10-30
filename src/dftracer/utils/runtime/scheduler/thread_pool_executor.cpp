@@ -487,12 +487,15 @@ void ThreadPoolExecutor::monitor_loop() {
                    num_threads_.load(std::memory_order_acquire)) {
             add_worker();
         }
-        // Shrink: one worker per keep-alive of sustained idle, down to the
-        // floor (gentle, so a brief lull does not thrash the pool).
-        if (live_workers_.load(std::memory_order_acquire) >
-                min_workers_.load(std::memory_order_acquire) &&
-            clock::now() - last_busy >= keepalive) {
-            retire_worker();
+        // Shrink after a keep-alive of sustained idle, by half the workers past
+        // the floor each time, so a brief lull costs nothing and a pool of any
+        // size reaches its floor in a few keep-alives.
+        const std::size_t live = live_workers_.load(std::memory_order_acquire);
+        const std::size_t floor = min_workers_.load(std::memory_order_acquire);
+        if (live > floor && clock::now() - last_busy >= keepalive) {
+            for (std::size_t n = std::max<std::size_t>((live - floor) / 2, 1);
+                 n > 0; --n)
+                retire_worker();
             last_busy = clock::now();
         }
         lock.lock();

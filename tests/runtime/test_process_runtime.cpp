@@ -151,6 +151,7 @@ TEST_SUITE("ProcessRuntime") {
         while (default_runtime().get_progress().workers.size() > 1 &&
                std::chrono::steady_clock::now() < deadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        REQUIRE(default_runtime().get_progress().workers.size() == 1);
         configure_default_runtime({.threads = 8});
         CHECK(default_runtime().get_progress().workers.size() < 8);
     }

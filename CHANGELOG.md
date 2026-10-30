@@ -305,6 +305,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix an idle worker pool that shrank by one worker per keep-alive, which took about a minute on a 224-thread node; it now retires half of the workers above its floor each keep-alive.
 - Fix a streaming scan that ignored its memory budget and a mid-scan `narrow()` on a host with more cores than the scan has chunks, because every chunk was claimed before the first one ran.
 - Fix a scan budget that grew each time a chunk larger than the budget finished, which let later chunks run past the budget.
 - Fix index answers that differed from a scan of the trace: records of a phase the View drops, such as instants, are left out of the index too, and a group by file keys a record without a file hash as null, not as an empty string.

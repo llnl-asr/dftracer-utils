@@ -170,7 +170,7 @@ constexpr std::size_t RESTART_WINDOW = 32768;
 // A streamed member goes to the dispatcher in pieces of about this size, apart
 // from its restart points, so a file in flight holds a few pieces and not a
 // checkpoint's worth of text per message.
-constexpr std::size_t SHIP_BYTES = std::size_t{4} << 20;
+constexpr std::size_t SHIP_BYTES = std::size_t{1} << 20;
 // A member that inflates past this is streamed rather than decoded whole, so a
 // file in flight does not hold several whole members at once.
 constexpr std::size_t WHOLE_MEMBER_BYTES = std::size_t{8} << 20;
@@ -262,7 +262,7 @@ static dftracer::utils::coro::CoroTask<bool> stream_member(
     Bytes in(READ_CHUNK);
     InflateBuffer buf = buffers.take();
     buf->clear();
-    // Growing a piece by doubling would leave an 8 MB buffer for a 4 MB one.
+    // Growing a piece by doubling would leave a buffer twice the piece.
     buf->reserve(SHIP_BYTES + OUT_STEP);
     std::uint64_t next_read = c_off;
     bool strip = strip_leading_partial;

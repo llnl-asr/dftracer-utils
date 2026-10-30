@@ -1,10 +1,15 @@
+// The _advanced create functions take the tracked allocator.
+#define ZSTD_STATIC_LINKING_ONLY
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/extent_codec.h>
 #include <zdict.h>
 #include <zstd.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 
@@ -25,14 +30,30 @@ dstd::Unexpected<dstd::Error> invalid_error() {
         dstd::Error(dstd::Condition::InvalidArgument));
 }
 
+// Thread-local contexts and shared dictionaries outlive any query pool, so
+// every block they take, including the workspace a context sizes on first use,
+// is charged to the general pool.
+ZSTD_customMem general_pool_mem() noexcept {
+    return {[](void* pool, std::size_t size) -> void* {
+                try {
+                    return memory::allocate(size, alignof(std::max_align_t),
+                                            *static_cast<memory::Pool*>(pool));
+                } catch (...) {
+                    return nullptr;
+                }
+            },
+            [](void*, void* p) { memory::c_free(p); },
+            &memory::Manager::get().general()};
+}
+
 struct CompressContext {
-    ZSTD_CCtx* ctx = ZSTD_createCCtx();
+    ZSTD_CCtx* ctx = ZSTD_createCCtx_advanced(general_pool_mem());
     dstd::Vector<std::uint8_t> scratch;
     ~CompressContext() { ZSTD_freeCCtx(ctx); }
 };
 
 struct DecompressContext {
-    ZSTD_DCtx* ctx = ZSTD_createDCtx();
+    ZSTD_DCtx* ctx = ZSTD_createDCtx_advanced(general_pool_mem());
     ~DecompressContext() { ZSTD_freeDCtx(ctx); }
 };
 
@@ -319,8 +340,9 @@ dstd::Expected<void, dstd::Error> ExtentPages::decode_page(
 
 dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
 PageDict::for_encode(ByteView bytes, const DictRef& ref) {
-    ZSTD_CDict* cdict =
-        ZSTD_createCDict(bytes.data(), bytes.size(), PAGE_ZSTD_LEVEL);
+    ZSTD_CDict* cdict = ZSTD_createCDict_advanced(
+        bytes.data(), bytes.size(), ZSTD_dlm_byCopy, ZSTD_dct_auto,
+        ZSTD_getCParams(PAGE_ZSTD_LEVEL, 0, bytes.size()), general_pool_mem());
     if (cdict == nullptr) return parse_error();
     return dstd::SharedPtr<const PageDict>(new PageDict(ref, cdict, nullptr));
 }
@@ -331,7 +353,9 @@ PageDict::for_decode(ByteView bytes, const DictRef& ref) {
         crc32(0, bytes_of(bytes), bytes.size()) != ref.crc) {
         return parse_error();
     }
-    ZSTD_DDict* ddict = ZSTD_createDDict(bytes.data(), bytes.size());
+    ZSTD_DDict* ddict =
+        ZSTD_createDDict_advanced(bytes.data(), bytes.size(), ZSTD_dlm_byCopy,
+                                  ZSTD_dct_auto, general_pool_mem());
     if (ddict == nullptr) return parse_error();
     return dstd::SharedPtr<const PageDict>(new PageDict(ref, nullptr, ddict));
 }

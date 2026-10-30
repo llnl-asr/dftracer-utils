@@ -144,6 +144,15 @@ void trim(Mode mode) noexcept;
  */
 void trim_thread() noexcept;
 
+/**
+ * @brief malloc and free for a C library that takes allocation hooks, such as
+ * zlib-ng, zstd and libdeflate, so its memory is tracked like ours.
+ *
+ * c_malloc returns null when the memory is not available. c_free takes null.
+ */
+void* c_malloc(std::size_t size) noexcept;
+void c_free(void* p) noexcept;
+
 }  // namespace dftracer::utils::memory
 
 #endif  // DFTRACER_UTILS_MEMORY_HEAP_H

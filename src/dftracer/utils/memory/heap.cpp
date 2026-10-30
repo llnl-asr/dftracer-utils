@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -339,6 +340,18 @@ void trim(Mode mode) noexcept {
         case Backend::System:
             return;
     }
+}
+
+void* c_malloc(std::size_t size) noexcept {
+    try {
+        return allocate(size, alignof(std::max_align_t));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void c_free(void* p) noexcept {
+    if (p != nullptr) deallocate(p);
 }
 
 void trim_thread() noexcept {

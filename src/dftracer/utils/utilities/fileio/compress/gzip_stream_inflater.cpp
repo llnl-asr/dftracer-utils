@@ -1,3 +1,4 @@
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/compress/zng_stream.h>
@@ -10,6 +11,14 @@ namespace dftracer::utils::utilities::fileio::compress {
 namespace {
 
 std::atomic<std::uint64_t> CHECKSUM_STREAMS{0};
+
+void track_allocations(zng_stream& zs) noexcept {
+    zs.zalloc = [](void*, unsigned items, unsigned size) -> void* {
+        return memory::c_malloc(static_cast<std::size_t>(items) * size);
+    };
+    zs.zfree = [](void*, void* p) { memory::c_free(p); };
+    zs.opaque = nullptr;
+}
 
 // zlib-ng fills its CPU-feature function table on first use without a lock.
 // Run one deflate and one inflate once, before any concurrent use.
@@ -24,6 +33,7 @@ void warm_up() {
         unsigned char back[64];
 
         zng_stream def{};
+        track_allocations(def);
         if (zng_deflateInit2(&def, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 31, 8,
                              Z_DEFAULT_STRATEGY) != Z_OK) {
             return;
@@ -38,6 +48,7 @@ void warm_up() {
         zng_deflateEnd(&def);
 
         zng_stream inf{};
+        track_allocations(inf);
         if (zng_inflateInit2(&inf, 31) == Z_OK) {
             inf.next_in = comp;
             inf.avail_in = comp_len;
@@ -71,6 +82,7 @@ std::int32_t open_inflate_stream(zng_stream& zs, int window_bits) {
     if (window_bits > 0) {
         CHECKSUM_STREAMS.fetch_add(1, std::memory_order_relaxed);
     }
+    track_allocations(zs);
     return zng_inflateInit2(&zs, window_bits);
 }
 

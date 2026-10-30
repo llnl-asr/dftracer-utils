@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -351,4 +352,22 @@ TEST_CASE("a gzip header with FHCRC and optional fields is accepted") {
     auto bad = member;
     bad[header.size() - 1] ^= 1;
     CHECK(decode(bad).first == gz::InflateStatus::DataError);
+}
+
+TEST_CASE("compression state is charged to the calling pool") {
+    memory::PoolHandle pool = memory::Manager::get().root().child("codecs");
+    REQUIRE(pool);
+    {
+        memory::Scope scope{*pool};
+        gz::GzipStreamInflater inf;
+        REQUIRE(inf.init(31));
+        CHECK(pool->live() > 0);
+    }
+    CHECK(pool->live() == 0);
+    {
+        memory::Scope scope{*pool};
+        gz::GzipMemberDecompressor decompressor;
+        CHECK(pool->live() > 0);
+    }
+    CHECK(pool->live() == 0);
 }

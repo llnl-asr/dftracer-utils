@@ -1,3 +1,5 @@
+// The _advanced create functions take the tracked allocator.
+#define ZSTD_STATIC_LINKING_ONLY
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
@@ -12,6 +14,7 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/memory/heap.h>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -641,6 +644,12 @@ std::string Dir::run_path(int id) const {
 
 namespace {
 
+const ZSTD_customMem TRACKED_MEM = {
+    [](void*, std::size_t size) -> void* {
+        return dftracer::utils::memory::c_malloc(size);
+    },
+    [](void*, void* p) { dftracer::utils::memory::c_free(p); }, nullptr};
+
 bool spill_compression_on(const std::string& path) {
     const auto v = Env::get(constants::SPILL_COMPRESS_ENV);
     const auto is = [&](std::string_view a, std::string_view b = {},
@@ -661,12 +670,12 @@ constexpr std::size_t COMPRESS_MIN_BYTES = 4096;
 }  // namespace
 
 struct Writer::Codec {
-    ZSTD_CCtx* ctx = ZSTD_createCCtx();
+    ZSTD_CCtx* ctx = ZSTD_createCCtx_advanced(TRACKED_MEM);
     std::string out;
     ~Codec() { ZSTD_freeCCtx(ctx); }
 };
 struct Reader::Codec {
-    ZSTD_DCtx* ctx = ZSTD_createDCtx();
+    ZSTD_DCtx* ctx = ZSTD_createDCtx_advanced(TRACKED_MEM);
     ~Codec() { ZSTD_freeDCtx(ctx); }
 };
 

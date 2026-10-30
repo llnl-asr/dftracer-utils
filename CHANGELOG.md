@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make a scan of one file's rows in the index decode only the part of a stored segment that can hold them, where it decoded the whole segment that the rows of many files share, and read each file's string table in the task that reads that file.
+  The first `dftracer_stats` of the 2,376 amg traces at 96 threads takes 5.7 s where it took about 150 s, and peaks at 1.5 GB where it peaked at 7.2 GB.
 - Count the memory zlib-ng, zstd and libdeflate allocate against the memory pool that uses it, so the memory budget and the memory reports include it.
 - Bound the memory the allocator keeps after a free, so peak memory no longer grows with the thread count: past 64 MiB of freed but still backed pages, a thread that frees gives its idle pages back at once, and an idle worker or I/O thread gives back its own.
   An index build of 2,000 files at 224 threads peaks at 325 MB where it took 623 MB, in the same time.

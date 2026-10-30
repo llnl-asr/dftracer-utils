@@ -40,8 +40,6 @@
 
 namespace dftracer::utils::index::gzip {
 
-using index::store::IndexDatabase;
-
 namespace {
 
 // -- Parallel path ---------------------------------------------------------

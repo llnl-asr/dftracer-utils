@@ -550,7 +550,8 @@ dstd::Expected<SegmentView, dstd::Error> SegmentView::open_head(
     if (std::memcmp(data, SEGMENT_MAGIC.data(), SEGMENT_MAGIC.size()) != 0) {
         return parse_error();
     }
-    if (dftracer::utils::read_u32_le(data + 4U) != segment_length) {
+    if (dftracer::utils::read_u32_le(data + 4U) != segment_length ||
+        (segment_length % SEGMENT_ALIGN) != 0) {
         return parse_error();
     }
     if (data[16] != 0 || data[17] != 0 || data[18] != 0 || data[19] != 0) {
@@ -559,6 +560,7 @@ dstd::Expected<SegmentView, dstd::Error> SegmentView::open_head(
     const std::uint32_t entry_count = dftracer::utils::read_u32_le(data + 8U);
     const std::uint32_t granule_count =
         dftracer::utils::read_u32_le(data + 12U);
+    if ((entry_count == 0) != (granule_count == 0)) return parse_error();
     if (granule_count >
         (head.size() - HEADER_BYTES) / MIN_GRANULE_INDEX_BYTES) {
         return parse_error();

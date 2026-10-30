@@ -180,8 +180,9 @@ class SegmentView {
     find_granule(ByteView head, std::uint32_t segment_length, ByteView key);
 
     /// The header and granule index `head` of a segment of `segment_length`,
-    /// checked as find_granule checks them, with no entry bytes. Its first keys
-    /// point into `head`. Use it for range_span and with_window only.
+    /// with no entry bytes. Its first keys point into `head`. It checks what
+    /// open_index checks except the zero tail. Use it for range_span and
+    /// with_window only.
     static dstd::Expected<SegmentView, dstd::Error> open_head(
         ByteView head, std::uint32_t segment_length);
 

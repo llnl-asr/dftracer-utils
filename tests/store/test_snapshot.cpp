@@ -4547,6 +4547,62 @@ TEST_SUITE("index store snapshot") {
         CHECK(scan_range(0, KEY_COUNT, false) == pages->size());
     }
 
+    TEST_CASE(
+        "a range scan merges later puts and an erase over a wide segment") {
+        const ScopeKey scope = file_scope("/traces/range_merge.pfw");
+        const NamespaceSpec spec = put_spec("dftu.test.range_merge");
+        constexpr std::size_t KEY_COUNT = 700;
+        const auto key_at = [](std::size_t index) {
+            const std::string digits = std::to_string(index);
+            return "key-" + std::string(6 - digits.size(), '0') + digits;
+        };
+        const std::string old_value(400, 'a');
+        const std::string new_value(400, 'b');
+
+        dftu_utils_test::ScopedTestDir dir("snapshot_range_merge");
+        WriterOptions options = small_extents();
+        options.extent_size = 8U * 1024U * 1024U;
+        {
+            auto writer = make_writer(dir, options);
+            auto id = writer->add_namespace(spec);
+            REQUIRE(id.has_value());
+            Batch first = writer->batch(*id, scope, 0);
+            for (std::size_t index = 0; index < KEY_COUNT; ++index) {
+                first.put(view_of(key_at(index)), view_of(old_value));
+            }
+            REQUIRE(writer->commit(std::move(first)).has_value());
+            const std::string erase_begin = key_at(310);
+            const std::string erase_end = key_at(315);
+            REQUIRE(writer
+                        ->erase(*id, scope, view_of(erase_begin),
+                                view_of(erase_end))
+                        .has_value());
+            Batch second = writer->batch(*id, scope, 0);
+            for (std::size_t index = 300; index <= 340; index += 2) {
+                second.put(view_of(key_at(index)), view_of(new_value));
+            }
+            REQUIRE(writer->commit(std::move(second)).has_value());
+            REQUIRE(flush_writer(*writer).has_value());
+            REQUIRE(close_writer(*writer).has_value());
+        }
+
+        auto snapshot = Snapshot::open(dir.str());
+        REQUIRE(snapshot.has_value());
+        const std::string begin = key_at(300);
+        const std::string end = key_at(330);
+        auto cursor = snapshot->scan(spec, scope, view_of(begin), view_of(end));
+        const std::vector<std::pair<std::string, std::string>> rows =
+            collect(cursor);
+        std::vector<std::pair<std::string, std::string>> expected;
+        for (std::size_t index = 300; index < 330; ++index) {
+            const bool put_again = index % 2 == 0;
+            if (index >= 310 && index < 315 && !put_again) continue;
+            expected.emplace_back(key_at(index),
+                                  put_again ? new_value : old_value);
+        }
+        CHECK(rows == expected);
+    }
+
     TEST_CASE("a point read of a granule over a page reads the whole segment") {
         const ScopeKey scope = file_scope("/traces/wide_granule.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.wide_granule");

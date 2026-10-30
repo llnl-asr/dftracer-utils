@@ -526,6 +526,85 @@ TEST_SUITE("index store segment") {
                 ->has_value());
     }
 
+    TEST_CASE("a window of the granules of a range holds every key of it") {
+        SegmentBuilder builder;
+        std::vector<std::string> keys;
+        const std::string value(1000, 'v');
+        for (std::size_t i = 0; i < 300; ++i) {
+            const std::string digits = std::to_string(i);
+            const std::string key =
+                "key-" + std::string(4 - digits.size(), '0') + digits;
+            keys.push_back(key);
+            builder.add(view_of(key), view_of(value));
+        }
+        const auto sealed = builder.seal(nullptr, nullptr, nullptr);
+        REQUIRE(sealed.has_value());
+        const std::uint32_t length = static_cast<std::uint32_t>(sealed->size());
+        const std::uint32_t head_bytes =
+            SegmentView::head_length(view_of(*sealed));
+        REQUIRE(head_bytes > 0);
+        const ByteView head{sealed->data(), head_bytes};
+
+        // The first key of each granule, so bounds also fall on granule edges.
+        std::vector<std::string> bounds = {"aaa", "zzz", keys.back() + "x"};
+        std::uint32_t last_offset = 0;
+        for (const std::string& key : keys) {
+            const auto granule =
+                SegmentView::find_granule(head, length, view_of(key));
+            REQUIRE(granule.has_value());
+            REQUIRE(granule->has_value());
+            if ((**granule).offset != last_offset) bounds.push_back(key);
+            last_offset = (**granule).offset;
+        }
+        REQUIRE(bounds.size() > 7);
+        for (std::size_t i = 0; i < keys.size(); i += 37) {
+            bounds.push_back(keys[i] + "x");
+        }
+
+        const auto range_of = [&](const std::string& begin,
+                                  const std::string& end) {
+            std::vector<std::string> out;
+            for (const std::string& key : keys) {
+                if (key >= begin && (end.empty() || key < end)) {
+                    out.push_back(key);
+                }
+            }
+            return out;
+        };
+        const auto windowed = [&](const std::string& begin,
+                                  const std::string& end) {
+            auto opened = SegmentView::open_head(head, length);
+            REQUIRE(opened.has_value());
+            const SegmentView::GranuleSpan span =
+                opened->range_span(view_of(begin), view_of(end));
+            REQUIRE(span.offset >= head_bytes);
+            REQUIRE(span.offset + span.length <= length);
+            auto view = std::move(*opened).with_window(
+                ByteView{sealed->data() + span.offset, span.length},
+                span.offset);
+            REQUIRE(view.has_value());
+            std::vector<std::string> out;
+            for (auto cursor = view->lower_bound(view_of(begin));
+                 !cursor.at_end(); cursor.next()) {
+                const ByteView key = cursor.entry().key();
+                std::string text(reinterpret_cast<const char*>(key.data()),
+                                 key.size());
+                if (!end.empty() && text >= end) break;
+                CHECK(same_bytes(cursor.entry().value(), view_of(value)));
+                out.push_back(std::move(text));
+            }
+            return out;
+        };
+
+        for (const std::string& begin : bounds) {
+            CHECK(windowed(begin, std::string()) == range_of(begin, ""));
+            for (const std::string& end : bounds) {
+                if (end <= begin) continue;
+                CHECK(windowed(begin, end) == range_of(begin, end));
+            }
+        }
+    }
+
     TEST_CASE("a damaged header or index leaves the head unusable") {
         SegmentBuilder builder;
         const std::string value(GRANULE_BYTES / 2 - 32, 'v');

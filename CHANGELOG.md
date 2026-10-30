@@ -19,8 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   A cold `dftracer_index` of the 2,376 amg traces at 96 threads peaks at 5.2 GB where it peaked at 8.1 GB, in the same time.
   Sets of many small files peak a little higher: 3.7 GB where they peaked at 3.4 GB for the 7,742 minife traces and 2.0 GB where they peaked at 1.8 GB for the 14,117 minife traces.
 - Count the memory zlib-ng, zstd and libdeflate allocate against the memory pool that uses it, so the memory budget and the memory reports include it.
-- Bound the memory the allocator keeps after a free, so peak memory no longer grows with the thread count: past 64 MiB of freed but still backed pages, a thread that frees gives its idle pages back at once, and an idle worker or I/O thread gives back its own.
-  An index build of 2,000 files at 224 threads peaks at 325 MB where it took 623 MB, in the same time.
+- Bound the memory the allocator keeps after a free, so peak memory no longer grows with the thread count: past 1 GiB of freed but still backed pages, a thread that frees gives its idle pages back at once, and an idle worker or I/O thread gives back its own.
+  A cold `dftracer_index` of the 8,404 minife traces peaks at 5.2 GB where it peaked at 6.8 GB at 224 threads, and at 3.1 GB where it peaked at 3.6 GB at 96 threads, in the same time.
 - Count a pre-aggregated counter record as the events it stands for when a trace aggregation reads the trace, with its duration, size and offset statistics from its args, so the answer matches the index.
   A frame still counts its rows, so a pre-aggregated record is one row there.
   Percentiles, histograms, plans that decode records by path, time buckets on a plan with no schema and group keys on arguments the build did not keep still count it as one row.

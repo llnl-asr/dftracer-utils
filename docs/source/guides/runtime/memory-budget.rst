@@ -179,6 +179,17 @@ a dict plus a ``warning`` string (empty when it fits).
    default. Only ``memory_budget_advice`` is exposed as a standalone Python
    function.
 
+What the budget counts
+----------------------
+
+The budget bounds the memory dftracer-utils tracks, not the resident memory of the whole process.
+It counts the blocks of its own allocator, including the state of zlib-ng, zstd and libdeflate, and the bytes each scan, file and spill reserves.
+It does not count the program and its libraries, the thread stacks, the partly used pages each thread's heap keeps, or the up to 64 MiB of freed pages the allocator keeps for reuse.
+In our measurements an index build used up to about 60 MB more than a 256 MB budget, and up to about 160 MB more than a 128 MB budget.
+DuckDB, Velox and Trino treat their memory limits the same way.
+
+To hold the whole process under a hard limit, run it in a job or a cgroup with that limit, and set the budget well below it, for example at three quarters of the limit.
+
 See also
 --------
 

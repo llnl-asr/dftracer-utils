@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <trace/views/test_view_common.h>
@@ -7,6 +8,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <set>
 #include <string>
 
 using namespace test_view_common;
@@ -59,6 +61,31 @@ coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
             co_await dftracer::utils::index::build::resolve_and_build_index(
                 &scope, std::move(in));
         });
+}
+
+coro::CoroTask<void> build_files(std::vector<std::string> files) {
+    dftracer::utils::index::build::ResolveAndBuildInput in;
+    in.files = std::move(files);
+    in.require_checkpoints = true;
+    co_await dftracer::utils::run_coro_scope(
+        [&](dftracer::utils::CoroScope& scope) -> coro::CoroTask<void> {
+            co_await dftracer::utils::index::build::resolve_and_build_index(
+                &scope, std::move(in));
+        });
+}
+
+coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
+    std::vector<std::string> files) {
+    dftracer::utils::index::build::ResolverInput in;
+    in.files = std::move(files);
+    in.require_checkpoints = true;
+    dftracer::utils::index::build::ResolverResult result;
+    co_await dftracer::utils::run_coro_scope(
+        [&](dftracer::utils::CoroScope& scope) -> coro::CoroTask<void> {
+            result =
+                co_await dftracer::utils::index::build::Resolver{}(scope, in);
+        });
+    co_return result;
 }
 
 std::size_t rows(const View& v, const std::string& q) {
@@ -180,6 +207,45 @@ TEST_SUITE("ViewIndexFreshness") {
                                  st::internal::get_file_modification_time(f2)));
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
         CHECK(count_by(by_cat(dir_view(d2, root)), "c") == MEMBER_EVENTS);
+    }
+
+    TEST_CASE("the fresh check of many files flags exactly the changed ones") {
+        TestEnvironment env(10);
+        REQUIRE(env.is_valid());
+        constexpr int FILES = 40;
+        std::vector<std::string> files;
+        for (int i = 0; i < FILES; ++i) {
+            const std::string gz =
+                env.get_dir() + "/t" + std::to_string(100 + i) + ".pfw.gz";
+            write_events(gz, "A", 50, 0);
+            files.push_back(gz);
+        }
+        run(build_files(files));
+        const std::set<int> rewritten = {3, 17, 38};
+        for (const int i : rewritten) rewrite_events(files[i], "B", 60);
+        for (int i = FILES; i < FILES + 2; ++i) {
+            const std::string gz =
+                env.get_dir() + "/t" + std::to_string(100 + i) + ".pfw.gz";
+            write_events(gz, "A", 50, 0);
+            files.push_back(gz);
+        }
+
+        const auto result = run(resolve_files(files));
+        CHECK(result.stale_detected);
+        std::set<std::size_t> flagged;
+        for (const auto& item : result.needs_checkpoint)
+            flagged.insert(item.file_index);
+        const std::set<std::size_t> expected = {3, 17, 38, FILES, FILES + 1};
+        CHECK(flagged == expected);
+        REQUIRE(result.cached.size() == FILES - rewritten.size());
+        std::size_t last = 0;
+        for (std::size_t i = 0; i < result.cached.size(); ++i) {
+            const auto& cached = result.cached[i];
+            CHECK(expected.count(cached.file_index) == 0);
+            CHECK(cached.file_path == files[cached.file_index]);
+            if (i > 0) CHECK(cached.file_index > last);
+            last = cached.file_index;
+        }
     }
 
     TEST_CASE("from_file without an index path prunes with the default index") {

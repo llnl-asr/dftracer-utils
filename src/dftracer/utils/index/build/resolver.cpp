@@ -9,8 +9,13 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
+
+#include <cstdint>
+#include <exception>
+#include <mutex>
 
 namespace dftracer::utils::index::build {
 
@@ -132,6 +137,104 @@ index::store::ExtensionMask stale_tier(
     return stale;
 }
 
+// Files per parallel_for chunk of the fresh check.
+constexpr std::int64_t DECIDE_GRAIN = 16;
+
+// What the fresh check found for one file. Kind Aggregate is a current file
+// whose tier rows must be built.
+struct FileDecision {
+    enum class Kind : std::uint8_t {
+        NotIndexed,
+        Stale,
+        NeedsCheckpoint,
+        Bloom,
+        Aggregate,
+        Cached
+    };
+    std::string schema;
+    index::store::ExtensionMask tier;
+    int file_id = -1;
+    Kind kind = Kind::NotIndexed;
+    bool agg_candidate = false;
+    bool agg_current = false;
+    bool tier_version_stale = false;
+};
+
+// Reads only. Safe to run for many files at once on one database.
+FileDecision decide(
+    const IndexDatabase& db,
+    const StringViewMap<index::store::FileRegistryEntry>& registry,
+    const PendingFile& f, const ResolveGroupInput& input,
+    std::uint64_t params) {
+    FileDecision d;
+    auto reg_it = registry.find(f.logical_path);
+    if (reg_it == registry.end()) return d;
+    const auto& reg = reg_it->second;
+    d.file_id = reg.file_id;
+
+    // Stat-only staleness using mtime/size captured during the scan
+    // (no extra metadata op). Rebuild if the source changed since it
+    // was indexed, or the record predates mtime/size tracking.
+    auto stored_stat = db.get_file_stat(f.logical_path);
+    if (!stored_stat || stored_stat->mtime != f.mtime ||
+        stored_stat->size != f.size) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Index stale for %s (source changed since indexing); "
+            "rebuilding",
+            f.file_path.c_str());
+        d.kind = FileDecision::Kind::Stale;
+        return d;
+    }
+
+    const bool has_checkpoints =
+        db.extension_current(reg.file_id,
+                             index::store::IndexExtension::Members) &&
+        schema_current(db, reg.file_id, input.schema);
+    if (input.require_checkpoints && !has_checkpoints) {
+        d.kind = FileDecision::Kind::NeedsCheckpoint;
+        return d;
+    }
+
+    // A changed checkpoint size re-checkpoints the file. The build path
+    // stores the requested size verbatim, so an exact compare suffices
+    // (no file read). Zero on either side means "unspecified": skip.
+    if (input.require_checkpoints && input.checkpoint_size != 0) {
+        const auto stored_ckpt = db.get_checkpoint_size(reg.file_id);
+        if (stored_ckpt != 0 && stored_ckpt != input.checkpoint_size) {
+            d.kind = FileDecision::Kind::NeedsCheckpoint;
+            return d;
+        }
+    }
+
+    d.schema = db.file_schema(reg.file_id).value_or(std::string{});
+    bool needs_agg = false;
+    if (find_schema(d.schema)) {
+        const auto agg_state =
+            db.extension_state(reg.file_id, index::store::IndexExtension::Agg);
+        // Another tier version has another layout and the index-wide
+        // records cannot hold two, so the tier is rebuilt, never
+        // merged.
+        d.tier_version_stale =
+            agg_state &&
+            agg_state->version != index::store::layout::ext_version(
+                                      index::store::IndexExtension::Agg);
+        d.agg_candidate = true;
+        d.agg_current = agg_current(agg_state, params);
+        needs_agg = !d.agg_current;
+    }
+    if (input.require_bloom) {
+        d.tier = stale_tier(db, reg.file_id, input.bloom_config,
+                            find_schema(d.schema));
+        if (!d.tier.empty()) {
+            d.kind = FileDecision::Kind::Bloom;
+            return d;
+        }
+    }
+    d.kind =
+        needs_agg ? FileDecision::Kind::Aggregate : FileDecision::Kind::Cached;
+    return d;
+}
+
 ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     ResolveGroupOutput result;
     result.index_path = input.index_path;
@@ -184,97 +287,60 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                     break;
                 }
         }
+        std::vector<FileDecision> decisions(input.files.size());
+        std::exception_ptr failure;
+        std::mutex failure_mutex;
+        default_runtime().parallel_for(
+            static_cast<std::int64_t>(input.files.size()), DECIDE_GRAIN,
+            [&](std::int64_t begin, std::int64_t end) {
+                try {
+                    for (std::int64_t i = begin; i < end; ++i) {
+                        const auto at = static_cast<std::size_t>(i);
+                        decisions[at] = decide(db, registry, input.files[at],
+                                               input, params);
+                    }
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(failure_mutex);
+                    if (!failure) failure = std::current_exception();
+                }
+            });
+        if (failure) std::rethrow_exception(failure);
+
         std::vector<std::pair<FileWorkItem, bool>> agg_candidates;
-
-        for (auto& f : input.files) {
-            auto reg_it = registry.find(f.logical_path);
-            if (reg_it == registry.end()) {
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), -1, {}, {}});
-                continue;
-            }
-
-            const auto& reg = reg_it->second;
-
-            // Stat-only staleness using mtime/size captured during the scan
-            // (no extra metadata op). Rebuild if the source changed since it
-            // was indexed, or the record predates mtime/size tracking.
-            auto stored_stat = db.get_file_stat(f.logical_path);
-            bool stale = !stored_stat || stored_stat->mtime != f.mtime ||
-                         stored_stat->size != f.size;
-            if (stale) {
-                DFTRACER_UTILS_LOG_WARN(
-                    "Index stale for %s (source changed since indexing); "
-                    "rebuilding",
-                    f.file_path.c_str());
-                result.stale_detected = true;
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), reg.file_id, {}, {}});
-                continue;
-            }
-
-            const bool has_checkpoints =
-                db.extension_current(reg.file_id,
-                                     index::store::IndexExtension::Members) &&
-                schema_current(db, reg.file_id, input.schema);
-
-            if (input.require_checkpoints && !has_checkpoints) {
-                result.needs_checkpoint.push_back(FileWorkItem{
-                    f.file_index, std::move(f.file_path), reg.file_id, {}, {}});
-                continue;
-            }
-
-            // A changed checkpoint size re-checkpoints the file. The build path
-            // stores the requested size verbatim, so an exact compare suffices
-            // (no file read). Zero on either side means "unspecified": skip.
-            if (input.require_checkpoints && input.checkpoint_size != 0) {
-                const auto stored_ckpt = db.get_checkpoint_size(reg.file_id);
-                if (stored_ckpt != 0 && stored_ckpt != input.checkpoint_size) {
+        for (std::size_t i = 0; i < input.files.size(); ++i) {
+            PendingFile& f = input.files[i];
+            FileDecision& d = decisions[i];
+            switch (d.kind) {
+                case FileDecision::Kind::Stale:
+                    result.stale_detected = true;
+                    [[fallthrough]];
+                case FileDecision::Kind::NotIndexed:
+                case FileDecision::Kind::NeedsCheckpoint:
                     result.needs_checkpoint.push_back(
                         FileWorkItem{f.file_index,
                                      std::move(f.file_path),
-                                     reg.file_id,
+                                     d.file_id,
                                      {},
                                      {}});
                     continue;
-                }
+                default:
+                    break;
             }
-
-            std::string schema =
-                db.file_schema(reg.file_id).value_or(std::string{});
-            bool needs_agg = false;
-            if (find_schema(schema)) {
-                const auto agg_state = db.extension_state(
-                    reg.file_id, index::store::IndexExtension::Agg);
-                // Another tier version has another layout and the index-wide
-                // records cannot hold two, so the tier is rebuilt, never
-                // merged.
-                if (agg_state && agg_state->version !=
-                                     index::store::layout::ext_version(
-                                         index::store::IndexExtension::Agg))
-                    result.aggregation_stale = true;
-                const bool current = agg_current(agg_state, params);
+            if (d.tier_version_stale) result.aggregation_stale = true;
+            if (d.agg_candidate)
                 agg_candidates.emplace_back(
                     FileWorkItem{
-                        f.file_index, f.file_path, reg.file_id, {}, schema},
-                    current);
-                needs_agg = !current;
+                        f.file_index, f.file_path, d.file_id, {}, d.schema},
+                    d.agg_current);
+            if (d.kind == FileDecision::Kind::Bloom) {
+                result.needs_bloom.push_back(
+                    FileWorkItem{f.file_index, std::move(f.file_path),
+                                 d.file_id, d.tier, std::move(d.schema)});
+            } else if (d.kind == FileDecision::Kind::Cached) {
+                result.cached.push_back(
+                    ResolvedFile{f.file_index, std::move(f.file_path),
+                                 d.file_id, std::move(d.schema)});
             }
-            if (input.require_bloom) {
-                auto tier = stale_tier(db, reg.file_id, input.bloom_config,
-                                       find_schema(schema));
-                if (!tier.empty()) {
-                    result.needs_bloom.push_back(
-                        FileWorkItem{f.file_index, std::move(f.file_path),
-                                     reg.file_id, tier, std::move(schema)});
-                    continue;
-                }
-            }
-            if (needs_agg) continue;
-
-            result.cached.push_back(
-                ResolvedFile{f.file_index, std::move(f.file_path), reg.file_id,
-                             std::move(schema)});
         }
         // A file already current must be aggregated again when the tier is
         // cleared; it then is not cached.

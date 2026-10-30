@@ -39,6 +39,7 @@
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/engine_agg_fold.h>
 #include <dftracer/utils/trace/views/fold.h>
+#include <dftracer/utils/trace/views/index_rule_fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/pipeline.h>
 #include <dftracer/utils/trace/views/stream_row_fold.h>
@@ -195,10 +196,8 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     }
 }
 
-// Write the index a bootstrap pass produced into `w`: members from the
-// artifacts, bloom and row sets from the folds, each with its manifest entry.
-// A bloom fold that spilled writes its tier into a staged write instead, which
-// is returned for the caller to publish.
+// A bloom fold that spilled writes its tier into a staged write, which is
+// returned for the caller to publish.
 std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite>
 write_bootstrap_index(
     dftracer::utils::index::store::IndexWrite& w, const std::string& logical,
@@ -221,7 +220,6 @@ write_bootstrap_index(
     std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
     if (bloom.writes_runs()) {
         staged = bloom.finish_staged(fid);
-        // The file's record gives the published tier the file's sources.
         dftracer::utils::index::store::records::put_file_record(
             *staged, logical,
             {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
@@ -232,15 +230,13 @@ write_bootstrap_index(
     return staged;
 }
 
-// The files of one index root and what its workers wrote.
 struct BootstrapRoot {
     std::string index_path;
     dstd::Vector<std::size_t> members;
     std::optional<dftracer::utils::index::store::IndexDatabase> db;
 };
 
-// Every index root of a bootstrap, open once and held read-write until the
-// last commit, with an id reserved for each file of the plan.
+// Every index root of a bootstrap is held read-write until the last commit.
 struct BootstrapStores {
     BootstrapStores() = default;
     BootstrapStores(const BootstrapStores&) = delete;
@@ -256,9 +252,8 @@ struct BootstrapStores {
 
 // Reserving ids creates the index root before the files are in it. A scan that
 // starts meanwhile would take the root for a built index, so the build is
-// serialized with the metadata reads of the same root. A staged spill is keyed
-// by the file id, so the ids are reserved before the build; a reserved id marks
-// no file as indexed.
+// serialized with the metadata reads of the same root. A reserved id marks no
+// file as indexed.
 coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
                                            BootstrapStores& out) {
     const std::size_t n = plan.files.size();
@@ -281,7 +276,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         auto store = dstd::make_unique<BootstrapRoot>();
         store->index_path = index_path;
         store->members.assign(members.begin(), members.end());
-        // A file listed twice takes one id, as file_id_for would give it.
+        // A file listed twice takes one id.
         dstd::Map<std::string, std::size_t> slot;
         std::vector<std::string> paths;
         for (std::size_t i : members)
@@ -290,8 +285,7 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
                              paths.size())
                     .second)
                 paths.push_back(plan.files[i].file_path);
-        // Held to the end, so a reader that opens the root meanwhile shares
-        // this read-write handle.
+        // A reader that opens the root meanwhile shares this handle.
         store->db.emplace(index_path);
         const auto got = store->db->assign_file_ids(paths);
         for (std::size_t i : members)
@@ -303,7 +297,6 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
     }
 }
 
-// The write a worker fills.
 struct BootstrapSink {
     BootstrapRoot* root;
     std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> write;
@@ -311,8 +304,6 @@ struct BootstrapSink {
     std::size_t limit = 0;
 };
 
-// Commits the write a worker fills, which holds whole files with their
-// records. The commit waits for its writes without holding the worker.
 coro::CoroTask<void> commit_bootstrap_sink(BootstrapSink& open) {
     if (!open.write) co_return;
     co_await open.write->commit_async();
@@ -320,7 +311,6 @@ coro::CoroTask<void> commit_bootstrap_sink(BootstrapSink& open) {
     bootstrap_counters().sink_commits.fetch_add(1, std::memory_order_relaxed);
 }
 
-// Writes one built file into the sink, which commits once it holds its limit.
 coro::CoroTask<void> write_bootstrap_file(
     BootstrapSink& open, const ViewFile& f, int file_id,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
@@ -329,8 +319,7 @@ coro::CoroTask<void> write_bootstrap_file(
     dftracer::utils::index::extensions::RowSetFold& rowsets,
     std::uint64_t hash) {
     if (!open.write) open.write = open.root->db->begin_write();
-    // The id was reserved for this pass, so the index holds nothing of it to
-    // clear.
+    // The id was reserved for this pass, so there is nothing of it to clear.
     open.write->set_fresh_file(file_id);
     auto staged = write_bootstrap_index(
         *open.write,
@@ -408,8 +397,6 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     namespace gzi = dftracer::utils::index::gzip;
     if (!export_bootstrap_eligible(plan)) co_return false;
 
-    // The files stream to the sink in plan order, so one sink per root takes
-    // them one after another, and each root commits once.
     BootstrapStores stores;
     co_await open_bootstrap_stores(plan, stores);
     // One sink per root is open at a time, so each may hold a worker's share.
@@ -669,11 +656,8 @@ namespace {
 // hash) as a byproduct, so the query never triggers a separate eager index
 // build. Returns false (caller falls through to the indexed path) unless every
 // file is a clean first touch and nothing materialized can answer instead.
-//
-// A worker per core takes a block of consecutive files of equal cost, one file
-// at a time, and writes each into a write of its block, which the worker
-// commits while the other files still parse. One file's first-touch result:
-// its aggregate state with `keep_state`. `ok` is false when the build failed.
+
+// `state` is set with `keep_state`. `ok` is false when the build failed.
 struct BootstrapFile {
     bool ok = false;
     dataframe::AggStatePtr state;
@@ -695,15 +679,14 @@ struct BootstrapRun {
     dftracer::utils::index::build::FileAdmission* admission = nullptr;
     std::size_t sink_limit = 0;
     bool keep_state;
+    dstd::Optional<AggQuery> rule_query;
     std::atomic<std::size_t> next_block{0};
     std::atomic<bool> failed{false};
-    // Event buffers shared by every file's fold driver, so a file starts with
-    // the capacity the files before it grew.
+    // Shared by every file's fold driver, so a file starts with the capacity
+    // the files before it grew.
     dftracer::utils::index::build::FoldBufferPool buffers;
 };
 
-// `spill_share` bounds the bloom chunks the file holds; memory::NO_SPILL_BUDGET
-// holds them all.
 coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
                                              int file_id, BootstrapSink* open) {
     namespace gzi = dftracer::utils::index::gzip;
@@ -711,8 +694,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     BootstrapFile out;
     std::uint64_t compressed = 0;
     if (f.uncompressed_size == 0) {
-        // The size of a file never indexed comes from its descriptor, which
-        // the pass then reads through.
+        // A file never indexed has no size in the index.
         if (!f.fd)
             f.fd = dstd::make_shared<ScopedFd>(
                 ::open(f.file_path.c_str(), O_RDONLY));
@@ -736,13 +718,21 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         ~Leave() { c.in_flight.fetch_sub(1, std::memory_order_relaxed); }
     } leave{counters};
     dftracer::utils::dstd::StringIntern intern;
-    EngineAggFold agg(*plan, intern, /*apply_query=*/true);
+    std::unique_ptr<IndexRuleFold> rule_agg;
+    std::unique_ptr<EngineAggFold> frame_agg;
+    if (run->rule_query)
+        rule_agg = IndexRuleFold::make(*plan, *run->rule_query, intern,
+                                       /*apply_query=*/true);
+    else
+        frame_agg = std::make_unique<EngineAggFold>(*plan, intern,
+                                                    /*apply_query=*/true);
+    Fold* agg = rule_agg ? static_cast<Fold*>(rule_agg.get())
+                         : static_cast<Fold*>(frame_agg.get());
     const auto& schema = plan_record_schema(*plan);
     dftracer::utils::index::extensions::BloomFold bloom(
         intern, dftracer::utils::index::build::for_schema({}, schema));
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
-    // A spilled file is stages of one write.
     if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET) {
         auto staged = open->root->db->begin_staged_write();
         // Its runs come before the file's record.
@@ -753,7 +743,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         bloom.enable_spill(ticket.elastic_bytes(), std::move(staged), file_id,
                            /*fresh_id=*/true);
     }
-    std::array<Fold*, 3> folds{&agg, &bloom, &rowsets};
+    std::array<Fold*, 3> folds{agg, &bloom, &rowsets};
     dftracer::utils::index::build::IndexFoldDriver driver(
         intern, folds, f.file_path, f.index_path, extra_capture_fields(*plan));
     driver.set_record_schema(schema);
@@ -776,13 +766,21 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     driver.seal();
     co_await write_bootstrap_file(*open, f, file_id, arts, schema, bloom,
                                   rowsets, hash);
-    if (run->keep_state) out.state = agg.take_state();
+    if (run->keep_state) {
+        if (rule_agg) {
+            CoverageSet none;
+            co_await rule_agg->finalize(none);
+            out.state = rule_agg->take_state();
+        } else {
+            out.state = frame_agg->take_state();
+        }
+    }
     out.ok = true;
     co_return out;
 }
 
-// Takes blocks until none is left or a file fails; false when one failed. A
-// worker that throws stops the others from taking more files.
+// False when a file failed. A worker that throws stops the others from taking
+// more files.
 coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
     try {
         while (!run->failed.load(std::memory_order_relaxed)) {
@@ -817,7 +815,6 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
     co_return !run->failed.load(std::memory_order_relaxed);
 }
 
-// Runs `workers` workers over the blocks of `run`.
 coro::CoroTask<void> bootstrap_workers(CoroScope& scope, BootstrapRun* run,
                                        std::size_t workers) {
     std::vector<coro::SpawnFuture<bool>> done;
@@ -858,6 +855,7 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     run.ids = &stores.ids;
     run.stores = &stores;
     run.keep_state = !resolved_transform;
+    if (run.keep_state) run.rule_query = trace_fold_query(plan);
     for (const auto& store : stores.roots) {
         dstd::Vector<std::uint64_t> costs;
         costs.reserve(store->members.size());
@@ -889,8 +887,8 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
     co_await dftracer::utils::run_coro_scope(bootstrap_workers, &run, active);
     if (run.failed.load(std::memory_order_relaxed)) co_return false;
     if (!resolved_transform) {
-        // Blocks are runs of consecutive files, so taking them by the first
-        // file merges the states in file order, as one state per file would.
+        // Blocks are runs of consecutive files, so their first files give
+        // the file order.
         dstd::Vector<std::size_t> order(run.blocks.size());
         std::iota(order.begin(), order.end(), std::size_t{0});
         const auto first_file = [&run](std::size_t b) {
@@ -995,10 +993,6 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         }
     }
 
-    // A build wants full coverage: the index partials give it without reading
-    // the traces when they answer the plan, else a scan through the engine
-    // group-by does; either leaves a complete mergeable AggState, whose
-    // per-group partials are persisted.
     dataframe::AggStatePtr state;
     const bool from_partials = co_await partials_collect(plan, state);
     if (!from_partials) state = co_await build_engine_agg_state(plan);
@@ -1049,11 +1043,8 @@ std::optional<dataframe::DataFrame> try_serve_rollup(const ViewPlan& plan) {
     return std::nullopt;
 }
 
-// The no-scan fast paths: the first-touch raw-gzip bootstrap, then the chunk
-// partials of the aggregation tier. On a hit fills `out` (a mergeable engine
-// AggState, finalize with finalize_engine_result) and returns true; false means
-// the query must scan. The AggState rollup is served separately by
-// try_serve_rollup.
+// On a hit fills `out` (a mergeable engine AggState, finalize with
+// finalize_engine_result) and returns true. False means the query must scan.
 coro::CoroTask<bool> try_serve_aggregate_no_scan(const ViewPlan& plan,
                                                  dataframe::AggStatePtr& out) {
     // Named, not awaited in the condition: GCC 12.1 on x86_64 compiled the
@@ -1128,10 +1119,8 @@ coro::CoroTask<TypedResult> run_collect_typed(const ViewPlan& plan,
             plan, out.counters, shard_begin, shard_end, progress);
         if (from_columns) co_return out;
     }
-    // The partials or the column blocks could not answer (a ph/ts predicate
-    // they cannot key on, no tier built, or a plan that does not span the
-    // files of one current index); scan the raw trace so collect_typed
-    // returns rows rather than silently empty.
+    // Scan the raw trace, so collect_typed returns rows rather than silently
+    // none.
     ViewDefinition vdef = make_vdef(plan, /*for_aggregation=*/false);
     dftracer::utils::dstd::StringIntern intern;
     TypedCollectFold fold(intern);
@@ -1989,11 +1978,15 @@ coro::CoroTask<ExportStats> run_session(
             plan_by_path(*sb.plan)));
     }
 
-    std::vector<std::unique_ptr<EngineAggFold>> aggs;
-    aggs.reserve(agg_b.size());
-    for (const auto* sb : agg_b)
-        aggs.push_back(std::make_unique<EngineAggFold>(*sb->agg_plan, intern,
-                                                       sb->apply_query));
+    std::vector<std::unique_ptr<EngineAggFold>> aggs(agg_b.size());
+    std::vector<std::unique_ptr<IndexRuleFold>> rule_aggs(agg_b.size());
+    for (std::size_t i = 0; i < agg_b.size(); ++i) {
+        rule_aggs[i] = IndexRuleFold::make(*agg_b[i]->agg_plan, intern,
+                                           agg_b[i]->apply_query);
+        if (!rule_aggs[i])
+            aggs[i] = std::make_unique<EngineAggFold>(
+                *agg_b[i]->agg_plan, intern, agg_b[i]->apply_query);
+    }
 
     std::unique_ptr<BranchDriverFold> raw_fold;
     if (!raw_b.empty()) {
@@ -2019,7 +2012,10 @@ coro::CoroTask<ExportStats> run_session(
 
     std::vector<Fold*> fold_ptrs;
     fold_ptrs.reserve(aggs.size() + factory_folds.size() + 1);
-    for (auto& a : aggs) fold_ptrs.push_back(a.get());
+    for (std::size_t i = 0; i < agg_b.size(); ++i)
+        fold_ptrs.push_back(rule_aggs[i]
+                                ? static_cast<Fold*>(rule_aggs[i].get())
+                                : static_cast<Fold*>(aggs[i].get()));
     if (raw_fold) fold_ptrs.push_back(raw_fold.get());
     for (auto& f : factory_folds) fold_ptrs.push_back(f.get());
     for (auto& f : streams) fold_ptrs.push_back(f.get());
@@ -2034,15 +2030,16 @@ coro::CoroTask<ExportStats> run_session(
                          nullptr, scan_cap);
 
     for (std::size_t i = 0; i < agg_b.size(); ++i) {
+        dataframe::AggState& branch_state =
+            rule_aggs[i] ? rule_aggs[i]->state() : aggs[i]->state();
         // A partial serializes the mergeable AggState for a distributed merge;
         // a collect finalizes it (rank/resolver relabel) into the DataFrame.
         if (agg_b[i]->br->agg->partial_out) {
-            *agg_b[i]->br->agg->partial_out =
-                encode_agg_partial(aggs[i]->state());
+            *agg_b[i]->br->agg->partial_out = encode_agg_partial(branch_state);
             continue;
         }
         *agg_b[i]->br->agg->out = apply_agg_post_ops(
-            finalize_engine_result(aggs[i]->state(), *agg_b[i]->agg_plan),
+            finalize_engine_result(branch_state, *agg_b[i]->agg_plan),
             *agg_b[i]->agg_plan);
     }
     // Factory folds published their results in Fold::finalize during the fuse;

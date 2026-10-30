@@ -45,7 +45,7 @@ inline void strip_array_delimiters(char* buf, std::size_t len) {
 }
 
 /// Bytes of lines one parse_many batch covers. The parser's capacity follows
-/// the batch, not the buffer; a line longer than half of it is parsed alone.
+/// the batch, not the buffer. A line longer than half of it is parsed alone.
 inline constexpr std::size_t PARSE_BATCH_BYTES = std::size_t{128} << 10;
 
 /// Calls `emit(root, source)` for every JSON document on the complete lines
@@ -89,9 +89,8 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
         }
         if (covered >= parse_len) break;
 
-        // The stream stopped before the end: a record that does not fit a
-        // batch, or a bad record that desynced the batch's single structural
-        // scan and swallowed the rest of it as one rejected document.
+        // A bad record can desync the structural scan of the batch and
+        // swallow the rest of it as one rejected document.
         std::size_t start = covered;
         if (start > pos) {  // resume at the line after the last record parsed
             while (start < parse_len && base[start] != '\n') ++start;
@@ -132,9 +131,8 @@ std::size_t parse_lines(simdjson::dom::parser& parser, const char* base,
 /// Iterate parsed dftracer events from one inflated buffer (NDJSON plus
 /// simdjson padding; the caller strips any "[" / "]" delimiter lines).
 /// `chunk_buffer` is held shared so an EventRecord's string_view can outlive
-/// the loop. Only the scalar fields are parsed into the event; args stay in
-/// the record's DOM element. Returns the trailing incomplete line for the
-/// caller to carry into the next buffer.
+/// the loop. Args stay in the record's DOM element. Returns the trailing
+/// incomplete line for the caller to carry into the next buffer.
 ///
 /// Parsed only through the last newline, not by parse_many's own truncation
 /// (which reads zero when a chunk is cut mid-string, leaving the next chunk to

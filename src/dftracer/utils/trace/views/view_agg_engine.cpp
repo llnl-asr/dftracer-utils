@@ -13,6 +13,7 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
+#include <dftracer/utils/trace/views/view_agg_partials.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -1204,6 +1205,29 @@ coro::CoroTask<EnginePrep> prepare_engine_group(const ViewPlan& plan) {
                          std::move(spec.dyn_prefix)};
 }
 
+namespace {
+
+// A paginated result is never cached.
+void persist_rollup(const ViewPlan& plan, const dataframe::AggState& state) {
+    const std::string rdir =
+        dftracer::utils::index::cache::rollup_cache_path(plan);
+    if (rdir.empty()) return;
+    plan_record_schema(plan);
+    try {
+        auto db = dftracer::utils::index::cache::open_rollup_db(
+            rdir, dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
+        if (db)
+            dftracer::utils::index::cache::persist_rollup(
+                *db, dftracer::utils::index::cache::plan_signature(plan),
+                dftracer::utils::index::cache::rest_signature(plan),
+                plan.time_bucket_us, plan.group_by, state);
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s", e.what());
+    }
+}
+
+}  // namespace
+
 coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
     const ViewPlan& plan_in) {
     const ViewPlan plan = resolve_bucket_origin(plan_in);
@@ -1220,32 +1244,21 @@ coro::CoroTask<dataframe::DataFrame> run_collect_via_engine(
             co_return finalize_engine_result(*served, plan);
     }
 
+    dataframe::AggStatePtr scanned;
+    const bool folded = co_await partials_scan_collect(plan, scanned);
+    if (folded) {
+        if (plan.materialize && !plan.limit && !plan.offset)
+            persist_rollup(plan, *scanned);
+        co_return finalize_engine_result(*scanned, plan);
+    }
+
     EnginePrep ep = co_await prepare_engine_group(plan);
 
-    // materialize() persists the AggState partials as a rollup (opt-in); a
-    // paginated result is never cached.
+    // materialize() persists the AggState partials as a rollup (opt-in).
     if (plan.materialize && !plan.limit && !plan.offset) {
         auto state = co_await ep.lf->collect_group_state(
             ep.group_key_names, ep.gaggs, ep.dyn_specs, ep.dyn_prefix);
-        const std::string rdir =
-            dftracer::utils::index::cache::rollup_cache_path(plan);
-        if (!rdir.empty()) plan_record_schema(plan);
-        if (!rdir.empty()) {
-            try {
-                auto db = dftracer::utils::index::cache::open_rollup_db(
-                    rdir,
-                    dftracer::utils::index::cache::CacheStore::Mode::ReadWrite);
-                if (db)
-                    dftracer::utils::index::cache::persist_rollup(
-                        *db,
-                        dftracer::utils::index::cache::plan_signature(plan),
-                        dftracer::utils::index::cache::rest_signature(plan),
-                        plan.time_bucket_us, plan.group_by, *state);
-            } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_WARN("rollup materialize skipped: %s",
-                                        e.what());
-            }
-        }
+        persist_rollup(plan, *state);
         co_return finalize_engine_result(*state, plan);
     }
 
@@ -1271,6 +1284,11 @@ coro::CoroTask<dataframe::AggStatePtr> build_engine_agg_state(
     const ViewPlan& plan_in) {
     const ViewPlan plan = resolve_bucket_origin(plan_in);
     ensure_schema(plan);
+    dataframe::AggStatePtr scanned;
+    // Named, not awaited in the condition: GCC 12.1 miscompiles a co_await in
+    // an if header.
+    const bool folded = co_await partials_scan_collect(plan, scanned);
+    if (folded) co_return std::move(scanned);
     EnginePrep ep = co_await prepare_engine_group(plan);
     co_return co_await ep.lf->collect_group_state(ep.group_key_names, ep.gaggs,
                                                   ep.dyn_specs, ep.dyn_prefix);

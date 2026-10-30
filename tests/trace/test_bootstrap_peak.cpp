@@ -61,9 +61,8 @@ std::string big_trace_text() {
     return out.str();
 }
 
-// A file of more than one parse piece: the parse buffers of a file in flight
-// are what the peak tests measure. Every file has the same text, so a
-// run spends its time in the bootstrap and not in making the input.
+// Every file has the same text, so a run spends its time in the bootstrap and
+// not in making the input.
 std::string write_big_trace(const std::string& dir, int n) {
     static const std::string text = big_trace_text();
     char name[32];
@@ -146,9 +145,8 @@ TEST_SUITE("BootstrapPeak") {
         CHECK_FALSE(memory::Manager::get().leaked());
     }
 
-    // Run by the case below in a new process, so each measured run starts
-    // from the same empty process: in one process, what an earlier run left
-    // behind moves the next run's peak by about 10 MB either way.
+    // Run by the case below in a new process, as what an earlier run leaves
+    // behind moves the next run's peak by about 10 MB.
     TEST_CASE("one bootstrap of big files" * doctest::skip()) {
         fresh_process::announce();
         const auto n = Env::get<int>(FILES_ENV);

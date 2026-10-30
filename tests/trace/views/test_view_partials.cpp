@@ -36,17 +36,16 @@ constexpr std::size_t MEMBER_BYTES = 2048;
 constexpr std::uint64_t BASE_TS = 1'000'000'000;
 constexpr std::uint64_t WINDOW_US = 1'000'000;
 constexpr double QUANTILE_TOLERANCE = 0.03;
-// Files 0 and 1 ran on one host, file 2 on another; each file is one process.
+// Files 0 and 1 ran on one host and file 2 on another. Each file is one
+// process.
 const char* const HOSTS[FILES] = {"hosta", "hosta", "hostb"};
 
 std::uint64_t read_dur(int file, int j) { return 10 + (j * 7 + file * 3) % 40; }
 std::uint64_t write_dur(int j) { return 20 + j % 9; }
 
-// Three files, one process and one host each, whose events all start inside
-// one second. The three share one index, built with percentiles so its partials
-// hold the quantile stores too and with a column budget that keeps every arg
-// column, so the typed collect answers the counters from the column blocks as
-// well.
+// Three files, one process and one host each, whose events all start inside one
+// second. They share one index built with percentiles and with a column budget
+// that keeps every arg column.
 struct Fixture {
     TestEnvironment env{200};
     std::vector<std::string> gz;
@@ -54,7 +53,7 @@ struct Fixture {
     agg::AggregationConfig aggregation;
 
     // `extras` keeps the string args epoch and step as extra group keys and
-    // writes them on the events and counters; `mixed` adds counters named
+    // writes them on the events and counters. `mixed` adds counters named
     // like an event, so one name is both.
     explicit Fixture(bool extras = false, bool mixed = false) {
         REQUIRE(env.is_valid());
@@ -213,7 +212,7 @@ TEST_SUITE("ViewPartials") {
 
         fx.delete_traces();
         for (std::size_t i = 0; i < groupings.size(); ++i) {
-            // A scan answers over the events only; the profile counters of
+            // A scan answers over the events only. The profile counters of
             // the traces are a kind of their own in the partials.
             const df::DataFrame got =
                 fx.view()

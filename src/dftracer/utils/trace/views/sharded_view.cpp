@@ -258,8 +258,7 @@ std::size_t merge_shard_set(const std::string& root,
             }
 
             // Each shard numbers its files from the start, so a file takes
-            // the next id of the consolidated index; its registry record and
-            // its partials carry that id.
+            // the next id of the consolidated index.
             dstd::HashMap<int, int> remap;
             {
                 namespace layout = dftracer::utils::index::store::layout;
@@ -307,9 +306,7 @@ std::size_t merge_shard_set(const std::string& root,
                 agg::tier::put_files(out_db, aggregated, config->params_hash);
 
                 // The partials carry dictionary ids in their cat, name, host,
-                // extra and arg keys; pid, tid and file hashes inside are raw.
-                // Each quantile store holds its own accuracy, so the accuracy
-                // argument of the parse does not reach the bytes written.
+                // extra and arg keys. Pid, tid and file hashes are raw.
                 auto write = out_db.begin_write();
                 dstd::Vector<std::uint8_t> bytes;
                 for (const int old_id : aggregated_old) {
@@ -356,9 +353,8 @@ std::size_t merge_shard_set(const std::string& root,
                             return true;
                         });
                 }
-                // A column block names its cat, name, host, file and arg
-                // paths in a block-local table of dictionary ids, so it copies
-                // under the new ids once that table is rewritten.
+                // A column block keeps a block-local table of dictionary ids,
+                // which is rewritten before the copy.
                 for (const int old_id : aggregated_old) {
                     const int new_id = remap[old_id];
                     agg::tier::for_each_chunk_columns(

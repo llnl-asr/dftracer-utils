@@ -194,12 +194,10 @@ dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
     return fail("", std::string(e.message()), legacy);
 }
 
-// A group's memory is its share of the budget in four equal parts: the calls
-// kept in memory between reading and sorting, the sort buffer, the state
-// (counter series, path records), and the open readers (a semaphore). The
-// calls and the state are pools below the group's own pool, each limited to
-// its part; the group pool has no limit, since its children reach it in
-// quanta of 1 MiB and a share of a few MiB would refuse them.
+// A group's memory is its share of the budget in four equal parts: the calls,
+// the sort buffer, the state and the open readers. The group pool has no limit,
+// since its children reach it in quanta of 1 MiB and a share of a few MiB
+// would refuse them.
 struct GroupMem {
     GroupMem(std::uint64_t share_bytes, std::string_view name)
         : share(share_bytes),
@@ -208,7 +206,7 @@ struct GroupMem {
           state(part(pool, "state", share_bytes / 4)),
           sort_budget(share_bytes / 4) {}
 
-    // Every pool opened; false when the pool table is full.
+    // False when the pool table is full.
     bool open() const { return pool && calls && state; }
 
     std::uint64_t share;

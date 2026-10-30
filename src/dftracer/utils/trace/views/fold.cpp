@@ -195,8 +195,7 @@ std::uint32_t top_leaf_id(DecodeHints& h,
     return id;
 }
 
-// The record keys that are axes or structure, not catalog paths. A switch on
-// the length and bytes keeps this to a few byte compares per key.
+// A switch on the length and bytes keeps this to a few byte compares per key.
 bool is_axis_key(std::string_view k, bool skip_args) {
     const char* p = k.data();
     switch (k.size()) {
@@ -930,8 +929,7 @@ namespace {
 // The most positions of an args object or a record whose keys are remembered.
 constexpr std::size_t MAX_KEY_POSITIONS = 64;
 
-// Whether the `n` bytes at `a` and `b` are equal, without a library call for a
-// key of up to 16 bytes: two loads that overlap cover it.
+// Two overlapping loads cover a key of up to 16 bytes without a library call.
 bool same_bytes(const char* a, const char* b, std::size_t n) {
     if (n >= 8) {
         if (n > 16) return std::memcmp(a, b, n) == 0;
@@ -955,8 +953,7 @@ bool same_bytes(const char* a, const char* b, std::size_t n) {
     return true;
 }
 
-// The id of `key` found at position `pos` of the record being decoded: the
-// remembered one when the previous record had the same key there, otherwise
+// The id the previous record had for the same key at `pos`, else
 // `resolve(key)`, which is remembered.
 template <class Resolve>
 std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
@@ -993,7 +990,7 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
     simdjson::dom::object args;
     hints.walked.clear();
 
-    // The axis keys are not catalog paths; every other key is kept, in order,
+    // The axis keys are not catalog paths. Every other key is kept, in order,
     // for the leaf pass below.
     for (auto field : top) {
         const std::string_view key = field.key;
@@ -1053,8 +1050,7 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
     if (!cat.empty()) ev.cat_id = ids.get_or_insert(cat);
     if (!name.empty()) ev.name_id = ids.get_or_insert(name);
 
-    // A non-empty args object is walked once, for the event and, with
-    // needs_args, for its leaves; otherwise args is a leaf of the record pass.
+    // A non-empty args object is walked once, for the event and its leaves.
     const bool args_walked = has_args && args.size() > 0;
     if (has_args) {
         trace::internal::parse_walks::args_walk();
@@ -1095,8 +1091,8 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
     }
 
     if (!capture_schema) return true;
-    // Like capture_schema_leaves with skip_args: every args key is skipped
-    // when the args walk emitted the leaves; otherwise args is a leaf in place.
+    // Like capture_schema_leaves with skip_args. Every args key is skipped
+    // when the args walk emitted the leaves, else args is a leaf in place.
     const bool args_in_walk = needs_args && args_walked;
     std::size_t at = 0;
     for (const auto& [key, val] : hints.walked) {

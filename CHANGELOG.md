@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Count a pre-aggregated counter record as the events it stands for when a trace aggregation reads the trace, with its duration, size and offset statistics from its args, so the answer matches the index.
+  A frame still counts its rows, so a pre-aggregated record is one row there.
+  Percentiles, histograms, plans that decode records by path, time buckets on a plan with no schema and group keys on arguments the build did not keep still count it as one row.
 - Answer the re-reads of an aggregation query from the chunk column blocks of the index instead of parsing the trace, when the query has no event filter and the build has no extra group keys.
   A block now holds the file hash of each record as a core column, so `by_file` is answered from it too, and `AggQueryStats::chunks_from_columns` counts the re-read chunks that a block answered (`AggregatedTraces::chunks_from_columns` in the DLIO loader).
   A query with an event filter or extra group keys still parses the chunk.

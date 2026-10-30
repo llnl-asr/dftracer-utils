@@ -101,10 +101,10 @@ AggregationConfig make_config(bool percentiles) {
     return cfg;
 }
 
-// POSIX read/write and STDIO fread/fwrite carry ret and offset; open carries a
-// ret that is a descriptor and must not count as a size; compute carries
-// numeric args only; "rare" has fewer than 64 events so its quantiles stay
-// exact; every 17th POSIX transfer is a pre-aggregated counter.
+// POSIX read/write and STDIO fread/fwrite carry ret and offset. Open carries a
+// ret that is a descriptor and must not count as a size. Compute carries
+// numeric args only. "rare" has fewer than 64 events, so its quantiles stay
+// exact. Every 17th POSIX transfer is a pre-aggregated counter.
 std::vector<Ev> make_events(std::size_t n, std::uint64_t seed) {
     static const char* const FILES[] = {"1a2b3c4d", "deadbeef", "0badf00d",
                                         "cafe1234", "feed5678", "abcdef01",
@@ -220,7 +220,6 @@ std::map<Key, Truth> truth_of(const std::vector<Ev>& events,
     return out;
 }
 
-// The per-event oracle on all events, one entry per (cat, name).
 std::map<Key, AggregationMetrics> reference(const std::vector<Ev>& events,
                                             const AggregationConfig& cfg) {
     std::map<Key, AggregationMetrics> out;
@@ -254,8 +253,8 @@ bool near(double a, double b, double scale, double tol) {
     return std::abs(a - b) <= tol * std::max(scale, 1e-300);
 }
 
-// tol 0 means bit-exact moments (a round trip); otherwise a relative bound on
-// the moments (a different order of merges).
+// tol 0 means bit-exact moments after a round trip. Otherwise it is a relative
+// bound for a different order of merges.
 void check_stat(const FieldStat& a, const FieldStat& b, double tol,
                 const char* what) {
     INFO("field: ", what);
@@ -369,7 +368,6 @@ void check_same(const AggPartial& a, const AggPartial& b, double tol) {
     }
 }
 
-// Chunk bounds as event indexes.
 std::vector<std::size_t> bounds(std::size_t n, std::size_t chunks) {
     std::vector<std::size_t> out{0};
     for (std::size_t c = 1; c < chunks; ++c)
@@ -448,8 +446,8 @@ TEST_SUITE("AggPartial") {
             return intern.get_or_insert(name);
         };
         dftracer::utils::trace::views::detail::FoldEvent ev;
-        // A repeated arg keeps its first value; a negative or too large number
-        // clamps to 0; a string arg is present with no number; an arg the
+        // A repeated arg keeps its first value. A negative or too large number
+        // clamps to 0. A string arg is present with no number. An arg the
         // metric rules do not read is left alone.
         ev.args.emplace_back(id("dur_sum"), 12.0);
         ev.args.emplace_back(id("dur_sum"), 99.0);
@@ -773,7 +771,8 @@ TEST_SUITE("AggPartial") {
         CHECK_FALSE(over_back.tids.is_exact());
         CHECK(over_back.tids.count() == over.tids.count());
 
-        // Two lists whose union fits stay a list; one that does not fits not.
+        // Two lists whose union fits stay a list. One that does not fit does
+        // not.
         AggPartial a = build(0, 100);
         a.merge(build(50, 150));
         CHECK(a.tids.is_exact());
@@ -798,8 +797,8 @@ TEST_SUITE("AggPartial") {
     TEST_CASE(
         "distinct (pid, tid) and (pid, file) pairs merge and round trip") {
         AggPartial a;
-        // Thread 7 of two processes is two threads; file 5 of pid 1 seen
-        // twice is one access; an event without a file adds no pair.
+        // Thread 7 of two processes is two threads. File 5 of pid 1 seen
+        // twice is one access. An event without a file adds no pair.
         a.observe(1, 7, 5);
         a.observe(1, 7, 5);
         a.observe(2, 7, 5);
@@ -833,7 +832,7 @@ TEST_SUITE("AggPartial") {
     }
 
     TEST_CASE("building a partial allocates a bounded number of blocks") {
-        // Debug mode counts allocations; ctest sets
+        // Debug mode counts allocations. ctest sets
         // DFTRACER_UTILS_MEMORY_DEBUG=1.
         const auto cfg = make_config(true);
         auto events = [&](std::size_t n) {
@@ -878,8 +877,9 @@ TEST_SUITE("AggPartial") {
                      static_cast<unsigned long long>(n_small),
                      static_cast<unsigned long long>(n_large));
         // Per partial: 4 quantile stores (duration, size, offset, level) each
-        // growing 1..64 (7 blocks) then a sketch and its bins; the tid list
-        // (3), the pid, file and span vectors (1 each) and the arg vector (3).
+        // growing 1..64 (7 blocks) then a sketch and its bins. Then the tid
+        // list (3), the pid, file and span vectors (1 each) and the arg vector
+        // (3).
         constexpr std::uint64_t BOUND = 60;
         CHECK(n_small <= BOUND);
         CHECK(n_large <= BOUND);

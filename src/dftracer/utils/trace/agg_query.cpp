@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
@@ -17,8 +18,8 @@
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/trace/agg_event_fold.h>
 #include <dftracer/utils/trace/agg_query.h>
-#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
@@ -44,79 +45,38 @@ namespace {
 namespace agg = index::schemas::dft::agg;
 using views::detail::FoldEvent;
 
-constexpr std::uint32_t REJECT = 0xFFFFFFFFu;
-constexpr std::uint32_t UNSET = 0xFFFFFFFEu;
-constexpr std::uint32_t MAX_CACHED_ID = 1u << 20;
-constexpr char EXTRA_SEP = '\x1f';
 constexpr std::size_t STREAM_BUFFER_BYTES = 4u << 20;
 constexpr std::size_t PARSE_LINES = 8192;
 
-/// id -> result id, looked up once per id; ids past MAX_CACHED_ID are looked
-/// up each time.
-class IdCache {
-   public:
-    template <class Fn>
-    std::uint32_t get(std::uint32_t id, Fn&& compute) {
-        if (id >= MAX_CACHED_ID) return compute(id);
-        if (id >= ids_.size())
-            ids_.resize(std::max<std::size_t>(id + 1, ids_.size() * 2), UNSET);
-        if (ids_[id] == UNSET) ids_[id] = compute(id);
-        return ids_[id];
-    }
-
-   private:
-    dstd::Vector<std::uint32_t> ids_;
-};
-
-/// Where a stored partial stands against the pid filter.
 enum class PidFit { All, None, Mixed };
 
-/// One index root, open for the length of the query. The reads on it are
-/// thread safe.
+/// One index root, open for the length of the query, safe to read from any
+/// task. The files of a root that does not exist or cannot be opened are read
+/// whole.
 struct Source {
     Source(const AggQuerySource& s, std::uint64_t default_params_hash)
         : path(s.index_path),
-          idx(path, index::store::IndexOpenMode::ReadOnly),
-          dict(idx),
-          params_hash(s.params_hash ? *s.params_hash : default_params_hash) {}
+          params_hash(s.params_hash ? *s.params_hash : default_params_hash) {
+        if (path.empty() || !dftracer::utils::input_exists(path)) return;
+        idx.emplace(path, index::store::IndexOpenMode::ReadOnly);
+        dict.emplace(*idx);
+    }
 
     std::string path;
-    index::store::IndexDatabase idx;
-    agg::tier::Dictionary dict;
+    dstd::Optional<index::store::IndexDatabase> idx;
+    dstd::Optional<agg::tier::Dictionary> dict;
     std::uint64_t params_hash;
 };
 
-/// The (cat, name, host, extra, kind) of a partial, as result ids; the extra
-/// id is NO_ID for none.
-struct Group {
-    std::uint32_t cat;
-    std::uint32_t name;
-    std::uint32_t host;
-    std::uint32_t extra;
-    AggKind kind;
-
-    bool operator==(const Group&) const = default;
-};
-
-struct GroupHash {
-    using is_avalanching = void;
-    std::size_t operator()(const Group& g) const noexcept {
-        using dftracer::utils::hash::splitmix64;
-        return static_cast<std::size_t>(splitmix64(
-            splitmix64(splitmix64((std::uint64_t{g.cat} << 32) | g.name) ^
-                       ((std::uint64_t{g.host} << 32) | g.extra)) ^
-            static_cast<std::uint64_t>(g.kind)));
-    }
-};
-
-/// A chunk to read: the groups whose partials could not be added whole; `all`
-/// reads every group.
+/// A chunk to read, for the groups whose partials could not be added whole.
+/// `all` reads every group.
 struct ChunkJob {
     std::uint32_t chunk = 0;
-    /// The index file id the chunk's records are keyed under.
     int file_id = -1;
     bool all = false;
-    dstd::Vector<Group> groups;
+    /// The file has no chunk table, so chunk 0 is the whole of it.
+    bool whole_file = false;
+    dstd::Vector<AggGroup> groups;
 };
 
 class Task;
@@ -124,53 +84,26 @@ class Task;
 class Runner {
    public:
     Runner(const AggQuery& query, AggQueryResult& result)
-        : q(query),
+        : read(),
+          rules(query, read, result.strings()),
           out(result),
-          strings(result.strings()),
-          read_metric_ids(read),
-          window_cfg(query.config),
-          read_cfg(query.config) {
-        for (const auto& c : q.categories) {
-            std::string storage;
-            categories.emplace(
-                dstd::String(trace::internal::to_lower_ascii(c, storage)));
-        }
-        for (const auto& n : q.names) names.emplace(n);
-        for (const auto& h : q.hosts) hosts.emplace(h);
-        pids.assign(q.pids.begin(), q.pids.end());
-        std::sort(pids.begin(), pids.end());
-        window_cfg.time_interval_us = q.window_us;
-        read_cfg.compute_percentiles = q.quantiles;
-        has_time = q.ts_begin > 0 || q.ts_end < UINT64_MAX;
-        reread_only = q.by_file || q.filter.has_value();
-    }
+          has_time(query.ts_begin > 0 || query.ts_end < UINT64_MAX),
+          reread_only(query.by_file || query.filter.has_value()) {}
 
     coro::CoroTask<void> run();
 
-    std::uint64_t bucket(std::uint64_t ts) const {
-        return agg::compute_time_bucket(ts, window_cfg);
-    }
     void fail(std::exception_ptr e) {
         std::lock_guard<std::mutex> lock(mu);
         if (!error) error = std::move(e);
         failed.store(true, std::memory_order_release);
     }
     bool is_failed() const { return failed.load(std::memory_order_acquire); }
+    bool cancelled() const { return rules.q.cancelled && rules.q.cancelled(); }
     void merge(Task& task);
 
-    const AggQuery& q;
-    AggQueryResult& out;
-    dstd::StringIntern& strings;
-    /// Ids of the events a re-read decodes; shared by the tasks.
     dstd::StringIntern read;
-    /// The ids of the fixed metric args in `read`.
-    agg::MetricArgIds read_metric_ids;
-    agg::AggregationConfig window_cfg;
-    agg::AggregationConfig read_cfg;
-    dstd::HashSet<dstd::String> categories;
-    dstd::HashSet<dstd::String> names;
-    dstd::HashSet<dstd::String> hosts;
-    dstd::Vector<std::uint64_t> pids;
+    AggEventRules rules;
+    AggQueryResult& out;
     bool has_time = false;
     bool reread_only = false;
 
@@ -178,8 +111,7 @@ class Runner {
     dstd::Vector<std::unique_ptr<Source>> sources;
 
    private:
-    /// The rows the tasks merged so far, split by key hash into stripes with a
-    /// lock each: one lock for all made every worker wait on each merge.
+    /// One lock for all rows made every worker wait on each merge.
     static constexpr std::size_t MERGE_STRIPES = 64;
     struct Stripe {
         std::mutex mu;
@@ -188,7 +120,6 @@ class Runner {
     static std::size_t stripe_of(const AggKey& key) {
         return (AggKeyHash{}(key) >> 32U) % MERGE_STRIPES;
     }
-    /// Moves the stripes into the result once every task merged.
     void collect();
 
     coro::CoroTask<void> file_task(std::size_t source, std::size_t file);
@@ -202,7 +133,6 @@ class Runner {
     std::atomic<bool> failed{false};
 };
 
-/// Returns its permit when the task ends, on any path.
 struct Permit {
     explicit Permit(coro::CoroSemaphore& s) : sem(s) {}
     Permit(const Permit&) = delete;
@@ -211,21 +141,23 @@ struct Permit {
     coro::CoroSemaphore& sem;
 };
 
-/// The state of one task: a file scan or a chunk re-read. It folds into its
-/// own map, which the runner merges into the result when the task ends.
 class Task {
    public:
-    Task(Runner& r, Source& s) : r_(r), src_(s) {}
+    Task(Runner& r, Source& s)
+        : r_(r), src_(s), folder_(r.rules, rows, stats) {}
 
     AggQueryResult::Rows rows;
     AggQueryStats stats;
 
-    /// Streams the partials of `file` and adds the ones that answer whole.
     /// Fills `jobs` with the chunks to re-read, in chunk order, and `spans`
     /// with the chunk table of the file.
     coro::CoroTask<void> scan_file(const std::string& path,
                                    dstd::Vector<ChunkJob>& jobs,
                                    dstd::Vector<index::gzip::ChunkSpan>& spans);
+
+    coro::CoroTask<void> trace_jobs(
+        const std::string& path, dstd::Vector<ChunkJob>& jobs,
+        dstd::Vector<index::gzip::ChunkSpan>& spans);
 
     coro::CoroTask<void> read_chunk(const std::string& path,
                                     const index::gzip::ChunkSpan& span,
@@ -235,64 +167,61 @@ class Task {
    private:
     struct Reread {
         std::uint32_t chunk;
-        Group group;
+        AggGroup group;
     };
 
     template <class Filter>
     std::uint32_t map_root(std::uint32_t id, const Filter& filter) {
-        const std::string* text = src_.dict.find(id);
+        const std::string* text = src_.dict->find(id);
         if (!text)
             throw DFTUtilsException::cat(ErrorCode::Parse,
                                          "aggregation query: dictionary id ",
                                          id, " is missing in ", src_.path);
         if (!filter.empty() &&
             filter.find(std::string_view(*text)) == filter.end())
-            return REJECT;
-        return r_.strings.get_or_insert(*text);
+            return AGG_REJECT;
+        return r_.rules.strings.get_or_insert(*text);
     }
 
     PidFit pid_fit(const agg::AggPartial& p) const {
-        if (r_.pids.empty()) return PidFit::All;
+        if (r_.rules.pids.empty()) return PidFit::All;
         if (!p.pids.is_exact()) return PidFit::Mixed;
         const auto ids = p.pids.ids();
         std::size_t in = 0;
         for (std::uint64_t id : ids)
-            if (std::binary_search(r_.pids.begin(), r_.pids.end(), id)) ++in;
+            if (std::binary_search(r_.rules.pids.begin(), r_.rules.pids.end(),
+                                   id))
+                ++in;
         return in == ids.size() ? PidFit::All
                : in == 0        ? PidFit::None
                                 : PidFit::Mixed;
     }
 
-    // Values were added event by event, and no quantile store holds them.
     static bool quantiles_missing(const agg::AggPartial& p) {
         return (p.duration_values != 0 && p.duration_q.count() == 0) ||
                (p.size_values != 0 && p.size_q.count() == 0) ||
                (p.offset_values != 0 && p.offset_q.count() == 0);
     }
 
-    void queue_reread(std::uint32_t chunk, const Group& group) {
-        if (!r_.q.reread) {
+    void queue_reread(std::uint32_t chunk, const AggGroup& group) {
+        if (!r_.rules.q.reread) {
             ++stats.unanswered;
             return;
         }
         rereads_.push_back({chunk, group});
     }
 
-    void take_partial(std::uint32_t chunk, const Group& group,
+    void take_partial(std::uint32_t chunk, const AggGroup& group,
                       std::span<const std::uint8_t> bytes);
-    /// Whether the time bins of `p` can answer a split of it by pid, tid
-    /// and window.
     bool bins_answer(const agg::AggPartial& p) const;
-    /// Adds the bins of `p` to the rows, under `key` with the pid, tid and
-    /// window of each bin.
     void take_bins(const agg::AggPartial& p, AggKey key);
 
     coro::CoroTask<void> whole_file_chunks(const std::string& path, int fid,
                                            std::size_t chunk_count,
                                            dstd::Vector<ChunkJob>& jobs);
 
-    // The bytes of the file's chunks before `chunk` that follow the last
-    // newline: the head of a line that a member boundary cut.
+    // The head of a line that a member boundary cut: the bytes before `chunk`
+    // that follow the last newline.
     coro::CoroTask<std::string> tail_before(
         const std::string& path, std::uint32_t chunk,
         const index::gzip::ChunkSpan* spans);
@@ -301,83 +230,24 @@ class Task {
     open_reader(const std::string& path);
 
     void parse_lines_of(std::string& pending, std::uint32_t chunk,
-                        const dstd::HashSet<Group, GroupHash>* wanted);
+                        const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
 
-    std::uint32_t read_cat(std::uint32_t id) {
-        return build_cat_.get(id, [&](std::uint32_t i) {
-            const std::string_view raw = i == dstd::StringIntern::NO_ID
-                                             ? std::string_view{}
-                                             : r_.read.resolve(i);
-            std::string storage;
-            const std::string_view lower =
-                trace::internal::to_lower_ascii(raw, storage);
-            if (!r_.categories.empty() &&
-                r_.categories.find(lower) == r_.categories.end())
-                return REJECT;
-            return r_.strings.get_or_insert(lower);
-        });
-    }
-
-    std::uint32_t read_name(std::uint32_t id) {
-        return build_name_.get(id, [&](std::uint32_t i) {
-            const std::string_view raw = i == dstd::StringIntern::NO_ID
-                                             ? std::string_view{}
-                                             : r_.read.resolve(i);
-            if (!r_.names.empty() && r_.names.find(raw) == r_.names.end())
-                return REJECT;
-            return r_.strings.get_or_insert(raw);
-        });
-    }
-
-    std::uint32_t read_host(std::uint32_t id) {
-        return build_host_.get(id, [&](std::uint32_t i) {
-            const std::string_view raw = i == dstd::StringIntern::NO_ID
-                                             ? std::string_view{}
-                                             : r_.read.resolve(i);
-            if (!r_.hosts.empty() && r_.hosts.find(raw) == r_.hosts.end())
-                return REJECT;
-            return r_.strings.get_or_insert(raw);
-        });
-    }
-
-    std::uint32_t extra_id(const agg::PodAccessor& acc) {
-        extra_buf_.clear();
-        bool any = false;
-        bool first = true;
-        for (const auto& k : r_.q.config.extra_group_keys) {
-            if (!first) extra_buf_ += EXTRA_SEP;
-            first = false;
-            const auto v = acc.arg_string(k);
-            if (!v.empty()) any = true;
-            extra_buf_.append(v);
-        }
-        return any ? r_.strings.get_or_insert(extra_buf_)
-                   : dstd::StringIntern::NO_ID;
-    }
-
-    void add_event(const FoldEvent& ev,
-                   const dstd::HashSet<Group, GroupHash>* wanted);
-
-    /// Answers the job from the column block of `chunk`: false, with nothing
-    /// added, when the index holds none.
+    /// False, with nothing added, when the index holds no column block.
     bool add_chunk_columns(std::uint32_t chunk, int file_id,
-                           const dstd::HashSet<Group, GroupHash>* wanted);
+                           const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
 
     Runner& r_;
     Source& src_;
-    IdCache root_cat_, root_name_, root_host_, root_extra_;
-    IdCache build_cat_, build_name_, build_host_;
+    AggEventFolder folder_;
+    AggIdCache root_cat_, root_name_, root_host_, root_extra_;
     dstd::Vector<Reread> rereads_;
     views::detail::FoldEventBuffer buffer_;
-    /// The event a column block row is rebuilt into.
     FoldEvent column_event_;
-    dstd::String extra_buf_;
     json::RecordParser parser_;
     std::shared_ptr<std::string> buf_ = std::make_shared<std::string>();
 };
 
 void Runner::merge(Task& task) {
-    // The rows of the task in stripe order, so each stripe locks once.
     dstd::Vector<std::pair<std::uint32_t, AggQueryResult::Rows::value_type*>>
         order;
     order.reserve(task.rows.size());
@@ -417,20 +287,21 @@ void Runner::merge(Task& task) {
 }
 
 coro::CoroTask<void> Runner::run() {
-    std::size_t workers = q.workers;
+    std::size_t workers = rules.q.workers;
     if (workers == 0) {
         const Executor* ex = Executor::current();
         workers =
             ex != nullptr ? std::max<std::size_t>(1, ex->get_num_threads()) : 1;
     }
     permits = std::make_unique<coro::CoroSemaphore>(workers);
-    const std::uint64_t default_params_hash = q.config.params_hash();
-    for (const auto& s : q.sources)
+    const std::uint64_t default_params_hash = rules.q.config.params_hash();
+    for (const auto& s : rules.q.sources)
         sources.push_back(std::make_unique<Source>(s, default_params_hash));
 
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        for (std::size_t si = 0; si < q.sources.size(); ++si)
-            for (std::size_t fi = 0; fi < q.sources[si].files.size(); ++fi)
+        for (std::size_t si = 0; si < rules.q.sources.size(); ++si)
+            for (std::size_t fi = 0; fi < rules.q.sources[si].files.size();
+                 ++fi)
                 scope.spawn(
                     [this, si, fi](CoroScope&) { return file_task(si, fi); });
         co_return;
@@ -458,7 +329,7 @@ void Runner::collect() {
 
 coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file) {
     Source& src = *sources[source];
-    const std::string path(q.sources[source].files[file]);
+    const std::string path(rules.q.sources[source].files[file]);
     dstd::Vector<ChunkJob> jobs;
     dstd::Vector<index::gzip::ChunkSpan> spans;
     {
@@ -467,14 +338,17 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file) {
         try {
             if (!is_failed()) {
                 Task task(*this, src);
-                co_await task.scan_file(path, jobs, spans);
+                if (rules.q.from_trace)
+                    co_await task.trace_jobs(path, jobs, spans);
+                else
+                    co_await task.scan_file(path, jobs, spans);
                 merge(task);
             }
         } catch (...) {
             fail(std::current_exception());
         }
     }
-    if (jobs.empty() || is_failed()) co_return;
+    if (jobs.empty() || is_failed() || cancelled()) co_return;
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         for (const ChunkJob& job : jobs)
             scope.spawn([this, &src, &path, &spans, &job](CoroScope&) {
@@ -490,9 +364,12 @@ coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
     co_await permits->acquire(1);
     Permit permit(*permits);
     try {
-        if (is_failed()) co_return;
+        if (is_failed() || cancelled()) co_return;
         Task task(*this, *source);
-        co_await task.read_chunk(*path, spans[job->chunk], *job, spans);
+        const index::gzip::ChunkSpan whole_file;
+        const index::gzip::ChunkSpan& span =
+            job->whole_file ? whole_file : spans[job->chunk];
+        co_await task.read_chunk(*path, span, *job, spans);
         merge(task);
     } catch (...) {
         fail(std::current_exception());
@@ -502,7 +379,11 @@ coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
 coro::CoroTask<void> Task::scan_file(
     const std::string& path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<index::gzip::ChunkSpan>& spans) {
-    const auto& idx = src_.idx;
+    if (!src_.idx)
+        throw DFTUtilsException::cat(ErrorCode::NotFound,
+                                     "aggregation query: ", src_.path,
+                                     " is not an open index");
+    const auto& idx = *src_.idx;
     const int fid =
         idx.get_file_info_id(index::store::internal::get_logical_path(path));
     if (fid < 0)
@@ -523,7 +404,7 @@ coro::CoroTask<void> Task::scan_file(
     std::size_t seen = 0;
     if (usable) {
         agg::tier::for_each_partial(
-            src_.idx, fid,
+            *src_.idx, fid,
             [&](std::uint32_t chunk, std::uint32_t cat_root,
                 std::uint32_t name_root, std::uint32_t host_root,
                 std::uint32_t extra_root, AggKind kind,
@@ -532,28 +413,32 @@ coro::CoroTask<void> Task::scan_file(
                 ++stats.partials_read;
                 const std::uint32_t cat =
                     root_cat_.get(cat_root, [&](std::uint32_t id) {
-                        return map_root(id, r_.categories);
+                        return map_root(id, r_.rules.categories);
                     });
-                const std::uint32_t name = root_name_.get(
-                    name_root,
-                    [&](std::uint32_t id) { return map_root(id, r_.names); });
-                const std::uint32_t host = root_host_.get(
-                    host_root,
-                    [&](std::uint32_t id) { return map_root(id, r_.hosts); });
-                if (cat == REJECT || name == REJECT || host == REJECT) {
+                const std::uint32_t name =
+                    root_name_.get(name_root, [&](std::uint32_t id) {
+                        return map_root(id, r_.rules.names);
+                    });
+                const std::uint32_t host =
+                    root_host_.get(host_root, [&](std::uint32_t id) {
+                        return map_root(id, r_.rules.hosts);
+                    });
+                if (cat == AGG_REJECT || name == AGG_REJECT ||
+                    host == AGG_REJECT) {
                     ++stats.partials_pruned;
                     return true;
                 }
                 const std::uint32_t extra =
                     root_extra_.get(extra_root, [&](std::uint32_t id) {
-                        const std::string* text = src_.dict.find(id);
+                        const std::string* text = src_.dict->find(id);
                         if (!text)
                             throw DFTUtilsException::cat(
                                 ErrorCode::Parse,
                                 "aggregation query: dictionary id ", id,
                                 " is missing in ", src_.path);
-                        return text->empty() ? dstd::StringIntern::NO_ID
-                                             : r_.strings.get_or_insert(*text);
+                        return text->empty()
+                                   ? dstd::StringIntern::NO_ID
+                                   : r_.rules.strings.get_or_insert(*text);
                     });
                 take_partial(chunk, {cat, name, host, extra, kind}, bytes);
                 return true;
@@ -562,7 +447,7 @@ coro::CoroTask<void> Task::scan_file(
 
     if (seen == 0) {
         ++stats.files_without_partials;
-        if (!r_.q.reread) {
+        if (!r_.rules.q.reread) {
             ++stats.unanswered;
             co_return;
         }
@@ -586,20 +471,45 @@ coro::CoroTask<void> Task::scan_file(
     }
 }
 
-// The chunks of a file with no partials: those the time range leaves.
+coro::CoroTask<void> Task::trace_jobs(
+    const std::string& path, dstd::Vector<ChunkJob>& jobs,
+    dstd::Vector<index::gzip::ChunkSpan>& spans) {
+    ++stats.files;
+    int fid = -1;
+    if (src_.idx) {
+        const int found = src_.idx->get_file_info_id(
+            index::store::internal::get_logical_path(path));
+        if (found >= 0) {
+            fid = found;
+            const auto table = src_.idx->query_chunk_spans(fid);
+            spans.assign(table.begin(), table.end());
+        }
+    }
+    if (spans.empty()) {
+        ChunkJob job;
+        job.all = true;
+        job.whole_file = true;
+        jobs.push_back(std::move(job));
+        co_return;
+    }
+    co_await whole_file_chunks(path, fid, spans.size(), jobs);
+}
+
 coro::CoroTask<void> Task::whole_file_chunks(const std::string& path, int fid,
                                              std::size_t chunk_count,
                                              dstd::Vector<ChunkJob>& jobs) {
     dstd::Vector<std::uint64_t> chunks;
     bool pruned_to_list = false;
-    if (r_.has_time) {
+    if (r_.has_time && src_.idx) {
         index::plan::PruneRequest request;
         request.index_path = src_.path;
         request.file_path = path;
-        request.db = &src_.idx;
-        request.time_range = std::make_pair(
-            static_cast<double>(r_.q.ts_begin),
-            r_.q.ts_end == UINT64_MAX ? 0.0 : static_cast<double>(r_.q.ts_end));
+        request.db = &*src_.idx;
+        request.time_range =
+            std::make_pair(static_cast<double>(r_.rules.q.ts_begin),
+                           r_.rules.q.ts_end == UINT64_MAX
+                               ? 0.0
+                               : static_cast<double>(r_.rules.q.ts_end));
         request.chunk_count = chunk_count;
         request.by_start = true;
         auto pruned = co_await index::plan::prune_file(std::move(request));
@@ -622,20 +532,18 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path, int fid,
     }
 }
 
-// Decides one stored partial: pruned, merged whole, or queued for a re-read
-// of its chunk.
-void Task::take_partial(std::uint32_t chunk, const Group& group,
+void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
                         std::span<const std::uint8_t> bytes) {
-    if (r_.reread_only && !r_.has_time && r_.pids.empty()) {
+    if (r_.reread_only && !r_.has_time && r_.rules.pids.empty()) {
         queue_reread(chunk, group);
         return;
     }
     agg::AggPartial::Fields keep;
-    keep.quantiles = r_.q.quantiles && !r_.reread_only;
-    keep.bins = r_.q.sums_only && !r_.reread_only;
+    keep.quantiles = r_.rules.q.quantiles && !r_.reread_only;
+    keep.bins = r_.rules.q.sums_only && !r_.reread_only;
     auto parsed = agg::AggPartial::deserialize(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
-        r_.q.config.sketch_accuracy, keep);
+        r_.rules.q.config.sketch_accuracy, keep);
     if (!parsed)
         throw DFTUtilsException(ErrorCode::Parse,
                                 "aggregation partial: malformed record");
@@ -648,8 +556,7 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
         queue_reread(chunk, group);
         return;
     }
-    // Every event of the partial starts in [ts, ts_last_start].
-    if (p.ts_last_start < r_.q.ts_begin || p.ts >= r_.q.ts_end) {
+    if (p.ts_last_start < r_.rules.q.ts_begin || p.ts >= r_.rules.q.ts_end) {
         ++stats.partials_pruned;
         return;
     }
@@ -658,9 +565,10 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
         ++stats.partials_pruned;
         return;
     }
-    const bool inside = p.ts >= r_.q.ts_begin && p.ts_last_start < r_.q.ts_end;
+    const bool inside =
+        p.ts >= r_.rules.q.ts_begin && p.ts_last_start < r_.rules.q.ts_end;
     if (r_.reread_only || !inside || fit != PidFit::All ||
-        (r_.q.quantiles && quantiles_missing(p))) {
+        (r_.rules.q.quantiles && quantiles_missing(p))) {
         queue_reread(chunk, group);
         return;
     }
@@ -668,27 +576,27 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
     AggKey key;
     key.cat = group.cat;
     key.name = group.name;
-    if (r_.q.by_host) key.host = group.host;
-    if (r_.q.by_extra) key.extra = group.extra;
-    if (r_.q.by_kind) key.kind = group.kind;
+    if (r_.rules.q.by_host) key.host = group.host;
+    if (r_.rules.q.by_extra) key.extra = group.extra;
+    if (r_.rules.q.by_kind) key.kind = group.kind;
     bool split = false;
-    if (r_.q.by_pid) {
+    if (r_.rules.q.by_pid) {
         const auto ids = p.pids.ids();
         if (!p.pids.is_exact() || ids.size() != 1)
             split = true;
         else
             key.pid = ids[0];
     }
-    if (r_.q.by_tid) {
+    if (r_.rules.q.by_tid) {
         const auto ids = p.tids.ids();
         if (!p.tids.is_exact() || ids.size() != 1)
             split = true;
         else
             key.tid = ids[0];
     }
-    if (r_.q.window_us != 0) {
-        key.window = r_.bucket(p.ts);
-        if (r_.bucket(p.ts_last_start) != key.window) split = true;
+    if (r_.rules.q.window_us != 0) {
+        key.window = r_.rules.bucket(p.ts);
+        if (r_.rules.bucket(p.ts_last_start) != key.window) split = true;
     }
     if (split) {
         if (!bins_answer(p)) {
@@ -708,9 +616,10 @@ void Task::take_partial(std::uint32_t chunk, const Group& group,
 }
 
 bool Task::bins_answer(const agg::AggPartial& p) const {
-    if (!r_.q.sums_only || r_.q.quantiles) return false;
+    if (!r_.rules.q.sums_only || r_.rules.q.quantiles) return false;
     if (p.bin_interval == 0 || p.bins.empty()) return false;
-    return r_.q.window_us == 0 || r_.q.window_us % p.bin_interval == 0;
+    return r_.rules.q.window_us == 0 ||
+           r_.rules.q.window_us % p.bin_interval == 0;
 }
 
 void Task::take_bins(const agg::AggPartial& p, AggKey key) {
@@ -724,15 +633,17 @@ void Task::take_bins(const agg::AggPartial& p, AggKey key) {
         return s;
     };
     for (const agg::TimeBin& b : p.bins) {
-        if (r_.q.by_pid) key.pid = b.pid;
-        if (r_.q.by_tid) key.tid = b.tid;
-        if (r_.q.window_us != 0)
-            key.window =
-                (b.bin * p.bin_interval / r_.q.window_us) * r_.q.window_us;
+        if (r_.rules.q.by_pid) key.pid = b.pid;
+        if (r_.rules.q.by_tid) key.tid = b.tid;
+        if (r_.rules.q.window_us != 0)
+            key.window = (b.bin * p.bin_interval / r_.rules.q.window_us) *
+                         r_.rules.q.window_us;
         auto it = rows.find(key);
         if (it == rows.end())
-            it = rows.emplace(key, agg::AggPartial(r_.q.config.sketch_accuracy))
-                     .first;
+            it =
+                rows.emplace(key,
+                             agg::AggPartial(r_.rules.q.config.sketch_accuracy))
+                    .first;
         agg::AggPartial& row = it->second;
         row.count += b.count;
         row.duration.merge(stat_of(b.duration_n, b.duration_sum));
@@ -786,11 +697,10 @@ coro::CoroTask<std::string> Task::tail_before(
     co_return tail;
 }
 
-// Parses the complete lines of `pending` (through its last newline) as the
-// events of `chunk` and leaves the rest. A line belongs to the chunk that
-// holds its newline, as in the index fold.
+// Parses the complete lines of `pending` as the events of `chunk` and leaves
+// the rest. A line belongs to the chunk that holds its newline.
 void Task::parse_lines_of(std::string& pending, std::uint32_t chunk,
-                          const dstd::HashSet<Group, GroupHash>* wanted) {
+                          const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
     const std::size_t nl = pending.rfind('\n');
     if (nl == std::string::npos) return;
     const std::size_t whole = nl + 1;
@@ -808,14 +718,17 @@ void Task::parse_lines_of(std::string& pending, std::uint32_t chunk,
         trace::parse_buffer(
             parser_, buf_, total, chunk, line_number,
             [&](const trace::EventRecord& rec) {
-                if (r_.q.filter && !r_.q.filter->evaluate(rec.json)) return;
+                if (r_.rules.q.filter && !r_.rules.q.filter->evaluate(rec.json))
+                    return;
                 FoldEvent& ev = buffer_.append();
-                views::detail::build_fold_event_into(
-                    ev, rec.ev, rec.args_dom, rec.has_args, r_.read, true);
+                views::detail::build_fold_event_into(ev, rec.ev, rec.args_dom,
+                                                     rec.has_args,
+                                                     r_.rules.read, true);
             });
         stats.max_batch_events =
             std::max(stats.max_batch_events, buffer_.size());
-        for (const FoldEvent& ev : buffer_.events()) add_event(ev, wanted);
+        for (const FoldEvent& ev : buffer_.events())
+            folder_.add_event(ev, wanted);
         buffer_.clear();
     }
     pending.erase(0, whole);
@@ -827,24 +740,31 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
                                       const index::gzip::ChunkSpan* spans) {
     namespace rd = utilities::reader::internal;
     ++stats.chunks_reread;
-    dstd::HashSet<Group, GroupHash> wanted;
+    dstd::HashSet<AggGroup, AggGroupHash> wanted;
     if (!job.all) wanted.insert(job.groups.begin(), job.groups.end());
-    const dstd::HashSet<Group, GroupHash>* filter = job.all ? nullptr : &wanted;
-    if (!r_.q.filter && r_.q.config.extra_group_keys.empty() &&
+    const dstd::HashSet<AggGroup, AggGroupHash>* filter =
+        job.all ? nullptr : &wanted;
+    if (!r_.rules.q.from_trace && !r_.rules.q.filter &&
+        r_.rules.q.config.extra_group_keys.empty() &&
         add_chunk_columns(job.chunk, job.file_id, filter)) {
         co_return;
     }
 
     auto reader = co_await open_reader(path);
+    const std::uint64_t from = job.whole_file ? 0 : span.uc_offset;
+    const std::uint64_t to = job.whole_file ? reader->get_max_bytes()
+                                            : span.uc_offset + span.uc_size;
+    if (from >= to) co_return;
     auto stream = reader->stream(rd::StreamConfig()
                                      .stream_type(rd::StreamType::Bytes)
                                      .range_type(rd::RangeType::ByteRange)
                                      .buffer_size(STREAM_BUFFER_BYTES)
-                                     .from(span.uc_offset)
-                                     .to(span.uc_offset + span.uc_size));
+                                     .from(from)
+                                     .to(to));
     std::string pending;
     bool decided = job.chunk == 0;
     while (!stream->done()) {
+        if (r_.cancelled()) co_return;
         auto piece = co_await stream->read_async();
         if (piece.empty()) break;
         pending.append(piece.data(), piece.size());
@@ -852,10 +772,9 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
             const std::size_t nl = pending.find('\n');
             if (nl == std::string::npos) continue;
             decided = true;
-            // The head of the chunk is a whole line only when it parses as
-            // one object: the tail of a line cut by the member boundary has a
-            // brace the head does not close. Any other head, and an empty one,
-            // continues a line of the chunks before.
+            // The head is a whole line only when it parses as one object. The
+            // tail of a line cut by the member boundary has a brace the head
+            // does not close, and an empty head continues a line before.
             auto head = parser_.parse(pending.data(), nl);
             const bool whole =
                 nl > 0 && !head.error() && head.value_unsafe().is_object();
@@ -868,28 +787,27 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
     }
 }
 
-// Rebuilds the events of `chunk` from its column block: every rule, limit and
-// key then stays in add_event, as on the parse path.
-bool Task::add_chunk_columns(std::uint32_t chunk, int file_id,
-                             const dstd::HashSet<Group, GroupHash>* wanted) {
+bool Task::add_chunk_columns(
+    std::uint32_t chunk, int file_id,
+    const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
     agg::ChunkColumns block;
-    if (!agg::tier::get_chunk_columns(src_.idx, file_id, chunk, block))
+    if (!src_.idx ||
+        !agg::tier::get_chunk_columns(*src_.idx, file_id, chunk, block))
         return false;
-    // The id in `r_.read` of each id the block names, interned once per block.
-    dstd::Vector<std::uint32_t> read_ids(block.ids.size(), UNSET);
+    dstd::Vector<std::uint32_t> read_ids(block.ids.size(), AGG_UNSET);
     const auto read_id = [&](std::uint32_t local) {
         std::uint32_t& id = read_ids[local];
-        if (id == UNSET) {
+        if (id == AGG_UNSET) {
             const dstd::String& text = block.texts[local];
             id = text.empty() ? dstd::StringIntern::NO_ID
-                              : r_.read.get_or_insert(text);
+                              : r_.rules.read.get_or_insert(text);
         }
         return id;
     };
     dstd::Vector<std::uint32_t> path_ids(block.columns.size());
     for (std::size_t c = 0; c < block.columns.size(); ++c)
-        path_ids[c] = r_.read.get_or_insert(block.texts[block.columns[c].path]);
-    // The entry of each column the next row visits.
+        path_ids[c] =
+            r_.rules.read.get_or_insert(block.texts[block.columns[c].path]);
     dstd::Vector<std::size_t> at(block.columns.size(), 0);
     for (std::size_t row = 0; row < block.rows; ++row) {
         views::detail::reset_fold_event(column_event_);
@@ -915,54 +833,10 @@ bool Task::add_chunk_columns(std::uint32_t chunk, int file_id,
                 value = column.uint64_at(k);
             column_event_.args.emplace_back(path_ids[c], value);
         }
-        add_event(column_event_, wanted);
+        folder_.add_event(column_event_, wanted);
     }
     ++stats.chunks_from_columns;
     return true;
-}
-
-void Task::add_event(const FoldEvent& ev,
-                     const dstd::HashSet<Group, GroupHash>* wanted) {
-    const agg::PodAccessor acc(ev, r_.read, r_.read_metric_ids);
-    if (!agg::partial_holds(acc)) return;
-    if (ev.ts < r_.q.ts_begin || ev.ts >= r_.q.ts_end) return;
-    if (!r_.pids.empty() &&
-        !std::binary_search(r_.pids.begin(), r_.pids.end(), ev.pid))
-        return;
-    const std::uint32_t cat = read_cat(ev.cat_id);
-    if (cat == REJECT) return;
-    const std::uint32_t name = read_name(ev.name_id);
-    if (name == REJECT) return;
-    const std::uint32_t host = read_host(ev.hhash_id);
-    if (host == REJECT) return;
-    const std::uint32_t extra = extra_id(acc);
-    const AggKind kind = agg::partial_kind(acc);
-    if (wanted != nullptr &&
-        wanted->find(Group{cat, name, host, extra, kind}) == wanted->end())
-        return;
-
-    AggKey key;
-    key.cat = cat;
-    key.name = name;
-    if (r_.q.by_host) key.host = host;
-    if (r_.q.by_kind) key.kind = kind;
-    if (r_.q.by_pid) key.pid = ev.pid;
-    if (r_.q.by_tid) key.tid = ev.tid;
-    if (r_.q.by_file) {
-        const auto fhash = acc.arg_string("fhash");
-        key.file = fhash.empty() ? 0 : agg::agg_hash_of_hex(fhash);
-        if (!fhash.empty() && !hash::parse_hex64(fhash))
-            key.file_text = r_.strings.get_or_insert(fhash);
-    }
-    if (r_.q.window_us != 0) key.window = r_.bucket(ev.ts);
-    if (r_.q.by_extra) key.extra = extra;
-
-    auto it = rows.find(key);
-    if (it == rows.end())
-        it = rows.emplace(key, agg::AggPartial(r_.q.config.sketch_accuracy))
-                 .first;
-    agg::fold_into_partial(it->second, acc, r_.read_cfg);
-    ++stats.events_read;
 }
 
 }  // namespace

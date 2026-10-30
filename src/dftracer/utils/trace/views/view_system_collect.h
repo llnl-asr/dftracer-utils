@@ -7,14 +7,10 @@
 
 namespace dftracer::utils::trace::views::detail {
 
-/// One-pass read of the sys counters of the aggregation tier's column blocks,
-/// each block holding the rows of one chunk with their exact arg values. Emits
-/// one output row per (host_hash, name, time_bucket) with a dynamic column per
-/// metric (its mean), the sorted union of metric names giving a stable schema
-/// and absent metrics NaN. Reads the shard range [shard_begin, shard_end)
-/// (shard_end <= 0 means all shards). Returns false (out_table untouched) when
-/// the plan does not span the files of one index whose aggregation data is
-/// current.
+/// One row per (host_hash, name, time_bucket) of the sys counters, with a
+/// column per metric (its mean, NaN when absent), in the shard range
+/// [shard_begin, shard_end) (shard_end <= 0 means all). Returns false, with
+/// out_table untouched, unless the plan spans the files of one current index.
 bool system_collect(const ViewPlan& plan,
                     dftracer::utils::dataframe::DataFrame& out_table,
                     int shard_begin = 0, int shard_end = 0,

@@ -115,8 +115,7 @@ struct ExtractionBudget {
  *
  * An extraction gets `total_bytes / max_parallel`, at least the four members a
  * writer needs to make progress and at most what a writer with one worker per
- * thread can use. Extractions that reserve this much fit in `total_bytes`
- * about `max_parallel` at a time, and only one at a time when it is smaller.
+ * thread can use.
  */
 ExtractionBudget plan_extraction_budget(std::uint64_t total_bytes,
                                         std::size_t max_parallel,
@@ -127,7 +126,7 @@ ExtractionBudget plan_extraction_budget(std::uint64_t total_bytes,
  * @brief Admits extractions while their reservations fit in the budget, and
  * at most `max_parallel` at once.
  *
- * `enter` waits for `reserve_bytes`; a reservation above the budget is clamped
+ * `enter` waits for `reserve_bytes`. A reservation above the budget is clamped
  * and runs alone. Every `enter` is paired with one `leave`.
  */
 class ExtractionAdmission {

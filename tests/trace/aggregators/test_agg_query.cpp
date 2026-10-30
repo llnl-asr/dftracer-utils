@@ -1,5 +1,5 @@
 // The aggregation query over real indexes: every group-by, window and filter
-// gives the rows today's per-event aggregator gives for the same events, and
+// gives the rows a per-event aggregator gives for the same events, and
 // the chunks that cannot be answered from the stored partials are re-read.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -128,11 +128,10 @@ agg::AggregationConfig make_config(std::uint64_t interval_us) {
     return cfg;
 }
 
-// POSIX read/write and STDIO fread/fwrite carry ret and offset; open carries a
-// ret that is a descriptor and must not count as a size; compute carries
-// numeric args only; "rare" has fewer than 64 events so its quantiles stay
-// exact; every 17th POSIX transfer is a pre-aggregated counter. Events are in
-// time order and span about 14 s.
+// POSIX read/write and STDIO fread/fwrite carry ret and offset. Open carries a
+// ret that is a descriptor and must not count as a size. Compute carries
+// numeric args only. "rare" has fewer than 64 events, so its quantiles stay
+// exact. Every 17th POSIX transfer is a pre-aggregated counter.
 std::vector<Ev> make_events(std::uint64_t seed) {
     static const char* const FILE_HASHES[] = {
         "1a2b3c4d", "deadbeef", "0badf00d", "cafe1234",
@@ -264,7 +263,6 @@ bool is_transfer(const Ev& e) {
             e.name == "fwrite");
 }
 
-// What the query is asked, in the terms of the events.
 struct Ask {
     bool by_pid = false;
     bool by_tid = false;
@@ -309,7 +307,7 @@ struct Truth {
     agg::AggregationMetrics metrics{0.01};
 };
 
-// Today's aggregator, one state per group key of the query.
+// A per-event aggregator, one state per group key of the query.
 std::map<Key, Truth> reference(const std::vector<Ev>& events, const Ask& ask,
                                const agg::AggregationConfig& cfg) {
     std::map<Key, Truth> out;
@@ -446,7 +444,6 @@ struct Fixture {
     std::string index_path;
 };
 
-// Builds the index of the FILES traces under `interval_us`.
 std::unique_ptr<Fixture> build(std::uint64_t interval_us,
                                const std::string& tag,
                                bool cut_mid_line = false,
@@ -514,8 +511,8 @@ AggQueryResult run(const AggQuery& q) {
     return out;
 }
 
-// Runs `ask` and compares every row with today's aggregator. Returns the
-// result so a case can assert how it was answered.
+// Compares every row with the per-event aggregator. Returns the result so a
+// case can assert how it was answered.
 AggQueryResult check(const Fixture& fx, const Ask& ask,
                      std::uint64_t interval_us, const char* what,
                      std::size_t workers = 0) {
@@ -542,7 +539,6 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
     return r;
 }
 
-// Every partial of every file, to know how many chunks there are.
 std::size_t partial_count(const Fixture& fx) {
     index::store::IndexDatabase db(fx.index_path,
                                    index::store::IndexOpenMode::ReadOnly);
@@ -645,7 +641,6 @@ void check_same_quantiles(const agg::QuantileStore& a,
         CHECK(a.quantile(p) == b.quantile(p));
 }
 
-// Two answers of one query hold the same rows, stat for stat.
 void check_same_partial(const agg::AggPartial& a, const agg::AggPartial& b) {
     CHECK(a.count == b.count);
     CHECK(a.ts == b.ts);
@@ -1088,7 +1083,7 @@ TEST_SUITE("AggQuery") {
         for (const auto& [k, a] : serial.rows) {
             const auto b = parallel.rows.find([&] {
                 trace::AggKey key = k;
-                // Ids are per result; compare through the text.
+                // Ids are per result, so compare through the text.
                 key.cat = parallel.strings().get_or_insert(serial.text(k.cat));
                 key.name =
                     parallel.strings().get_or_insert(serial.text(k.name));

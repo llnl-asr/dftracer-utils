@@ -243,6 +243,22 @@ type (``string``, ``bool``, ``int64``, ``uint64`` or ``float64``), ascending, so
 ``10`` follows ``9``; a group of nulls is an empty list, and a string may hold any
 byte. The trace aggregate keeps the text form only.
 
+Pre-aggregated counters and frames
+----------------------------------
+
+A pre-aggregated counter record stands for the events it counts.
+A trace aggregation counts it as its ``args.count`` events and takes its duration, size and offset statistics from its args.
+A frame holds rows, so the same record is one row of a frame, and a frame's ``count()`` is its number of rows.
+
+These shapes of a trace aggregation still run on frames, so a pre-aggregated record is one row there too:
+
+* percentiles and histograms;
+* a plan that decodes its records by path;
+* a time bucket on a plan with no schema;
+* a group key on an argument the index build did not keep.
+
+Every other unfiltered aggregation gives the same answer from the index, from the trace, and alone or beside other aggregations in one session.
+
 Occupancy: concurrency-aware duration
 -------------------------------------
 

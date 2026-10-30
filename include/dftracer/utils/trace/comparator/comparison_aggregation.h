@@ -20,10 +20,9 @@
 
 namespace dftracer::utils::trace::comparator {
 
-/// What a node query keeps, in the terms of an aggregation query. A set that
-/// is not restricted keeps everything; a restricted empty set keeps nothing.
-/// The pid and time range cut the events a row is built from; the category
-/// and name sets only select rows.
+/// What a node query keeps. A set that is not restricted keeps everything and a
+/// restricted empty set keeps nothing. The pid and time range cut the events a
+/// row is built from, and the category and name sets only select rows.
 struct ComparisonFilter {
     bool has_categories = false;
     bool has_names = false;
@@ -54,12 +53,10 @@ struct ComparisonFilter {
     bool same_cut(const ComparisonFilter& other) const;
 };
 
-/// The filter that `query` stands for. A conjunction of `cat`, `name` and
-/// `pid` equalities and `in` lists, of `ts` comparisons against integers, and
-/// of `or` between sets of one of those fields becomes sets and a range,
-/// answered from the index. Any other query becomes `expr`. A category
-/// compares lower-cased on both sides, as the aggregation keys it. Internal
-/// when the rewritten query does not parse.
+/// A conjunction of `cat`, `name` and `pid` equalities and `in` lists, of `ts`
+/// comparisons against integers and of `or` between sets of one field becomes
+/// sets and a range. Any other query becomes `expr`. Fails with Internal when
+/// the rewritten query does not parse.
 Result<ComparisonFilter> filter_from_query(const duql::Query& query);
 
 /// One side of the comparison, collapsed once per filter.
@@ -68,24 +65,17 @@ struct SideAggregate {
     dstd::Vector<CollapsedMap> groups;
     /// Of the first filter.
     TraceMetadata meta;
-    /// Chunk reads that the queries needed, summed over the cuts. The
-    /// metadata and the quantiles come from the stored partials and read
-    /// none. The per-window peaks read only a chunk whose partial holds more
-    /// than one pid or tid or crosses a window, and every chunk when the
-    /// node has an expression filter.
+    /// Chunk reads that the queries needed, summed over the cuts. Only the
+    /// per-window peaks read, and every chunk when the node has an expression
+    /// filter.
     std::size_t metadata_chunks_reread = 0;
     std::size_t group_chunks_reread = 0;
 };
 
-/// Answers every filter from the aggregation tier of the indexes of `files`
-/// (the config the comparator builds them with). Two queries run for each
-/// distinct cut of the events: one grouped by pid, tid and
-/// `window_us` window for the busiest thread of each window, and one grouped by
-/// category and name for the quantiles, the stats and the metadata (the
-/// distinct processes, threads, files and pairs). Both are answered from the
-/// stored partials, but for the chunks a partial cannot answer (see
-/// `group_chunks_reread`). Memory: the rows of the first query for one cut at a
-/// time, then the collapsed groups.
+/// Answers every filter from the aggregation tier of the indexes of `files`,
+/// re-reading the chunks a partial cannot answer (see `group_chunks_reread`).
+/// Memory is the rows of the per-window query for one cut at a time, then the
+/// collapsed groups.
 coro::CoroTask<Result<SideAggregate>> aggregate_side(
     dstd::Span<const std::string> files, dstd::StringView index_dir,
     const dstd::Vector<ComparisonFilter>& filters, std::uint64_t window_us,

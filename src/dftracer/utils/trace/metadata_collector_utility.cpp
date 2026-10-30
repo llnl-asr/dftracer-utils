@@ -63,9 +63,8 @@ MetadataCollectorUtility::operator()(
 
 namespace {
 
-// The index record of `file` when the index holds it unchanged since the
-// stat the caller read; the stat check is the one the scan already made, so
-// the file is not opened again.
+// The index record of `file` when the index holds it unchanged since the stat
+// the caller read. The file is not opened again.
 std::optional<internal::IndexedFile> fresh_index_record(
     const std::string& index_path, const std::string& file,
     const dftracer::utils::InputFileStat& st) {
@@ -138,10 +137,8 @@ MetadataCollectorUtility::process_compressed(
         // A file this process built or read is not opened again.
         std::optional<internal::IndexedFile> seen;
         if (!input.force_rebuild) seen = known();
-        // Most files of a built root are fresh, so their checks share the
-        // root. A check that meets a writer reads the index as stale and
-        // takes the slow path below, which decides again under the writer
-        // permits.
+        // A check that meets a writer reads the index as stale and takes the
+        // slow path below, which decides again under the writer permits.
         if (!seen && !input.force_rebuild) {
             co_await root->gate.acquire(1);
             const internal::RootPermit reading(*root, 1);

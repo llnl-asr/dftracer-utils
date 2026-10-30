@@ -19,12 +19,10 @@ using dftracer::utils::index::schemas::dft::agg::QuantileStore;
 namespace {
 
 constexpr double ACCURACY = 0.01;
-// A sketch quantile is a bucket midpoint, so it is within
-// (gamma - 1) / 2 = 0.0101 of any value in its bucket at accuracy 0.01; the
-// bound below adds slack for the rank rule. The SIMD key kernel may put a
-// value on the neighbouring bucket at a bucket edge, one gamma (0.0202) away
-// from a scalar sketch, so the bound against a scalar sketch is 0.021.
-// The data spans 1e9, about 1030 of the 2048 bins, so nothing collapses.
+// A sketch quantile is within 0.0101 of any value in its bucket at accuracy
+// 0.01. The SIMD key kernel may put a value on the neighbouring bucket at an
+// edge, one gamma (0.0202) from a scalar sketch, so that bound is 0.021.
+// The data spans about 1030 of the 2048 bins, so nothing collapses.
 constexpr double TRUE_BOUND = 0.011;
 constexpr double DIRECT_BOUND = 0.021;
 constexpr double QS[] = {0.0, 0.01, 0.25, 0.5, 0.9, 0.99, 1.0};
@@ -239,7 +237,7 @@ TEST_CASE("add_many matches adding one value at a time") {
 }
 
 TEST_CASE("conversion sizes the sketch once") {
-    // Debug mode counts allocations; ctest sets DFTRACER_UTILS_MEMORY_DEBUG=1.
+    // Debug mode counts allocations. ctest sets DFTRACER_UTILS_MEMORY_DEBUG=1.
     auto v = lognormal(64, 41);
     QuantileStore s(ACCURACY);
     for (double x : v) s.add(x);

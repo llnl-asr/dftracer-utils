@@ -48,11 +48,9 @@ using store::internal::get_logical_path;
 
 constexpr char EXTRA_SEP = '\x1f';
 
-// The tier's name for field `f` of `plan`: a dftracer field keeps its own. A
-// path-decoded record's name, entity, lane, duration or time role maps to
-// name, pid, tid, dur or ts when the tier holds exactly the value the scan
-// reads: a required field, a string name, an int otherwise and times in
-// microseconds. Empty when the tier holds no such value.
+// A path-decoded role maps to the tier's field only when the tier holds exactly
+// the value the scan reads: a required field, in microseconds for times. Empty
+// when it does not.
 std::string tier_field(const ViewPlan& plan, std::string_view f) {
     if (!plan_by_path(plan)) return std::string(f);
     namespace ix = dftracer::utils::index;
@@ -74,9 +72,8 @@ std::string tier_field(const ViewPlan& plan, std::string_view f) {
     return {};
 }
 
-// Whether every record of `plan`'s path-decoded files holds a value of each
-// role the tier maps, not negative: the tier folds a missing value as 0 where
-// the scan reads null. Each chunk's zone must show the role in every record.
+// The tier folds a missing or negative role value as 0 where the scan reads
+// null, so every chunk's zone must show the role present in every record.
 bool roles_complete(const ViewPlan& plan) {
     namespace ix = dftracer::utils::index;
     const ix::Roles& r = plan_record_schema(plan).roles;
@@ -119,22 +116,18 @@ bool roles_complete(const ViewPlan& plan) {
     return true;
 }
 
-// Fields the partials answer: ts is only its min, te only its max, so those
-// ops are gated in unanswered_agg.
 bool answerable_field(const std::string& f) {
     return f == "dur" || f == "size" || f == "offset" || f == "ts" || f == "te";
 }
 
-// Whether the partials hold the rows the scan of `plan` reads: they hold every
-// record, and a path schema's `data` row set can leave some out.
+// The partials hold every record, and a path schema's `data` row set can leave
+// some out.
 bool rows_match(const ViewPlan& plan) {
     return !plan_by_path(plan) || plan.all_records ||
            plan_record_schema(plan).data.empty();
 }
 
-// The group keys the partials answer for `plan`; a path plan's field keys on
-// the name, entity and lane roles become name, pid and tid keys. nullopt when
-// a key is one they cannot answer.
+// nullopt when a key is one the partials cannot answer.
 std::optional<std::vector<GroupKey>> partial_keys(const ViewPlan& plan) {
     using Kind = GroupKey::Kind;
     std::vector<GroupKey> keys = plan.group_by;
@@ -201,8 +194,6 @@ bool reads_lookup(const duql::QueryNode& node) {
         node.data);
 }
 
-// Filter fields the partials answer: the ones a group key or a set of the
-// query names.
 bool query_answerable(const ViewPlan& plan) {
     const duql::Query& q = *plan.query;
     // Aggregated records keep no array elements.
@@ -218,9 +209,7 @@ bool query_answerable(const ViewPlan& plan) {
     return true;
 }
 
-// Ops the seed path can reconstruct from a partial's FieldStat and quantile
-// store. Occupancy and ArgMax/SetUnion keep no such state, so they decline to
-// the scan. No default: -Wswitch flags a newly added op.
+// No default, so -Wswitch flags a newly added op.
 bool serves_op(AggOp op) {
     switch (op) {
         case AggOp::Count:
@@ -247,8 +236,7 @@ bool serves_op(AggOp op) {
     return false;
 }
 
-// The aggregate or field of `plan` the partials cannot answer, as a phrase
-// for the decline log; empty when they answer every one.
+// A phrase for the decline log, empty when the partials answer every aggregate.
 std::string unanswered_agg(const ViewPlan& plan, const AggSchema& sch) {
     if (!rows_match(plan)) return "rows of another kind than the partials";
     for (const auto& s : plan.agg) {
@@ -261,21 +249,19 @@ std::string unanswered_agg(const ViewPlan& plan, const AggSchema& sch) {
         if (!serves_op(s.op)) return refused();
         if (field.empty() != s.field.empty() || by.empty() != s.by.empty())
             return refused();
-        // Only dur and size keep their values for quantiles and moments past
-        // two; skew, kurtosis, percentiles and histograms on any other field
-        // must scan.
+        // Only dur and size keep the values for quantiles and moments past two.
         if ((s.op == AggOp::Skew || s.op == AggOp::Kurt || s.op == AggOp::Pct ||
              s.op == AggOp::Hist) &&
             field != "dur" && field != "size")
             return refused();
         if (s.op == AggOp::Count && !field.empty()) return refused();
-        // A partial knows the first and the last start of its events, and
-        // the last end.
+        // A partial knows the first and the last start of its events and the
+        // last end.
         if (field == "ts" && s.op != AggOp::Min && s.op != AggOp::Max)
             return refused();
         if (field == "te" && s.op != AggOp::Max) return refused();
-        // The scan scales ts/dur/te by time_scale; the partials hold raw
-        // values, so a scaled-field agg would diverge. Decline it.
+        // The scan scales ts, dur and te by time_scale and the partials hold
+        // raw values.
         if (plan.time_scale != 1.0 &&
             (field == "ts" || field == "dur" || field == "te" || by == "ts" ||
              by == "dur" || by == "te"))
@@ -292,8 +278,6 @@ bool wants_quantiles(const ViewPlan& plan) {
     return false;
 }
 
-// The category, name, host and pid sets of a filter that is a conjunction of
-// equality and membership leaves on them, each field once.
 struct FilterSets {
     bool has_cat = false;
     bool has_name = false;
@@ -362,8 +346,6 @@ bool extract_sets(const ViewPlan& plan, const duql::QueryNode& n,
         n.data);
 }
 
-// A value column the partials fill: its AggState value_col index and the base
-// field (dur/size/offset/ts/te) whose stat feeds it.
 struct ValueCol {
     std::int32_t value_col;
     std::string field;
@@ -374,8 +356,7 @@ std::vector<ValueCol> value_cols(const ViewPlan& plan,
     std::vector<ValueCol> out;
     for (std::size_t vc = 0; vc < value_names.size(); ++vc) {
         std::string base = agg_value_base_field(value_names[vc]);
-        // offset is an arg, so its value column is named args.offset; the
-        // partial holds it under the bare name.
+        // The partial holds offset under its bare name.
         if (!plan_by_path(plan) &&
             base == std::string(dftracer::utils::ARGS_PREFIX) + "offset")
             base = "offset";
@@ -386,8 +367,6 @@ std::vector<ValueCol> value_cols(const ViewPlan& plan,
     return out;
 }
 
-// The query for `plan`, the keys it groups by, and what the rows are read
-// with.
 struct Prepared {
     AggQuery query;
     std::vector<GroupKey> keys;
@@ -395,8 +374,6 @@ struct Prepared {
     bool by_path = false;
 };
 
-// Says, at debug level, why the partials cannot answer a plan: the view then
-// scans every trace file it reads.
 std::nullopt_t declined(const std::string& why) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials cannot answer this query (%s); the traces "
@@ -405,8 +382,14 @@ std::nullopt_t declined(const std::string& why) {
     return std::nullopt;
 }
 
-// nullopt when the partials cannot answer `plan`; see partials_collect.
-std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
+enum class PrepSource { Partials, Trace };
+
+// nullopt when the partials cannot answer `plan`. With Trace a file the index
+// does not hold, a stale tier and an unreadable index leave the file to be read
+// whole instead of declining the plan.
+std::optional<Prepared> prepare(const ViewPlan& plan, bool typed,
+                                PrepSource from) {
+    const bool trace = from == PrepSource::Trace;
     if (plan.files.empty()) return declined("no files");
     if (!plan.computed.empty()) return declined("computed columns");
     if (plan.time_range) return declined("a time range");
@@ -427,7 +410,6 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
     p.by_path = plan_by_path(plan);
     p.keys = std::move(*keys);
     if (typed && plan.time_bucket_us > 0) {
-        // The partials are keyed from time 0 in the trace's own unit.
         if (plan.bucket_origin_us != 0 || plan.bucket_origin_min ||
             plan.time_scale != 1.0)
             return declined("a shifted or scaled time bucket");
@@ -439,55 +421,98 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
     } else if (plan.time_bucket_us != 0) {
         return declined("a time bucket on an untyped plan");
     }
+    // A path-decoded trace is read by the scan's decoder, not the line parser
+    // a re-read runs.
+    if (p.by_path && trace) return declined("a path-decoded plan read whole");
+    // The engine's quantile sketch moves with the order and size of the chunks
+    // the values arrive in, so a fold would answer another quantile than the
+    // frame path.
+    if (trace && wants_quantiles(plan))
+        return declined("a quantile aggregate of a scanned trace");
     if (p.by_path && !roles_complete(plan))
         return declined("a schema without every trace role");
 
     AggQuery& q = p.query;
-    std::uint64_t interval_us = 0;
-    try {
-        std::map<std::string, std::size_t> root_of;
-        std::map<std::string, std::unique_ptr<IndexDatabase>> dbs;
-        for (const auto& f : plan.files) {
-            if (f.index_path.empty()) return declined("a file with no index");
-            auto it = root_of.find(f.index_path);
-            if (it == root_of.end()) {
-                auto db = std::make_unique<IndexDatabase>(
-                    f.index_path, store::IndexOpenMode::ReadOnly);
-                const auto config = agg::tier::read_config(*db);
-                if (!config)
-                    return declined("an index with no aggregation config");
-                AggQuerySource src;
-                src.index_path =
-                    dstd::String(f.index_path.data(), f.index_path.size());
-                src.params_hash = config->params_hash;
-                if (q.sources.empty()) {
-                    interval_us = config->time_interval_us;
-                    p.extra = config->extra_group_keys;
-                } else if (config->extra_group_keys != p.extra) {
-                    // The sources keep their extra values under other keys.
-                    return declined("indexes with other extra group keys");
+    std::uint64_t interval_us = q.config.time_interval_us;
+    std::vector<std::string> build_extra;
+    // The first root with a config fixes the span of a pre-aggregated counter
+    // and the extra keys. A root without one says nothing about either.
+    bool config_seen = false;
+    std::map<std::string, std::size_t> root_of;
+    std::map<std::string, std::unique_ptr<IndexDatabase>> dbs;
+    for (const auto& f : plan.files) {
+        std::size_t at = q.sources.size();
+        bool indexed = false;
+        if (f.index_path.empty()) {
+            if (!trace) return declined("a file with no index");
+        } else {
+            try {
+                auto it = root_of.find(f.index_path);
+                if (it == root_of.end()) {
+                    auto db = std::make_unique<IndexDatabase>(
+                        f.index_path, store::IndexOpenMode::ReadOnly);
+                    const auto config = agg::tier::read_config(*db);
+                    if (!config && !trace)
+                        return declined("an index with no aggregation config");
+                    AggQuerySource src;
+                    src.index_path =
+                        dstd::String(f.index_path.data(), f.index_path.size());
+                    if (config) {
+                        src.params_hash = config->params_hash;
+                        if (!config_seen) {
+                            config_seen = true;
+                            interval_us = config->time_interval_us;
+                            build_extra = config->extra_group_keys;
+                        } else if (!trace &&
+                                   config->extra_group_keys != build_extra) {
+                            // The sources keep their extra values under other
+                            // keys.
+                            return declined(
+                                "indexes with other extra group keys");
+                        }
+                    }
+                    it = root_of.emplace(f.index_path, q.sources.size()).first;
+                    q.sources.push_back(std::move(src));
+                    dbs.emplace(f.index_path, std::move(db));
                 }
-                it = root_of.emplace(f.index_path, q.sources.size()).first;
-                q.sources.push_back(std::move(src));
-                dbs.emplace(f.index_path, std::move(db));
+                at = it->second;
+                indexed = true;
+                const IndexDatabase& db = *dbs.at(f.index_path);
+                const int fid =
+                    db.get_file_info_id(get_logical_path(f.file_path));
+                if (fid < 0) {
+                    if (!trace)
+                        return declined("a file missing from its index");
+                } else if (!trace) {
+                    const auto state =
+                        db.extension_state(fid, store::IndexExtension::Agg);
+                    if (!state || !state->ready ||
+                        state->version != store::layout::ext_version(
+                                              store::layout::Ext::Agg) ||
+                        state->params_hash != *q.sources[at].params_hash)
+                        return declined(
+                            "a file whose aggregation data is stale");
+                }
+            } catch (const std::exception& e) {
+                // The scan reports an unreadable index.
+                if (!trace)
+                    return declined(std::string("an unreadable index: ") +
+                                    e.what());
+                indexed = false;
             }
-            const IndexDatabase& db = *dbs.at(f.index_path);
-            const int fid = db.get_file_info_id(get_logical_path(f.file_path));
-            if (fid < 0) return declined("a file missing from its index");
-            const auto state =
-                db.extension_state(fid, store::IndexExtension::Agg);
-            if (!state || !state->ready ||
-                state->version !=
-                    store::layout::ext_version(store::layout::Ext::Agg) ||
-                state->params_hash != *q.sources[it->second].params_hash)
-                return declined("a file whose aggregation data is stale");
-            q.sources[it->second].files.emplace_back(f.file_path.data(),
-                                                     f.file_path.size());
         }
-    } catch (const std::exception& e) {
-        // An index that cannot be read cannot be answered from; the scan
-        // reports it.
-        return declined(std::string("an unreadable index: ") + e.what());
+        if (!indexed) {
+            // A file with no usable index is a source of its own.
+            auto it = root_of.find(std::string());
+            if (it == root_of.end()) {
+                AggQuerySource src;
+                it = root_of.emplace(std::string(), q.sources.size()).first;
+                q.sources.push_back(std::move(src));
+            }
+            at = it->second;
+        }
+        q.sources[at].files.emplace_back(f.file_path.data(),
+                                         f.file_path.size());
     }
 
     for (const auto& gk : p.keys) {
@@ -508,9 +533,11 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
                 q.by_host = true;
                 break;
             case GroupKey::Kind::Arg:
-                // Only a key the build kept the values of is in the partials.
-                if (std::find(p.extra.begin(), p.extra.end(), gk.arg) ==
-                    p.extra.end())
+                // The joined text of the kept values cannot tell a missing
+                // one from an empty one, which the scan keeps apart, so a key
+                // the build did not keep declines on a trace too.
+                if (std::find(build_extra.begin(), build_extra.end(), gk.arg) ==
+                    build_extra.end())
                     return declined(
                         "a group key on an arg the build did "
                         "not keep");
@@ -526,13 +553,14 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
                 break;
         }
     }
+    p.extra = std::move(build_extra);
     q.config.time_interval_us = interval_us;
     for (const auto& k : p.extra) q.config.extra_group_keys.push_back(k);
     q.by_kind = true;
     q.quantiles = wants_quantiles(plan);
-    // A path-decoded file is not read by the dftracer line parser, so what a
-    // re-read would answer is left to the scan.
+    // The dftracer line parser does not read a path-decoded file.
     q.reread = !p.by_path;
+    q.from_trace = trace;
     if (typed) q.window_us = plan.time_bucket_us;
 
     if (plan.query) {
@@ -543,8 +571,8 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
             q.hosts = std::move(sets.hosts);
             q.pids = std::move(sets.pids);
         } else if (p.by_path || plan.query->references("cat")) {
-            // A category compares lower-cased in the partials, which only a
-            // set of equal values can say.
+            // The partials compare a category lower-cased, which only a set
+            // of equal values can say.
             return declined("a category filter that is not a set of values");
         } else {
             q.filter = *plan.query;
@@ -553,8 +581,7 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed) {
     return p;
 }
 
-// The stat of `field` of a partial, in the domain the scan reads: a path
-// record's int field is signed where dftracer's is unsigned.
+// A path record's int field is signed where dftracer's is unsigned.
 dataframe::FieldStat field_stat(const std::string& field,
                                 const agg::AggPartial& p,
                                 dataframe::FieldStatDomain domain) {
@@ -584,21 +611,21 @@ dataframe::FieldStat field_stat(const std::string& field,
     return fs;
 }
 
-// Whether a group key relabels an opaque hash to a name after the
-// aggregation (finalize_engine_result resolves these).
 bool key_is_resolved(GroupKey::Kind kind) {
     return kind == GroupKey::Kind::FilePath ||
            kind == GroupKey::Kind::FileName ||
            kind == GroupKey::Kind::HostName || kind == GroupKey::Kind::Rank;
 }
 
-// What the rows of a result seed into engine states with.
 class Seeder {
    public:
-    Seeder(const ViewPlan& plan, const Prepared& prep,
-           const AggQueryResult& result)
-        : prep_(prep),
-          res_(result),
+    Seeder(const ViewPlan& plan, const std::vector<GroupKey>& keys,
+           const std::vector<std::string>& extra, bool quantiles,
+           const dstd::StringIntern& texts)
+        : keys_(keys),
+          extra_(extra),
+          quantiles_(quantiles),
+          texts_(texts),
           has_bucket_(plan.time_bucket_us > 0),
           domain_(plan_by_path(plan) ? dataframe::FieldStatDomain::I64
                                      : dataframe::FieldStatDomain::U64) {
@@ -606,17 +633,14 @@ class Seeder {
         lowered_ = dataframe::lower_group_aggs(spec_.gaggs);
         cols_ = value_cols(plan, lowered_.value_names);
         sketches_.resize(cols_.size());
-        // A transformed key needs the resolved and transformed value at seed
-        // time (finalize_engine_result skips the resolver for it); a plain
-        // resolved key is seeded as its raw hash and resolved at finalize.
+        // finalize_engine_result skips the resolver for a transformed key, so
+        // it resolves at seed time. A plain resolved key resolves at finalize.
         for (const auto& gk : plan.group_by)
             if (gk.transform != GroupKey::Transform::None)
                 resolver_ = ensure_resolver(plan);
     }
 
-    std::size_t nkeys() const {
-        return (has_bucket_ ? 1u : 0u) + prep_.keys.size();
-    }
+    std::size_t nkeys() const { return (has_bucket_ ? 1u : 0u) + keys_.size(); }
 
     dataframe::AggStatePtr new_state() const {
         auto state = dataframe::agg_new(lowered_.specs, spec_.dyn_specs);
@@ -624,8 +648,7 @@ class Seeder {
         return state;
     }
 
-    // The key texts of a row, [time_bucket?, group_by...], and which of them
-    // are null: a file key of a row without a file hash, as a scan keys it.
+    // A file key of a row without a file hash is null, as a scan keys it.
     void keys_of(const AggKey& key, std::vector<std::string>& out,
                  std::vector<bool>& nulls) const {
         out.clear();
@@ -634,7 +657,7 @@ class Seeder {
             out.push_back(std::to_string(key.window));
             nulls.push_back(false);
         }
-        for (const auto& gk : prep_.keys) {
+        for (const auto& gk : keys_) {
             nulls.push_back(is_file_key(gk.kind) &&
                             key.file_text == dstd::StringIntern::NO_ID &&
                             key.file == 0);
@@ -657,7 +680,7 @@ class Seeder {
             v.value_col = cols_[i].value_col;
             v.stat = field_stat(cols_[i].field, p, domain_);
             const agg::QuantileStore* q = nullptr;
-            if (prep_.query.quantiles) {
+            if (quantiles_) {
                 if (cols_[i].field == "dur")
                     q = &p.duration_q;
                 else if (cols_[i].field == "size")
@@ -674,6 +697,11 @@ class Seeder {
     }
 
    private:
+    std::string_view text(std::uint32_t id) const {
+        return id == dstd::StringIntern::NO_ID ? std::string_view{}
+                                               : texts_.resolve(id);
+    }
+
     static bool is_file_key(GroupKey::Kind kind) {
         return kind == GroupKey::Kind::Fhash ||
                kind == GroupKey::Kind::FilePath ||
@@ -683,9 +711,9 @@ class Seeder {
     std::string group_value(const GroupKey& gk, const AggKey& k) const {
         switch (gk.kind) {
             case GroupKey::Kind::Name:
-                return std::string(res_.text(k.name));
+                return std::string(text(k.name));
             case GroupKey::Kind::Cat:
-                return std::string(res_.text(k.cat));
+                return std::string(text(k.cat));
             case GroupKey::Kind::Pid:
                 return std::to_string(k.pid);
             case GroupKey::Kind::Tid:
@@ -694,7 +722,7 @@ class Seeder {
             case GroupKey::Kind::FilePath:
             case GroupKey::Kind::FileName: {
                 if (k.file_text != dstd::StringIntern::NO_ID)
-                    return std::string(res_.text(k.file_text));
+                    return std::string(text(k.file_text));
                 if (k.file == 0) return {};
                 char buf[::dftracer::utils::hash::HEX64_DIGITS];
                 ::dftracer::utils::hash::format_hex64(k.file, buf);
@@ -702,17 +730,17 @@ class Seeder {
             }
             case GroupKey::Kind::Hhash:
             case GroupKey::Kind::HostName:
-                return std::string(res_.text(k.host));
+                return std::string(text(k.host));
             case GroupKey::Kind::IoCat:
                 return std::to_string(static_cast<int>(
-                    trace::internal::io_category(res_.text(k.name))));
+                    trace::internal::io_category(text(k.name))));
             case GroupKey::Kind::AccPat:
                 return "0";
             case GroupKey::Kind::Arg: {
                 // The extra values are joined by 0x1F, one per key of the
                 // query's extra_group_keys.
-                std::string_view rest = res_.text(k.extra);
-                for (const auto& name : prep_.extra) {
+                std::string_view rest = text(k.extra);
+                for (const auto& name : extra_) {
                     const std::size_t at = rest.find(EXTRA_SEP);
                     const std::string_view part = rest.substr(0, at);
                     if (name == gk.arg) return std::string(part);
@@ -730,8 +758,10 @@ class Seeder {
         return {};
     }
 
-    const Prepared& prep_;
-    const AggQueryResult& res_;
+    const std::vector<GroupKey>& keys_;
+    const std::vector<std::string>& extra_;
+    bool quantiles_;
+    const dstd::StringIntern& texts_;
     bool has_bucket_;
     dataframe::FieldStatDomain domain_;
     AggInputSpec spec_;
@@ -746,7 +776,6 @@ AggQueryResult run_or_throw(Result<AggQueryResult>&& r) {
     return std::move(*r);
 }
 
-// Says, at debug level, how the partials answered a query.
 void log_answer(const AggQueryStats& st) {
     DFTRACER_UTILS_LOG_DEBUG(
         "View: the index partials answered over %zu files: %zu partials read, "
@@ -758,11 +787,54 @@ void log_answer(const AggQueryStats& st) {
         st.unanswered);
 }
 
+dataframe::AggStatePtr seed_rows_of(const ViewPlan& plan,
+                                    const std::vector<GroupKey>& keys,
+                                    const std::vector<std::string>& extra,
+                                    bool quantiles,
+                                    const dstd::StringIntern& texts,
+                                    const AggQueryResult::Rows& rows) {
+    Seeder seeder(plan, keys, extra, quantiles, texts);
+    auto state = seeder.new_state();
+    std::vector<std::string> texts_of_row;
+    std::vector<bool> nulls;
+    const bool events_only = plan.phase == Phase::Events;
+    for (const auto& [key, partial] : rows) {
+        if (events_only && key.kind != AggKind::Event) continue;
+        seeder.keys_of(key, texts_of_row, nulls);
+        seeder.seed(*state, texts_of_row, nulls, partial);
+    }
+    dataframe::agg_seed_finalize(*state);
+    return state;
+}
+
+dataframe::AggStatePtr seed_all(const ViewPlan& plan, const Prepared& prep,
+                                const AggQueryResult& result) {
+    return seed_rows_of(plan, prep.keys, prep.extra, prep.query.quantiles,
+                        result.strings(), result.rows);
+}
+
 }  // namespace
+
+dstd::Optional<AggQuery> trace_fold_query(const ViewPlan& plan) {
+    auto prep = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    if (!prep) return {};
+    prep->query.cancelled = plan.cancelled;
+    return std::move(prep->query);
+}
+
+dataframe::AggStatePtr seed_rows(const ViewPlan& plan, const AggQuery& query,
+                                 const dstd::StringIntern& texts,
+                                 const AggQueryResult::Rows& rows) {
+    auto keys = partial_keys(plan);
+    std::vector<std::string> extra;
+    for (const auto& k : query.config.extra_group_keys) extra.emplace_back(k);
+    return seed_rows_of(plan, keys ? *keys : std::vector<GroupKey>{}, extra,
+                        query.quantiles, texts, rows);
+}
 
 coro::CoroTask<bool> partials_collect(const ViewPlan& plan,
                                       dataframe::AggStatePtr& out) {
-    auto prep = prepare(plan, /*typed=*/false);
+    auto prep = prepare(plan, /*typed=*/false, PrepSource::Partials);
     if (!prep) co_return false;
     auto ran = co_await run_agg_query(prep->query);
     AggQueryResult result = run_or_throw(std::move(ran));
@@ -773,19 +845,23 @@ coro::CoroTask<bool> partials_collect(const ViewPlan& plan,
             "query may not do");
         co_return false;
     }
+    out = seed_all(plan, *prep, result);
+    co_return true;
+}
 
-    Seeder seeder(plan, *prep, result);
-    auto state = seeder.new_state();
-    std::vector<std::string> keys;
-    std::vector<bool> nulls;
-    const bool events_only = plan.phase == Phase::Events;
-    for (const auto& [key, partial] : result.rows) {
-        if (events_only && key.kind != AggKind::Event) continue;
-        seeder.keys_of(key, keys, nulls);
-        seeder.seed(*state, keys, nulls, partial);
-    }
-    dataframe::agg_seed_finalize(*state);
-    out = std::move(state);
+coro::CoroTask<bool> partials_scan_collect(const ViewPlan& plan,
+                                           dataframe::AggStatePtr& out) {
+    auto prep = prepare(plan, /*typed=*/false, PrepSource::Trace);
+    if (!prep) co_return false;
+    prep->query.cancelled = plan.cancelled;
+    auto ran = co_await run_agg_query(prep->query);
+    AggQueryResult result = run_or_throw(std::move(ran));
+    DFTRACER_UTILS_LOG_DEBUG(
+        "View: the trace answered over %zu files: %llu events in %zu chunks",
+        result.stats.files,
+        static_cast<unsigned long long>(result.stats.events_read),
+        result.stats.chunks_reread);
+    out = seed_all(plan, *prep, result);
     co_return true;
 }
 
@@ -793,7 +869,7 @@ coro::CoroTask<bool> partials_collect_typed(
     const ViewPlan& plan, dataframe::DataFrame& out_regular,
     dataframe::DataFrame& out_aggregated, int shard_begin, int shard_end,
     const ProgressFn* progress) {
-    auto prep = prepare(plan, /*typed=*/true);
+    auto prep = prepare(plan, /*typed=*/true, PrepSource::Partials);
     if (!prep) co_return false;
     const int shards = agg::AGG_KEY_NUM_SHARDS;
     if (shard_end <= 0) shard_end = shards;
@@ -811,7 +887,8 @@ coro::CoroTask<bool> partials_collect_typed(
         co_return false;
     }
 
-    Seeder seeder(plan, *prep, result);
+    Seeder seeder(plan, prep->keys, prep->extra, prep->query.quantiles,
+                  result.strings());
     auto events = seeder.new_state();
     auto profiles = seeder.new_state();
     std::vector<std::string> keys;

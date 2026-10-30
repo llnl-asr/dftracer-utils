@@ -3,43 +3,46 @@
 
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
-// The view's aggregate, events and profiles reads over the chunk partials of
-// the aggregation tier, through run_agg_query (trace/agg_query.h). A partial
-// answers a group-by on category, name, host, and on pid and tid when the
-// chunk holds one; what a partial cannot answer is re-read from its chunk, so
-// a plan that needs that needs the traces. A path-decoded plan reads no chunk:
-// it is declined when a re-read would be needed.
 namespace dftracer::utils::trace::views::detail {
 
-/// Answers the aggregation of `plan` from the partials of its files and fills
-/// `out` with the mergeable engine AggState (finalize with
-/// finalize_engine_result). Returns false, with `out` untouched, when the
-/// partials cannot answer the plan exactly (no usable partials for a file, a
-/// filter, field or aggregation they cannot hold, a time scale or window they
-/// cannot serve); the caller scans then. Requires plan.schema to be built.
-/// Throws what run_agg_query reports.
+/// Fills `out` with the mergeable engine AggState (finalize with
+/// finalize_engine_result) from the partials of the files of `plan`. Returns
+/// false, with `out` untouched, when the partials cannot answer it exactly and
+/// the caller scans. Requires plan.schema. Throws what run_agg_query reports.
 coro::CoroTask<bool> partials_collect(
     const ViewPlan& plan, dftracer::utils::dataframe::AggStatePtr& out);
 
-/// The events and profiles of `plan` in one pass: `out_regular` holds the
-/// groups of the events and `out_aggregated` those of the profiles (counters
-/// of a category other than sys), each keyed [time_bucket?, group_by...] and
-/// finalized like a fresh scan. The plan's time_bucket is the window of the
-/// query. Returns false, with the outputs untouched, as partials_collect does.
-///
-/// A shard range [shard_begin, shard_end) of AGG_KEY_NUM_SHARDS keeps the
-/// groups whose key hashes into it (shard_end <= 0 keeps all), so disjoint
-/// ranges give disjoint groups that concatenate. Every range reads the same
-/// partials. `progress` is called with (0, shards) and (shards, shards).
-/// Requires plan.schema to be built.
+/// As partials_collect, but folds the events by the rules of the index fold, so
+/// a missing, stale or unreadable index does not decline. Returns false, with
+/// `out` untouched, only for a plan shape the partials cannot answer either.
+/// Requires plan.schema. Throws what run_agg_query reports.
+coro::CoroTask<bool> partials_scan_collect(
+    const ViewPlan& plan, dftracer::utils::dataframe::AggStatePtr& out);
+
+/// Event groups go to `out_regular`, non-sys counter groups to
+/// `out_aggregated`. False leaves both untouched. Keeps keys hashing into
+/// [shard_begin, shard_end) of AGG_KEY_NUM_SHARDS, all when shard_end <= 0.
+/// `progress` gets (0, shards) then (shards, shards). Requires plan.schema.
 coro::CoroTask<bool> partials_collect_typed(
     const ViewPlan& plan, dftracer::utils::dataframe::DataFrame& out_regular,
     dftracer::utils::dataframe::DataFrame& out_aggregated, int shard_begin = 0,
     int shard_end = 0, const ProgressFn* progress = nullptr);
+
+/// The query the index rules fold the events of `plan` by on a scan. Empty
+/// when the plan stays on the frame path. Reads no trace.
+dstd::Optional<AggQuery> trace_fold_query(const ViewPlan& plan);
+
+/// The engine state of `rows`. `texts` holds the key texts the rows name by id.
+dftracer::utils::dataframe::AggStatePtr seed_rows(
+    const ViewPlan& plan, const AggQuery& query,
+    const dftracer::utils::dstd::StringIntern& texts,
+    const AggQueryResult::Rows& rows);
 
 }  // namespace dftracer::utils::trace::views::detail
 

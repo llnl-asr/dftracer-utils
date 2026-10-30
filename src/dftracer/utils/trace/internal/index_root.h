@@ -23,12 +23,9 @@ struct IndexedFile {
     std::size_t num_checkpoints = 0;
 };
 
-// What this process knows of the index at one root. `gate` is a FIFO
-// reader-writer gate: a freshness check holds one permit, while a build or a
-// first-touch bootstrap writes the root and holds them all. A read-only open
-// that meets a writer fails and reads as a stale index, and the store refuses
-// to upgrade a read-only handle that a reader still holds, so the two never
-// overlap.
+// `gate` is a FIFO reader-writer gate. A freshness check holds one permit, and
+// a build or a first-touch bootstrap holds them all. A read-only open that
+// meets a writer fails and reads as a stale index.
 struct IndexRoot {
     static constexpr std::uint64_t ALL_PERMITS = std::uint64_t{1} << 32;
     coro::CoroSemaphore gate{ALL_PERMITS};

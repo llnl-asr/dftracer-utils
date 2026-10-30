@@ -42,9 +42,8 @@ bool is_hash_arg(std::string_view path) {
     return path == "hhash" || path == "fhash";
 }
 
-// The plan's event-side time_bucket/group_by do not apply here - the counters
-// keep their own (host, name, time_bucket) grain. Every row is keyed by the
-// same shard prefix, so it range-splits identically.
+// The plan's time_bucket and group_by do not apply here, as the counters keep
+// their own (host, name, time_bucket) grain.
 std::optional<store::IndexDatabase> covering_index(const ViewPlan& plan) {
     if (plan.files.empty()) return std::nullopt;
     const std::string& index_path = plan.files.front().index_path;
@@ -113,8 +112,7 @@ double value_of(const agg::ChunkColumn& column, std::size_t at) {
     return 0.0;
 }
 
-// Where `row` sits in a column that holds it, so its value reads without a
-// second search; end() when it does not hold the row.
+// end() when the column does not hold the row.
 std::size_t row_index(const agg::ChunkColumn& column, std::uint64_t row) {
     const auto it =
         std::lower_bound(column.rows.begin(), column.rows.end(), row);
@@ -122,8 +120,7 @@ std::size_t row_index(const agg::ChunkColumn& column, std::uint64_t row) {
     return static_cast<std::size_t>(it - column.rows.begin());
 }
 
-// Whether the block's row `r` is a sys counter the counters keep, and fills
-// `out` with its group; false for any other row.
+// Fills `out` with the group of a sys counter row, false for any other row.
 bool counter_group(const agg::ChunkColumns& block, std::uint64_t r,
                    const agg::AggregationConfig& cfg, GroupKey& out,
                    agg::SystemAggregationMetrics& out_metrics) {
@@ -155,9 +152,8 @@ bool counter_group(const agg::ChunkColumns& block, std::uint64_t r,
     return true;
 }
 
-// The counters frame a set of groups gives: one row per group whose shard lies
-// in [begin, end), a column per metric name (the sorted union, so the schema is
-// stable) and NaN where a group lacks one.
+// One row per group whose shard lies in [begin, end), a column per metric name
+// (the sorted union) and NaN where a group lacks one.
 dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
                                           int shard_end) {
     const std::int64_t begin = shard_begin;
@@ -175,8 +171,7 @@ dataframe::DataFrame build_counters_frame(const Groups& groups, int shard_begin,
     }
     dstd::Vector<dstd::String> metric_names(name_set.begin(), name_set.end());
 
-    // The counters keep their own grain and a per-metric mean (a double), so
-    // the value columns stay Float64 - no integer domain to preserve here.
+    // Per-metric means, so the value columns stay Float64.
     dstd::Vector<dstd::String> hosts, names;
     dstd::Vector<double> time_bucket, ts, te, count;
     dstd::Vector<dstd::Vector<double>> metric_vals(metric_names.size());

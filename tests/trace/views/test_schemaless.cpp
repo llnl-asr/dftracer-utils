@@ -92,7 +92,7 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
     return detail::apply_agg_post_ops(std::move(out), *p);
 }
 
-// Whether the chunk partials answer `p`; the state they seed when they do.
+// Fills `st` when the chunk partials answer `p`.
 bool partials_serve(const scan::ScanPlan& p, df::AggStatePtr& st) {
     namespace detail = dftracer::utils::trace::views::detail;
     detail::ensure_schema(*p);
@@ -104,7 +104,7 @@ bool partials_serve(const scan::ScanPlan& p, df::AggStatePtr& st) {
     return served;
 }
 
-// The aggregation of `p` from the chunk partials; fails when they decline it.
+// The aggregation of `p` from the chunk partials. Fails when they decline it.
 df::DataFrame tier_only(const scan::ScanPlan& p) {
     namespace detail = dftracer::utils::trace::views::detail;
     df::AggStatePtr st;
@@ -683,7 +683,7 @@ fields:
         same_frame(filtered, scan_only(plan(b, keys, aggs, reads)), cols);
 
         // A one second window holds every chunk of the file, so the partials
-        // answer it; a two millisecond window cuts chunks, which only a
+        // answer it. A two millisecond window cuts chunks, which only a
         // re-read of the traces can split, and a path plan reads none.
         const auto bucketed = scan::time_bucket(plan(b, keys, aggs), 1000000);
         df::DataFrame regular, profiles;

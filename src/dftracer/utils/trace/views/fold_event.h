@@ -30,9 +30,8 @@
 // each other.
 namespace dftracer::utils::trace::views::detail {
 
-/// Fixed-size chunks that the lists of many events take their storage from, so
-/// a batch holds its entries in a few blocks rather than one block per event.
-/// A block it hands out never moves; reset() hands every block out again.
+/// Fixed-size chunks the entry lists of many events take their storage from.
+/// A block it hands out never moves. reset() hands every block out again.
 template <class T>
 class ChunkArena {
     static_assert(std::is_trivially_destructible_v<T>);
@@ -42,7 +41,7 @@ class ChunkArena {
     /// before, up to CHUNK_ENTRIES, so a buffer of a few events stays small.
     static constexpr std::size_t MIN_CHUNK_ENTRIES = 64;
     static constexpr std::size_t CHUNK_ENTRIES = 4096;
-    /// Chunks reset() keeps for the next batch; the rest are freed.
+    /// Chunks reset() keeps for the next batch. The rest are freed.
     static constexpr std::size_t RETAIN_CHUNKS = 16;
 
     T* allocate(std::size_t n) {
@@ -67,7 +66,7 @@ class ChunkArena {
         return chunks_.back().data.get();
     }
     /// Grows the block `allocate` handed out last from `capacity` to `wanted`
-    /// entries in place; false when it is not the last block or the chunk has
+    /// entries in place. False when it is not the last block or the chunk has
     /// no room, and nothing changes.
     bool extend(const T* block, std::size_t capacity, std::size_t wanted) {
         if (current_ >= chunks_.size()) return false;
@@ -343,10 +342,9 @@ inline void reset_fold_event(FoldEvent& ev) {
 }
 
 /// FoldEvents a decoding worker reuses from batch to batch. The lists of every
-/// event take their entries from arenas of the buffer, so a batch holds its
-/// entries in a few chunks and steady-state decode allocates nothing per
-/// event. clear() hands the chunks out again; a batch of more than
-/// RETAIN_SLOTS events is cut back to that many slots.
+/// event take their entries from arenas of the buffer. clear() hands the chunks
+/// out again and cuts a batch of more than RETAIN_SLOTS events back to that
+/// many slots.
 class FoldEventBuffer {
    public:
     static constexpr std::size_t RETAIN_SLOTS = 16384;
@@ -593,9 +591,8 @@ struct DecodeHints {
     const dftracer::utils::index::RecordSchema* schema = nullptr;
     std::vector<const dftracer::utils::index::FieldSpec*> fields;
     std::vector<std::uint8_t> known;
-    /// The catalog path id ("args." + key) of each argument key id, so a
-    /// record's args are walked once for both the event and its leaves: by
-    /// index below FIELD_CACHE_IDS, by map above.
+    /// The catalog path id ("args." + key) of each argument key id, by index
+    /// below FIELD_CACHE_IDS and by map above.
     std::vector<std::uint32_t> arg_leaf;
     ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> arg_leaf_far;
     /// The path id of each top-level key whose value is a scalar. `packed`
@@ -613,9 +610,8 @@ struct DecodeHints {
         simdjson::dom::element value;
     };
     dftracer::utils::dstd::Vector<WalkedKey> walked;
-    /// The key at each position of the previous record's args object, with its
-    /// interned id, and of its leaf keys, with their path id. A record of the
-    /// same shape finds its keys by one compare, not by hashing them.
+    /// The key at each position of the previous record's args object with its
+    /// interned id, and of its leaf keys with their path id.
     struct KeyAt {
         dftracer::utils::dstd::String key;
         std::uint32_t id = dftracer::utils::dstd::StringIntern::NO_ID;
@@ -676,14 +672,10 @@ void build_fold_event_into(FoldEvent& ev, const DFTracerEvent& scalars,
                            bool needs_args, DecodeHints* leaves = nullptr,
                            dftracer::utils::dstd::InternCache* cache = nullptr);
 
-/// Decode a DFTracer record into the next slot of `batch` in one walk of its
-/// keys and one walk of its args: the scalars, the args (when `needs_args`, and
-/// the fhash and hhash ids always) and, with `capture_schema`, the schema
-/// leaves. The result equals build_fold_event_into and capture_schema_leaves
-/// run on DFTracerEvent::parse_scalars. Returns false, appending no slot, for a
-/// record that is not an object or has no phase. `hints` is the calling
-/// worker's own and is not shared between threads. `cache`, bound to `intern`,
-/// answers a string it has seen before.
+/// Decode a DFTracer record into the next slot of `batch`. The result equals
+/// build_fold_event_into and capture_schema_leaves run on
+/// DFTracerEvent::parse_scalars. Returns false, appending no slot, for a record
+/// that is not an object or has no phase. `hints` is the calling worker's own.
 bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
                             dftracer::utils::dstd::StringIntern& intern,
                             bool needs_args, bool capture_schema,

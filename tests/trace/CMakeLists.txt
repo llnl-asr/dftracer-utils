@@ -43,6 +43,7 @@ set(TRACE_TEST_SOURCES
     views/test_field_filter.cpp
     views/test_view_aggregate.cpp
     views/test_view_partials.cpp
+    views/test_view_index_parity.cpp
     views/test_time_window.cpp
     views/test_generic_view.cpp
     views/test_schema_view.cpp

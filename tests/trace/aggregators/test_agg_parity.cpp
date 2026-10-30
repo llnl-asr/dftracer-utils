@@ -20,33 +20,10 @@
 #include <utility>
 #include <vector>
 
-// Parity references for the aggregate outputs of dftracer_comparator, the
-// View aggregate queries and dftracer_gen_dlio_config, taken from the code as
-// it was before the aggregation redesign. The fixtures are generated from
-// fixed seeds, so the references are small text files under data/.
-//
-// Set DFTRACER_UTILS_AGG_PARITY_RECORD=<dir> to write the references to <dir>
-// instead of comparing against data/.
-//
-// Comparison rules:
-//  - counts, sums, mins, maxes, timestamps, bucket starts, busy and active
-//    times, every string and every key: exact.
-//  - means, variances, standard deviations, skewness, kurtosis, concurrency
-//    and utilization: relative tolerance 1e-9. The comparator's deltas and
-//    percentage changes are derived from two such values and follow the
-//    same rule.
-//  - quantiles (p50, p90, p99 columns, the comparator's *_p50/_p95/_p99
-//    metrics, and the DLIO distribution parameters that are sampled from
-//    quantiles): relative tolerance 0.01, the accuracy of the DDSketch. A
-//    delta or percentage change of two quantiles is bounded by the error of
-//    both operands.
-//  - View rows are compared as a set keyed by the group key columns, never by
-//    position. Comparator entries (nodes, groups, metrics) are matched by
-//    name or label, not by position, because the report orders groups by
-//    values that move with the quantiles. The DLIO YAML lines keep their
-//    order, which is part of that output.
-//  - a field or row in the reference that is missing in the output fails, and
-//    so does one in the output that is missing in the reference.
+// Parity references for dftracer_comparator, the View aggregate queries and
+// dftracer_gen_dlio_config. Set DFTRACER_UTILS_AGG_PARITY_RECORD=<dir> to write
+// them to <dir> instead of comparing against data/. Quantiles compare at the
+// DDSketch accuracy, means and moments at 1e-9 and the rest exactly.
 
 namespace {
 
@@ -91,10 +68,6 @@ String reference(const char* file, StringView produced) {
     return text;
 }
 
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
 struct Rng {
     std::uint64_t state;
     explicit Rng(std::uint64_t seed) : state(seed) {}
@@ -109,8 +82,8 @@ struct Rng {
 
 enum class Kind { Read, Write, Open, Close, Fwrite, Step, Fetch };
 
-// One rank file. The variant changes durations, sizes and one event name so
-// the comparator report has differences in every direction.
+// The variant changes durations, sizes and one event name so the comparator
+// report has differences in every direction.
 std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
                         bool variant) {
     const std::string pfw = dir + "/rank_" + std::to_string(file) + ".pfw";
@@ -210,9 +183,7 @@ std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
     return gz;
 }
 
-// DLIO components over two ranks with fixed durations, as the gen_dlio_config
-// binary test does, plus a seeded jitter so the fitted distributions are not
-// degenerate.
+// A seeded jitter keeps the fitted distributions from being degenerate.
 void write_dlio_traces(const std::string& dir) {
     fs::create_directories(dir);
     for (int file = 0; file < 2; ++file) {
@@ -284,10 +255,6 @@ Fixtures& fixtures() {
     return f;
 }
 
-// ---------------------------------------------------------------------------
-// Text helpers
-// ---------------------------------------------------------------------------
-
 String escape(StringView s) {
     String out;
     for (unsigned char c : s) {
@@ -333,10 +300,6 @@ bool rel_close(double x, double y, double tol) {
     return std::fabs(x - y) <= tol * std::max(std::fabs(x), std::fabs(y)) +
                                    (tol > 0.0 ? 1e-12 : 0.0);
 }
-
-// ---------------------------------------------------------------------------
-// View aggregate tables
-// ---------------------------------------------------------------------------
 
 // Line 1: column names. Line 2: S for a text column, N for a number. Then one
 // line per row, sorted by the key columns, tab separated.
@@ -389,10 +352,9 @@ String table_text(const df::DataFrame& t, const Vector<String>& keys) {
     return out;
 }
 
-// Relative tolerance of a numeric column, by its name. An unclassified name
-// fails the test so that a new column gets a rule on purpose. The bare names
-// epoch, level, size, step, offset and ret are the per-group means of those
-// event arguments.
+// An unclassified name fails the test, so a new column gets a rule on purpose.
+// The bare names epoch, level, size, step, offset and ret are the per-group
+// means of those event arguments.
 double column_tolerance(StringView name, bool& known) {
     known = true;
     if (name == "n" || name == "time_bucket" || starts_with(name, "busy") ||
@@ -492,7 +454,6 @@ struct ViewQuery {
     BuildView build;
 };
 
-// The aggregate specs are arguments of View::agg, which takes std::vector.
 const std::vector<AggSpec>& moment_aggs() {
     static const std::vector<AggSpec> aggs{
         {AggOp::Count, "", "n"},
@@ -616,10 +577,6 @@ std::vector<ViewFile> view_files(const std::vector<std::string>& gz) {
     return files;
 }
 
-// ---------------------------------------------------------------------------
-// Comparator report
-// ---------------------------------------------------------------------------
-
 String replace_all(String s, StringView from, StringView to) {
     if (from.empty()) return s;
     for (auto p = s.find(from); p != String::npos;
@@ -628,8 +585,8 @@ String replace_all(String s, StringView from, StringView to) {
     return s;
 }
 
-// The scratch directory name differs on every run and the wall-clock time of
-// the report is not an output of the aggregation; both are fixed to constants.
+// The scratch directory name and the wall-clock time differ on every run, so
+// both are fixed to constants.
 String normalize_report(String text) {
     text = replace_all(std::move(text), fixtures().root.str(), "<DIR>");
     const StringView tag = "\"execution_time_ms\":";
@@ -648,7 +605,6 @@ String normalize_report(String text) {
     return text;
 }
 
-// The arguments go to run_process_capture, which takes std strings.
 String run_comparator(const std::vector<std::string>& extra) {
     const std::string binary = dftu_utils_test::find_binary_by_name(
         "DFTRACER_UTILS_COMPARATOR_PATH", "dftracer_comparator");
@@ -734,8 +690,6 @@ void compare_key_sets(const Fields& ref, const Fields& out,
                       where << ": field not in reference: " << entry.first);
 }
 
-// A scalar that is not a metric number: strings and bools exact, numbers
-// exact (counts and byte totals).
 void compare_exact(const Elem& ref, const Elem& out, const String& where) {
     const bool numbers = ref.is_number() && out.is_number();
     const bool same_type = ref.type() == out.type() || numbers;
@@ -762,9 +716,7 @@ void compare_metric(const Elem& ref_e, const Elem& out_e, const String& where) {
     const double tol = kind == MetricKind::Exact    ? TOL_EXACT
                        : kind == MetricKind::Moment ? TOL_MOMENT
                                                     : TOL_QUANTILE;
-    // The operands and what is derived from them. The delta of two
-    // quantiles is off by the error of each, and a percentage by the error of
-    // the ratio, so those bounds are in terms of the operands.
+    // A delta of two quantiles is off by the error of each operand.
     const double scale = std::max({std::fabs(number_field(ref, "baseline")),
                                    std::fabs(number_field(ref, "variant")),
                                    std::fabs(number_field(out, "baseline")),
@@ -805,7 +757,8 @@ void compare_metric(const Elem& ref_e, const Elem& out_e, const String& where) {
     }
 }
 
-// Entries of `array` keyed by `id_key`; the order of the array is not compared.
+// The order of the entries is not compared, as the report orders groups by
+// values that move with the quantiles.
 void compare_named(const Elem& ref_e, const Elem& out_e, StringView id_key,
                    const String& where, EachFn each) {
     Map<String, Elem> ref, out;
@@ -875,12 +828,8 @@ void compare_report(StringView ref_text, StringView out_text) {
                       compare_node);
 }
 
-// ---------------------------------------------------------------------------
-// DLIO config
-// ---------------------------------------------------------------------------
-
-// The YAML config keeps its line order. Keys and text are exact; numbers come
-// from sampled quantiles and fitted mixtures, so they get the sketch accuracy.
+// Numbers come from sampled quantiles and fitted mixtures, so they get the
+// sketch accuracy.
 void compare_yaml(StringView ref_text, StringView out_text) {
     const auto ref = split(ref_text, '\n');
     const auto out = split(out_text, '\n');

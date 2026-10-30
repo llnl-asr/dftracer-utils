@@ -16,40 +16,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string_view>
 
-// One query API over the chunk partials of the aggregation tier. A query
-// names the files, a group-by, an optional time window and filters, and gets
-// one row per group key, each an AggPartial that has the stored partials
-// merged into it as the index scan yields them.
-//
-// A stored partial is added whole when it answers the query exactly. It is
-// answered by re-reading its chunk when it cannot:
-//   - a window: the events of the partial do not all start in one window,
-//     that is the windows of its first and of its last event start differ;
-//   - the time range or the pid filter cuts the partial;
-//   - the group-by names a pid or tid and the partial holds more than one,
-//     or names the file or an extra key (partials do not hold them);
-//   - the group-by splits events from profiles and the partial holds both;
-//   - the query has an event filter, which only an event can answer;
-//   - quantiles are asked for and the partial has per-event values but
-//     stores no quantiles.
-// A file that has no usable partials (its tier was written without the
-// fold, or with other params) is re-read whole, in the chunks the time range
-// leaves. A query that sets `reread` false reads nothing but partials: what a
-// re-read would have answered is counted in the stats and left out.
-//
-// A re-read answers from the chunk's column block when the index holds one and
-// the query has neither an event filter nor extra group keys: the block holds
-// every column and numeric arg of the chunk's events, so the trace is not
-// parsed. A chunk the index holds no block for, and a query with a filter or
-// extra group keys, parses the chunk through the gzip index.
-//
-// An event belongs to the window of its ts, as in compute_time_bucket.
-// A chunk is the lines that END in its gzip member, the rule of the index
-// fold that builds the partials, the bloom filters and the chunk statistics.
-// A re-read follows it, so a member cut inside a line neither doubles nor
-// drops that line.
+// A query over the chunk partials of the aggregation tier. It yields one
+// AggPartial row per group key. A chunk is the lines that END in its gzip
+// member, as in the index fold, so a member cut inside a line neither doubles
+// nor drops that line.
 
 namespace dftracer::utils::trace {
 
@@ -59,7 +32,7 @@ struct AggQuerySource {
     /// Trace paths as the index was built from them.
     dstd::Vector<dstd::String> files;
     /// The params hash the files of this index were built with. Unset takes
-    /// config.params_hash(); a caller that does not know the build config
+    /// config.params_hash(). A caller that does not know the build config
     /// reads the hash off the index.
     dstd::Optional<std::uint64_t> params_hash;
 };
@@ -68,16 +41,14 @@ struct AggQuery {
     dstd::Vector<AggQuerySource> sources;
 
     /// The config the indexes were built with. Its params hash decides
-    /// whether a file's partials are usable, its extra_group_keys are the
-    /// extra keys of the partials (string args), its time_interval_us is the
-    /// span of a pre-aggregated counter, and its sketch_accuracy the accuracy
-    /// of the quantile stores.
+    /// whether a file's partials are usable and its time_interval_us is the
+    /// span of a pre-aggregated counter.
     index::schemas::dft::agg::AggregationConfig config;
 
     bool by_pid = false;
     bool by_tid = false;
     bool by_file = false;
-    /// Groups by the hhash text of the events; a partial keeps one host.
+    /// Groups by the hhash text of the events. A partial keeps one host.
     bool by_host = false;
     /// Splits events (ph other than C), profiles (counters of a category
     /// other than sys) and the pre-aggregated sys counters into separate rows.
@@ -86,7 +57,7 @@ struct AggQuery {
     /// config.extra_group_keys names in the order the build had them.
     bool by_extra = false;
 
-    /// 0 for no windows; else the window length. With config.use_relative_time
+    /// 0 for no windows, else the window length. With config.use_relative_time
     /// windows start at multiples of it from config.reference_timestamp.
     std::uint64_t window_us = 0;
 
@@ -94,7 +65,7 @@ struct AggQuery {
     dstd::Vector<dstd::String> categories;
     dstd::Vector<dstd::String> names;
     dstd::Vector<std::uint64_t> pids;
-    /// The hhash texts to keep; empty keeps all.
+    /// The hhash texts to keep. Empty keeps all.
     dstd::Vector<dstd::String> hosts;
     /// Keeps events with ts_begin <= ts < ts_end.
     std::uint64_t ts_begin = 0;
@@ -102,7 +73,7 @@ struct AggQuery {
 
     /// Keeps the events the expression holds for (the whole line, with args
     /// fallback). The stored partials cannot answer it, so every chunk is
-    /// re-read; the sets above still prune what they can without a read. An
+    /// re-read. The sets above still prune what they can without a read. An
     /// expression on `cat` must compare lower-cased on both sides.
     dstd::Optional<duql::Query> filter;
 
@@ -110,19 +81,27 @@ struct AggQuery {
     /// query runs on.
     std::size_t workers = 0;
 
-    /// The quantile stores of the rows; without them none are merged.
+    /// Polled before a chunk is read and before a parsed batch is folded. True
+    /// stops the query, which answers with the rows it folded so far.
+    std::function<bool()> cancelled;
+
+    /// The quantile stores of the rows. Without them none are merged.
     bool quantiles = false;
-    /// The rows need only the count and the n and sum of duration and size,
-    /// so means come out exact. A partial that a split by pid, tid or window
-    /// would re-read is then split by its time bins when the window is a
-    /// multiple of the bin interval of the build; its rows have no times,
-    /// minima, maxima, moments or distinct ids. Takes effect only without
-    /// quantiles.
+    /// The rows need only the count and the n and sum of duration and size.
+    /// A partial a split would re-read is split by its time bins instead, so
+    /// its rows have no times, minima, maxima, moments or distinct ids.
+    /// Takes effect only without quantiles.
     bool sums_only = false;
 
     /// False reads no chunk: a partial or a file that only a re-read could
     /// answer is counted in AggQueryStats::unanswered and left out.
     bool reread = true;
+
+    /// Folds every event of every file by the rules of the index fold and
+    /// ignores the stored partials and column blocks. A file with no usable
+    /// index is read whole. Not served for a plan whose records the dftracer
+    /// line parser does not read (a path-decoded schema).
+    bool from_trace = false;
 };
 
 /// What a row holds, when the query splits them (AggQuery::by_kind).
@@ -176,7 +155,7 @@ struct AggQueryStats {
     /// Split by pid, tid or window through their time bins (see
     /// AggQuery::sums_only).
     std::size_t partials_binned = 0;
-    /// Chunk reads; a chunk with several re-read partials is read once.
+    /// Chunk reads. A chunk with several re-read partials is read once.
     std::size_t chunks_reread = 0;
     /// Re-read chunks answered from their column block, without parsing the
     /// trace.
@@ -207,20 +186,16 @@ class AggQueryResult {
                                                : strings_->resolve(id);
     }
     dstd::StringIntern& strings() { return *strings_; }
+    const dstd::StringIntern& strings() const { return *strings_; }
 
    private:
     dstd::UniquePtr<dstd::StringIntern> strings_;
 };
 
-/// Runs `query`. Files are read in parallel on the runtime of the caller: up
-/// to `workers` tasks run at once, each a file scan or a chunk re-read, each
-/// folding into a map of its own that is merged into the result when the task
-/// ends. Memory: the result map, plus at most `workers` task maps, each as
-/// large as the groups of one file (or one chunk), plus the re-read ids (12
-/// bytes per queued partial) of the files being scanned, plus one parsed batch
-/// of events or one chunk column block per task. Fails with NotFound for a file
-/// that is not in its index, Parse for a malformed partial or block, and what
-/// the reader reports for a chunk.
+/// Runs `query` on the runtime of the caller, up to `workers` tasks at once.
+/// Memory is the result map plus a map of one file's groups per running task.
+/// Fails with NotFound for a file that is not in its index, Parse for a
+/// malformed partial or block, and what the reader reports for a chunk.
 coro::CoroTask<Result<AggQueryResult>> run_agg_query(const AggQuery& query);
 
 }  // namespace dftracer::utils::trace

@@ -1,9 +1,8 @@
 #ifndef DFTRACER_UTILS_TESTS_AGGREGATION_ORACLE_H
 #define DFTRACER_UTILS_TESTS_AGGREGATION_ORACLE_H
 
-// The per-event aggregator that the chunk partials replaced, kept as a test
-// oracle: one AggregationMetrics accumulates the events of a group one by one
-// by the metric rules the partials share (accumulate_event_metrics). The
+// A per-event oracle for the chunk partials: one AggregationMetrics accumulates
+// the events of a group one by one by the metric rules the partials share. The
 // partials must merge to what it gives.
 
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -83,8 +82,7 @@ class OracleSink {
     bool percentiles_;
 };
 
-/// Accumulates `acc` into `entry` the way the per-event aggregator did; the
-/// caller picks the entry. Events the partials do not hold are skipped.
+/// The caller picks `entry`. Events the partials do not hold are skipped.
 template <class Acc>
 void oracle_event(const Acc& acc, AggregationMetrics& entry,
                   const AggregationConfig& cfg) {

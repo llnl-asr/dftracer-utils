@@ -192,7 +192,8 @@ void check_against(const dataframe::DataFrame& df, const Expected& want) {
         CHECK(count[at] == static_cast<double>(group.count));
         CHECK(ts[at] == static_cast<double>(group.ts));
         CHECK(te[at] == static_cast<double>(group.te));
-        for (const std::string& metric : {"num", "used", "util"}) {
+        for (const char* metric_text : {"num", "used", "util"}) {
+            const std::string metric(metric_text);
             const auto it = group.sum.find(metric);
             const auto column = f64_column(df, metric);
             if (it == group.sum.end()) {

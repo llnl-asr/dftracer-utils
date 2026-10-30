@@ -286,10 +286,12 @@ void count_changes(simdjson::dom::element e, std::size_t& metrics,
         if (e["is_regression"].get(regression) == simdjson::SUCCESS &&
             regression)
             ++regressions;
-        for (auto field : e.get_object().value())
+        const simdjson::dom::object object = e.get_object().value();
+        for (auto field : object)
             count_changes(field.value, metrics, changed, regressions);
     } else if (e.is_array()) {
-        for (auto item : e.get_array().value())
+        const simdjson::dom::array array = e.get_array().value();
+        for (auto item : array)
             count_changes(item, metrics, changed, regressions);
     }
 }

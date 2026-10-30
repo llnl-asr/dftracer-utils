@@ -274,15 +274,18 @@ TEST_CASE("decay purges after the delay with no trim call") {
 TEST_CASE("freed memory past the idle cap is purged at once") {
     page_trim(Mode::All);
     std::size_t base = reserved();
-    WorkingSet set = build_set(1);
-    REQUIRE(set.bytes > IDLE_BACKED_CAP);
+    std::vector<WorkingSet> sets;
+    std::size_t bytes = 0;
+    while (bytes <= IDLE_BACKED_CAP) {
+        sets.push_back(build_set(1));
+        bytes += sets.back().bytes;
+    }
     std::size_t peak = reserved();
-    free_set(set);
+    for (WorkingSet& set : sets) free_set(set);
     // No trim and no decay: only the cap gives back the bytes past it.
     std::size_t held = reserved() - base;
-    CHECK(held <= IDLE_BACKED_CAP + set.bytes / 10);
-    CHECK(drop(peak, reserved()) + IDLE_BACKED_CAP + set.bytes / 10 >=
-          set.bytes);
+    CHECK(held <= IDLE_BACKED_CAP + bytes / 10);
+    CHECK(drop(peak, reserved()) + IDLE_BACKED_CAP + bytes / 10 >= bytes);
 }
 
 TEST_CASE("trim of decayed memory keeps what is not yet idle long enough") {

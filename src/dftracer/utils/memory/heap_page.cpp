@@ -127,7 +127,12 @@ struct SpanHeader {
     std::size_t usable;
     std::uint64_t free_mask;
     std::uint64_t purged_mask;
+    // Pages freed after use and still backed: the idle bytes g_idle_backed
+    // counts. A fresh page is never touched, so it is not counted.
+    std::uint64_t dirty_mask;
     std::uint64_t cached_since;
+    // The backed bytes of a cached large run that g_idle_backed counts.
+    std::size_t idle_counted;
     std::atomic<SpanHeader*> cache_next;
     Heap* owner;
     std::uint32_t free_pages;
@@ -181,6 +186,27 @@ std::atomic<std::uint64_t> g_cache_live{0};
 static_assert(CACHE_COUNT <= 64);
 std::atomic<std::ptrdiff_t> g_cache_reserved{0};
 std::atomic<std::size_t> g_budget_purged{0};
+
+// Freed and still backed bytes of every heap and cache. Past IDLE_BACKED_CAP a
+// heap that frees purges its own idle pages at once, so retention follows this
+// bound instead of the free rate times the decay time, which grows with the
+// thread count.
+std::atomic<std::ptrdiff_t> g_idle_backed{0};
+
+void idle_add(std::size_t bytes) noexcept {
+    g_idle_backed.fetch_add(static_cast<std::ptrdiff_t>(bytes),
+                            std::memory_order_relaxed);
+}
+
+void idle_sub(std::size_t bytes) noexcept {
+    g_idle_backed.fetch_sub(static_cast<std::ptrdiff_t>(bytes),
+                            std::memory_order_relaxed);
+}
+
+bool idle_over_cap() noexcept {
+    return g_idle_backed.load(std::memory_order_relaxed) >
+           static_cast<std::ptrdiff_t>(IDLE_BACKED_CAP);
+}
 pthread_key_t g_key;
 pthread_once_t g_once = PTHREAD_ONCE_INIT;
 
@@ -642,7 +668,12 @@ std::size_t purge_pages(SpanHeader* s, std::uint64_t mask) noexcept {
     std::size_t purged = 0;
     for_each_page_run(mask, [&](std::size_t first, std::size_t n) {
         if (purge_range(page_base(s, first), n * HEAP_PAGE_SIZE)) {
-            s->purged_mask |= run_bits(first, n);
+            const std::uint64_t bits = run_bits(first, n);
+            s->purged_mask |= bits;
+            idle_sub(
+                static_cast<std::size_t>(std::popcount(s->dirty_mask & bits)) *
+                HEAP_PAGE_SIZE);
+            s->dirty_mask &= ~bits;
             purged += n;
         }
     });
@@ -769,6 +800,8 @@ void purge_entry(SpanHeader* s) noexcept {
                purge_range(page_base(s, 1), s->map_bytes - HEAP_PAGE_SIZE)) {
         s->purged_mask = 1;
         cache_take_accounting(s->map_bytes - HEAP_PAGE_SIZE);
+        idle_sub(s->idle_counted);
+        s->idle_counted = 0;
     }
 }
 
@@ -848,6 +881,14 @@ void decay_step(Heap& h) noexcept {
     decay_live_caches(now, delay, CACHE_ENTRIES_PER_CALL);
 }
 
+// Past the cap, purge this heap's idle pages and then the oldest cache entries,
+// whatever their age. Other heaps purge their own when they next free.
+void relieve_idle(Heap& h) noexcept {
+    std::uint64_t now = now_ms();
+    purge_heap(h, now, 0, UNLIMITED);
+    if (idle_over_cap()) decay_live_caches(now, 0, CACHE_ENTRIES_PER_CALL);
+}
+
 void stamp_free_pages(SpanHeader* s, std::size_t index, std::size_t n,
                       std::uint64_t now) noexcept {
     for (std::size_t i = index; i < index + n; ++i) s->free_since[i] = now;
@@ -892,6 +933,8 @@ SpanHeader* adopt_cached_run(Heap& h, std::size_t run) noexcept {
     } else {
         cache_take_accounting(s->map_bytes);
     }
+    idle_sub(s->idle_counted);
+    s->idle_counted = 0;
     bump(h.reserved, s->map_bytes, true);
     return s;
 }
@@ -936,6 +979,13 @@ void trim_all(std::uint64_t now) noexcept {
             }
         }
     }
+}
+
+void trim_own_heap(std::uint64_t now) noexcept {
+    if (t_heap == nullptr) return;
+    flush_remote(*t_heap);
+    drain_inbox(*t_heap);
+    purge_heap(*t_heap, now, 0, UNLIMITED);
 }
 
 void trim_decayed(std::uint64_t now) noexcept {
@@ -1028,6 +1078,10 @@ bool find_run(std::uint64_t free_mask, std::size_t n, std::size_t step,
 
 void take_run(Heap& h, SpanHeader* s, std::size_t index,
               std::size_t n) noexcept {
+    const std::uint64_t bits = run_bits(index, n);
+    idle_sub(static_cast<std::size_t>(std::popcount(s->dirty_mask & bits)) *
+             HEAP_PAGE_SIZE);
+    s->dirty_mask &= ~bits;
     s->free_mask &= ~run_bits(index, n);
     s->free_pages -= static_cast<std::uint32_t>(n);
     if (s->free_pages == 0) span_unlink(h, s);
@@ -1037,6 +1091,8 @@ void take_run(Heap& h, SpanHeader* s, std::size_t index,
 void give_run(Heap& h, SpanHeader* s, std::size_t index,
               std::size_t n) noexcept {
     s->free_mask |= run_bits(index, n);
+    s->dirty_mask |= run_bits(index, n);
+    idle_add(n * HEAP_PAGE_SIZE);
     asan_poison(page_base(s, index), n * HEAP_PAGE_SIZE);
     vg_noaccess(page_base(s, index), n * HEAP_PAGE_SIZE);
     stamp_free_pages(s, index, n, now_ms());
@@ -1046,6 +1102,7 @@ void give_run(Heap& h, SpanHeader* s, std::size_t index,
         if (h.spans != s || s->next != nullptr) cache_empty_span(h, s);
         decay_step(h);
     }
+    if (idle_over_cap()) relieve_idle(h);
 }
 
 bool find_in_spans(Heap& h, std::size_t n, std::size_t step,
@@ -1234,11 +1291,15 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
         asan_poison(user, s->usable);
         s->purged_mask = 0;
         const std::size_t index = 1 + large_class(s->usable);
-        if (s->usable >= LARGE_PURGE_SIZE)
+        if (s->usable >= LARGE_PURGE_SIZE) {
             cache_put_purged(index, s);
-        else
+        } else {
+            s->idle_counted = s->map_bytes - HEAP_PAGE_SIZE;
+            idle_add(s->idle_counted);
             cache_put(index, s, s->map_bytes);
+        }
         decay_step(h);
+        if (idle_over_cap()) relieve_idle(h);
         return;
     }
     // Another mapping may land in the range, so its shadow must be clean.
@@ -1391,6 +1452,8 @@ void page_deallocate(void* p) noexcept { release(p, 0, false); }
 void page_deallocate(void* p, std::size_t size) noexcept {
     release(p, size, true);
 }
+
+void page_trim_thread() noexcept { trim_own_heap(now_ms()); }
 
 void page_trim(Mode mode) noexcept {
     std::uint64_t now = now_ms();

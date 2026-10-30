@@ -103,8 +103,9 @@ struct WorkingSet {
     std::size_t bytes = 0;
 };
 
-WorkingSet build_set() {
-    std::size_t div = SANITIZED ? 4 : 1;
+// A quarter of the full set stays below IDLE_BACKED_CAP once freed, so trim and
+// decay, not the cap, give it back.
+WorkingSet build_set(std::size_t div = 4) {
     WorkingSet set;
     for (std::size_t i = 0; i < LARGE_COUNT / div; ++i) {
         set.large.push_back(page_allocate(LARGE_BLOCK, 16));
@@ -268,6 +269,20 @@ TEST_CASE("decay purges after the delay with no trim call") {
     if (!SANITIZED) {
         CHECK(drop(resident_free, resident_bytes()) >= set.bytes * 6 / 10);
     }
+}
+
+TEST_CASE("freed memory past the idle cap is purged at once") {
+    page_trim(Mode::All);
+    std::size_t base = reserved();
+    WorkingSet set = build_set(1);
+    REQUIRE(set.bytes > IDLE_BACKED_CAP);
+    std::size_t peak = reserved();
+    free_set(set);
+    // No trim and no decay: only the cap gives back the bytes past it.
+    std::size_t held = reserved() - base;
+    CHECK(held <= IDLE_BACKED_CAP + set.bytes / 10);
+    CHECK(drop(peak, reserved()) + IDLE_BACKED_CAP + set.bytes / 10 >=
+          set.bytes);
 }
 
 TEST_CASE("trim of decayed memory keeps what is not yet idle long enough") {

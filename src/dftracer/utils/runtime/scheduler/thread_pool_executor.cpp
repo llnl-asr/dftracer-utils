@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
 #include <dftracer/utils/runtime/coro/yield.h>
@@ -614,18 +615,25 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             // park long.
             const bool poller =
                 !idle_poller_.exchange(true, std::memory_order_acq_rel);
+            bool idle_long = false;
             {
                 std::unique_lock<std::mutex> lock(idle_mutex_);
                 if (work_signal_.load(std::memory_order_acquire) !=
                         observed_signal ||
                     idle_cv_.wait_for(lock, idle_park) !=
-                        std::cv_status::timeout)
+                        std::cv_status::timeout) {
                     idle_park = IDLE_PARK_MIN;
-                else if (!poller)
-                    idle_park = IDLE_PARK_MAX;
-                else if (idle_park < IDLE_PARK_MAX)
-                    idle_park *= 2;
+                } else {
+                    idle_long = idle_park == IDLE_PARK_MAX;
+                    if (!poller)
+                        idle_park = IDLE_PARK_MAX;
+                    else if (idle_park < IDLE_PARK_MAX)
+                        idle_park *= 2;
+                }
             }
+            // Only this thread may purge its heap, so an idle worker gives its
+            // freed pages back itself.
+            if (idle_long) memory::trim_thread();
             if (poller) idle_poller_.store(false, std::memory_order_release);
             idle_workers_.fetch_sub(1, std::memory_order_acq_rel);
         }

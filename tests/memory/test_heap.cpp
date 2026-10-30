@@ -813,3 +813,31 @@ TEST_CASE("budget no purge scenario" * doctest::skip()) {
     page_deallocate(second, NEXT * 2);
     configure(Config{});
 }
+
+TEST_CASE("trim_thread gives back the idle pages of the calling thread") {
+    if (config().backend != Backend::PageHeap) return;
+    constexpr std::size_t medium = HEAP_PAGE_SIZE + 5000;
+    constexpr std::size_t count = 64;
+    std::size_t backed_after_free = 0;
+    std::size_t backed_after_trim = 0;
+    std::thread worker([&] {
+        std::vector<char*> blocks;
+        for (std::size_t i = 0; i < count; ++i) {
+            auto* m = static_cast<char*>(page_allocate(medium, 16));
+            std::memset(m, 1, medium);
+            blocks.push_back(m);
+        }
+        // Every other block stays live, so its span stays in this heap and the
+        // freed runs between them are idle pages of this heap.
+        for (std::size_t i = 0; i < count; i += 2)
+            page_deallocate(blocks[i], medium);
+        backed_after_free = reserved();
+        trim_thread();
+        backed_after_trim = reserved();
+        for (std::size_t i = 1; i < count; i += 2)
+            page_deallocate(blocks[i], medium);
+    });
+    worker.join();
+    // The freed pages stay backed for the decay time until the owner trims.
+    CHECK(backed_after_free - backed_after_trim >= count / 2 * HEAP_PAGE_SIZE);
+}

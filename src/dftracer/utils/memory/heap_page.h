@@ -18,6 +18,9 @@ inline constexpr std::size_t LARGE_MAX = std::size_t{64} << 20;
 /// decay runs only when a heap maps or frees a large run. 2 and 4 MiB slow the
 /// mixed heap_bench case by 4 to 6%.
 inline constexpr std::size_t LARGE_PURGE_SIZE = std::size_t{8} << 20;
+/// Freed but still backed bytes past which a heap purges its idle pages on
+/// free, so retention does not grow with the free rate or the thread count.
+inline constexpr std::size_t IDLE_BACKED_CAP = std::size_t{64} << 20;
 /// The largest alignment the page heap serves. A block aligned more would sit
 /// in a span other than the one that holds its header.
 inline constexpr std::size_t MAX_ALIGN = HEAP_SPAN_SIZE / 2;
@@ -39,6 +42,7 @@ void* page_allocate_to(std::size_t size, std::size_t align, std::uint16_t pool);
 void page_deallocate(void* p) noexcept;
 void page_deallocate(void* p, std::size_t size) noexcept;
 void page_trim(Mode mode) noexcept;
+void page_trim_thread() noexcept;
 
 /// Move a huge block to @p size bytes, which must be larger than LARGE_MAX and
 /// than the block. The contents stay. Throws std::bad_alloc.

@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Bound the memory the allocator keeps after a free, so peak memory no longer grows with the thread count: past 64 MiB of freed but still backed pages, a thread that frees gives its idle pages back at once, and an idle worker or I/O thread gives back its own.
+  An index build of 2,000 files at 224 threads peaks at 325 MB where it took 623 MB, in the same time.
 - Count a pre-aggregated counter record as the events it stands for when a trace aggregation reads the trace, with its duration, size and offset statistics from its args, so the answer matches the index.
   A frame still counts its rows, so a pre-aggregated record is one row there.
   Percentiles, histograms, plans that decode records by path, time buckets on a plan with no schema and group keys on arguments the build did not keep still count it as one row.

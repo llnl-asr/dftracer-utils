@@ -1,6 +1,14 @@
+#include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/io/io_thread_pool.h>
 
+#include <chrono>
+
 namespace dftracer::utils::io {
+
+namespace {
+// How long an I/O thread waits for work before it gives back its idle pages.
+constexpr std::chrono::milliseconds IDLE_TRIM_AFTER{50};
+}  // namespace
 
 IoThreadPool::IoThreadPool(std::size_t num_threads, unsigned batch_threshold)
     : num_threads_(num_threads == 0 ? 4 : num_threads),
@@ -100,8 +108,16 @@ void IoThreadPool::worker_loop() {
         std::function<void()> fn;
         {
             std::unique_lock<std::mutex> lock(mutex_);
-            cv_.wait(lock,
-                     [this] { return !running_.load() || !queue_.empty(); });
+            const auto ready = [this] {
+                return !running_.load() || !queue_.empty();
+            };
+            if (!cv_.wait_for(lock, IDLE_TRIM_AFTER, ready)) {
+                // Only this thread may purge its heap.
+                lock.unlock();
+                memory::trim_thread();
+                lock.lock();
+                cv_.wait(lock, ready);
+            }
             if (!running_.load() && queue_.empty()) return;
             if (queue_.empty()) continue;
             fn = std::move(queue_.front());

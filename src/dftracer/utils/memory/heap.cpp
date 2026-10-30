@@ -341,4 +341,14 @@ void trim(Mode mode) noexcept {
     }
 }
 
+void trim_thread() noexcept {
+    switch (backend()) {
+        case Backend::PageHeap:
+            page_trim_thread();
+            return;
+        case Backend::System:
+            return;
+    }
+}
+
 }  // namespace dftracer::utils::memory

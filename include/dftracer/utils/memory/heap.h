@@ -136,6 +136,14 @@ void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
  */
 void trim(Mode mode) noexcept;
 
+/**
+ * @brief Give back every idle page of the calling thread's heap at once.
+ *
+ * For a thread about to sit idle: no other thread may purge its heap, so
+ * without this its freed pages stay backed until it runs again or exits.
+ */
+void trim_thread() noexcept;
+
 }  // namespace dftracer::utils::memory
 
 #endif  // DFTRACER_UTILS_MEMORY_HEAP_H

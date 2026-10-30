@@ -259,6 +259,9 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
     /// publishes. Throws std::logic_error on a write that is not staged, and
     /// std::runtime_error on a store error.
     void stage() override;
+    /// On a worker of the process runtime it waits without holding the worker.
+    /// Anywhere else it blocks like stage().
+    coro::CoroTask<void> stage_async() override;
 
     int file_id_for(std::string_view logical_path) override;
     void bind_file(std::string_view logical_path, int file_id) override;
@@ -318,6 +321,7 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
         bool building = false;
     };
     coro::CoroTask<void> stage_body(kv::Writer& writer);
+    coro::CoroTask<void> stage_in_use();
     coro::CoroTask<void> commit_body();
     bool building(const std::string& name, const kv::ScopeKey& scope) const;
     /// Returns how many keys of `foreign` it put into `batch`, those `copy`

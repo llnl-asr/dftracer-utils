@@ -1,9 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -11,9 +13,12 @@
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <memory/fresh_process.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -21,8 +26,10 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <span>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -46,15 +53,16 @@ using Key = std::pair<std::string, std::string>;
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
 std::string write_trace(const std::string& dir, int n,
-                        std::map<Key, std::vector<double>>& durations) {
+                        std::map<Key, std::vector<double>>& durations,
+                        int salt = 0) {
     std::ostringstream out;
     out << "[\n";
-    for (int i = 0; i < EVENTS; ++i) {
+    for (int i = 0; i < EVENTS + salt; ++i) {
         const bool own = i % 5 == 0;
         const std::string cat =
             own ? "file" + std::to_string(n) : (i % 3 == 0 ? "STDIO" : "POSIX");
         const std::string name = own ? "step" : NAMES[i % 4];
-        const int dur = 1 + (i * 7 + n) % 500;
+        const int dur = 1 + (i * 7 + n + salt) % 500;
         char fhash[24];
         std::snprintf(fhash, sizeof fhash, "%016x", 0x1000 + i % 7);
         out << R"({"id":)" << i << R"(,"name":")" << name << R"(","cat":")"
@@ -156,6 +164,85 @@ void check_quantiles(const agg::AggPartial& p, const agg::QuantileStore& q,
 
 std::string index_dir_of(const dftu_utils_test::TestEnvironment& env) {
     return env.get_dir() + "/idx";
+}
+
+// Every aggregation row of `file`, keyed by text in place of dictionary ids,
+// so two indexes compare whatever ids they gave.
+std::map<std::string, std::string> agg_rows(const std::string& file,
+                                            const std::string& index_dir) {
+    const auto index_path =
+        trace::internal::determine_index_path(file, index_dir);
+    IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+    auto dictionary = agg::make_intern_table();
+    agg::tier::load_dictionary(db, *dictionary);
+    const int fid =
+        db.get_file_info_id(index::store::internal::get_logical_path(file));
+    REQUIRE(fid >= 0);
+    const auto text = [&](std::uint32_t id) {
+        return std::string(dictionary->intern.resolve(id));
+    };
+    std::map<std::string, std::string> rows;
+    agg::tier::for_each_partial(
+        db, fid,
+        [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
+            std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
+            std::span<const std::uint8_t> bytes) {
+            rows.emplace("p " + std::to_string(chunk) + " " + text(cat) + " " +
+                             text(name) + " " + text(host) + " " + text(extra) +
+                             " " + std::to_string(static_cast<int>(kind)),
+                         std::string(bytes.begin(), bytes.end()));
+            return true;
+        });
+    agg::tier::for_each_chunk_columns(
+        db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+            std::ostringstream value;
+            value << block.rows;
+            for (const auto* locals :
+                 {&block.cat, &block.name, &block.host, &block.file})
+                for (const std::uint32_t local : *locals)
+                    value << ' '
+                          << std::string_view(block.texts[local].data(),
+                                              block.texts[local].size());
+            for (const auto* numbers :
+                 {&block.ts, &block.dur, &block.pid, &block.tid})
+                for (const std::uint64_t v : *numbers) value << ' ' << v;
+            rows.emplace("c " + std::to_string(chunk), value.str());
+            return true;
+        });
+    return rows;
+}
+
+using Rows = std::map<std::string, std::string>;
+
+// The first key whose row is missing from one side or differs, for a failed
+// comparison.
+std::string first_difference(const Rows& a, const Rows& b) {
+    for (const auto& [key, value] : a) {
+        const auto at = b.find(key);
+        if (at == b.end()) return "only left: " + key;
+        if (at->second != value)
+            return "differs: " + key + " (" + std::to_string(value.size()) +
+                   " vs " + std::to_string(at->second.size()) + " bytes)";
+    }
+    for (const auto& [key, value] : b)
+        if (a.find(key) == a.end()) return "only right: " + key;
+    return "same";
+}
+
+void check_rows(const Rows& a, const Rows& b) {
+    CHECK_MESSAGE(a == b, first_difference(a, b), " of ", a.size(), " and ",
+                  b.size(), " rows");
+}
+
+constexpr const char* CRASH_DIR_ENV = "DFTRACER_UTILS_TEST_AGG_CRASH_DIR";
+constexpr int CRASH_FILES = 3;
+constexpr std::uint64_t CRASH_RUNS = 2;
+
+std::vector<std::string> crash_files(const std::string& dir) {
+    std::vector<std::string> files;
+    for (int i = 0; i < CRASH_FILES; ++i)
+        files.push_back(dir + "/t" + std::to_string(i) + ".pfw.gz");
+    return files;
 }
 
 }  // namespace
@@ -337,5 +424,98 @@ TEST_SUITE("AggPartialsStore") {
         agg::tier::load_dictionary(db, *dictionary);
         for (std::size_t i = 0; i < ids.size(); ++i)
             CHECK(read_partials(db, ids[i], *dictionary).count == before[i]);
+    }
+
+    TEST_CASE("rows written through equal the rows held in memory") {
+        dftu_utils_test::TestEnvironment env(10);
+        std::vector<std::string> files;
+        std::map<Key, std::vector<double>> durations;
+        for (int i = 0; i < 3; ++i)
+            files.push_back(write_trace(env.get_dir(), i, durations));
+        const std::string held = env.get_dir() + "/held";
+        const std::string through = env.get_dir() + "/through";
+
+        const auto run_bytes = agg::g_agg_run_bytes.exchange(UINT64_MAX);
+        build_seconds(files, held);
+        const auto runs = agg::g_agg_runs_staged.load();
+        // Each closed chunk fills a run.
+        agg::g_agg_run_bytes.store(1);
+        build_seconds(files, through);
+        CHECK(agg::g_agg_runs_staged.load() > runs);
+        for (const auto& f : files) {
+            const auto rows = agg_rows(f, held);
+            CHECK_FALSE(rows.empty());
+            check_rows(agg_rows(f, through), rows);
+        }
+
+        // A changed file rebuilt through its staged write keeps none of the
+        // rows it had.
+        write_trace(env.get_dir(), 0, durations, /*salt=*/37);
+        const auto rebuilt = agg::g_agg_runs_staged.load();
+        build_seconds(files, through);
+        CHECK(agg::g_agg_runs_staged.load() > rebuilt);
+        agg::g_agg_run_bytes.store(UINT64_MAX);
+        const std::string fresh = env.get_dir() + "/fresh";
+        build_seconds(files, fresh);
+        agg::g_agg_run_bytes.store(run_bytes);
+        CHECK(agg_rows(files[0], through) != agg_rows(files[0], held));
+        for (const auto& f : files)
+            check_rows(agg_rows(f, through), agg_rows(f, fresh));
+    }
+
+    // A build killed after it staged rows of a changed file leaves each file
+    // with its old rows or its new rows whole, and the next build ends well.
+    TEST_CASE("a build killed while it writes through leaves whole rows") {
+        dftu_utils_test::TestEnvironment env(10);
+        std::map<Key, std::vector<double>> durations;
+        std::vector<std::string> files;
+        for (int i = 0; i < CRASH_FILES; ++i)
+            files.push_back(write_trace(env.get_dir(), i, durations));
+        const auto index_dir = index_dir_of(env);
+        build_seconds(files, index_dir);
+        std::vector<std::map<std::string, std::string>> before;
+        for (const auto& f : files) before.push_back(agg_rows(f, index_dir));
+
+        for (int i = 0; i < CRASH_FILES; ++i)
+            write_trace(env.get_dir(), i, durations, /*salt=*/37);
+        ::setenv(CRASH_DIR_ENV, env.get_dir().c_str(), 1);
+        const auto child = fresh_process::run("a build killed after runs");
+        ::unsetenv(CRASH_DIR_ENV);
+        REQUIRE(child.ok());
+
+        const std::string fresh = env.get_dir() + "/fresh";
+        build_seconds(files, fresh);
+        std::size_t kept = 0;
+        for (int i = 0; i < CRASH_FILES; ++i) {
+            const auto rows = agg_rows(files[i], index_dir);
+            const auto after = agg_rows(files[i], fresh);
+            CHECK((rows == before[i] || rows == after));
+            if (rows == before[i]) ++kept;
+        }
+        MESSAGE("files with their old rows after the kill: " << kept);
+        CHECK(kept > 0);
+
+        build_seconds(files, index_dir);
+        for (const auto& f : files)
+            check_rows(agg_rows(f, index_dir), agg_rows(f, fresh));
+    }
+
+    // Run by the case above in a new process, which it ends with _exit once a
+    // fold has staged runs, so no write commits after that.
+    TEST_CASE("a build killed after runs" * doctest::skip()) {
+        fresh_process::announce();
+        const auto env_dir = Env::get<std::string_view>(CRASH_DIR_ENV);
+        REQUIRE(env_dir.has_value());
+        const std::string dir(*env_dir);
+        const auto files = crash_files(dir);
+        agg::g_agg_run_bytes.store(1);
+        std::atomic<bool> done{false};
+        std::thread build([&] {
+            build_seconds(files, dir + "/idx");
+            done.store(true);
+        });
+        while (agg::g_agg_runs_staged.load() < CRASH_RUNS && !done.load())
+            std::this_thread::yield();
+        ::_exit(done.load() ? 1 : 0);
     }
 }

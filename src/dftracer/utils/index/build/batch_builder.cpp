@@ -283,6 +283,9 @@ static coro::CoroTask<void> parse_and_write_worker(
                     if (agg_fold_factory_ptr && *agg_fold_factory_ptr) {
                         job.agg_fold =
                             (*agg_fold_factory_ptr)(*job.intern, pf.file_id);
+                        job.agg_fold->write_through(*admission->staged_db,
+                                                    pf.logical_path,
+                                                    pf.fresh_id);
                         fold_ptrs.push_back(job.agg_fold.get());
                     }
                     driver.emplace(*job.intern, fold_ptrs, pf.file_path,
@@ -422,17 +425,17 @@ static coro::CoroTask<void> parse_and_write_worker(
                     (*results_ptr)[idx].success = false;
                     (*results_ptr)[idx].error_message = write_job.error_message;
                 }
-                if (write_job.staged) {
+                for (auto& staged : write_job.staged) {
                     std::string failed;
                     try {
-                        co_await write_job.staged->commit_async();
+                        co_await staged->commit_async();
                     } catch (const std::exception& e) {
                         failed = e.what();
                     }
-                    write_job.staged.reset();
+                    staged.reset();
                     if (!failed.empty()) {
                         DFTRACER_UTILS_LOG_ERROR(
-                            "Failed to publish the spilled index of %s: %s",
+                            "Failed to publish the staged index of %s: %s",
                             pf.file_path.c_str(), failed.c_str());
                         (*results_ptr)[idx].success = false;
                         (*results_ptr)[idx].error_message = failed;
@@ -506,10 +509,8 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto admission = std::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
-    if (budget != NO_BUDGET) {
-        admission->spill_staged = true;
-        admission->staged_db = writer_db.get();
-    }
+    admission->staged_db = writer_db.get();
+    if (budget != NO_BUDGET) admission->spill_staged = true;
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
     auto next_block = std::make_shared<std::atomic<std::size_t>>(0);

@@ -1,7 +1,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -156,6 +155,7 @@ void AggregationFold::close_columns() {
     closed.chunk = chunk_;
     layout::append_value(closed.value, layout::Ext::Agg,
                          layout::agg_kind::COLUMNS, bytes_of(scratch_));
+    closed_bytes_ += closed.value.size();
     closed_columns_.push_back(std::move(closed));
     referenced_.insert(referenced_.end(), columns_.ids().begin(),
                        columns_.ids().end());
@@ -175,6 +175,7 @@ void AggregationFold::close_chunk() {
         closed.key = slot.key;
         layout::append_value(closed.value, layout::Ext::Agg,
                              layout::agg_kind::PARTIAL, bytes_of(scratch_));
+        closed_bytes_ += closed.value.size();
         closed_.push_back(std::move(closed));
         referenced_.push_back(slot.key.cat);
         referenced_.push_back(slot.key.name);
@@ -185,6 +186,50 @@ void AggregationFold::close_chunk() {
         slot.last_thread = 0;
         slot.used = false;
     }
+    if (through_db_ == nullptr) return;
+    namespace fa = constants::file_admission;
+    const std::size_t doublings = std::min(
+        through_runs_ / fa::SPILL_RUNS_PER_DOUBLING, fa::MAX_SPILL_DOUBLINGS);
+    if (closed_bytes_ >= g_agg_run_bytes.load(std::memory_order_relaxed)
+                             << doublings)
+        queue_closed();
+}
+
+void AggregationFold::queue_closed() {
+    if (!staged_) {
+        staged_ = through_db_->begin_staged_write();
+        // Its runs come before the file's record.
+        staged_->bind_file(through_path_, file_id_);
+        staged_->set_fresh_file(through_fresh_ ? file_id_ : -1);
+        index::store::records::clear_file(
+            *staged_, index::store::layout::Ext::Agg, file_id_);
+    }
+    put_closed(*staged_);
+    stage_due_ = true;
+}
+
+coro::CoroTask<void> AggregationFold::stage_async() {
+    stage_due_ = false;
+    co_await staged_->stage_async();
+    ++through_runs_;
+    g_agg_runs_staged.fetch_add(1, std::memory_order_relaxed);
+}
+
+void AggregationFold::put_closed(index::store::IndexWrite& w) {
+    for (const Closed& closed : closed_)
+        index::store::records::put_agg_partial_value(
+            w, file_id_, closed.chunk, closed.key.cat, closed.key.name,
+            closed.key.host, closed.key.extra,
+            static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
+    closed_.clear();
+    for (const ClosedColumns& closed : closed_columns_)
+        index::store::records::put_agg_chunk_columns_value(
+            w, file_id_, closed.chunk, bytes_of(closed.value));
+    closed_columns_.clear();
+    closed_bytes_ = 0;
+    std::sort(referenced_.begin(), referenced_.end());
+    referenced_.erase(std::unique(referenced_.begin(), referenced_.end()),
+                      referenced_.end());
 }
 
 void AggregationFold::merge(trace::views::detail::Fold& other) {
@@ -204,33 +249,46 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
         closed_columns_.push_back(std::move(closed));
     referenced_.insert(referenced_.end(), o.referenced_.begin(),
                        o.referenced_.end());
+    closed_bytes_ += o.closed_bytes_;
+    o.closed_bytes_ = 0;
     o.closed_.clear();
     o.closed_columns_.clear();
     o.referenced_.clear();
 }
 
 void AggregationFold::write(index::store::IndexWrite& w) {
-    namespace layout = index::store::layout;
     if (file_id_ < 0) {
         throw std::logic_error(
             "an aggregation fold writes the data of one file, and has none");
     }
+    if (staged_) {
+        throw std::logic_error(
+            "an aggregation fold that wrote through finishes its staged write");
+    }
     close_chunk();
     // The clear covers every kind, so it comes before any put.
-    index::store::records::clear_file(w, layout::Ext::Agg, file_id_);
-    for (const Closed& closed : closed_)
-        index::store::records::put_agg_partial_value(
-            w, file_id_, closed.chunk, closed.key.cat, closed.key.name,
-            closed.key.host, closed.key.extra,
-            static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
-    closed_.clear();
-    for (const ClosedColumns& closed : closed_columns_)
-        index::store::records::put_agg_chunk_columns_value(
-            w, file_id_, closed.chunk, bytes_of(closed.value));
-    closed_columns_.clear();
-    std::sort(referenced_.begin(), referenced_.end());
-    referenced_.erase(std::unique(referenced_.begin(), referenced_.end()),
-                      referenced_.end());
+    index::store::records::clear_file(w, index::store::layout::Ext::Agg,
+                                      file_id_);
+    finish_rows(w);
+}
+
+void AggregationFold::write_through(index::store::IndexDatabase& db,
+                                    std::string logical_path, bool fresh_id) {
+    through_db_ = &db;
+    through_path_ = std::move(logical_path);
+    through_fresh_ = fresh_id;
+}
+
+std::unique_ptr<index::store::IndexDatabaseWrite>
+AggregationFold::finish_through() {
+    close_chunk();
+    if (!staged_) return nullptr;
+    finish_rows(*staged_);
+    return std::move(staged_);
+}
+
+void AggregationFold::finish_rows(index::store::IndexWrite& w) {
+    put_closed(w);
     for (const std::uint32_t id : referenced_)
         index::store::records::put_agg_dictionary_entry(
             w, file_id_, id, agg_intern_->intern.resolve(id));

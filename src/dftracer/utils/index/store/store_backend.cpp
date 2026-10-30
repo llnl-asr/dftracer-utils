@@ -1061,6 +1061,22 @@ void StoreIndexWrite::stage() {
     wait_for(stage_body(root_->writer()));
 }
 
+coro::CoroTask<void> StoreIndexWrite::stage_async() {
+    if (!staged_) {
+        throw std::logic_error("store index: only a staged write stages");
+    }
+    if (Executor::current() != default_runtime().executor())
+        return IndexDatabaseWrite::stage_async();
+    memory::Scope in_pool(root_->pool());
+    return stage_in_use();
+}
+
+coro::CoroTask<void> StoreIndexWrite::stage_in_use() {
+    if (committed_) co_return;
+    StoreRoot::WriterUse use(*root_);
+    co_await stage_body(root_->writer());
+}
+
 coro::CoroTask<void> StoreIndexWrite::stage_body(kv::Writer& writer) {
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =

@@ -45,9 +45,9 @@ struct ParsedIndexJob {
     /// The schema the file was decoded with; written with its members.
     const index::RecordSchema* schema = nullptr;
     std::string error_message;
-    /// The staged write a spill left. The caller publishes it after
-    /// write_index_job returns.
-    std::unique_ptr<index::store::IndexDatabaseWrite> staged;
+    /// The staged writes the bloom and aggregation folds left. The caller
+    /// publishes them after write_index_job returns.
+    std::vector<std::unique_ptr<index::store::IndexDatabaseWrite>> staged;
 };
 
 struct BatchWriterMetrics {
@@ -58,14 +58,17 @@ struct BatchWriterMetrics {
 };
 
 /// Write `job` into `sink`, which the caller commits. A file whose bloom fold
-/// spilled writes its tier into `job.staged`, which the caller publishes before
-/// the next file. Returns false, with `job.error_message` set, when the write
-/// failed. What was already written for the file is left in the sink.
+/// spilled or whose aggregation fold wrote through writes that data into
+/// `job.staged`, which the caller publishes before the next file. Returns
+/// false, with `job.error_message` set, when the write failed. What was already
+/// written for the file is left in the sink.
 inline bool write_index_job(index::store::IndexWrite& sink,
                             ParsedIndexJob& job) {
     sink.set_fresh_file(job.fresh_id ? job.file_id : -1);
     const bool spills = job.bloom_fold && job.bloom_fold->writes_runs();
     try {
+        auto agg_staged =
+            job.agg_fold ? job.agg_fold->finish_through() : nullptr;
         if (!job.tier_only) {
             if (!job.logical_path.empty())
                 index::store::records::put_file_record(sink, job.logical_path,
@@ -74,9 +77,11 @@ inline bool write_index_job(index::store::IndexWrite& sink,
                                                       job.artifacts);
             // New members renumber the chunks, so tier data the bloom fold does
             // not rewrite would describe old ones. A spilled tier clears in its
-            // own staged write. A fresh id has nothing to clear.
+            // own staged write, as do rows the aggregation fold wrote through.
+            // A fresh id has nothing to clear.
             for (auto ext : index::store::ALL_EXTENSIONS)
-                if (!spills && ext != index::store::IndexExtension::Members)
+                if (!spills && ext != index::store::IndexExtension::Members &&
+                    !(agg_staged && ext == index::store::IndexExtension::Agg))
                     index::store::records::clear_file(sink, ext, job.file_id);
             // Plugin data is never in a spill run.
             index::store::records::clear_file(
@@ -92,12 +97,18 @@ inline bool write_index_job(index::store::IndexWrite& sink,
             if (!job.logical_path.empty())
                 index::store::records::put_file_record(
                     *staged, job.logical_path, job.record);
-            job.staged = std::move(staged);
+            job.staged.push_back(std::move(staged));
         } else if (job.bloom_fold)
             job.bloom_fold->write(sink, job.file_id);
         if (job.plugin_builders) job.plugin_builders->write(sink, job.file_id);
         if (job.rowset_fold) job.rowset_fold->write(sink, job.file_id);
-        if (job.agg_fold) job.agg_fold->write(sink);
+        if (agg_staged) {
+            if (!job.logical_path.empty())
+                index::store::records::put_file_record(
+                    *agg_staged, job.logical_path, job.record);
+            job.staged.push_back(std::move(agg_staged));
+        } else if (job.agg_fold)
+            job.agg_fold->write(sink);
     } catch (const std::exception& e) {
         job.success = false;
         job.error_message = e.what();

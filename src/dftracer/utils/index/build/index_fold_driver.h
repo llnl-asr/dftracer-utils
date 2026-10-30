@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/manager.h>
@@ -155,6 +156,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         for (auto* f : folds_) {
             if (auto* b = dynamic_cast<index::extensions::BloomFold*>(f))
                 bloom_ = b;
+            if (auto* a =
+                    dynamic_cast<index::schemas::dft::agg::AggregationFold*>(f))
+                agg_ = a;
             needs_args_ |= f->needs_args();
             capture_schema_ |= f->wants_schema();
             skip_never_indexed_ &= !f->reads_never_indexed();
@@ -250,6 +254,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 } else {
                     step(*piece);
                     buffers_->give(std::move(piece->batch));
+                    co_await stage_agg();
                 }
                 continue;
             }
@@ -529,6 +534,12 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         if (builders_) builders_->step(c.checkpoint_idx, c.lines);
     }
 
+    // The staged rows of the aggregation fold after an in-order step(), so no
+    // worker blocks on the store.
+    coro::CoroTask<void> stage_agg() {
+        if (agg_ && agg_->stage_due()) co_await agg_->stage_async();
+    }
+
     struct PieceRelease {
         coro::CoroSemaphore* permits;
         FoldBufferPool* buffers;
@@ -554,11 +565,12 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             if (folds_[i] == bloom_) continue;
             std::optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
             tails_[i].reset();
-            tails_[i].emplace(
-                scope_->spawn([fold = folds_[i], piece, unit = unit_of(*piece),
-                               prev = std::move(prev)](CoroScope&) mutable {
-                    return fold_task(fold, std::move(piece), std::move(unit),
-                                     std::move(prev));
+            tails_[i].emplace(scope_->spawn(
+                [fold = folds_[i], agg = folds_[i] == agg_ ? agg_ : nullptr,
+                 piece, unit = unit_of(*piece),
+                 prev = std::move(prev)](CoroScope&) mutable {
+                    return fold_task(fold, agg, std::move(piece),
+                                     std::move(unit), std::move(prev));
                 }));
         }
         if (bloom_) co_await step_bloom(std::move(piece));
@@ -566,9 +578,12 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     // Spawned frames are destroyed after their future completes, so a task
     // drops its piece itself: the last owner returns the permit to the driver.
+    // `agg` is the fold when it is the aggregation fold, whose staged rows are
+    // written here so no worker blocks on the store.
     static coro::CoroTask<void> fold_task(
-        trace::views::detail::Fold* fold, std::shared_ptr<const Parsed> c,
-        trace::views::detail::ScanUnit unit,
+        trace::views::detail::Fold* fold,
+        index::schemas::dft::agg::AggregationFold* agg,
+        std::shared_ptr<const Parsed> c, trace::views::detail::ScanUnit unit,
         std::optional<coro::SpawnFuture<void>> prev) {
         std::exception_ptr error;
         try {
@@ -579,6 +594,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
         c.reset();
         if (error) std::rethrow_exception(error);
+        if (agg && agg->stage_due()) co_await agg->stage_async();
     }
 
     // The bloom fold's state is per checkpoint, so batches of different
@@ -761,6 +777,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 } else {
                     step(*done);
                     buffers_->give(std::move(done->batch));
+                    co_await stage_agg();
                 }
             } catch (...) {
                 error = std::current_exception();
@@ -787,6 +804,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     };
     std::deque<BloomStep> bloom_steps_;
     index::extensions::BloomFold* bloom_ = nullptr;
+    index::schemas::dft::agg::AggregationFold* agg_ = nullptr;
     std::unique_ptr<coro::CoroSemaphore> permits_;
     std::vector<std::optional<coro::SpawnFuture<void>>> tails_;
     // Shared by every file of a build, so a slot keeps its capacity from file

@@ -64,6 +64,9 @@ class IndexDatabaseWrite : public IndexWrite {
     virtual void stage() {
         throw std::logic_error("index write: only a staged write stages");
     }
+    /// stage() for a coroutine. A write that can waits without holding a
+    /// worker. The default runs stage().
+    virtual coro::CoroTask<void> stage_async();
     virtual int file_id_for(std::string_view logical_path) = 0;
     /// Binds `file_id` to `logical_path` before the file's record is written.
     /// Nothing to do where ids are global to the index.

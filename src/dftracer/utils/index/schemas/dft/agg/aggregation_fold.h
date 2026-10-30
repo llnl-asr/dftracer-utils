@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
@@ -13,10 +14,14 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
+#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -25,11 +30,14 @@
 #include <string_view>
 #include <variant>
 
-namespace dftracer::utils::index::store {
-class IndexWrite;
-}
-
 namespace dftracer::utils::index::schemas::dft::agg {
+
+/// The closed rows a fold that writes through holds before its first run. For
+/// tests.
+inline std::atomic<std::uint64_t> g_agg_run_bytes{
+    constants::file_admission::MIN_SPILL_RUN_BYTES};
+/// Runs staged so far by folds that write through. For tests.
+inline std::atomic<std::uint64_t> g_agg_runs_staged{0};
 
 /// The aggregation core's Accessor over an owned FoldEvent. hhash and fhash
 /// come from the POD's dedicated fields, not from `args`. The metric arg values
@@ -168,8 +176,25 @@ class AggregationFold : public trace::views::detail::Fold {
     }
 
     /// Emits the partials, column blocks and referenced dictionary entries into
-    /// `w`, and the file's manifest entry when the fold has a file.
+    /// `w`, and the file's manifest entry when the fold has a file. Throws
+    /// std::logic_error on a fold that wrote through.
     void write(index::store::IndexWrite& w);
+
+    /// Lets the fold move its closed rows into a staged write of `db` once they
+    /// pass a run's size, so a large file does not hold them all until the
+    /// end. `db` must outlive the fold.
+    void write_through(index::store::IndexDatabase& db,
+                       std::string logical_path, bool fresh_id);
+    /// Closes the last chunk. When rows went to a staged write, puts the rest,
+    /// the dictionary entries and the manifest entry into it and hands it
+    /// over in place of write(). Its commit publishes the rows whole, and
+    /// dropped uncommitted it publishes none. Null when no rows went.
+    std::unique_ptr<index::store::IndexDatabaseWrite> finish_through();
+    /// Whether rows wait in the staged write for stage_async().
+    bool stage_due() const { return stage_due_; }
+    /// Writes the rows that wait in the staged write and frees them. Rows
+    /// left waiting go with finish_through().
+    coro::CoroTask<void> stage_async();
 
     std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
     std::uint64_t max_time_bucket() const { return state_.max_time_bucket; }
@@ -240,6 +265,10 @@ class AggregationFold : public trace::views::detail::Fold {
                           std::uint32_t build_id, bool lower);
     void close_chunk();
     void close_columns();
+    /// Puts the closed rows into `w` and frees them.
+    void put_closed(index::store::IndexWrite& w);
+    void queue_closed();
+    void finish_rows(index::store::IndexWrite& w);
 
     dftracer::utils::dstd::StringIntern* build_intern_;
     index::schemas::dft::agg::MetricArgIds metric_ids_;
@@ -272,6 +301,13 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;
     /// Duplicates included. Cleared once written.
     dftracer::utils::dstd::Vector<std::uint32_t> referenced_;
+    std::uint64_t closed_bytes_ = 0;
+    index::store::IndexDatabase* through_db_ = nullptr;
+    std::string through_path_;
+    bool through_fresh_ = false;
+    bool stage_due_ = false;
+    std::size_t through_runs_ = 0;
+    std::unique_ptr<index::store::IndexDatabaseWrite> staged_;
 };
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

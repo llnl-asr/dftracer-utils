@@ -291,4 +291,9 @@ coro::CoroTask<void> IndexDatabaseWrite::commit_async() {
     co_return;
 }
 
+coro::CoroTask<void> IndexDatabaseWrite::stage_async() {
+    stage();
+    co_return;
+}
+
 }  // namespace dftracer::utils::index::store

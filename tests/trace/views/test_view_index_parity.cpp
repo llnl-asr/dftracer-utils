@@ -780,7 +780,7 @@ TEST_SUITE("ViewIndexParity") {
 
         // Both branches scanned the traces: no rollup or tier answered them.
         CHECK(stats.events_scanned > 0);
-        for (const std::string& column : {"n", "sum_dur"}) {
+        for (const char* column : {"n", "sum_dur"}) {
             check_same_cells(cells_of(alone(stdio), columns, column),
                              cells_of(fused_stdio, columns, column));
             check_same_cells(cells_of(alone(posix), columns, column),

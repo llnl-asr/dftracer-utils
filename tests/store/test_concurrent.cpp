@@ -31,8 +31,6 @@
 namespace dftracer::utils::store {
 
 struct DataFileWriterTestHook {
-    /// Swaps the writer's descriptor for a read-only one on the same file, so
-    /// every pwrite fails with EBADF.
     static void reopen_read_only(DataFileWriter& writer,
                                  const std::string& path) {
         if (writer.fd_ >= 0) ::close(writer.fd_);
@@ -69,7 +67,7 @@ constexpr int RUNTIME_THREADS = 8;
 // A sanitizer build runs under a ctest timeout of 120 s (ASan) or 300 s (TSan)
 // and makes a commit tens of times slower, so the thread and batch counts of
 // the two large cases shrink there. Each case keeps its shape and every
-// assertion; only the number of batches differs.
+// assertion. Only the number of batches differs.
 #if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
 constexpr bool SANITIZED = true;
 #elif defined(__has_feature)
@@ -157,7 +155,6 @@ WriterOptions store_options(std::uint32_t extent_size,
     return options;
 }
 
-/// Commits only when asked: neither the size nor the interval ever fires.
 WriterOptions manual_options(std::uint32_t extent_size) {
     return store_options(extent_size, std::uint64_t{1} << 40,
                          std::chrono::hours(1));
@@ -205,8 +202,6 @@ std::vector<std::uint8_t> read_file(const std::string& path) {
                                      std::istreambuf_iterator<char>());
 }
 
-/// Copies the bytes `source` holds right now into `target` under `name` and
-/// returns the directory, so a snapshot can read the file as of the copy.
 std::string copy_out(const std::string& source,
                      const dftu_utils_test::ScopedTestDir& target,
                      const std::string& name) {
@@ -218,7 +213,6 @@ std::string copy_out(const std::string& source,
     return target.str();
 }
 
-/// The records the file holds; 0 while it holds none.
 std::size_t record_count(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     if (!reader) return 0;
@@ -333,8 +327,6 @@ TEST_CASE("many threads commit and one close keeps every key and every sum") {
 
     RowsByScope expected_a;
     RowsByScope expected_b;
-    // A scan of a fold namespace folds the scopes together, so the sums are
-    // keyed by key alone.
     std::map<std::string, std::int64_t> expected_sum;
     for (int t = 0; t < THREADS; ++t) {
         for (int b = 0; b < BATCHES; ++b) {
@@ -476,8 +468,6 @@ TEST_CASE("a batch appears whole or not at all in a snapshot taken mid-write") {
             cursor.next();
         }
         for (const auto& entry : per_batch) {
-            // A batch is one segment of one extent ref: it is recorded whole or
-            // not at all.
             REQUIRE(entry.second == static_cast<std::size_t>(KEYS));
         }
         visible_samples += per_batch.empty() ? 0 : 1;
@@ -549,7 +539,6 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
     REQUIRE(closed.has_value());
 }
 
-/// Reads `length` bytes at `offset` of `path`, fewer when the file ends first.
 static std::vector<std::uint8_t> read_range(const std::string& path,
                                             std::uint64_t offset,
                                             std::size_t length) {
@@ -563,11 +552,8 @@ static std::vector<std::uint8_t> read_range(const std::string& path,
 }
 
 /// True when the record the file's header names as its tail holds an extent ref
-/// with a segment whose key range is exactly `key`, which is what makes the
-/// one-entry marker batch visible. The group commit interval does not fire in
-/// this case, so the tail record is the one the last flush wrote, and reading
-/// it alone keeps the check off the rest of the file, which grows while it
-/// runs.
+/// with a segment whose key range is exactly `key`. Reading the tail record
+/// alone keeps the check off the rest of the file, which grows while it runs.
 static bool marker_recorded(const std::string& path, const std::string& key) {
     const std::vector<std::uint8_t> header =
         read_range(path, 0, store::FILE_HEADER_BYTES);
@@ -609,21 +595,16 @@ static bool marker_recorded(const std::string& path, const std::string& key) {
 }
 
 TEST_CASE("flush holds every batch committed before it under other threads") {
-    // An extent of many small segments costs the sealing append a sort of all
-    // of them before its write is submitted, and four appenders seal such an
-    // extent often, so the window between the seal of an extent and the submit
-    // of its write is one a flush meets: a flush that counts a sealed extent in
-    // flight only from its submit then returns without recording the extent
-    // that holds the marker.
+    // Many small segments cost the sealing append a sort, so the window between
+    // the seal of an extent and the submit of its write is one a flush meets.
+    // A flush that counts a sealed extent only from its submit would return
+    // without recording the extent that holds the marker.
     constexpr std::uint32_t RACE_EXTENT = 64 * 1024;
     constexpr std::uint32_t BACKGROUND = 4;
     constexpr int ROUNDS = SANITIZED ? 40 : 200;
     constexpr int KEYS = 2;
 
     dftu_utils_test::ScopedTestDir dir("store_concurrent_flush_race");
-    // Neither the interval nor the size of a group commit of the task's own
-    // fires here, so every record is one a flush wrote and the tail record is
-    // the one the last flush wrote.
     auto writer = make_writer(dir, manual_options(RACE_EXTENT));
     const NamespaceSpec spec = put_spec("raced", 0);
     auto created = writer->add_namespace(spec);
@@ -733,7 +714,7 @@ TEST_CASE(
     "group commit by size writes a record once enough extent bytes wait") {
     constexpr std::uint64_t COMMIT_BYTES = 128 * 1024;
     // A 5000-byte value makes each batch a segment longer than an extent, so
-    // every batch is written as its own run; the commit size counts its raw
+    // every batch is written as its own run. The commit size counts its raw
     // segment bytes, about 5 KB, so 16 batches stay below COMMIT_BYTES and 40
     // pass it.
     constexpr int QUIET_BATCHES = 16;
@@ -759,7 +740,7 @@ TEST_CASE(
         ++extent;
     };
     // The record is in the file as soon as its pwrite returns, so the reader
-    // of the live file sees it; a byte copy adds an fd and a race to that.
+    // of the live file sees it. A byte copy adds an fd and a race to that.
     const auto records_now = [&] {
         return record_count(to_std(writer->path()));
     };
@@ -797,8 +778,6 @@ TEST_CASE("group commit by time writes a record without flush") {
 
     Batch entries = writer->batch(*created, scope, 0);
     const std::string key = "only";
-    // Longer than an extent, so the batch is written as a run of its own
-    // without waiting for an extent to fill.
     const std::string big_value(5000, 'y');
     entries.put(view_of(key), view_of(big_value));
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
@@ -852,8 +831,6 @@ TEST_CASE(
     REQUIRE(flush_writer(*writer).has_value());
     CHECK(CommitterTestHook::syncs() == 4);
 
-    // Closing adds no group commit sync of ours: the file's own fsync on close
-    // belongs to DataFileWriter.
     REQUIRE(close_writer(*writer).has_value());
     CHECK(CommitterTestHook::syncs() == 4);
 }
@@ -925,7 +902,7 @@ TEST_CASE("drops and failures from many threads keep the generation rules") {
     }
     std::sort(expected.begin(), expected.end());
     // A footer repeats the items of the chain, so a generation may be read
-    // twice; every generation of every scope appears and no other one does.
+    // twice. Every generation of every scope appears and no other one does.
     generations.erase(std::unique(generations.begin(), generations.end()),
                       generations.end());
     std::vector<std::uint64_t> distinct_expected;
@@ -1006,8 +983,6 @@ TEST_CASE("a failed extent write deletes the batches of its extent") {
     auto flushed = flush_writer(*writer);
     REQUIRE_FALSE(flushed.has_value());
     CHECK(flushed.error().is(Condition::Io));
-    // The extent write failed, so no record will ever name that batch and the
-    // failure path is the only one that can free it.
     CHECK(CommitterTestHook::live_batches() == before);
 }
 

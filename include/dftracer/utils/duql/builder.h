@@ -72,9 +72,8 @@ class Expr {
     /// Relinquish ownership of the underlying node.
     QueryNodePtr release() { return std::move(node_); }
 
-    /// Build an executable Query (returns dstd::Expected<Query, DuqlError>).
-    /// Defined in query.h, so callers must include it; a plugin renders with
-    /// to_string() instead and never pulls the parser.
+    /// Build an executable Query (dstd::Expected<Query, DuqlError>).
+    /// Defined in query.h, so include it to call this.
     auto build() const;
 
    private:

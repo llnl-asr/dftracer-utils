@@ -12,9 +12,8 @@
 namespace dftracer::utils {
 
 // Big-endian fixed-width byte codec, the mirror of little_endian.h. The read_*
-// and write_* functions do not check bounds: the caller owns the buffer.
-// BeReader is the checked form. On a little-endian host each function compiles
-// to one load or store plus a byte swap.
+// and write_* functions do not check bounds and the caller owns the buffer.
+// BeReader is the checked form.
 
 template <typename T>
 inline T read_be(const std::uint8_t* p) {

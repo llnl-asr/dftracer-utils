@@ -18,11 +18,8 @@
 namespace dftracer::utils::index::store {
 
 class IndexDatabaseWrite;
-/// Reads the aggregation extension's records by index key; defined in the
-/// index library.
 class AggRowReader;
 
-/// How an index database is opened.
 enum class IndexOpenMode { ReadOnly, ReadWrite };
 
 /// The type a column reports in a schema, derived from the path catalog.
@@ -46,21 +43,20 @@ ColumnType merge_column_type(ColumnType a, ColumnType b);
 /// empty string for Unknown.
 const char* column_type_name(ColumnType t);
 
+/// Closes the store writer of every index this process holds, so each data
+/// file is complete. Call it at process exit while the runtime still runs, as a
+/// writer left open waits on stopped threads. Logs a close that fails.
+void close_index_writers();
+
+/// Drops the handle this process keeps of the index at `index_path`, which
+/// closes its writer when nothing else holds the index. Call it before the
+/// index directory is removed, so a later open reads the directory again.
+void release_index(const std::string& index_path);
+
 /// The index database: the read/query surface plus the write/ingest/format
 /// surface over one on-disk `.dftindex`. The store that holds it and all
 /// mutable state live behind an opaque `Impl`. Reads are `const`; a
 /// `const IndexDatabase&` is therefore a read-only handle.
-/// Closes the store writer of every index this process holds, so each data
-/// file is complete. Call it at process exit while the runtime still runs: a
-/// writer left open then waits on stopped threads. Logs a close that fails.
-void close_index_writers();
-
-/// Drops the handle this process keeps of the index at `index_path` after a
-/// read-only open, which closes its writer when nothing else holds the index.
-/// Call it before the index directory is removed, so a later open reads the
-/// directory again rather than the removed one.
-void release_index(const std::string& index_path);
-
 class IndexDatabase {
    public:
     /// On-disk layout version. An index with another stored version is
@@ -127,7 +123,7 @@ class IndexDatabase {
     /// Stored mtime/size for `path`; nullopt if not registered.
     std::optional<FileStat> get_file_stat(std::string_view path) const;
 
-    /// Stored format version; nullopt if unset or from an older layout.
+    /// nullopt if unset or from an older layout.
     std::optional<std::uint32_t> get_format_version() const;
 
     /// True if no format is stored or the stored format differs from
@@ -166,8 +162,7 @@ class IndexDatabase {
     /// therefore not detected. Build-option changes are the Resolver's
     /// concern (the manifest), not this check's.
     Freshness check_freshness(const std::string& file_path) const;
-    /// The same against a size and mtime the caller already read, so the file
-    /// is not stat'ed again.
+    /// The same against a size and mtime the caller already read.
     Freshness check_freshness(const std::string& file_path, std::uint64_t size,
                               std::int64_t mtime) const;
 
@@ -253,21 +248,17 @@ class IndexDatabase {
     /// Arrow IPC frame; nullopt when the file's row sets are not current.
     std::optional<std::string> rowset(int file_id, std::string_view name) const;
 
-    /// Every record the index holds, for checks and tools that compare two
-    /// indexes: per current copy in namespace then scope order, a `#copy`
-    /// record with its state and params hash and then `namespace|scope|key`
-    /// for each of its keys. A scope is named by its paths, so two indexes of
-    /// the same files compare equal whatever ids they gave them. Throws
-    /// std::runtime_error on a read error.
+    /// Every record the index holds, for tools that compare two indexes. Per
+    /// current copy in namespace then scope order, a `#copy` record with its
+    /// state and params hash, then `namespace|scope|key` for each key. Scopes
+    /// are named by paths, not ids. Throws std::runtime_error on a read error.
     void for_each_record(
         const std::function<void(std::string_view key, std::string_view value)>&
             fn) const;
 
-    /// One write to this index.
     std::unique_ptr<IndexDatabaseWrite> begin_write();
-    /// A write whose stage() calls land its keys in pieces that no reader sees
-    /// until its commit() publishes them all, replacing what the index held for
-    /// the copies it wrote.
+    /// A write whose stage() calls land keys that no reader sees until commit()
+    /// publishes them all, replacing what the index held for those copies.
     std::unique_ptr<IndexDatabaseWrite> begin_staged_write();
 
     /// Atomically reserve `count` contiguous file_ids, returning the first
@@ -282,18 +273,15 @@ class IndexDatabase {
     std::vector<int> assign_file_ids(
         const std::vector<std::string>& file_paths);
 
-    /// Closes this process's writer of the index, so its data file is
-    /// complete for other processes, and a later write opens a new writer
-    /// that sees every generation written so far. Throws std::runtime_error
+    /// Closes this process's writer, so its data file is complete for other
+    /// processes. A later write opens a new writer. Throws std::runtime_error
     /// on a store error.
     void close_writer();
 
     /// Later reads through any handle of this index in this process see the
-    /// data files other processes wrote since. File ids handed out so far
-    /// keep their paths.
+    /// data files other processes wrote since. File ids keep their paths.
     void refresh();
 
-    /// Read-write opens of an index store by this process so far.
     static std::uint64_t read_write_opens() noexcept;
 
    private:

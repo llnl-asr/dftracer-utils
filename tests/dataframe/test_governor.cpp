@@ -48,7 +48,7 @@ struct Budget {
     }
 };
 
-// Distinct keys: ten rows per key in a full frame. A group-by or a set of the
+// Distinct keys, ten rows per key in a full frame. A group-by or a set of the
 // keys needs state that grows with this.
 constexpr std::int64_t KEYS = 6553;
 
@@ -204,7 +204,7 @@ struct Asked {
     std::size_t after = SIZE_MAX;
 };
 
-// Runs `plan` over a fresh source twice: once as is, and once with a request
+// Runs `plan` over a fresh source twice, once as is and once with a request
 // for half of what the budget holds posted at morsel ASK_AT. `before` and
 // `after` are the reservation of the pool ending in `tail` then and its
 // smallest one later.
@@ -337,7 +337,7 @@ TEST_CASE(
             first_pool = sorts.front().id;
             before = sorts.front().reserved;
             // Room for less than a quarter of the second query's first
-            // morsel: its own reservation cannot cover the shortfall, so
+            // morsel. Its own reservation cannot cover the shortfall, so
             // the rest is posted to the first query.
             Budget::set(memory::Manager::get().root().reserved() + BUDGET / 32);
             second_source = std::make_shared<Hooked>(1, SECOND_ROWS, nullptr);
@@ -502,7 +502,7 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
             Budget roomy(8 * BUDGET);
             plain = run(plan, plain_dirs);
         }
-        // Below the key set: its grow is refused.
+        // Below the key set, so its grow is refused.
         std::size_t tight_dirs = 0;
         Budget tight(BUDGET / 64);
         const DataFrame got = run(plan, tight_dirs);

@@ -26,14 +26,13 @@ struct DirectoryCommit {
     BlockHandle segments;
 };
 
-/// One range erase of one copy, by the batch ordinal it took.
 struct DirectoryErase {
     std::uint64_t ordinal = 0;
     ByteView begin;
     ByteView end;
 };
 
-/// One copy of one directory entry. The views point into the directory.
+/// The views of a copy point into the directory.
 struct DirectoryCopy {
     std::uint32_t local_id = 0;
     std::uint64_t generation = 0;
@@ -42,9 +41,7 @@ struct DirectoryCopy {
     std::uint8_t fold_kind = 0;
     /// Empty, or one per path of the entry's scope in its path order.
     dstd::Vector<SourceStat> sources;
-    /// The commits holding a segment of the copy, in sequence order.
     dstd::Vector<DirectoryCommit> commits;
-    /// The erases the copy holds, in the order its items name them.
     dstd::Vector<DirectoryErase> erases;
 };
 
@@ -54,7 +51,6 @@ struct DirectoryDrop {
     ByteView end;
 };
 
-/// The key of one directory entry: namespace, format version and scope.
 struct DirectoryKey {
     dstd::StringView name;
     std::uint32_t format_version = 0;
@@ -62,8 +58,6 @@ struct DirectoryKey {
     dstd::Vector<dstd::StringView> paths;
 };
 
-/// One decoded entry: its key, the highest generation of its copies and drops
-/// in the file, and those copies and drops.
 struct DirectoryEntry {
     DirectoryKey key;
     std::uint64_t highest_generation = 0;
@@ -72,17 +66,15 @@ struct DirectoryEntry {
 };
 
 /// Builds the scope directory of one file: one entry per namespace, format
-/// version and scope, sorted by name, then version, then scope kind and paths,
-/// with that scope's copies, the key range of each copy in each commit, its
-/// erases and its drops. Copies, erases and drops whose namespace, scope or
-/// copy the items do not name are left out, as a reader leaves them out.
+/// version and scope, sorted by name, version, then scope kind and paths.
+/// Copies, erases and drops whose namespace, scope or copy the items do not
+/// name are left out, as a reader leaves them out.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     dstd::Span<const NamespaceItem> namespaces,
     dstd::Span<const ScopeItem> scopes, dstd::Span<const CopyItem> copies,
     dstd::Span<const DropItem> drops, dstd::Span<const EraseItem> erases,
     dstd::Span<const DirectoryCommit> commits);
 
-/// One entry of a slot table being built.
 struct TableEntry {
     ByteView key;
     ByteView payload;
@@ -93,22 +85,18 @@ struct TableEntry {
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_slot_table(
     dstd::Span<const TableEntry> entries);
 
-/// One block of a slot table, split at an entry boundary.
 struct TableBlock {
     dstd::Vector<std::uint8_t> bytes;
     std::size_t entries = 0;
 
-    /// The key of the first entry: the separator a parent names this block by.
     ByteView first_key() const;
 };
 
-/// Splits one slot table into blocks of at most `per_block` entries, in entry
-/// order. An empty table splits into no block.
+/// Splits one slot table into blocks of at most `per_block` entries. An empty
+/// table splits into no block.
 dstd::Expected<dstd::Vector<TableBlock>, dstd::Error> split_slot_table(
     ByteView table, std::size_t per_block);
 
-/// Writes one separator table over child blocks: one entry per child, whose
-/// key is the child's first entry key and whose payload is its handle.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_separator_table(
     dstd::Span<const TableBlock> children,
     dstd::Span<const BlockHandle> handles);
@@ -154,17 +142,14 @@ class ScopeDirectory {
 
     std::size_t size() const { return count_; }
 
-    /// The index of the entry with exactly this key, or size() when none has.
     std::size_t find(dstd::StringView name, std::uint32_t format_version,
                      ScopeKind kind,
                      dstd::Span<const dstd::String> paths) const;
 
-    /// The first and one past the last entry of a namespace and version.
     std::pair<std::size_t, std::size_t> namespace_range(
         dstd::StringView name, std::uint32_t format_version) const;
 
     dstd::Expected<DirectoryKey, dstd::Error> key(std::size_t index) const;
-    /// The highest generation of the entry, without decoding the rest.
     dstd::Expected<std::uint64_t, dstd::Error> highest_generation(
         std::size_t index) const;
     dstd::Expected<DirectoryEntry, dstd::Error> entry(std::size_t index) const;

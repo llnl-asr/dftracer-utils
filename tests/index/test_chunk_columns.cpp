@@ -1,7 +1,3 @@
-// The per-chunk numeric columns of the aggregation tier: that the codec gives
-// back every value bit for bit, that a chunk block holds the chunk's records
-// exactly, and that a sharded merge copies the blocks.
-
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -46,8 +42,6 @@ namespace {
 constexpr std::size_t CHECKPOINT_SIZE = 4096;
 constexpr int RECORDS = 120;
 
-// ---- the codec ------------------------------------------------------------
-
 agg::ChunkColumn column_of(std::uint32_t path, agg::ColumnKind kind,
                            const std::vector<std::uint64_t>& rows,
                            const std::vector<std::uint64_t>& bits) {
@@ -59,8 +53,6 @@ agg::ChunkColumn column_of(std::uint32_t path, agg::ColumnKind kind,
     return column;
 }
 
-// A block of `rows` rows whose core columns differ row by row and whose ids
-// name three dictionary entries.
 agg::ChunkColumns core_block(std::size_t rows) {
     agg::ChunkColumns block;
     block.rows = rows;
@@ -124,8 +116,6 @@ bool same(const dstd::Vector<std::uint64_t>& got,
            std::equal(got.begin(), got.end(), want.begin());
 }
 
-// One column of `values` (reinterpreted as the bits of `kind`) on the rows
-// `rows` of a block of `block_rows` rows, encoded and decoded again.
 agg::ChunkColumn roundtrip_column(agg::ColumnKind kind,
                                   const std::vector<std::uint64_t>& bits,
                                   const std::vector<std::uint64_t>& rows,
@@ -142,8 +132,6 @@ agg::ChunkColumn roundtrip_column(agg::ColumnKind kind,
     CHECK(same(got.columns[0].bits, bits));
     return got.columns[0];
 }
-
-// ---- the fixture trace ----------------------------------------------------
 
 enum class NumKind : std::uint8_t { Int64, Uint64, Double };
 
@@ -297,7 +285,6 @@ Row parse_row(const std::string& line) {
     return row;
 }
 
-// Every record of the trace text that is not metadata, in file order.
 std::vector<Row> parse_trace(const std::string& text) {
     std::vector<Row> rows;
     std::istringstream in(text);
@@ -312,8 +299,6 @@ std::vector<Row> parse_trace(const std::string& text) {
     return rows;
 }
 
-// The fixture: X events, counters of the application and of the system, A
-// records and metadata records, with integer, fractional and huge arguments.
 // The categories keep their case, so a block that lower-cases one is seen.
 std::string make_trace(int n) {
     std::ostringstream text;
@@ -367,11 +352,10 @@ std::string make_trace(int n) {
     return text.str();
 }
 
-// The trace text `text` written in `dir`/`name` and gzipped in one member.
 std::string write_gzip(const std::string& dir, const std::string& name,
                        const std::string& text);
 
-// A trace of its own in `dir`/`name`, so each one's sidecar index is distinct.
+// Each trace gets its own name, so each sidecar index is distinct.
 std::string write_trace(const std::string& dir, const std::string& name,
                         std::string& text) {
     text = make_trace(RECORDS);
@@ -410,8 +394,6 @@ void build(const std::vector<std::string>& files,
     Indexer::open(files, options(index_dir)).build();
 }
 
-// ---- the comparison -------------------------------------------------------
-
 void check_row_core(const agg::ChunkColumns& block, std::size_t r,
                     const Row& row) {
     CHECK(block.ts[r] == row.ts);
@@ -430,8 +412,7 @@ void check_row_core(const agg::ChunkColumns& block, std::size_t r,
     CHECK(block.texts[block.file[r]] == row.fhash.c_str());
 }
 
-// The column of `path` of the kind `kind`: one arg path holds one column per
-// kind its values take.
+// One arg path holds one column per kind its values take.
 const agg::ChunkColumn* column_for(const agg::ChunkColumns& block,
                                    std::string_view path,
                                    agg::ColumnKind kind) {
@@ -441,8 +422,6 @@ const agg::ChunkColumn* column_for(const agg::ChunkColumns& block,
     return nullptr;
 }
 
-// The value of every arg of `row` is on row r of `block`, with its column of
-// its kind.
 void check_row_args(const agg::ChunkColumns& block, std::size_t r,
                     const Row& row) {
     for (const auto& [path, value] : row.args) {
@@ -464,8 +443,6 @@ void check_row_args(const agg::ChunkColumns& block, std::size_t r,
     }
 }
 
-// Every value of every column of `block` is the one its record held, on the
-// same row.
 void check_columns_against(const agg::ChunkColumns& block,
                            const std::vector<Row>& rows, std::size_t at) {
     for (const agg::ChunkColumn& column : block.columns) {
@@ -492,9 +469,6 @@ struct Decoded {
     std::vector<std::uint64_t> chunks;
 };
 
-// Reads every block of `file_id` and holds it against the records of `rows`:
-// every numeric arg of every record has its column, and a block whose records
-// hold args has columns.
 Decoded read_and_check(const IndexDatabase& db, int file_id,
                        const std::vector<Row>& rows) {
     Decoded out;
@@ -538,8 +512,8 @@ dstd::Span<const std::uint8_t> span_of(std::string_view bytes) {
         reinterpret_cast<const std::uint8_t*>(bytes.data()), bytes.size());
 }
 
-// One column of a block, named by the text of its path and holding its rows
-// and values, so two indexes are compared without their block-local ids.
+// Named by the text of its path, so two indexes compare without their
+// block-local ids.
 struct ColumnShape {
     dstd::String path;
     agg::ColumnKind kind = agg::ColumnKind::Int64;
@@ -549,9 +523,8 @@ struct ColumnShape {
     bool operator==(const ColumnShape&) const = default;
 };
 
-// The trace of a real DFTracer record, whose args repeat a key: `used` twice at
-// the top of args and `nested` holding `CPP_APP` twice. The first value of each
-// repeated path is the one the block keeps.
+// A real DFTracer record whose args repeat a key. The block keeps the first
+// value of each repeated path.
 std::string repeated_key_trace() {
     std::ostringstream text;
     text << "[\n";
@@ -568,7 +541,6 @@ std::string repeated_key_trace() {
     return text.str();
 }
 
-// The rows and values the column of `path` of `kind` holds.
 std::vector<std::pair<std::uint64_t, std::uint64_t>> values_of(
     const agg::ChunkColumns& block, std::string_view path,
     agg::ColumnKind kind) {
@@ -851,8 +823,6 @@ TEST_SUITE("ChunkColumns") {
                     ids.insert(block.file[r]);
                     texts.insert(std::string(block.texts[block.file[r]]));
                 }
-                // Every block names the hash in one id and its absence in
-                // another.
                 CHECK(ids.size() == 2);
                 at += block.rows;
                 return true;
@@ -863,7 +833,6 @@ TEST_SUITE("ChunkColumns") {
         CHECK(texts.count("0123456789abcdef") == 1);
         CHECK(texts.count("") == 1);
 
-        // A point get of one chunk answers with the block the scan returned.
         agg::ChunkColumns one;
         REQUIRE(agg::tier::get_chunk_columns(db, fid, first_chunk, one));
         CHECK(one.chunk == first_chunk);
@@ -914,8 +883,6 @@ TEST_SUITE("ChunkColumns") {
         const auto decoded_b = read_and_check(db, merged_b, rows_b);
         CHECK(decoded_a.blocks > 1);
         CHECK(decoded_b.blocks > 1);
-        // The merged blocks hold the columns of the blocks they came from,
-        // path text, rows and values included.
         CHECK(columns_of(db, merged_a) == before_a);
         CHECK(columns_of(db, merged_b) == before_b);
     }
@@ -940,7 +907,6 @@ TEST_SUITE("ChunkColumns") {
                 CHECK(block.chunk == chunk);
                 CHECK(block.rows > 0);
                 REQUIRE(at + block.rows <= RECORDS);
-                // One entry per row, holding the first value of the path.
                 CHECK(values_of(block, "used", agg::ColumnKind::Int64) ==
                       first_values(block.rows, at, 10));
                 CHECK(values_of(block, "nested.CPP_APP",

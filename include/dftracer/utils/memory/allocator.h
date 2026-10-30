@@ -50,10 +50,8 @@ constexpr bool operator==(const Allocator<T>&, const Allocator<U>&) noexcept {
  * @brief A standard allocator that charges every block to one pool, whatever
  * the scope.
  *
- * Two compare equal when they name the same pool, and the allocator follows
- * the container on copy, move and swap. The pool must be open while the
- * allocator allocates; a block that outlives the pool's handle is reported as
- * a leak when the pool closes.
+ * Two compare equal when they name the same pool. The pool must be open while
+ * the allocator allocates. A block that outlives it is reported as a leak.
  */
 template <class T>
 class PoolAllocator {

@@ -253,7 +253,7 @@ void IoUringBackend::cancel_pending() {
     std::lock_guard<std::mutex> lock(submit_mutex_);
     auto* sqe = ring_.get_sqe();
     // A full SQ drains once the kernel takes what is pending, so flush and
-    // retry; it is not a sign that cancel is unsupported.
+    // retry. It is not a sign that cancel is unsupported.
     for (int attempt = 0; sqe == nullptr && attempt < CANCEL_SQE_RETRIES;
          ++attempt) {
         ring_.flush();

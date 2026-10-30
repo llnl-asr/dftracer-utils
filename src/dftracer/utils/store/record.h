@@ -23,7 +23,7 @@ enum class RecordKind : std::uint32_t {
     Footer = 3
 };
 enum class ScopeKind : std::uint8_t { Root = 0, File = 1, Files = 2 };
-/// A Building copy holds batches no reader sees; a later CopyItem of the same
+/// A Building copy holds batches no reader sees. A later CopyItem of the same
 /// local id in the same file publishes it as Ready.
 enum class CopyState : std::uint8_t { Ready = 0, Failed = 1, Building = 2 };
 
@@ -44,8 +44,6 @@ struct SourceStat {
     std::uint64_t hash = 0;
 };
 
-/// The bytes one source stat takes where a record or a scope directory
-/// encodes it: three u64.
 inline constexpr std::size_t SOURCE_STAT_BYTES = 24;
 
 struct ScopeItem {
@@ -78,10 +76,7 @@ struct DropItem {
 /// there, and leaves every other key of the copy, and every batch committed
 /// after it.
 struct EraseItem {
-    /// The copy in its file, by the local id of its CopyItem.
     std::uint32_t copy_id = 0;
-    /// The batch ordinal the erase took, which orders it with the batches of
-    /// its copy.
     std::uint64_t ordinal = 0;
     dstd::Vector<std::uint8_t> begin_key;
     /// Empty means to the last key.
@@ -93,8 +88,8 @@ struct ExtentSegment {
     std::uint32_t offset_in_extent = 0;
     std::uint32_t length = 0;
     std::uint64_t entry_count = 0;
-    /// The batch ordinal the writer gave this segment: a larger ordinal is a
-    /// later batch of the file, whatever the record order.
+    /// A larger ordinal is a later batch of the file, whatever the record
+    /// order.
     std::uint64_t ordinal = 0;
     dstd::Vector<std::uint8_t> first_key;
     dstd::Vector<std::uint8_t> last_key;
@@ -111,7 +106,6 @@ struct ExtentRefItem {
     dstd::Vector<ExtentSegment> segments;
 };
 
-/// The key range one commit holds for one copy.
 struct CommitCopy {
     std::uint32_t copy_id = 0;
     dstd::Vector<std::uint8_t> first_key;
@@ -131,9 +125,8 @@ struct CommitRefItem {
     dstd::Vector<CommitCopy> copies;
 };
 
-/// The offset, length and crc of one block written after the commit records:
-/// one pread reads it whole, and the crc covers its bytes as
-/// store::crc32 computes them.
+/// One block written after the commit records: one pread reads it whole, and
+/// the crc covers its bytes as store::crc32 computes them.
 struct BlockHandle {
     std::uint64_t offset = 0;
     std::uint32_t length = 0;
@@ -146,7 +139,6 @@ struct BlockHandle {
 /// a light open needs, the items block, the number of extents the segment
 /// blocks name, and the directory the first query of a scope reads.
 struct FileTail {
-    /// The format version of the file, as the header holds it.
     std::uint32_t format_version = 0;
     std::uint32_t extent_size = 0;
     std::uint64_t writer_random = 0;
@@ -155,10 +147,10 @@ struct FileTail {
     dstd::String label;
     std::uint64_t creation_time = 0;
     BlockHandle items;
-    /// The distinct extents that hold a segment; a segment block names each by
+    /// The distinct extents that hold a segment. A segment block names each by
     /// its index below this count.
     std::uint32_t extent_count = 0;
-    /// The levels below the top table; 1 when it points at leaves.
+    /// The levels below the top table. 1 when it points at leaves.
     std::uint32_t directory_levels = 0;
     dstd::Vector<std::uint8_t> top_table;
     /// A Bloom filter over the directory keys of the file (scope_filter.h), so
@@ -186,18 +178,13 @@ struct Record {
     RecordItems items;
 };
 
-/// The bytes of one block handle: offset, length, crc.
 void append_block_handle(dstd::Vector<std::uint8_t>& out,
                          const BlockHandle& handle);
 
-/// Reads the bytes of one block handle, leaving `at` past it.
 bool read_block_handle(ByteView bytes, std::size_t& at, BlockHandle& out);
 
-/// The body of a record: every item, in the order given. The blocks a footer
-/// names hold their items this way.
 dstd::Vector<std::uint8_t> encode_items(const RecordItems& items);
 
-/// The items of one body, as encode_items wrote them.
 dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body);
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(

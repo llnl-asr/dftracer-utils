@@ -56,7 +56,6 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
             1, std::memory_order_relaxed);
         names.category_count = slot_of(category_counts, cat);
         names.name_count = slot_of(name_counts, name);
-        // name -> category is a property of the name, recorded for every event.
         if (name_category.find(name) == name_category.end())
             name_category.emplace(std::string(name), cat);
     }

@@ -10,9 +10,8 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-/// The out-of-band outputs an AggregationFold produces per file (the partials
-/// and the column blocks are written to the index write by
-/// AggregationFold::write).
+/// The out-of-band outputs of an AggregationFold per file. The partials and
+/// column blocks go through AggregationFold::write.
 struct AggFoldOutput {
     std::string file_path;
     std::uint64_t min_time_bucket = std::numeric_limits<std::uint64_t>::max();
@@ -20,10 +19,9 @@ struct AggFoldOutput {
     std::size_t events_processed = 0;
 };
 
-/// Merges the per-file AggregationFold out-of-band outputs into the index of
-/// `db`: the stored time bounds are widened by the range of the events.
-/// Synchronous, so safe to call from a coroutine without suspending. `db` must
-/// be open for writing.
+/// Widens the stored time bounds of `db` by the range of the events of
+/// `outputs`. Synchronous, so safe to call from a coroutine without suspending.
+/// `db` must be open for writing.
 void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
                              index::store::IndexDatabase& db);
 

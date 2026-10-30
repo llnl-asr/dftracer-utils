@@ -29,8 +29,8 @@ void abort_with(const char* message) noexcept {
 namespace {
 
 // One page per thread that allocates or frees through the system backend. A
-// cache is never unmapped; the next thread that starts takes one that an
-// exited thread released.
+// cache is never unmapped and the next thread takes one an exited thread
+// released.
 struct SystemCache {
     AttribCache attrib;
     std::atomic<SystemCache*> list_next{nullptr};

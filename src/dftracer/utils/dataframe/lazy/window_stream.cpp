@@ -1426,7 +1426,7 @@ class WindowStreamCursor : public Cursor {
         }
     }
 
-    // The rows held for the chunk cannot leave before the kernel runs; the
+    // The rows held for the chunk cannot leave before the kernel runs. The
     // spools of a sequential pass can, when the governor asks.
     void govern() {
         if (!has_cap(budget_)) return;

@@ -13,7 +13,7 @@ Pipeline::Pipeline(const PipelineConfig& config)
     : name_(config.name),
       error_policy_(config.error_policy),
       error_handler_(config.error_handler) {
-    // The settings this pipeline asks for apply to the process runtime; one
+    // The settings this pipeline asks for apply to the process runtime. One
     // it leaves unset keeps what the runtime has.
     RuntimeSettings settings;
     settings.threads = config.executor_threads;
@@ -43,7 +43,6 @@ Pipeline::Pipeline(const PipelineConfig& config)
 
 Pipeline::~Pipeline() {
     DFTRACER_UTILS_LOG_DEBUG("Pipeline '%s' destroyed", name_.c_str());
-    // The scheduler waits for its tasks; the process runtime keeps running.
     scheduler_.reset();
     if (watchdog_) watchdog_->stop();
 }

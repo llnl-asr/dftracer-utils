@@ -73,9 +73,9 @@ coro::CoroTask<void> index_loop_helper(dstd::SharedPtr<IndexLoop> loop) {
     co_return;
 }
 
-// Runs fn(i) for each i in [0, n) on the cores of the calling thread's
-// executor, serially off an executor. The caller drains the loop too and waits
-// for the helpers with its worker slot handed off. `fn` must not throw.
+// Runs fn(i) for each i in [0, n) on the calling thread's executor, serially
+// off an executor. The caller drains the loop too and waits for the helpers
+// with its worker slot handed off. `fn` must not throw.
 template <typename Fn>
 void for_each_index(std::size_t n, Fn&& fn) {
     Executor* exec = Executor::current();

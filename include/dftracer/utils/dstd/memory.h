@@ -12,7 +12,7 @@
 namespace dftracer::utils::dstd {
 
 /// Destroys and frees with the size of T, so a UniquePtr<Derived> does not
-/// convert to a UniquePtr<Base>: the sized free would get the wrong size.
+/// convert to a UniquePtr<Base>, since the sized free would get the wrong size.
 template <class T>
 struct Delete {
     static_assert(!std::is_array_v<T>, "UniquePtr has no array form");

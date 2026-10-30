@@ -55,8 +55,8 @@ coro::CoroTask<int> receive_and_record(std::shared_ptr<Race> race,
     co_return value ? *value : NO_VALUE;
 }
 
-// Blocks on its channel. The token is the cooperative signal; cancel() closes
-// the channel so the blocked receive wakes and the loser can stop.
+// Blocks on its channel. The token is the cooperative signal, and cancel()
+// closes the channel so the blocked receive wakes and the loser can stop.
 template <int Tag>
 class Racer {
    public:
@@ -390,7 +390,6 @@ coro::CoroTask<int> spins_at_a_wait(std::shared_ptr<Seen> seen) {
     }
 }
 
-// Waits on a task that waits for ever.
 coro::CoroTask<int> awaits_a_spinner(std::shared_ptr<Seen> seen) {
     Guard guard{seen};
     try {

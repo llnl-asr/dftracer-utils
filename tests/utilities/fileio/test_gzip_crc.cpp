@@ -45,7 +45,7 @@ namespace {
 
 constexpr std::uint64_t CKPT = 1u << 20;
 
-// Set by Sample: the decoded size of the whole file.
+// Set by Sample to the decoded size of the whole file.
 std::size_t FULL_TEXT_SIZE = 0;
 constexpr std::size_t CRC_BYTE_FROM_END = 8;
 

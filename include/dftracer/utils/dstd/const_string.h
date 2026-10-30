@@ -9,8 +9,6 @@ namespace dftracer::utils {
 /**
  * @brief Compile-time string buffer for consteval string concatenation.
  *
- * Enables building type signatures and display names entirely at compile time.
- * The result lives in .rodata (zero runtime allocation).
  *
  * @tparam MaxLen Maximum capacity of the buffer (default 512).
  */

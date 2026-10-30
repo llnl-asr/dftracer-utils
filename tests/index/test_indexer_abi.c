@@ -434,7 +434,7 @@ static void test_aggregation_settings(void) {
     TEST_ASSERT_EQUAL_UINT64(0, DFTU_RESULT_VALUE(st).needs_work);
     dftu_indexer_free(ix);
 
-    // Another window is another tier: the file needs work again.
+    // Another window is another tier, so the file needs work again.
     opts.aggregation_time_interval_us = 250000;
     o = dftu_indexer_open(paths, 1, &opts);
     TEST_ASSERT_TRUE(DFTU_RESULT_OK(o));

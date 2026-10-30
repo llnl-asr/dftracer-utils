@@ -13,7 +13,6 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 namespace {
-// Build ids past this are looked up each time instead of cached.
 constexpr std::uint32_t MAX_CACHED_BUILD_ID = 1u << 20;
 
 std::string_view bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
@@ -76,7 +75,6 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
     if (!partial_holds(acc)) return;
     TimeBin* bin = nullptr;
     if (config_.time_interval_us != 0) {
-        // The bin of compute_time_bucket, with one division.
         std::uint64_t ts = acc.ts();
         if (config_.use_relative_time) ts -= config_.reference_timestamp;
         bin =
@@ -89,8 +87,8 @@ void AggregationFold::add_to_partial(const trace::views::detail::FoldEvent& ev,
 TimeBin& AggregationFold::bin_of(Slot& slot, std::uint64_t pid,
                                  std::uint64_t tid, std::uint64_t bin) {
     // Events of a thread come mostly in time order, so each thread keeps its
-    // newest bin. An event of an older bin looks back a few bins and else
-    // adds a second bin of that key, which normalize_bins adds up.
+    // newest bin. An older event looks back a few bins, else adds a second bin
+    // of that key, which normalize_bins adds up.
     constexpr std::size_t LOOK_BACK = 8;
     auto& bins = slot.partial.bins;
     slot.partial.bin_interval = config_.time_interval_us;
@@ -129,8 +127,8 @@ TimeBin& AggregationFold::bin_of(Slot& slot, std::uint64_t pid,
 
 void AggregationFold::add_to_columns(
     const trace::views::detail::FoldEvent& ev) {
-    // The column keeps the category text of the record itself; only the
-    // partials group by its lower case.
+    // The column keeps the record's category case. Only the partials group by
+    // lower case.
     columns_.add_row(ev.ts, ev.dur, ev.has_dur, ev.pid, ev.tid,
                      static_cast<std::uint8_t>(ev.phase),
                      root_id(cat_text_ids_, ev.cat_id, false),
@@ -218,8 +216,7 @@ void AggregationFold::write(index::store::IndexWrite& w) {
             "an aggregation fold writes the data of one file, and has none");
     }
     close_chunk();
-    // The clear covers every kind of the file's aggregation data, so it comes
-    // before any of them is put.
+    // The clear covers every kind, so it comes before any put.
     index::store::records::clear_file(w, layout::Ext::Agg, file_id_);
     for (const Closed& closed : closed_)
         index::store::records::put_agg_partial_value(

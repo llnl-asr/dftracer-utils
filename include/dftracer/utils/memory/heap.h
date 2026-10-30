@@ -20,16 +20,15 @@ enum class Backend : std::uint8_t {
 enum class Mode : std::uint8_t {
     /// Purge only memory idle for longer than the decay time.
     Decayed,
-    /// Purge all idle memory held by the shared cache, by the calling thread's
-    /// heap and by heaps that no thread holds. Heaps held by other running
-    /// threads are not reached: only their owner touches them, and it purges at
-    /// its own slow paths or when it exits.
+    /// Purge all idle memory of the shared cache, the calling thread's heap and
+    /// heaps no thread holds. Heaps of other running threads are not reached.
+    /// Their owner purges them at its slow paths or when it exits.
     All,
 };
 
 struct Config {
     Backend backend = Backend::PageHeap;
-    /// Milliseconds idle memory stays backed; constants::DECAY_MS_ENV sets it.
+    /// Milliseconds idle memory stays backed. constants::DECAY_MS_ENV sets it.
     std::uint32_t decay_ms = constants::DEFAULT_DECAY_MS;
     /// The sum of reservations the root accepts. Zero is a third of the
     /// available memory.
@@ -49,9 +48,8 @@ struct Config {
  * @brief The configuration in effect.
  *
  * The backend and the decay time are fixed at the first call to any function
- * in this header and never change; constants::MEMORY_BACKEND_ENV and
- * constants::DECAY_MS_ENV pick them. The other fields hold the resolved
- * values, never zero except hard_cap.
+ * in this header. constants::MEMORY_BACKEND_ENV and constants::DECAY_MS_ENV
+ * pick them. The other fields hold resolved values, never zero except hard_cap.
  */
 Config config() noexcept;
 
@@ -67,11 +65,9 @@ void configure(const Config& config) noexcept;
 /**
  * @brief Allocate @p size bytes aligned to @p align.
  *
- * @p align must be a power of two. The page heap serves at most 2 MiB and
- * aborts on more. A zero @p size returns a unique pointer that must still be
- * freed. Throws std::bad_alloc when the memory is not available or the block
- * would pass the hard cap. The block is freed only by deallocate() of this
- * library.
+ * @p align is a power of two. The page heap aborts above 2 MiB. Zero @p size
+ * still needs a free. Throws std::bad_alloc when memory is not available or the
+ * hard cap would be passed. Free only with this library's deallocate().
  */
 void* allocate(std::size_t size, std::size_t align);
 
@@ -101,9 +97,8 @@ void* try_allocate(std::size_t size, std::size_t align) noexcept;
 /// Free a block from allocate(); null is a no-op.
 void deallocate(void* p) noexcept;
 
-/// Blocks handed out since the process started, a resize counted as one. Only
-/// the debug mode (DFTRACER_UTILS_MEMORY_DEBUG=1) counts; it is 0 without it,
-/// and the normal path pays nothing.
+/// Blocks handed out since the process started, a resize counted as one. Zero
+/// unless the debug mode (DFTRACER_UTILS_MEMORY_DEBUG=1) is on.
 std::uint64_t debug_allocation_count() noexcept;
 
 /**
@@ -116,10 +111,8 @@ void deallocate(void* p, std::size_t size) noexcept;
 /**
  * @brief Free a block like deallocate(), for a coroutine frame.
  *
- * With constants::DEBUG_ENV on, the block is filled with the freed pattern
- * and its memory is not given to any other allocation until the pool the
- * block was charged to closes or the process exits, so a late resume of the
- * frame or a read through it finds the pattern. The pool counts the block
+ * With constants::DEBUG_ENV on, the block is filled with the freed pattern and
+ * not reused until its pool closes or the process exits. The pool counts it
  * until then. Without the debug mode this is deallocate().
  */
 void deallocate_retained(void* p, std::size_t size) noexcept;
@@ -127,13 +120,10 @@ void deallocate_retained(void* p, std::size_t size) noexcept;
 /**
  * @brief Resize a block from allocate() whose requested size is @p old_size.
  *
- * Returns @p p when the block already fits @p new_size at @p align, else a
- * new block that holds the first min(@p old_size, @p new_size) bytes, and @p p
- * is freed. Either way the block stays charged to the pool of the old block
- * and is freed with @p new_size. A null @p p is allocate(@p new_size,
- * @p align). Throws std::bad_alloc and leaves @p p intact when the memory is
- * not available. Debug builds abort when @p old_size is not the size of the
- * block.
+ * Returns @p p if it fits, else a copy of the first min(@p old_size, @p
+ * new_size) bytes and frees @p p. Null @p p is allocate(). Throws
+ * std::bad_alloc and leaves @p p intact. Debug builds abort on a wrong @p
+ * old_size.
  */
 void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
                  std::size_t align);
@@ -141,9 +131,8 @@ void* reallocate(void* p, std::size_t old_size, std::size_t new_size,
 /**
  * @brief Give idle memory back to the operating system.
  *
- * Purged memory stays mapped, so addresses are never reused by other code
- * and a block that is allocated again is backed again on first touch. Safe to
- * call from any thread while other threads allocate and free.
+ * Purged memory stays mapped. Safe to call from any thread while other threads
+ * allocate and free.
  */
 void trim(Mode mode) noexcept;
 

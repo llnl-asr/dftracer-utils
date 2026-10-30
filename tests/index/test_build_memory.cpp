@@ -90,7 +90,6 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
         });
     rt.submit(std::move(task), "test-build-memory").wait();
     rt.shutdown();
-    // A failed file says why in the test's output.
     for (const auto& file : out.results)
         if (!file.success) MESSAGE("build failed: " << file.error_message);
     return out;
@@ -102,7 +101,6 @@ std::vector<std::pair<std::string, std::string>> contents(
     store::release_index(index_path);
     store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
     std::vector<std::pair<std::string, std::string>> out;
-    // A read error throws rather than read as a smaller index.
     db.for_each_record([&out](std::string_view key, std::string_view value) {
         out.emplace_back(std::string(key), std::string(value));
     });
@@ -124,8 +122,7 @@ struct Budget {
     ~Budget() { memory::configure(memory::Config{}); }
 };
 
-// A reservation of all the budget from a pool of its own, which fails when
-// anything else is reserved and posts the shortfall to the holders.
+// Fails when anything else is reserved and posts the shortfall to the holders.
 memory::Status ask_for_budget() {
     memory::PoolHandle pool = memory::Manager::get().root().child("ask");
     REQUIRE(pool);
@@ -165,7 +162,6 @@ TEST_SUITE("IndexBuildMemory") {
         const std::uint64_t room =
             tight - plan.workers * plan.sink_bytes -
             tight / constants::file_admission::UNTRACKED_DIVISOR;
-        // The pool holds fewer files than the build has workers.
         REQUIRE(room / held < WORKERS);
         const auto few = run_build(files, env.get_dir() + "/few", tight);
         const auto many = run_build(files, env.get_dir() + "/many", 32 * tight);
@@ -216,8 +212,8 @@ TEST_SUITE("IndexBuildMemory") {
         REQUIRE(big.indexed == 1);
         const auto expect = contents(index_of(files[0], big_dir));
         REQUIRE_FALSE(expect.empty());
-        // A budget far below one file's state is slow, not wrong: the spill
-        // share has a floor, so the runs stay few and every family matches.
+        // A budget far below one file's state is slow, not wrong. The spill
+        // share has a floor, so the runs stay few.
         for (std::uint64_t budget : {1 * MIB, 8 * MIB}) {
             CAPTURE(budget);
             const auto dir = env.get_dir() + "/small" + std::to_string(budget);
@@ -287,7 +283,6 @@ TEST_SUITE("IndexBuildMemory") {
         for (auto& b : out) buffers.give(std::move(b));
         REQUIRE(buffers.idle() == 4);
 
-        // The shortfall is past every idle byte, so every idle buffer goes.
         memory::PoolHandle hold = memory::Manager::get().root().child("hold");
         memory::Reservation held = hold->reserve(32 * MIB);
         REQUIRE(held);

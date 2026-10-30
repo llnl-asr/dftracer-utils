@@ -14,8 +14,8 @@ void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
         max_bucket = std::max(max_bucket, out.max_time_bucket);
     }
 
-    // min == UINT64_MAX is the only "no events seen" sentinel; a real bucket
-    // range can legitimately be [0, 0] (relative time, first bucket).
+    // min == UINT64_MAX is the only "no events seen" sentinel. A real bucket
+    // range can be [0, 0] (relative time, first bucket).
     if (min_bucket != std::numeric_limits<std::uint64_t>::max() &&
         min_bucket <= max_bucket)
         tier::widen_time_bounds(db, {min_bucket, max_bucket});

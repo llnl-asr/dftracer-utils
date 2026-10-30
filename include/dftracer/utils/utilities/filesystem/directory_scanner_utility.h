@@ -30,9 +30,7 @@ namespace dftracer::utils::utilities::filesystem {
 /// source files (double-counting events). Two kinds:
 /// - Index-artifact dirs (`.dftindex`, `.dftindex-cache`, `.dftindex_staging`
 ///   and older `.dftindex-views`): index data, rollups and materialized views.
-/// - `split/`: the default output of the `dftracer_split` CLI. A
-///   recursive scan re-run after a split would otherwise pick up both the
-///   original trace and its split copy.
+/// - `split/`: the default output of the `dftracer_split` CLI.
 /// - `schemas/`: record schema specs (`*.json`, `*.yaml`) beside an index.
 inline bool is_excluded_scan_dir(const fs::path& p) {
     const std::string name = p.filename().string();
@@ -40,17 +38,14 @@ inline bool is_excluded_scan_dir(const fs::path& p) {
            name == "schemas";
 }
 
-/// The stat batches a directory scan has run in this process. A scan of one
-/// directory runs one batch per slice of its entries, so the count is above
-/// one when the stats went through the executor in parallel.
+/// The stat batches directory scans have run in this process, one per slice of
+/// a directory's entries. For tests.
 inline std::atomic<std::size_t>& scan_stat_batches() {
     static std::atomic<std::size_t> batches{0};
     return batches;
 }
 
-/// The threads that have run a stat batch in this process. A scan whose
-/// batches run on the thread that awaited it stats its files on that thread's
-/// run loop, one at a time. For tests.
+/// The threads that have run a stat batch in this process. For tests.
 class ScanStatThreads {
    public:
     void note() {
@@ -202,11 +197,9 @@ class DirectoryScannerUtility {
         return out;
     }
 
-    /// Recursive parallel scan: list one directory level, stat its entries in
-    /// batches over @p ctx, as many at once as @p gate admits, spawn a child
-    /// scan per subdirectory, then merge in listing order. Uses error codes
-    /// instead of exceptions so an unreadable directory is skipped rather than
-    /// aborting the whole scan.
+    /// Recursive parallel scan merged in listing order. Stat batches run over
+    /// @p ctx, as many at once as @p gate admits. An unreadable directory is
+    /// skipped rather than aborting the scan.
     static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
         CoroScope& ctx, std::shared_ptr<coro::AdaptiveGate> gate, fs::path dir,
         bool populate_size) {
@@ -264,10 +257,8 @@ class DirectoryScannerUtility {
 
 /// Scans `input` with a `Scanner` (a scanner utility that takes a CoroScope)
 /// on a pool of its own with `executor_threads` workers and `io_threads` I/O
-/// threads, and blocks until done. A CLI drives its run coroutine with get()
-/// on the main thread, whose run loop is one thread, so a scan awaited there
-/// stats every file one at a time. Here the stat batches fan out over the pool,
-/// which grows only as far as the scan's AdaptiveGate admits batches.
+/// threads, and blocks until done. Stat batches fan out over the pool, which a
+/// scan awaited on a CLI's one-thread main run loop cannot do.
 template <class Scanner, class Input>
 coro::CoroTask<void> scan_on_pool_task(CoroScope& scope, Input input,
                                        std::vector<FileEntry>* entries) {

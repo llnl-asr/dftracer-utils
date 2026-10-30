@@ -8,9 +8,8 @@
 
 namespace dftracer::utils {
 
-// Little-endian fixed-width byte codec. The read_* and write_* functions do
-// not check bounds: the caller owns the buffer. LeReader is the checked form.
-// On a little-endian host each function compiles to one load or store.
+// Little-endian fixed-width byte codec. The read_* and write_* functions do not
+// check bounds and the caller owns the buffer. LeReader is the checked form.
 
 inline std::uint16_t byte_swap(std::uint16_t v) {
     return static_cast<std::uint16_t>((v >> 8U) | (v << 8U));

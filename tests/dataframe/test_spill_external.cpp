@@ -47,7 +47,7 @@ std::size_t spill_slot_bytes() {
     return total;
 }
 
-// One splitmix64 step: spread bits, so spill files do not compress and their
+// One splitmix64 step to spread bits, so spill files do not compress and their
 // size follows the row count on every codec.
 std::int64_t mix(std::uint64_t x) {
     x += 0x9e3779b97f4a7c15ULL;
@@ -56,7 +56,7 @@ std::int64_t mix(std::uint64_t x) {
     return static_cast<std::int64_t>(x ^ (x >> 31));
 }
 
-// `morsels` morsels of `rows` rows of two columns of mixed bits; `hook` runs
+// `morsels` morsels of `rows` rows of two columns of mixed bits. `hook` runs
 // before morsel i is made.
 class Hooked : public Source {
    public:
@@ -125,7 +125,7 @@ struct Budget {
 };
 
 // A spill directory under the working directory, which is a disk in a build
-// tree; the system temp directory may be tmpfs.
+// tree. The system temp directory may be tmpfs.
 struct SpillDirVar {
     fs::path dir;
     SpillDirVar() {
@@ -208,7 +208,7 @@ TEST_CASE("merged sort runs leave the spill slot before the query ends") {
     REQUIRE(before_merge > 0);
     CHECK(after_merge > 0);
     // Without a release the merged runs add to the runs they replace, which
-    // at least doubles the gauge; with it the gauge holds about one copy.
+    // at least doubles the gauge. With it the gauge holds about one copy.
     CHECK(after_merge < before_merge + before_merge / 2);
     first.reset();
     cursor.reset();

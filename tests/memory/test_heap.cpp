@@ -526,8 +526,7 @@ TEST_CASE("the page heap poisons slack, free blocks and purged pages") {
 #endif
 
 TEST_CASE("a large block is charged at most an eighth above its size") {
-    // Pool counters sum the heaps of the active backend; the page_heap run of
-    // this file covers the case.
+    // The page_heap run of this file covers the case.
     if (config().backend != Backend::PageHeap) return;
     PoolHandle pool = Manager::get().root().child("large_classes");
     REQUIRE(pool);

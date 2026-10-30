@@ -13,28 +13,19 @@
 #include <cstdint>
 #include <limits>
 
-// The column block of one (file, chunk) of the aggregation tier: the rows of
-// the chunk's records that the partials keep, in file order, as exact columns.
-// A block holds the core columns of every row (ts, dur, pid, tid, phase, cat,
-// name, host, file) and one numeric column per (arg path, value kind) that the
-// chunk's records hold. Strings are indexes into a block-local table of the
-// index dictionary ids the block names, so a sharded merge remaps a block by
-// rewriting that table. The file column is the file hash text the record names,
-// the empty text standing for a record that names none.
+// The exact columns of the records of one (file, chunk) that the partials keep.
+// Strings are indexes into a block-local table of dictionary ids, so a sharded
+// merge remaps a block by rewriting that table.
 namespace dftracer::utils::index::schemas::dft::agg {
 
-/// The kind of the values of one numeric column: the variant kind of the
-/// FoldEvent args it holds.
 enum class ColumnKind : std::uint8_t { Int64 = 0, Uint64 = 1, Double = 2 };
 
-/// No dictionary id, so a block cannot name it.
 inline constexpr std::uint32_t NO_DICTIONARY_ID =
     std::numeric_limits<std::uint32_t>::max();
 
-/// One numeric column of a block: the rows of the block that hold the arg
-/// path, ascending, and the value of each one. `bits` holds the value in the
-/// form `kind` names: the two's complement of an Int64, a Uint64, or the IEEE
-/// bits of a Double.
+/// The rows of a block that hold an arg path, ascending, and their values.
+/// `bits` holds the two's complement of an Int64, a Uint64 or the IEEE bits of
+/// a Double, as `kind` names.
 struct ChunkColumn {
     std::uint32_t path = 0;
     ColumnKind kind = ColumnKind::Double;
@@ -48,46 +39,40 @@ struct ChunkColumn {
     double double_at(std::size_t k) const { return bits_double(bits[k]); }
 };
 
-/// The decoded (or being built) column block of one chunk. Row r of the block
-/// is the r-th record of the chunk the partials keep, in file order; the
-/// column of row r is `cat[r]`, an index into `ids`. `file[r]` is the id of the
-/// text of the record's file hash, whose text is empty for a record without
-/// one.
+/// The column block of one chunk. Row r is the r-th record of the chunk the
+/// partials keep, in file order. `cat[r]` and the other string columns index
+/// `ids`. The file text is empty for a record without a file hash.
 struct ChunkColumns {
     std::uint64_t chunk = 0;
     std::size_t rows = 0;
-    /// The dictionary ids the block names: the texts of cat, name, host and
-    /// file and the arg paths of its columns, in the order the block first used
-    /// them.
+    /// The dictionary ids the block names, in the order it first used them.
     dstd::Vector<std::uint32_t> ids;
-    /// The text of each id of `ids`, resolved through the file's dictionary
-    /// entries by the reader; empty when the file holds none.
+    /// The text of each id of `ids`, filled by the reader. Empty when the file
+    /// holds none.
     dstd::Vector<dstd::String> texts;
-    /// The category of row r as its record spells it, in its own case, not the
-    /// lower case the partials group by.
+    /// The category as the record spells it, not lower-cased like the partials.
     dstd::Vector<std::uint32_t> cat;
     dstd::Vector<std::uint32_t> name;
     dstd::Vector<std::uint32_t> host;
     dstd::Vector<std::uint32_t> file;
     dstd::Vector<std::uint64_t> ts;
     dstd::Vector<std::uint64_t> dur;
-    /// 1 where the record carried a duration, 0 where it carried none.
+    /// 1 where the record carried a duration.
     dstd::Vector<std::uint8_t> has_dur;
     dstd::Vector<std::uint64_t> pid;
     dstd::Vector<std::uint64_t> tid;
     dstd::Vector<std::uint8_t> phase;
-    /// Every column of the block; a builder keeps unused slots past its live
-    /// columns, which encode_chunk_columns is told the count of.
+    /// A builder keeps unused slots past its live columns. Pass the live count
+    /// to encode_chunk_columns.
     dstd::Vector<ChunkColumn> columns;
 
-    /// Empties the block, keeping the storage of its columns for reuse.
+    /// Keeps the storage of the columns for reuse.
     void clear();
 };
 
-/// Accumulates one chunk's block event by event, keeping the storage of the
-/// previous chunks: no allocation per event once the columns exist. Call
-/// add_row once per record, then add_int64/add_uint64/add_double for each
-/// numeric arg of that record.
+/// Accumulates one chunk's block event by event and keeps the storage of the
+/// previous chunks. Call add_row once per record, then add_int64, add_uint64 or
+/// add_double for each numeric arg of that record.
 class ChunkColumnBuilder {
    public:
     void clear();
@@ -96,40 +81,33 @@ class ChunkColumnBuilder {
                  std::uint64_t pid, std::uint64_t tid, std::uint8_t phase,
                  std::uint32_t cat, std::uint32_t name, std::uint32_t host,
                  std::uint32_t file);
-    /// Adds the value of `path` on the row added last. `path` is the index
-    /// dictionary id of the arg path. A row keeps the first value of a path,
-    /// as the engine reads a record whose args repeat a key.
+    /// Adds the value of `path` (a dictionary id) on the row added last. A row
+    /// keeps the first value of a path, as the engine reads repeated keys.
     void add_int64(std::uint32_t path, std::int64_t v);
     void add_uint64(std::uint32_t path, std::uint64_t v);
     void add_double(std::uint32_t path, double v);
 
     bool empty() const { return block_.rows == 0; }
 
-    /// Appends the encoded block to `out`. Returns false, appending nothing,
-    /// when the block holds no row.
+    /// Returns false, appending nothing, when the block holds no row.
     bool encode_into(dstd::Vector<std::uint8_t>& out);
 
-    /// The dictionary ids the block names, in `ids` order; each needs a
-    /// dictionary entry in the file it is written under.
+    /// Each id needs a dictionary entry in the file the block is written under.
     const dstd::Vector<std::uint32_t>& ids() const { return block_.ids; }
 
    private:
     std::uint32_t local_id(std::uint32_t id);
-    /// The local id of `id`, from the pair of the row before when it repeats.
     std::uint32_t row_local_id(std::uint32_t id, std::uint32_t& last,
                                std::uint32_t& last_local);
     ChunkColumn& column_of(std::uint32_t path, ColumnKind kind);
-    /// Whether the current row holds no value of `path` yet.
     bool first_in_row(std::uint32_t path);
 
     ChunkColumns block_;
     dstd::HashMap<std::uint32_t, std::uint32_t> local_of_;
     dstd::HashMap<std::uint64_t, std::uint32_t> column_of_;
     std::uint32_t live_columns_ = 0;
-    /// Per block-local id, the row count when that path last got a value.
     dstd::Vector<std::size_t> path_row_;
-    /// The dictionary id and local id the row before named as cat, name, host
-    /// and file, so a run of equal ids skips the hash lookup.
+    /// The ids of the row before, so a run of equal ids skips the hash lookup.
     std::uint32_t last_cat_ = NO_DICTIONARY_ID;
     std::uint32_t last_cat_local_ = 0;
     std::uint32_t last_name_ = NO_DICTIONARY_ID;
@@ -140,20 +118,14 @@ class ChunkColumnBuilder {
     std::uint32_t last_file_local_ = 0;
 };
 
-/// Appends the encoded block to `out`: its first `column_count` columns, each
-/// with the arg path of its column. Re-encoding a decoded block gives back the
-/// same block, with the ids the block names.
+/// Appends the encoded block to `out`, using its first `column_count` columns.
 void encode_chunk_columns(const ChunkColumns& block, std::size_t column_count,
                           dstd::Vector<std::uint8_t>& out);
 
-/// The block of `bytes`, the payload of one chunk's column record, with its
-/// `ids`, `cat`, `name`, `host`, `file`, `ts`, `dur`, `has_dur`, `pid`, `tid`,
-/// `phase` and `columns` filled. `texts` stays empty and `chunk` stays 0:
-/// neither is in the bytes. Each value equals the one the record
-/// held: an Int64 or Uint64 value is the same integer of the same variant
-/// kind, and a Double value is the same double bit for bit (-0.0 and NaN
-/// payloads included). A block with a format this code does not know, a
-/// truncated body or a value out of range is ErrorCode::Parse.
+/// Decodes the payload of one chunk's column record. `texts` stays empty and
+/// `chunk` stays 0, since neither is in the bytes. Values round-trip exactly,
+/// doubles bit for bit. An unknown format, a truncated body or a value out of
+/// range is ErrorCode::Parse.
 dstd::Expected<ChunkColumns, ErrorCode> decode_chunk_columns(
     dstd::Span<const std::uint8_t> bytes);
 

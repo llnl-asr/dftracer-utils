@@ -42,7 +42,6 @@ std::string write_trace(const std::string& dir, int n) {
         dir + "/t" + std::to_string(n) + ".pfw.gz", out.str());
 }
 
-// Largest live byte count seen while a one-worker build of `files` runs.
 std::size_t peak_live(const std::vector<std::string>& files,
                       const std::string& index_dir) {
     std::atomic<bool> done{false};
@@ -89,9 +88,8 @@ TEST_SUITE("IndexBuildPeak") {
         for (int i = 0; i < 256; ++i)
             files.push_back(write_trace(env.get_dir(), i));
         const std::vector<std::string> few(files.begin(), files.begin() + 64);
-        // The store trains each namespace's dictionary on samples of up to
-        // this many bytes, which fill with the data: small, they fill within
-        // the first files, so 64 files hold as many sample bytes as 256.
+        // The store trains each namespace's dictionary on samples that fill
+        // within the first files, so 64 files hold as many sample bytes as 256.
         const auto samples =
             dftracer::utils::store::g_dict_sample_bytes.exchange(
                 std::size_t{256} << 10);
@@ -101,8 +99,6 @@ TEST_SUITE("IndexBuildPeak") {
         dftracer::utils::store::g_dict_sample_bytes.store(samples);
         MESSAGE("peak live bytes: 64 files " << small << ", 256 files "
                                              << large);
-        // One worker holds one file's state and a sink of up to its limit,
-        // whatever the number of files.
         constexpr std::size_t BUDGET = std::size_t{48} << 20;
         CHECK(small < BUDGET);
         CHECK(large < BUDGET);

@@ -965,7 +965,6 @@ def _build_index_task(
     force_rebuild: bool,
     parallelism: int,
     build_bloom: bool = True,
-    # The aggregation config every build makes, forwarded to build_index_batch.
     aggregation_config: "Optional[AggregationConfig]" = None,
     enable_det_ids: bool = False,
 ) -> None:
@@ -1055,7 +1054,6 @@ def distributed_index(
         raise ValueError("index_path is required")
     from .indexer import AggregationConfig as _AggregationConfig
 
-    # Every build makes the aggregation tier; a caller only customizes it.
     agg_config = aggregation_config if aggregation_config is not None else _AggregationConfig()
     import logging as _logging
     import time as _time
@@ -1133,9 +1131,8 @@ def distributed_index(
     _log.info("distributed_index: opening IndexDatabase at %s", index_path)
     db = _IndexDatabase(index_path)
 
-    # 2. PLAN: whole files bin-packed across workers. A file is never split
-    #    across workers: each part of a file's index is built from the whole
-    #    file, so one worker builds it, with its own threads.
+    # A file is never split across workers, since each part of its index is
+    # built from the whole file.
     _t3 = _time.monotonic()
     if partition == "lpt":
         path_index = {p: i for i, p in enumerate(all_paths)}
@@ -1155,7 +1152,6 @@ def distributed_index(
         [len(u) for u in per_worker_files],
     )
 
-    # 3. BUILD: each worker receives its paths.
     index_dir = os.path.dirname(index_path.rstrip("/"))
     worker_file_lists: List[List[str]] = [
         [all_paths[i] for i in files_w] for files_w in per_worker_files

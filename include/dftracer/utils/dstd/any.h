@@ -13,14 +13,11 @@
 namespace dftracer::utils::dstd {
 
 /**
- * @brief A std::any whose heap values come from memory::allocate: 32 bytes,
- * with a 24-byte inline buffer.
+ * @brief A std::any of 32 bytes with a 24-byte inline buffer.
  *
- * A value that fits the buffer with its alignment and is nothrow move
- * constructible stays inline; any other is placed by memory::allocate and
- * freed with the sized memory::deallocate. Copyable like std::any, so a value
- * must be copy constructible. A moved-from Any is empty. A failed any_cast
- * throws std::bad_any_cast.
+ * A nothrow move constructible value that fits the buffer stays inline. Any
+ * other is placed by memory::allocate. The value must be copy constructible. A
+ * moved-from Any is empty. A failed any_cast throws std::bad_any_cast.
  */
 class Any {
    public:
@@ -180,8 +177,8 @@ class Any {
         },
         &type_of<T>};
 
-    // The table address identifies the type without RTTI; a table copied
-    // into another shared library has another address, so type() decides.
+    // A table copied into another shared library has another address, so
+    // type() decides.
     template <class T>
     bool holds() const noexcept {
         if constexpr (!std::is_copy_constructible_v<T>) {

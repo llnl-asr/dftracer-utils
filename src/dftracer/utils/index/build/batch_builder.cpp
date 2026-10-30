@@ -50,11 +50,9 @@ struct PreparedFile {
     std::int64_t file_mtime_ns = 0;
     std::uint64_t file_size = 0;
     int file_id = 0;
-    /// The caller's open descriptor of the file, if it passed one. The parse
-    /// worker takes it.
+    /// The parse worker takes the caller's open descriptor, if it passed one.
     dstd::SharedPtr<ScopedFd> input_fd;
-    /// The id was reserved by this build, so the index holds no data for it
-    /// and its tiers need no clearing.
+    /// The id was reserved by this build, so its tiers need no clearing.
     bool fresh_id = false;
 };
 
@@ -88,8 +86,8 @@ PreparedFile prepare_file(std::size_t i, const std::string& file_path,
 std::vector<PreparedFile> prepare_file_identities(
     const std::string& index_path, const std::vector<std::string>& file_paths) {
     index::store::IndexDatabase db(index_path);
-    // Ids come from a counter that only grows, so one at or past it before
-    // the assignment was never used in this index.
+    // Ids come from a counter that only grows, so one at or past it was never
+    // used in this index.
     const int first_fresh = db.reserve_file_id_range(0);
     const auto ids = db.assign_file_ids(file_paths);
     std::vector<PreparedFile> prepared;
@@ -103,8 +101,6 @@ std::vector<PreparedFile> prepare_file_identities(
 
 }  // namespace
 
-// What the files of one build share: admission by the memory budget, the sink
-// size, the spill location and the event buffers.
 struct Admission {
     Admission(std::uint64_t budget, std::size_t workers,
               std::uint64_t sink_bytes_each, std::size_t sinks,
@@ -112,19 +108,14 @@ struct Admission {
         : sink_limit(sink_bytes_each),
           files(budget, workers, sink_bytes_each * sinks, file_count) {}
 
-    /// Bytes a sink holds before its worker commits it.
     std::size_t sink_limit;
     FileAdmission files;
-    /// Files spill into a staged write of the index.
     bool spill_staged = false;
-    /// The index the staged writes go to.
     index::store::IndexDatabase* staged_db = nullptr;
     /// RecordSchema id for every file; empty detects each file's.
     std::string schema;
     std::atomic<std::size_t> spilled{0};
     std::atomic<std::size_t> max_spill_runs{0};
-    /// Event buffers shared by every file's fold driver, so a file starts
-    /// with the capacity the files before it grew.
     FoldBufferPool buffers;
 };
 
@@ -153,14 +144,11 @@ static std::string basename_of(const std::string& path) {
     return pos == std::string::npos ? path : path.substr(pos + 1);
 }
 
-// Where files are written: a write of the index per run of a worker's block,
-// committed when the run ends.
 struct BlockWriter {
     index::store::IndexDatabase* db = nullptr;
     index::build::BatchWriterMetrics* metrics = nullptr;
 };
 
-// The write a worker is filling and the files written into it.
 struct OpenSink {
     std::unique_ptr<index::store::IndexDatabaseWrite> sink;
     std::vector<std::size_t> written;
@@ -212,11 +200,7 @@ static coro::CoroTask<void> parse_and_write_worker(
 
         for (std::size_t idx = block_begin; idx < block_end; ++idx) {
             auto& pf = (*prepared_ptr)[idx];
-            // One open of the input serves the size and mtime, the hash, the
-            // schema probe and the gzip index build.
             dstd::SharedPtr<ScopedFd> input_fd = std::move(pf.input_fd);
-            // A file of known size takes its place in the budget before it is
-            // opened; one of unknown size is opened to read its size first.
             struct stat input_stat{};
             FileAdmission::Ticket ticket;
             bool admitted = false;
@@ -269,7 +253,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                 const auto file_config =
                     index::build::for_schema(bloom_config, schema);
 
-                // Bloom + hash are harvested by folds via an IndexFoldDriver.
                 std::vector<views::Fold*> fold_ptrs;
                 std::optional<index::build::IndexFoldDriver> driver;
                 {
@@ -332,8 +315,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                         static_cast<std::size_t>(job.artifacts.total_lines);
                     result.chunks_processed = job.artifacts.members.size();
                     // Publish the dictionary's pending entries now that every
-                    // member is parsed; bloom buckets by checkpoint and needs
-                    // none.
+                    // member is parsed. Bloom needs none.
                     if (driver) driver->seal();
                     if (job.bloom_fold) {
                         result.events_processed = static_cast<std::size_t>(
@@ -357,8 +339,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                                 job.bloom_fold->spill_runs());
                         }
                     }
-                    // Lift the aggregation fold's out-of-band outputs before it
-                    // goes to the write phase; its metrics stay for write.
                     if (job.agg_fold) {
                         index::schemas::dft::agg::AggFoldOutput ao;
                         ao.file_path = pf.file_path;
@@ -383,9 +363,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                     .count());
             parse_ns_ptr->fetch_add(file_ns, std::memory_order_relaxed);
 
-            // A large trace spends minutes per file here. Keep the per-file
-            // detail at DEBUG and emit an INFO heartbeat only every ~5% so a
-            // long build shows progress without a line per file.
+            // Per-file detail stays at DEBUG. INFO gets a heartbeat every ~5%.
             const std::size_t done =
                 done_ptr->fetch_add(1, std::memory_order_relaxed) + 1;
             const std::size_t total = prepared_ptr->size();
@@ -398,7 +376,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 DFTRACER_UTILS_LOG_INFO("IndexBatch: parsed %zu/%zu files",
                                         done, total);
             }
-            // Throttled to ~50 steps to bound the per-file callback/GIL cost.
+            // Bounds the per-file callback/GIL cost.
             if (progress_ptr) {
                 const std::size_t pstep = total < 50 ? 1 : total / 50;
                 if (done == total || done % pstep == 0) {
@@ -411,8 +389,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                 continue;
             }
 
-            // Build the payload (move bloom/dict/aggregation into it), and
-            // leave the result behind in parsed_jobs[idx].
             const auto w0 = std::chrono::steady_clock::now();
             {
                 index::build::ParsedIndexJob write_job;
@@ -439,9 +415,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                 (*parsed_jobs_ptr)[idx] = std::move(holder);
                 (*results_ptr)[idx] = std::move(result);
 
-                // The file's state goes into the sink and is freed here, so a
-                // worker holds one file's state and the serialized rest of
-                // its block.
                 if (!open.sink) open.sink = writer->db->begin_write();
                 if (index::build::write_index_job(*open.sink, write_job)) {
                     open.written.push_back(idx);
@@ -471,8 +444,6 @@ static coro::CoroTask<void> parse_and_write_worker(
                     std::chrono::steady_clock::now() - w0)
                     .count());
             ticket = {};
-            // A sink that has grown past the budget commits and the next file
-            // opens another.
             if (open.sink &&
                 open.sink->buffered_bytes() >= admission->sink_limit)
                 co_await commit_open_sink(writer, open);
@@ -496,7 +467,6 @@ dstd::Vector<std::size_t> cut_blocks(std::size_t files,
     std::uint64_t seen = 0;
     for (std::size_t i = 0; i < files; ++i) {
         const std::size_t open_for = i - starts.back();
-        // Cut before file i when the work so far reaches the next share.
         const bool share = seen * blocks >= total * starts.size();
         if (open_for > 0 && share) starts.push_back(i);
         seen += costs.empty() ? 1 : std::max<std::uint64_t>(costs[i], 1);
@@ -505,16 +475,11 @@ dstd::Vector<std::size_t> cut_blocks(std::size_t files,
     return starts;
 }
 
-// Streaming parse + write pipeline. Each worker takes a block of consecutive
-// files, parses them one after another, writes each into a sink as it finishes
-// and commits the sink at the end of the block, or sooner when it has grown
-// past the sink limit. A file's state is freed as soon as it is written, so
-// memory grows with the workers, not the files.
+// A file's state is freed as soon as it is written, so memory grows with the
+// workers, not the files.
 static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
                                                    BatchWriteState* state) {
     std::size_t parse_workers = std::max<std::size_t>(1, state->parallelism);
-    // One block of consecutive files per worker. Blocks hold about equal work,
-    // so the workers finish together.
     const auto block_starts = dstd::make_shared<dstd::Vector<std::size_t>>(
         cut_blocks(state->num_files, state->file_costs, parse_workers));
     DFTRACER_UTILS_LOG_INFO(
@@ -524,14 +489,11 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
 
     auto writer_metrics = std::make_shared<index::build::BatchWriterMetrics>();
 
-    // Every file of the pipeline shares one index root, so its schemas are
-    // loaded once: a lookup per file stalled a build on Lustre for minutes.
+    // A lookup per file stalled a build on Lustre for minutes.
     index::load_index_schemas(state->index_path);
     auto writer_db =
         std::make_shared<index::store::IndexDatabase>(state->index_path);
 
-    // The workers' sinks hold up to their limit each, so the budget sets the
-    // workers and the limit, and the files get what is left.
     constexpr std::uint64_t NO_BUDGET = memory::NO_SPILL_BUDGET;
     const std::uint64_t budget =
         state->memory_budget == NO_BUDGET
@@ -544,7 +506,6 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto admission = std::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
-    // A spilled file is stages of one write.
     if (budget != NO_BUDGET) {
         admission->spill_staged = true;
         admission->staged_db = writer_db.get();

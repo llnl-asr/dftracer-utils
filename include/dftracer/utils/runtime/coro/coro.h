@@ -86,8 +86,6 @@ struct CoroPromise : FrameAllocation {
 
     TaskIndex task_id{-1};
 
-    /// The pool and intern table current when the coroutine was created; it
-    /// enters them each time it resumes.
     detail::RunContext context;
 
     /// True when Coro::release() transferred ownership to the queue.

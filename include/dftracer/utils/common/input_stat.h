@@ -13,7 +13,7 @@
 namespace dftracer::utils {
 
 /// The stat results of the paths one run has read, so an input is stat'ed once
-/// however many layers ask. Owned by one run (see InputStatScope); thread safe.
+/// however many layers ask. Owned by one run (see InputStatScope). Thread safe.
 class InputStatCache {
    public:
     bool find(const std::string& path, InputFileStat& out) const;
@@ -27,14 +27,10 @@ class InputStatCache {
     dstd::UniquePtr<dstd::HashMap<dstd::String, InputFileStat>> map_;
 };
 
-/// Publishes a fresh InputStatCache for the lifetime of the object, so every
-/// stat_input() on any thread reads and fills it. Only a CLI tool makes one, on
-/// the stack of its main, after its arguments parse and before its work
-/// starts; the work has joined when it ends. Each run then has a cache of its
-/// own, and library calls, which never make one, stat the files every time. A
-/// scope made while another is live shares that one, and the other stays
-/// published when this one ends. A stat_input() that is running when the owner
-/// ends keeps the cache alive until it returns.
+/// Publishes a fresh InputStatCache for its lifetime, so every stat_input()
+/// uses it. Only a CLI tool makes one, on the stack of its main, and the work
+/// must have joined when it ends. A scope made while another is live shares
+/// that one. A running stat_input() keeps the cache alive until it returns.
 class InputStatScope {
    public:
     InputStatScope();
@@ -46,7 +42,7 @@ class InputStatScope {
     dstd::SharedPtr<InputStatCache> cache_;
 };
 
-/// stat_path() through the published cache; a plain stat when none is
+/// stat_path() through the published cache. A plain stat when none is
 /// published. A failed stat is not kept.
 bool stat_input(const std::string& path, InputFileStat& out);
 
@@ -54,7 +50,7 @@ inline bool stat_input(const fs::path& path, InputFileStat& out) {
     return stat_input(path.string(), out);
 }
 
-/// Drops `path` from the published cache; no-op without one. A caller that
+/// Drops `path` from the published cache. No-op without one. A caller that
 /// deletes a path it may have stat'ed through stat_input() calls it.
 void forget_input(const std::string& path);
 

@@ -238,8 +238,7 @@ class ReadyAwaitable<void> {
 };
 
 /**
- * Create immediately ready awaitable from value
- * Useful for fallback when async I/O is not available
+ * Create an immediately ready awaitable from a value.
  */
 template <typename T>
 ReadyAwaitable<std::decay_t<T>> make_ready_awaitable(T&& value) {

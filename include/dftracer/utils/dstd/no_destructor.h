@@ -10,11 +10,8 @@ namespace dftracer::utils {
  * @brief Holds a T in aligned in-object storage, constructed on first use and
  * never destructed.
  *
- * For a function-local static owning process-lifetime state whose destructor at
- * exit would be unsafe (e.g. it races another library's static teardown). The T
- * lives in the static's own storage, so there is no heap allocation to leak;
- * Valgrind sees it as still-reachable static memory, not a definite/indirect
- * leak. Access with `*m` / `m->`.
+ * For a function-local static whose destructor at exit would be unsafe, such as
+ * one that races another library's static teardown.
  */
 template <class T>
 class NoDestructor {

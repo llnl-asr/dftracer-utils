@@ -28,22 +28,18 @@ inline constexpr std::size_t FILE_TRAILER_BYTES = 32;
 /// Every this many sequences a commit record is a checkpoint: it lists every
 /// item so far, with the earlier commits by summary, and a reader starts there.
 inline constexpr std::uint64_t CHECKPOINT_INTERVAL = 64;
-/// The most bytes one read run covers: extent refs that are adjacent in the
-/// file are read together up to this many bytes, so a run of them costs one
-/// preadv instead of one pread per extent. A ref longer than this is a run of
-/// its own.
+/// The most bytes one read run covers: adjacent extent refs are read together
+/// with one preadv. A longer ref is a run of its own.
 inline constexpr std::size_t READ_RUN_BYTES = std::size_t{16} << 20;
 /// Every extent starts at a multiple of this many bytes and its stored form is
 /// padded to one, so extents lie end to end whatever their compressed length.
 inline constexpr std::size_t EXTENT_ALIGN_BYTES = 4096;
-/// The most bytes the top table of a scope directory may use; above it the
+/// The most bytes the top table of a scope directory may use. Above it the
 /// directory gains a level of middle blocks.
 inline constexpr std::size_t DIRECTORY_TOP_BYTES = 32768;
-/// Entries per directory leaf block and per middle block.
 inline constexpr std::size_t DIRECTORY_BLOCK_ENTRIES = 256;
-/// The most bytes one segment block holds: the runs of one copy of one commit
-/// are packed into blocks up to this size, so a cold read of a scope costs a
-/// few block reads instead of one per commit.
+/// The most bytes one segment block holds: the runs of one copy of many
+/// commits are packed up to this size, so a cold read costs few block reads.
 inline constexpr std::size_t SEGMENT_BLOCK_BYTES = std::size_t{256} << 10;
 /// What a light open reads from the end of the file: the trailer, the footer
 /// and, with them, the whole directory top table.
@@ -65,8 +61,6 @@ struct ExtentTarget {
     std::uint8_t* bad = nullptr;
 };
 
-/// What a block read did: the pread/preadv calls it made, and the bytes they
-/// returned.
 struct BlockReads {
     std::uint64_t calls = 0;
     std::uint64_t bytes = 0;
@@ -84,7 +78,6 @@ struct FileIndex {
     dstd::String host;
     dstd::String label;
     std::uint64_t creation_time = 0;
-    // The sequence of the newest applied record; a footer has its own sequence.
     std::uint64_t last_sequence = 0;
     // The newest applied record is a footer. A close syncs every extent before
     // it writes the footer, so every extent ref of a closed file is on disk.
@@ -92,7 +85,6 @@ struct FileIndex {
     dstd::Vector<NamespaceItem> namespaces;
     dstd::Vector<ScopeItem> scopes;
     dstd::Vector<CopyItem> copies;
-    /// The position in `copies` of each copy's local id.
     dstd::HashMap<std::uint32_t, std::size_t> copy_at;
     dstd::Vector<DropItem> drops;
     dstd::Vector<EraseItem> erases;
@@ -100,7 +92,7 @@ struct FileIndex {
     /// newest checkpoint, and the checkpoint's own.
     dstd::Vector<IndexedExtentRef> extent_refs;
     /// The commits a checkpoint or the footer lists by summary. Their extent
-    /// refs stay in their records; read_commit reads them.
+    /// refs stay in their records. read_commit reads them.
     dstd::Vector<CommitRefItem> commit_refs;
     /// The footer of a closed file, which names its items block, its extent
     /// table and its scope directory. Absent for a file that is not closed.
@@ -111,26 +103,21 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
                             std::uint64_t random, dstd::StringView label);
 
 /// The file of a store directory that lists the footer of every closed data
-/// file, so a snapshot learns the directory of a file without opening it. A
-/// writer appends one entry when its close succeeds. The summary is a cache: a
-/// data file it does not list, through a lost, torn or missing entry, is read
-/// as if there were no summary.
+/// file, so a snapshot learns a file's directory without opening it. A writer
+/// appends an entry when its close succeeds. The summary is a cache: a file it
+/// does not list is read as if there were no summary.
 inline constexpr std::string_view SUMMARY_FILE_NAME = "summary.dfsum";
 
-/// One closed data file as the summary lists it.
 struct SummaryEntry {
-    /// The name of the data file in the directory.
     dstd::String name;
     /// The bytes the file holds at least: every block its tail names.
     std::uint64_t needed_bytes = 0;
-    /// The sequence of its footer record.
     std::uint64_t sequence = 0;
-    /// The namespaces and the tail its footer holds.
     RecordItems footer;
 };
 
 /// Every entry of the summary of `dir`, in the order written, up to the first
-/// that does not verify. Empty when the directory has no summary; Io when it
+/// that does not verify. Empty when the directory has no summary. Io when it
 /// cannot be read.
 dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
     dstd::StringView dir);
@@ -161,13 +148,10 @@ class DataFileWriter {
     /// dictionary is written after it. Safe from many threads at once.
     dstd::Expected<DictRef, dstd::Error> append_dict(ByteView bytes);
 
-    /// Takes `length` bytes at the first offset that is a multiple of `align`
-    /// at or after the file end, and moves the end past them. Safe from any
-    /// thread: one compare-and-swap hands out a range, no range is ever
-    /// reused and the range belongs to the caller before it returns. `align`
-    /// must not be zero. `kind` names the range only so a reserved extent
-    /// region reaches the fault recorder there; a range of any other kind is
-    /// recorded with its bytes where they are written.
+    /// Takes `length` bytes at the first multiple of `align` (not zero) at or
+    /// after the file end, and moves the end past them. Safe from any thread.
+    /// No range is ever reused. `kind` lets a reserved extent region reach the
+    /// fault recorder there. Any other kind is recorded where written.
     std::uint64_t reserve_range(
         std::uint64_t length, std::uint64_t align,
         io_fault::WriteKind kind = io_fault::WriteKind::Extent);
@@ -185,27 +169,20 @@ class DataFileWriter {
 
     dstd::Expected<void, dstd::Error> write_header();
     dstd::Expected<void, dstd::Error> sync_data();
-    /// Every item a checkpoint or the footer lists, with the extent refs of the
-    /// commit not yet written.
     RecordItems items_with_pending_extents() const;
-    /// Summarizes the extent refs of the record just written into one commit
-    /// ref per sequence, which later checkpoints and the footer list.
     void add_commit_refs();
-    /// Builds the segment blocks of every copy of every commit, the directory
-    /// blocks and the items block of a closed file into `out`, as they land
-    /// when `out` is written at `base`, and returns the footer item that names
-    /// them. Each block is read by one pread, and its crc covers its bytes.
+    /// Builds the segment blocks, directory blocks and items block of a closed
+    /// file into `out` as they land when `out` is written at `base`, and
+    /// returns the footer item that names them.
     dstd::Expected<FileTail, dstd::Error> build_blocks(
         const RecordItems& items, std::uint64_t base,
         dstd::Vector<std::uint8_t>& out) const;
     dstd::Expected<void, dstd::Error> write_record(RecordKind kind,
                                                    const RecordItems& items);
     void latch(const dstd::Error& error);
-    /// True once a write failed, which every later write must report.
     bool latched() const noexcept {
         return latched_.load(std::memory_order_acquire);
     }
-    /// The first write error, meaningful once latched().
     dstd::Error latched_result() const;
 
     int fd_ = -1;
@@ -223,11 +200,9 @@ class DataFileWriter {
     dstd::String label_;
     RecordItems pending_items_;
     RecordItems all_items_;
-    /// The position in all_items_ of each copy's local id.
     dstd::HashMap<std::uint32_t, std::size_t> copy_item_at_;
-    /// Every committed extent ref, in commit order: close() builds the extent
-    /// table, the segment blocks and the directory from them without reading
-    /// the file again.
+    /// Every committed extent ref, in commit order, so close() builds the
+    /// tables without reading the file again.
     dstd::Vector<ExtentRefItem> committed_extents_;
     /// The committer thread closes and latches while commit threads read, so
     /// both are flags. The error behind `latched_` is written first and read
@@ -251,10 +226,9 @@ class DataFileReader {
     static dstd::Expected<DataFileReader, dstd::Error> open(
         dstd::StringView path, FooterItems footer = FooterItems::All);
     /// The reader of the closed file at `path` as its summary entry lists it,
-    /// as a light open would index it, with nothing read. The file opens on the
-    /// first read, which fails with Parse when the file is shorter than the
-    /// entry's needed bytes. Parse when the entry holds no tail or a tail this
-    /// reader cannot use.
+    /// with nothing read. The file opens on the first read, which fails with
+    /// Parse when the file is shorter than the entry's needed bytes. Parse when
+    /// the entry holds no tail or one this reader cannot use.
     static dstd::Expected<DataFileReader, dstd::Error> from_summary(
         dstd::StringView path, const SummaryEntry& entry);
 
@@ -281,9 +255,8 @@ class DataFileReader {
         std::uint64_t offset, std::size_t length,
         dstd::RawBuffer<std::uint8_t>& out, BlockReads* reads) const;
     /// Reads `length` bytes at `offset` in VERIFY_CHUNK_BYTES chunks and keeps
-    /// none of them, so the operating system caches the range for the reads
-    /// that follow. A range past the end of the file stops at the end. Io when
-    /// a read fails. `reads` counts the calls and their bytes.
+    /// none, so the operating system caches the range. A range past the end of
+    /// the file stops at the end. Io when a read fails. `reads` counts them.
     dstd::Expected<void, dstd::Error> warm_range(std::uint64_t offset,
                                                  std::uint64_t length,
                                                  BlockReads* reads) const;
@@ -292,33 +265,22 @@ class DataFileReader {
     /// the read itself fails. `reads` counts the call and its bytes.
     dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> read_block(
         const BlockHandle& handle, BlockReads* reads) const;
-    /// Checks the crc of a block without keeping its bytes: reads it in
-    /// VERIFY_CHUNK_BYTES chunks, so memory stays bounded for a big value run.
-    /// Parse when the block is out of the file or its crc fails, as read_extent
-    /// does. `reads` counts the pread calls it made and the bytes they
-    /// returned.
+    /// Checks the crc of a block in VERIFY_CHUNK_BYTES chunks, so memory stays
+    /// bounded for a big value run. Parse when the block is out of the file or
+    /// its crc fails. `reads` counts the calls and bytes.
     dstd::Expected<void, dstd::Error> verify_block(const ExtentRef& ref,
                                                    BlockReads* reads) const;
-    /// Reads the extents of one run into their own buffers, one preadv per
-    /// group of at most IOV_MAX refs with one iovec per extent pointing
-    /// straight into that extent's buffer, then checks each extent crc. The
-    /// buffers keep the stored bytes: the pages of an extent are decoded one at
-    /// a time, from the caller's side (extent_codec.h). `refs` and `targets`
-    /// are parallel spans of equal length; `refs` must be in ascending offset
-    /// order with each ref starting where the previous one ends, so one preadv
-    /// covers a group. A ref of zero length or out of the file, and an extent
-    /// whose crc fails, is left empty and marked bad through its target. A
-    /// short read past the end of the file (a truncated file) leaves the
-    /// extents it did not fill empty and bad, as read_extent reports them. The
-    /// only error is Io, when a read call itself fails, and the caller must
-    /// then treat the whole file as unreadable. The bytes of a bad extent are
-    /// dropped.
+    /// Reads the extents of one run, one preadv per group of at most IOV_MAX
+    /// refs, then checks each crc. `refs` and `targets` are parallel, and
+    /// `refs` must ascend, each starting where the previous ends. A bad or
+    /// truncated extent is left empty and marked bad. Io, the only error, ends
+    /// the file.
     dstd::Expected<BlockReads, dstd::Error> read_extents(
         dstd::Span<const ExtentRef> refs,
         dstd::Span<const ExtentTarget> targets) const;
     /// The extent refs of one commit a summary lists, read from its record.
     /// Parse when the record does not decode, sits elsewhere or is not the one
-    /// the summary names by crc; Io when the read fails. `reads` counts the
+    /// the summary names by crc. Io when the read fails. `reads` counts the
     /// calls and bytes.
     dstd::Expected<dstd::Vector<ExtentRefItem>, dstd::Error> read_commit(
         const CommitRefItem& ref, BlockReads* reads) const;
@@ -340,60 +302,48 @@ class DataFileReader {
                                                    std::uint64_t sequence,
                                                    std::uint64_t file_size);
 
-    /// True when one read of the file end gave a footer with a FileTail: the
-    /// header fields, the namespaces and the tail of it, and nothing else.
-    /// False falls back to the full open of the chain. Unsupported when the
-    /// tail names another format version.
+    /// True when one read of the file end gave a footer with a FileTail. False
+    /// falls back to the full open of the chain. Unsupported when the tail
+    /// names another format version.
     dstd::Expected<bool, dstd::Error> open_light(std::uint64_t file_size);
-    /// Applies the items block a footer names, as the footer's own items, so
-    /// the index of a full open holds every scope, copy, drop and commit
-    /// summary of the file.
+    /// Applies the items block a footer names, so the index of a full open
+    /// holds every scope, copy, drop and commit summary.
     dstd::Expected<void, dstd::Error> apply_items_block();
 
     mutable std::atomic<int> fd_{-1};
     std::uint64_t file_size_ = 0;
     std::size_t records_read_ = 0;
     FileIndex index_;
-    /// The path and the lock of a reader that opens its file on first use.
     dstd::String path_;
     dstd::UniquePtr<std::mutex> open_mutex_;
 };
 
 /// Where the bytes of one closed data file are. Each category counts bytes no
 /// other category counts, except extent_padding_bytes, which extent_bytes
-/// already holds, and the sum of file_bytes is exact:
-///   header_bytes + extent_bytes + record_bytes + gap_bytes +
-///   segment_block_bytes + items_block_bytes + directory_leaf_bytes +
-///   directory_separator_bytes + footer_bytes == file_bytes.
+/// already holds. The sum is exact: header + extent + record + gap +
+/// segment_block + items_block + directory_leaf + directory_separator + footer.
 struct SpaceReport {
     std::uint64_t file_bytes = 0;
-    /// The file header.
     std::uint64_t header_bytes = 0;
-    /// Distinct extents.
     std::uint64_t extents = 0;
     /// The stored bytes of every extent, the padding inside it included.
     std::uint64_t extent_bytes = 0;
     /// The page tables of the extents, their headers left out.
     std::uint64_t extent_page_table_bytes = 0;
-    /// The stored bytes of every page, compressed or raw.
     std::uint64_t page_bytes = 0;
-    /// The raw bytes those pages decode to.
     std::uint64_t page_raw_bytes = 0;
     std::uint64_t pages = 0;
     /// The pages stored with zstd, with a dictionary or without.
     std::uint64_t pages_compressed = 0;
     /// The pages stored with zstd and a dictionary.
     std::uint64_t pages_dict = 0;
-    /// Distinct page dictionaries the extents name.
     std::uint64_t dicts = 0;
-    /// The bytes of those dictionaries, each padded to EXTENT_ALIGN_BYTES.
     std::uint64_t dict_bytes = 0;
     /// The zero bytes an extent holds past its last page: part of extent_bytes.
     std::uint64_t extent_padding_bytes = 0;
     /// What no other line counts: the bytes that align a range, the runs that
     /// hold a big value outside an extent, and any byte after the trailer.
     std::uint64_t gap_bytes = 0;
-    /// The commit and checkpoint records.
     std::uint64_t record_bytes = 0;
     std::uint64_t segment_block_bytes = 0;
     std::uint64_t segment_entries = 0;
@@ -410,17 +360,13 @@ struct SpaceReport {
     std::uint64_t filter_bytes = 0;
     /// The footer record, the top table it holds and the trailer.
     std::uint64_t footer_bytes = 0;
-    /// The copies the items block lists.
     std::uint64_t copies = 0;
-    /// The commit and checkpoint records, one per commit.
     std::uint64_t commits = 0;
 };
 
-/// The space report of one closed data file: reads the header, the trailer, the
-/// commits, every block the footer names and the page table of every extent,
-/// and decodes no page. Parse when the file is not closed, when a record, an
-/// extent or a block does not verify, or when two categories claim the same
-/// bytes; Io when a read fails.
+/// The space report of one closed data file. It decodes no page. Parse when the
+/// file is not closed, when a record, an extent or a block does not verify, or
+/// when two categories claim the same bytes. Io when a read fails.
 dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path);
 
 }  // namespace dftracer::utils::store

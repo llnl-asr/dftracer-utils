@@ -129,7 +129,7 @@ void ThreadPoolExecutor::shutdown() {
 
     coord_cv_.notify_all();
     {
-        // set_threads may start the monitor; it checks running_ under this.
+        // set_threads may start the monitor. It checks running_ under this.
         std::lock_guard<std::mutex> resize(resize_mutex_);
         if (monitor_thread_.joinable()) monitor_thread_.join();
     }
@@ -209,11 +209,7 @@ void ThreadPoolExecutor::cancel_in_flight() {
 // Runnable work finishes before the workers stop. A coroutine chain woken to
 // unwind, such as a scan producer whose consumer stopped early, is destroyed
 // mid-chain by the orphan sweep below otherwise, and every frame still
-// awaiting it leaks. This waits only for work that is runnable or in flight;
-// cancel_in_flight() wakes the parked coroutines and calls this between
-// rounds. A worker inside a blocking handoff is parked too, not busy: it
-// waits on work the queue carries, or on something that never comes, and
-// either way it holds no run slot.
+// awaiting it leaks. A worker in a blocking handoff counts as parked.
 void ThreadPoolExecutor::quiesce() {
     for (;;) {
         if (live_workers_.load(std::memory_order_acquire) == 0) return;
@@ -420,7 +416,7 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
     const bool was_eager = eager_.load(std::memory_order_acquire);
     const bool now_eager = eager.value_or(was_eager);
     eager_.store(now_eager, std::memory_order_release);
-    // An elastic pool keeps its floor; one that turns elastic starts at one.
+    // An elastic pool keeps its floor. One that turns elastic starts at one.
     const std::size_t old_floor = min_workers_.load(std::memory_order_acquire);
     const std::size_t floor =
         now_eager ? threads
@@ -451,7 +447,6 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
 void ThreadPoolExecutor::grow_io_threads(std::size_t threads) {
     std::lock_guard<std::mutex> resize(resize_mutex_);
     if (threads <= io_pool_size_.load(std::memory_order_acquire)) return;
-    // A backend with no thread pool keeps its size.
     if (io_backend_ && io_backend_->grow_threads(threads))
         io_pool_size_.store(threads, std::memory_order_release);
 }
@@ -522,8 +517,8 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
     }
 
     while (running_ && !context->retire.load(std::memory_order_acquire)) {
-        // A cap that shrank below the permits held leaves the count below
-        // zero: a holder gives its permit back before its next task.
+        // A cap that shrank leaves the count below zero, so a holder gives its
+        // permit back before its next task.
         if (context->holds_permit &&
             permits_.load(std::memory_order_relaxed) < 0) {
             release_permit(context);
@@ -572,7 +567,7 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
                     utilities::monitor_resume_begin(pending_entry.monitor_id);
                 }
                 {
-                    // Our coroutines enter their own pool; anything else
+                    // Our coroutines enter their own pool. Anything else
                     // charges the general pool.
                     memory::Scope scope{general, nullptr};
                     pending_resume.resume();
@@ -614,10 +609,9 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
             // Give up the permit for a waiting/surplus thread, then park.
             release_permit(context);
             idle_workers_.fetch_add(1, std::memory_order_acq_rel);
-            // One idle worker at a time backs off from the short park; the
-            // rest re-check once after IDLE_PARK_MIN, which covers a missed
-            // wakeup, and then park on the long one, so a quiet pool does not
-            // wake every worker on the backoff ladder.
+            // One idle worker at a time backs off from the short park. The rest
+            // re-check once after IDLE_PARK_MIN to cover a missed wakeup, then
+            // park long.
             const bool poller =
                 !idle_poller_.exchange(true, std::memory_order_acq_rel);
             {
@@ -651,9 +645,8 @@ void ThreadPoolExecutor::worker_thread(WorkerContext* context) {
 
 void ThreadPoolExecutor::drive_until(const std::function<bool()>& done) {
     memory::Pool& general = memory::Manager::get().general();
-    // Backs off like an idle worker. A task with no awaiter that ends, new
-    // work and shutdown wake the park; the timeout still re-checks the queue
-    // for the enqueue that worker_thread's park comment describes.
+    // The timeout re-checks the queue for the enqueue that worker_thread's
+    // park comment describes.
     std::chrono::milliseconds park = IDLE_PARK_MIN;
 
     while (!done()) {
@@ -771,9 +764,8 @@ bool ThreadPoolExecutor::is_responsive() const {
         return false;
     }
 
-    // Deadlocked means work is pending and no worker has resumed anything
-    // for deadlock_timeout_. Task start and end counts cannot tell: one task
-    // may run for hours while its coroutines make progress.
+    // Deadlocked means work is pending and no worker has resumed anything for
+    // deadlock_timeout_. A task may run for hours while its coroutines resume.
     std::uint64_t resumes = 0;
     bool busy = run_queue_.size_approx() > 0;
     {
@@ -998,9 +990,8 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
     if (!task) {
         co_return;
     }
-    // Tells the owner the task ended when this frame ends: after the task
-    // ran, and also when it never runs because the owner stopped or the
-    // executor shut down and destroyed the queued frame.
+    // Tells the owner the task ended, also when the queued frame is destroyed
+    // unrun at shutdown.
     struct FinishTask {
         TaskOwner* owner;
         std::shared_ptr<Task> task;
@@ -1047,8 +1038,7 @@ coro::Coro ThreadPoolExecutor::run_task(std::shared_ptr<Task> task,
                                  context->worker_id, task->get_id(),
                                  task->get_name());
 
-        // run_coro_scope joins the scope to wait for any sub-spawned
-        // coroutines; the body never throws, it records task_error.
+        // The body never throws and records task_error.
         co_await run_coro_scope(
             this, [&, this](CoroScope& scope) -> coro::CoroTask<void> {
                 try {

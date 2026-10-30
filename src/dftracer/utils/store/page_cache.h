@@ -16,25 +16,22 @@ namespace dftracer::utils::store {
 /// reads it: a page the cache drops lives until the last query lets go of it.
 using CachedPage = dstd::SharedPtr<const dstd::RawBuffer<std::uint8_t>>;
 
-/// Decoded pages by the file they come from and the offset of their stored
-/// bytes in it, at most about `capacity` bytes of them, dropped by CLOCK: a
-/// page found since the hand last passed it gets a second chance, and a page
-/// kept but not found again goes first. Thread-safe: a key hashes to one of
-/// SHARDS shards, each with its own mutex and an equal share of the capacity.
+/// Decoded pages by file and offset of their stored bytes, at most about
+/// `capacity` bytes, dropped by CLOCK with a second chance for a page found
+/// since the hand last passed it. Thread-safe. A key hashes to one of SHARDS
+/// shards, each with its own mutex and an equal share of the capacity.
 class PageCache {
    public:
     explicit PageCache(std::size_t capacity);
     PageCache(const PageCache&) = delete;
     PageCache& operator=(const PageCache&) = delete;
 
-    /// The page at `offset` of file `file`, or null when the cache has none.
     CachedPage find(std::uint64_t file, std::uint64_t offset);
     /// Keeps `page` as the page at `offset` of file `file`, unless the cache
     /// holds one there already, and returns the page it holds. Drops pages of
     /// the shard until the shard is within its share, never the last one.
     CachedPage insert(std::uint64_t file, std::uint64_t offset,
                       CachedPage page);
-    /// The bytes of the pages the cache holds.
     std::size_t bytes() const;
 
    private:

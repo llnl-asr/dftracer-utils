@@ -75,7 +75,7 @@ void find_planted(void* context, const DebugSiteTotal& total) noexcept {
         *static_cast<Found*>(context) = {total.site, total.live, total.peak};
 }
 
-// Own functions, so each has its own site; the empty asm keeps the call to new
+// Own functions, so each has its own site. The empty asm keeps the call to new
 // from becoming a tail call.
 __attribute__((noinline)) char* plant_early() {
     char* p = new char[EARLY_BYTES];

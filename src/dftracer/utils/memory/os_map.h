@@ -12,10 +12,9 @@
 
 namespace dftracer::utils::memory {
 
-// The heap maps its memory with system calls, not through the libc symbols.
-// A tracer that wraps munmap (DFTracer) allocates in its wrapper, which
-// reaches this heap again before the first call returns. macOS has no
-// supported syscall(); a library there does not take another's calls.
+// The heap maps with system calls, not the libc symbols. A tracer that wraps
+// munmap (DFTracer) allocates in its wrapper and reaches this heap again.
+// macOS has no supported syscall().
 #if defined(__linux__)
 inline void* os_mmap(void* addr, std::size_t len, int prot, int flags, int fd,
                      off_t off) noexcept {

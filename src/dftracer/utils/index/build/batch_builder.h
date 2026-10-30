@@ -47,15 +47,16 @@ namespace dftracer::utils::index::build {
 using dftracer::utils::CoroScope;
 
 /// Bytes of memory, reserved capacity included, a sink holds before its worker
-/// commits it. Every worker holds one: on the 14,117 minife traces 32 MiB held
-/// 0.5 GB at 16 threads, and 4 MiB builds as fast with a 3% larger index.
+/// commits it. Every worker holds one, so a large value costs memory per
+/// thread.
 inline constexpr std::size_t MAX_SINK_BYTES = std::size_t{4} << 20;
 
-/// The limit a build applies; tests lower it to make small inputs commit.
+/// The limit a build applies. Tests lower it to make small inputs commit.
 inline std::atomic<std::size_t> g_max_sink_bytes{MAX_SINK_BYTES};
 
-/// Where the blocks of consecutive files start, then the end: about `workers`
-/// blocks of equal cost (equal file counts when `costs` is empty).
+/// Returns the start of each block of consecutive files, then the end. There
+/// are about `workers` blocks of equal cost (equal file counts when `costs` is
+/// empty).
 dstd::Vector<std::size_t> cut_blocks(std::size_t files,
                                      std::span<const std::uint64_t> costs,
                                      std::size_t workers);
@@ -95,8 +96,7 @@ struct IndexBuildBatchConfig {
     bool tier_only = false;
     /// Bytes the build may hold at once: 0 resolves through
     /// memory::resolve_spill_budget, memory::NO_SPILL_BUDGET leaves the build
-    /// unbounded. Parse workers admit a file only while its estimated bytes
-    /// fit.
+    /// unbounded.
     std::uint64_t memory_budget = 0;
     /// RecordSchema id every file is decoded with; empty detects each file's.
     std::string schema;
@@ -119,22 +119,19 @@ struct IndexBuildBatchConfig {
     /// If non-empty, parallel to `file_paths`: use these file_ids instead
     /// of allocating them in the build.
     std::vector<int> preassigned_file_ids;
-    /// With preassigned ids: the ids from this one up were reserved by this
-    /// build, so the index holds no data for them and their tiers need no
-    /// clearing. The default marks none.
+    /// With preassigned ids, the ids from this one up were reserved by this
+    /// build and need no clearing. The default marks none.
     int first_fresh_file_id = std::numeric_limits<int>::max();
 
-    /// If non-empty, parallel to `file_paths`: an open read-only descriptor
-    /// of each file, which the build uses instead of opening the file. The
-    /// build takes each one out of this vector when it prepares the file, and
-    /// closes it as soon as that file is parsed. A null entry opens the file
-    /// as usual.
+    /// If non-empty, parallel to `file_paths`: an open read-only descriptor of
+    /// each file, used instead of opening it. The build takes each one out of
+    /// this vector and closes it once the file is parsed. A null entry opens
+    /// the file as usual.
     std::vector<dstd::SharedPtr<ScopedFd>> input_fds;
 
     /// If non-empty, parallel to `file_paths`: the relative work of each file,
-    /// such as its size in bytes. A worker takes a run of consecutive files,
-    /// and the runs are cut to hold about equal work. Empty cuts them to
-    /// equal file counts.
+    /// such as its size in bytes. Runs of consecutive files are cut to equal
+    /// work. Empty cuts them to equal file counts.
     std::vector<std::uint64_t> file_costs;
 };
 
@@ -149,7 +146,6 @@ struct IndexBuildBatchMetrics {
     std::size_t max_files_in_flight = 0;
     /// Files whose build state passed their share and spilled to disk.
     std::size_t files_spilled = 0;
-    /// The most spill runs one file wrote while it was parsed.
     std::size_t max_spill_runs = 0;
 };
 
@@ -161,9 +157,8 @@ struct IndexBuildBatchResult {
     std::uint64_t total_events = 0;
     IndexBuildBatchMetrics metrics;
 
-    /// Per-file aggregation-fold out-of-band outputs (time bounds), for callers
-    /// using agg_fold_factory. Drained via
-    /// aggregators::merge_aggregation_folds.
+    /// Per-file out-of-band outputs (time bounds) for agg_fold_factory. Drained
+    /// via aggregators::merge_aggregation_folds.
     std::vector<index::schemas::dft::agg::AggFoldOutput> agg_outputs;
 };
 

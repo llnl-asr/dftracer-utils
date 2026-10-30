@@ -96,9 +96,8 @@ std::uint64_t now_micros() {
             .count());
 }
 
-/// The roots this process opened, kept open so each folder gets one data file
-/// per process, not one per write. They close before the process runtime
-/// stops, since their writers wait on it to close.
+/// Kept open so each folder gets one data file per process. They close before
+/// the process runtime stops, since their writers wait on it.
 struct CacheRoots {
     std::mutex mutex;
     std::map<std::string, std::shared_ptr<store::StoreRoot>> roots;

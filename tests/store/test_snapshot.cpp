@@ -143,8 +143,6 @@ WriterOptions small_extents() {
     return options;
 }
 
-/// The one executor of this suite: every writer coroutine runs on it, so a
-/// test submits flush and close there and waits for the result.
 Runtime& store_runtime() {
     static Runtime runtime(RUNTIME_THREADS);
     return runtime;
@@ -211,8 +209,6 @@ void write_file(const std::string& path,
                  static_cast<std::streamsize>(bytes.size()));
 }
 
-/// Every extent ref of a data file, with those a summary lists read from their
-/// commit records.
 std::vector<store::IndexedExtentRef> extent_refs_of(
     const DataFileReader& reader) {
     auto refs = reader.all_extent_refs();
@@ -237,7 +233,6 @@ bool is_data_file(const std::filesystem::path& path) {
     return path.extension() == ".dfs";
 }
 
-/// The one data file of `dir`, beside its summary.
 std::string only_data_file(const std::string& dir) {
     std::vector<std::string> found;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -247,14 +242,11 @@ std::string only_data_file(const std::string& dir) {
     return found.front();
 }
 
-/// Removes the summary of `dir`, as a crash that loses it leaves the directory.
 void drop_summary(const std::string& dir) {
     std::filesystem::remove(std::filesystem::path(dir) /
                             std::string(store::SUMMARY_FILE_NAME));
 }
 
-/// The bytes of a closed data file with the format version of its footer
-/// tail set to `version`, the footer record encoded again in place.
 std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
                                             std::uint32_t version) {
     REQUIRE(bytes.size() >= store::FILE_TRAILER_BYTES);
@@ -362,15 +354,11 @@ dstd::Vector<std::uint8_t> bytes_vector(const std::string& bytes) {
     return dstd::Vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
-/// A 17-byte value whose bytes show its place in the fold order.
 std::string concat_value(int index) {
     const std::string digits = std::to_string(index);
     return "concat-" + std::string(10 - digits.size(), '0') + digits;
 }
 
-/// Sets the process runtime to `threads` threads, so an open under it reads
-/// its files in parallel, and puts its thread count back at the end of the
-/// scope.
 class ScopedDefaultRuntime {
    public:
     explicit ScopedDefaultRuntime(std::size_t threads)
@@ -390,10 +378,8 @@ class ScopedDefaultRuntime {
     std::size_t previous_;
 };
 
-/// What one open of a root read, and a text of every scope state and every row,
-/// so two opens under different runtimes compare with one string. The read
-/// counters are the ones the dump left behind: an open reads no block, and the
-/// queries the dump makes read the commits they need.
+/// What one open of a root read, and a text of every scope state and row, so
+/// two opens under different runtimes compare with one string.
 struct OpenDump {
     std::string text;
     std::size_t files = 0;
@@ -416,7 +402,6 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     CHECK(snapshot->skipped().empty());
     OpenDump dump;
     dump.files = snapshot->open_stats().files;
-    // Open itself reads no block at all.
     CHECK(snapshot->read_stats().read_calls == 0);
     for (const ScopeKey& scope : scopes) {
         dump.text +=
@@ -442,7 +427,6 @@ OpenDump dump_open(const dftu_utils_test::ScopedTestDir& root,
     return dump;
 }
 
-/// The descriptor this process holds open on `path`, found by its inode, or -1.
 int descriptor_of(const std::string& path) {
     struct stat file_stat{};
     if (::stat(path.c_str(), &file_stat) != 0) return -1;
@@ -456,8 +440,6 @@ int descriptor_of(const std::string& path) {
     return -1;
 }
 
-/// One data file of one writer of the open tests: one commit of `keys` entries
-/// per scope, with a group commit after each one when `flushed`.
 void write_scopes_file(const dftu_utils_test::ScopedTestDir& dir,
                        const NamespaceSpec& spec,
                        const std::vector<ScopeKey>& scopes, int keys,
@@ -478,9 +460,6 @@ void write_scopes_file(const dftu_utils_test::ScopedTestDir& dir,
     REQUIRE(close_writer(*writer).has_value());
 }
 
-/// One data file of one writer of the open tests: `batches` commits of `keys`
-/// entries each, in one scope, with a group commit after each one when
-/// `flushed`.
 void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
                        const NamespaceSpec& spec, const ScopeKey& scope,
                        int batches, int keys, bool flushed) {
@@ -502,9 +481,6 @@ void write_scoped_file(const dftu_utils_test::ScopedTestDir& dir,
     REQUIRE(close_writer(*writer).has_value());
 }
 
-/// A closed file of `commits` small commits of one namespace, round robin over
-/// `scopes`, each writing a window of keys that overlaps the next commit's of
-/// the same scope, and the map each scope's keys end at.
 std::vector<std::map<std::string, std::string>> write_many_commits(
     const dftu_utils_test::ScopedTestDir& dir, const NamespaceSpec& spec,
     const std::vector<ScopeKey>& scopes, int commits) {
@@ -533,8 +509,6 @@ std::vector<std::map<std::string, std::string>> write_many_commits(
     return model;
 }
 
-/// The segment blocks the scope directory of a closed file names, each once,
-/// with the commit sequence of every run that names one.
 struct ClosedSegments {
     std::vector<store::BlockHandle> blocks;
     std::vector<std::uint64_t> runs;
@@ -676,11 +650,9 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_page_dict");
         const ScopeKey scope = file_scope("/traces/dict.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.dict");
-        // About 120 MiB of event-like values: the first dictionary trains on
-        // the first 8 MiB, the second on every eighth page of the 64 MiB
-        // after it.
+        // The first dictionary trains on the first 8 MiB, the second on every
+        // eighth page of the 64 MiB after it.
         constexpr int KEYS = 120000;
-        // Most batches fill extents; every tenth is a run larger than one.
         constexpr int PER_BATCH = 200;
         constexpr int PER_BIG_BATCH = 2000;
         const auto dict_key = [](int index) {
@@ -724,7 +696,6 @@ TEST_SUITE("index store snapshot") {
         }
         REQUIRE(flush_writer(*writer).has_value());
 
-        // Before the close the reader checks each commit, pages included.
         {
             auto open = Snapshot::open(dir.str());
             REQUIRE(open.has_value());
@@ -803,8 +774,6 @@ TEST_SUITE("index store snapshot") {
             if (!found.has_value()) {
                 ++failed;
             } else {
-                // A read that answers answers right: its page needed no
-                // dictionary.
                 REQUIRE(found->has_value());
                 CHECK(to_std((*found)->bytes()) == value(i));
             }
@@ -841,7 +810,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(writer->commit(std::move(first)).has_value());
         REQUIRE(flush_writer(*writer).has_value());
         {
-            // Committed and recorded, and still the old copy for readers.
             auto snapshot = Snapshot::open(dir.str());
             REQUIRE(snapshot.has_value());
             CHECK(get(*snapshot, "k1") == std::optional<std::string>("old1"));
@@ -850,12 +818,10 @@ TEST_SUITE("index store snapshot") {
             CHECK(snapshot->copy_info(spec, scope).params_hash == 5);
         }
 
-        // A plain batch cannot join a building copy.
         Batch plain = writer->batch(*id, scope, 5, &old_sources);
         plain.put(view_of(std::string("k9")), view_of(std::string("x")));
         CHECK_FALSE(writer->commit(std::move(plain)).has_value());
 
-        // An erase inside the building copy hides its earlier batches' keys.
         const std::string begin = "k3";
         const std::string end = std::string("k3") + '\0';
         REQUIRE(writer->erase(*id, scope, view_of(begin), view_of(end))
@@ -884,7 +850,6 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(snapshot.has_value());
             check_published(*snapshot);
         }
-        // Publishing twice, or a scope with no building copy, is refused.
         CHECK_FALSE(writer->publish(*id, scope, 9, &new_sources).has_value());
 
         REQUIRE(close_writer(*writer).has_value());
@@ -1278,8 +1243,6 @@ TEST_SUITE("index store snapshot") {
         write_file(corrupt_path, bytes);
 
         {
-            // A closed file is synced: the bad run fails the read of its own
-            // value, and the rest of the commit reads.
             auto corrupt = Snapshot::open(corrupt_dir.str());
             REQUIRE(corrupt.has_value());
             CHECK(corrupt->state(spec, scope) == ScopeState::Ready);
@@ -1290,8 +1253,6 @@ TEST_SUITE("index store snapshot") {
                 corrupt->get(spec, scope, view_of(std::string("small")));
             REQUIRE(other.has_value());
             CHECK(other->has_value());
-            // No directory or segment block names the run, but check() reads
-            // it through the entry that holds it.
             auto report = corrupt->check();
             REQUIRE(report.has_value());
             CHECK(report->blocks == 2);
@@ -1345,8 +1306,6 @@ TEST_SUITE("index store snapshot") {
 
         auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
-        // The batch is one segment now instead of a run of extent-sized ones:
-        // it is longer than an extent and is written as a run of its own.
         REQUIRE(extent_refs_of(*reader).size() == 1);
         const store::ExtentRefItem run = extent_refs_of(*reader)[0].ref;
         REQUIRE(run.segments.size() == 1);
@@ -1435,7 +1394,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(only_copy_generation(left_path) == 1);
         CHECK(only_copy_generation(right_path) == 1);
 
-        // The higher writer id wins, and here it holds the smaller name.
         const std::string tied_low =
             forge_copy(left_path, by_writer, "w-z.dfs", 100);
         const std::string tied_high =
@@ -1451,7 +1409,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(tie_value->has_value());
         CHECK(to_std((*tie_value)->bytes()) == "from-right");
 
-        // Equal writer ids: the larger file name wins.
         const std::string named_low =
             forge_copy(right_path, by_name, "w-a.dfs", 300);
         const std::string named_high =
@@ -1587,8 +1544,6 @@ TEST_SUITE("index store snapshot") {
         dstd::Vector<SourceStat> sources;
         sources.push_back(SourceStat{11, 22, 33});
 
-        // One writer, so one copy: a batch, an erase, then a batch that puts a
-        // key of the range back.
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
@@ -1608,8 +1563,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(close_writer(*writer).has_value());
 
         const auto check_rows = [&](Snapshot& snapshot) {
-            // The copy stays current, with its generation, its params hash and
-            // its sources.
             const CopyInfo info = snapshot.copy_info(spec, scope);
             CHECK(info.state == ScopeState::Ready);
             CHECK(info.generation == 1);
@@ -1621,7 +1574,6 @@ TEST_SUITE("index store snapshot") {
                 snapshot.get(spec, scope, view_of(std::string("key-b")));
             REQUIRE(hidden.has_value());
             CHECK_FALSE(hidden->has_value());
-            // A key the range holds in both batches reads its later version.
             auto shown =
                 snapshot.get(spec, scope, view_of(std::string("key-c")));
             REQUIRE(shown.has_value());
@@ -1665,7 +1617,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(snapshot.has_value());
         check_rows(*snapshot);
 
-        // The same file without its footer: the chain carries the erase.
         dftu_utils_test::ScopedTestDir chain_dir("snapshot_erase_range_chain");
         write_file(chain_dir.file("data.dfs"),
                    without_footer(read_file(only_data_file(dir.str()))));
@@ -1732,12 +1683,10 @@ TEST_SUITE("index store snapshot") {
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        // The hidden version of key-x is not folded; the later one is.
         auto folded = snapshot->get(spec, scope, view_of(std::string("key-x")));
         REQUIRE(folded.has_value());
         REQUIRE(folded->has_value());
         CHECK(to_std((*folded)->bytes()) == "x2");
-        // No erase covers key-z, so both versions fold in ordinal order.
         auto both = snapshot->get(spec, scope, view_of(std::string("key-z")));
         REQUIRE(both.has_value());
         REQUIRE(both->has_value());
@@ -1768,7 +1717,6 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(close_writer(*writer).has_value());
         }
 
-        // The second writer of the scope holds no copy of it yet.
         {
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
@@ -1829,7 +1777,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(visible.has_value());
         REQUIRE(visible->has_value());
 
-        // The same file with the record of the erase: the erase hides.
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         auto cursor = snapshot->scan(spec, scope, ByteView{}, ByteView{});
@@ -1917,7 +1864,6 @@ TEST_SUITE("index store snapshot") {
             CHECK(info.sources[1].hash == 900);
         };
 
-        // Through the summary a close leaves.
         {
             auto snapshot = Snapshot::open(dir.str());
             REQUIRE(snapshot.has_value());
@@ -1932,7 +1878,6 @@ TEST_SUITE("index store snapshot") {
             CHECK(absent.sources.empty());
         }
 
-        // Through the records of a file whose summary and footer a crash took.
         drop_summary(dir.str());
         const std::string path = only_data_file(dir.str());
         write_file(path, without_footer(read_file(path)));
@@ -2071,7 +2016,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(snapshot.has_value());
         auto listed = snapshot->namespaces();
         REQUIRE(listed.has_value());
-        // One entry per name and version any file declares, in that order.
         REQUIRE(listed->size() == 3);
         CHECK(to_std((*listed)[0].name) == "dftu.test.namespaces");
         CHECK((*listed)[0].format_version == 1);
@@ -2112,7 +2056,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE_FALSE(rejected_hash.has_value());
         CHECK(rejected_hash.error().is(dstd::Condition::InvalidArgument));
 
-        // The copy is still the one its first batch announced.
         Batch again = writer->batch(*id, scope, 9, &kept_sources);
         again.put(view_of(std::string("key-d")), view_of(std::string("d")));
         REQUIRE(writer->commit(std::move(again)).has_value());
@@ -2286,8 +2229,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(writer->commit(std::move(batch)).has_value());
         REQUIRE(close_writer(*writer).has_value());
 
-        // A file without a footer takes its version from the header, and a
-        // closed file from the tail of its footer.
         std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         std::vector<std::uint8_t> header_one = bytes;
         dftracer::utils::write_u32_le(header_one.data() + 8, 1);
@@ -2775,8 +2716,6 @@ TEST_SUITE("index store snapshot") {
                                     std::move(first_segments)));
             REQUIRE(file->commit().has_value());
 
-            // One commit whose single extent holds a segment of copy 1 and a
-            // segment of copy 2.
             add_scope(*file, 2, "/traces/b.pfw");
             add_copy(*file, 2, 2);
             const auto segment_a2 = seal("a-2", "a-value-2");
@@ -2868,8 +2807,6 @@ TEST_SUITE("index store snapshot") {
             }
             REQUIRE(flush_writer(*writer).has_value());
 
-            // One batch is one segment, so a segment of an extent or more is a
-            // run of its own: it is no longer a failed commit.
             auto reader = DataFileReader::open(to_std(writer->path()));
             REQUIRE(reader.has_value());
             REQUIRE(extent_refs_of(*reader).size() == std::size(lengths));
@@ -3029,7 +2966,6 @@ TEST_SUITE("index store snapshot") {
             return dump_open(dir, spec, scopes);
         }();
 
-        // Every namespace, scope state and row is the same either way.
         CHECK(one.text == eight.text);
         CHECK(one.files == WRITERS);
         CHECK(eight.files == WRITERS);
@@ -3041,8 +2977,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(one.text.find("b0-key-0000=value-0") != std::string::npos);
         CHECK(one.extents >= WRITERS * BATCHES);
         CHECK(one.extents == eight.extents);
-        // A lazy open reads no block, and the dump reads every extent once. The
-        // files closed, so every commit is synced and none is checked whole.
         CHECK(eight.read_calls == one.read_calls);
         CHECK(eight.commits == one.commits);
         CHECK(eight.commits >= WRITERS);
@@ -3050,15 +2984,10 @@ TEST_SUITE("index store snapshot") {
         CHECK(one.commits_verified == 0);
         CHECK(one.extents_read == one.extents);
         CHECK(eight.extents_read == eight.extents);
-        // The files closed, so the dump reads the directory and segment blocks
-        // of each scope, one call each, and no commit record.
         CHECK(one.indexes_read == 0);
         CHECK(eight.indexes_read == 0);
         CHECK(eight.metadata_blocks_read == one.metadata_blocks_read);
         CHECK(eight.metadata_blocks_read >= 2U * WRITERS);
-        // Each file holds several extents in one window, which the second
-        // extent loaded there reads whole, in one call: a file is smaller than
-        // one chunk of the read.
         CHECK(eight.windows_warmed == WRITERS);
         CHECK(eight.read_calls == eight.extents_read +
                                       eight.metadata_blocks_read +
@@ -3078,8 +3007,6 @@ TEST_SUITE("index store snapshot") {
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 3);
-        // One group commit per scope, so the middle reference is one commit's
-        // extents, read in one preadv and crc-checked as one block.
         const store::ExtentRefItem middle = extent_refs_of(*reader)[1].ref;
         std::uint64_t middle_raw = 0;
         for (const store::ExtentSegment& segment : middle.segments) {
@@ -3118,9 +3045,6 @@ TEST_SUITE("index store snapshot") {
             CHECK(collect(cursor).size() == 1000);
             CHECK(snapshot->open_stats().files == 1);
             CHECK(snapshot->open_stats().extents == 3);
-            // The three commits of the file, each read once at its first touch:
-            // the queries of one dump touch each of them exactly once, and
-            // read the pages they need besides.
             CHECK(snapshot->read_stats().commits_verified == 3);
             CHECK(snapshot->read_stats().read_calls ==
                   3 + snapshot->read_stats().page_reads);
@@ -3137,8 +3061,6 @@ TEST_SUITE("index store snapshot") {
             file_scope("/traces/c.pfw"), file_scope("/traces/d.pfw")};
         write_scopes_file(dir, spec, scopes, 1000, true);
         const std::string path = only_data_file(dir.str());
-        // Cut as a crash before the close leaves it, so each commit is checked
-        // whole on its first touch.
         write_file(path, without_footer(read_file(path)));
         drop_summary(dir.str());
         const std::string key_text = "b0-key-0000";
@@ -3166,8 +3088,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, scopes[2]) == ScopeState::Bad);
         CHECK(snapshot->read_stats().commits_verified == 0);
 
-        // With the file readable again, a failed commit keeps its error and is
-        // not read again, while a commit no query touched reads as usual.
         REQUIRE(::dup2(saved_fd, data_fd) == data_fd);
         ::close(saved_fd);
         ::close(dir_fd);
@@ -3190,8 +3110,6 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey both = file_scope("/traces/both.pfw");
         const ScopeKey late = file_scope("/traces/late.pfw");
         {
-            // The second commit holds two extents: one of `both` and one of
-            // `late`.
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
@@ -3227,8 +3145,6 @@ TEST_SUITE("index store snapshot") {
             }
         }
         REQUIRE(late_extent != nullptr);
-        // A byte of the first page of the extent of `late`, which holds its
-        // first key and which the page crc covers.
         std::vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(late_extent->offset + late_extent->length <= bytes.size());
         const auto late_at = static_cast<std::size_t>(late_extent->offset);
@@ -3242,8 +3158,6 @@ TEST_SUITE("index store snapshot") {
         ScopedDefaultRuntime runtime(1);
         auto snapshot = Snapshot::open(copy_dir.str());
         REQUIRE(snapshot.has_value());
-        // The commit is synced, so nothing checks it whole: the state is the
-        // one its records give.
         CHECK(snapshot->state(spec, late) == ScopeState::Ready);
         CHECK(snapshot->read_stats().extents_read == 0);
 
@@ -3256,7 +3170,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(late_cursor.error().has_value());
         CHECK(late_cursor.error()->is(dstd::Condition::Parse));
 
-        // The other extent of the same commit reads.
         const std::string both_key = "b1-" + key_of(0);
         auto found = snapshot->get(spec, both, view_of(both_key));
         REQUIRE(found.has_value());
@@ -3264,8 +3177,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(to_std((*found)->bytes()) == value_of(0));
         CHECK(snapshot->read_stats().extents_read == 2);
 
-        // An extent that cannot be read keeps its error after the file reads
-        // again, while the extents already read stay readable.
         const int data_fd = descriptor_of(copy_path);
         REQUIRE(data_fd >= 0);
         const int saved_fd = ::dup(data_fd);
@@ -3334,8 +3245,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(closed_file.has_value());
         CHECK(closed_file->index().closed);
 
-        // Without the footer, only the durable commit is read extent by extent;
-        // the other is checked whole on its first touch.
         write_file(cut_dir.file("w-mark.dfs"), without_footer(read_file(path)));
         ScopedDefaultRuntime runtime(1);
         auto snapshot = Snapshot::open(cut_dir.str());
@@ -3370,7 +3279,6 @@ TEST_SUITE("index store snapshot") {
             view_of(std::string("b0-") + key_of(500)), ByteView{});
         REQUIRE_FALSE(cursor.at_end());
         CHECK(to_std(cursor.key()) == "b0-" + key_of(500));
-        // Only the first scope's extent is read before the first row.
         CHECK(snapshot->read_stats().extents_read == 1);
         std::size_t rows = 0;
         while (!cursor.at_end()) {
@@ -3411,8 +3319,6 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(close_writer(*writer).has_value());
         }
         {
-            // A newer copy of a, a whole drop of b, a range drop of c and a
-            // new scope d, in a second file.
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
@@ -3426,9 +3332,6 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(close_writer(*writer).has_value());
         }
         {
-            // More commits than a checkpoint interval, so the chain of the cut
-            // file lists most commits by summary, and a big value, over scopes
-            // of their own.
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
@@ -3451,8 +3354,6 @@ TEST_SUITE("index store snapshot") {
              std::filesystem::directory_iterator(dir.str())) {
             if (!is_data_file(entry.path())) continue;
             const std::string path = entry.path().string();
-            // A light open keeps the directory and leaves the scope items of
-            // the footer unread; a full open reads them.
             auto light =
                 DataFileReader::open(path, store::FooterItems::Directory);
             REQUIRE(light.has_value());
@@ -3497,7 +3398,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(closed.find("/traces/m1.pfw many-big=" +
                           std::string(3 * SMALL_EXTENT, 'b')) !=
               std::string::npos);
-        // check() sees the same commits, extents and segments either way.
         const auto checked = [](const std::string& root) {
             auto snapshot = Snapshot::open(root);
             REQUIRE(snapshot.has_value());
@@ -3510,7 +3410,6 @@ TEST_SUITE("index store snapshot") {
                    std::to_string(report->segments);
         };
         CHECK(checked(dir.str()) == checked(cut_dir.str()));
-        // The newer copy of a, no b, c without its dropped range, and d.
         CHECK(closed.find("/traces/a.pfw key-" + key_of(0) + "=second-") !=
               std::string::npos);
         CHECK(closed.find("/traces/b.pfw key-") == std::string::npos);
@@ -3530,8 +3429,6 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey both = file_scope("/traces/both.pfw");
         const ScopeKey late = file_scope("/traces/late.pfw");
         {
-            // `both` has a segment in each of two commits, and `late` one in
-            // the second only.
             auto writer = make_writer(dir);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
@@ -3556,7 +3453,6 @@ TEST_SUITE("index store snapshot") {
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const auto& refs = extent_refs_of(*reader);
-        // Two commits, each with its own extents.
         const auto newest = std::max_element(refs.begin(), refs.end(),
                                              [](const auto& a, const auto& b) {
                                                  return a.sequence < b.sequence;
@@ -3568,8 +3464,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(oldest->sequence < newest->sequence);
         const store::ExtentRefItem newer = newest->ref;
 
-        // The last byte of the newer commit's extent is padding no segment
-        // covers, so only its crc sees the change.
         std::vector<std::uint8_t> bytes = read_file(path);
         REQUIRE(newer.offset + newer.length <= bytes.size());
         bytes[static_cast<std::size_t>(newer.offset) + newer.length - 1U] ^=
@@ -3580,7 +3474,6 @@ TEST_SUITE("index store snapshot") {
         ScopedDefaultRuntime runtime(1);
         auto snapshot = Snapshot::open(copy_dir.str());
         REQUIRE(snapshot.has_value());
-        // The newer commit reads Bad through `late`, before any read fails.
         CHECK(snapshot->state(spec, late) == ScopeState::Bad);
         CHECK(snapshot->read_stats().commits_verified == 1);
 
@@ -3592,9 +3485,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(dir_fd >= 0);
         REQUIRE(::dup2(dir_fd, data_fd) == data_fd);
 
-        // The older commit of `both` now fails to read, and its newer one is
-        // Bad: the copy is unreadable whatever else failed, so the query finds
-        // nothing and reports no error.
         const std::string key_text = "b0-key-0000";
         auto found = snapshot->get(spec, both, view_of(key_text));
         REQUIRE(found.has_value());
@@ -3636,9 +3526,6 @@ TEST_SUITE("index store snapshot") {
             ScopedDefaultRuntime runtime(threads);
             auto snapshot = Snapshot::open(cut_dir.str());
             REQUIRE(snapshot.has_value());
-            // An extent cut in two and the records after it are gone, so the
-            // scopes they name are absent rather than bad, and the copy the
-            // file still names is whole.
             CHECK(snapshot->skipped().empty());
             CHECK(snapshot->state(spec, scopes[0]) == ScopeState::Ready);
             CHECK(snapshot->state(spec, scopes[1]) == ScopeState::Absent);
@@ -3650,7 +3537,6 @@ TEST_SUITE("index store snapshot") {
             CHECK(to_std((*found)->bytes()) == "value-999");
             CHECK(snapshot->open_stats().files == 1);
             CHECK(snapshot->open_stats().extents == 1);
-            // One commit, read once, by the state and the query that need it.
             CHECK(snapshot->read_stats().commits_verified == 1);
             CHECK(snapshot->read_stats().read_calls ==
                   1 + snapshot->read_stats().page_reads);
@@ -3672,8 +3558,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(copied_reader.has_value());
         REQUIRE(extent_refs_of(*copied_reader).size() == 1);
         const store::ExtentRefItem run = extent_refs_of(*copied_reader)[0].ref;
-        // Without a group commit per batch every record sits after the extents,
-        // so a cut inside the extents leaves no index to recover.
         const std::uint64_t cut = run.offset + run.length / 2U;
         REQUIRE(cut < bytes.size());
         write_file(dir.file("w-cut.dfs"),
@@ -3700,8 +3584,6 @@ TEST_SUITE("index store snapshot") {
             auto writer = make_writer(dir, options);
             auto id = writer->add_namespace(spec);
             REQUIRE(id.has_value());
-            // One flush per batch seals a small extent each time, so the file
-            // holds far more extents than its size in extent sizes.
             for (int b = 0; b < 40; ++b) {
                 Batch batch = writer->batch(*id, scope, 0);
                 batch.put(view_of("k" + std::to_string(100 + b)),
@@ -3783,8 +3665,6 @@ TEST_SUITE("index store snapshot") {
             }
         };
         SUBCASE("a torn entry ends the summary") {
-            // A byte of the second entry, so its crc fails and the reader
-            // stops there.
             const std::size_t first =
                 12 + dftracer::utils::read_u32_le(bytes.data() + 4);
             bytes[first + 20] ^= 0xFFU;
@@ -3852,8 +3732,6 @@ TEST_SUITE("index store snapshot") {
         const std::string path = only_data_file(dir.str());
         write_file(path, without_footer(read_file(path)));
 
-        // The entry names blocks the close synced before its footer, so the
-        // file reads through them as a closed file.
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->open_stats().files_summarized == 1);
@@ -3906,8 +3784,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == value_of(7));
-        // Only the file that holds the scope reads its directory leaf and its
-        // segment block; every other file is ruled out by its tail.
         CHECK(snapshot->read_stats().files_filtered == FILES - 1);
         CHECK(snapshot->read_stats().metadata_blocks_read == 2);
 
@@ -3918,7 +3794,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->read_stats().files_filtered == 2 * FILES - 1);
         CHECK(snapshot->read_stats().metadata_blocks_read == 2);
 
-        // Every scope still reads whole through a scan.
         for (int f = 0; f < FILES; ++f) {
             auto cursor =
                 snapshot->scan(spec, scopes[static_cast<std::size_t>(f)],
@@ -3941,8 +3816,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE_FALSE(refused.has_value());
         CHECK(refused.error().is(dstd::Condition::InvalidArgument));
 
-        // A cache of no bytes still keeps the page a query reads, and every
-        // value reads right.
         ::setenv(name, "0", 1);
         auto tiny = Snapshot::open(dir.str());
         ::unsetenv(name);
@@ -3969,7 +3842,6 @@ TEST_SUITE("index store snapshot") {
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
-        // Two files open, and not one block of them read.
         REQUIRE(snapshot->open_stats().files == 2);
         const store::ReadStats cold = snapshot->read_stats();
         CHECK(cold.commits_verified == 0);
@@ -3982,11 +3854,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
         CHECK(to_std((*found)->bytes()) == value_of(0));
-        // The files closed, so their commits are synced: the scope filter of
-        // the other file rules the scope out, and the get reads the directory
-        // block of the file that holds it, the segment block of the one commit
-        // whose range holds the key, then the page table of the one extent
-        // that holds it and the page that holds the key.
         const store::ReadStats touched = snapshot->read_stats();
         CHECK(touched.commits_verified == 0);
         CHECK(touched.indexes_read == 0);
@@ -4010,7 +3877,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(both.extents_read == 2);
         CHECK(both.page_reads == 2);
         CHECK(both.read_calls == 8);
-        // A closed file holds no commit object and lists no extent ref.
         CHECK(snapshot->open_stats().commits == 0);
         CHECK(snapshot->open_stats().extents == 0);
     }
@@ -4024,9 +3890,6 @@ TEST_SUITE("index store snapshot") {
         const ScopeKey sound = file_scope("/traces/sound.pfw");
         const NamespaceSpec spec = put_spec("dftu.test.put");
 
-        // One extent holds the segment of `broken` and the segment of `shared`,
-        // and the commit that names it is the one the corrupt byte hits. The
-        // next extent holds the segment of `sound` alone.
         auto writer = make_writer(dir);
         auto id = writer->add_namespace(spec);
         REQUIRE(id.has_value());
@@ -4065,8 +3928,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->state(spec, shared) == ScopeState::Bad);
         CHECK(snapshot->read_stats().commits_verified == 1);
 
-        // The good scope is read on its own, and the bad commit is not touched
-        // by the query that does not need it.
         auto visible =
             snapshot->get(spec, sound, view_of(std::string("sound-1")));
         REQUIRE(visible.has_value());
@@ -4102,14 +3963,10 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(writer->commit(std::move(entries)).has_value());
         }
         REQUIRE(close_writer(*writer).has_value());
-        // The sound scope is a file of its own, so its commit is not the one
-        // the big value run belongs to.
         write_scoped_file(copy_dir, spec, sound_scope, 1, 20, true);
 
         auto reader = DataFileReader::open(to_std(writer->path()));
         REQUIRE(reader.has_value());
-        // The big value is a run of its own, the one extent ref with no
-        // segments.
         bool found_run = false;
         store::ExtentRef run{};
         for (const store::IndexedExtentRef& extent : extent_refs_of(*reader)) {
@@ -4131,7 +3988,6 @@ TEST_SUITE("index store snapshot") {
 
         auto snapshot = Snapshot::open(copy_dir.str());
         REQUIRE(snapshot.has_value());
-        // Nothing of the run was read at open.
         CHECK(snapshot->read_stats().extents_read == 0);
         CHECK(snapshot->state(spec, big_scope) == ScopeState::Bad);
         auto hidden =
@@ -4139,7 +3995,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(hidden.has_value());
         CHECK_FALSE(hidden->has_value());
 
-        // The other commit of the file is untouched by it.
         CHECK(snapshot->state(spec, sound_scope) == ScopeState::Ready);
         auto visible = snapshot->get(spec, sound_scope,
                                      view_of(std::string("b0-key-0000")));
@@ -4163,8 +4018,6 @@ TEST_SUITE("index store snapshot") {
             write_scoped_file(dir, spec, scope, BATCHES, KEYS, true);
         }
 
-        // The same root as written, and again cut before every footer, as a
-        // crash before the closes leaves it.
         dftu_utils_test::ScopedTestDir cut_dir("snapshot_lazy_threads_cut");
         for (const auto& entry :
              std::filesystem::directory_iterator(dir.str())) {
@@ -4219,8 +4072,6 @@ TEST_SUITE("index store snapshot") {
             for (std::thread& thread : threads) thread.join();
             CHECK(failures.load() == 0);
 
-            // Each extent of a synced root, and each commit of a cut one, was
-            // read exactly once, whatever the order the threads reached it in.
             const store::ReadStats reads = snapshot.read_stats();
             CHECK(reads.commits_verified ==
                   (synced ? 0U : static_cast<std::uint64_t>(FILES * BATCHES)));
@@ -4305,8 +4156,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->read_stats().extents_read == 0);
 
-        // The commit verifies: its extent crc is right and its segment index is
-        // well formed. A lookup through the index does not reject it either.
         auto found = snapshot->get(spec, scope, view_of(std::string("k2")));
         REQUIRE(found.has_value());
         REQUIRE(found->has_value());
@@ -4325,10 +4174,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(to_std(report->bad_segments[0].file) == "w-check.dfs");
         CHECK(report->bad_segments[0].extent_offset == listed.offset);
         CHECK(report->bad_segments[0].offset_in_extent == offset_in_extent);
-        // The check reads the extent whole against its crc, and not the page
-        // table the get read.
         CHECK(snapshot->read_stats().extents_read == before.extents_read + 1);
-        // The walk does not change what the commit already read.
         CHECK(snapshot->state(spec, scope) == ScopeState::Ready);
     }
 
@@ -4343,7 +4189,6 @@ TEST_SUITE("index store snapshot") {
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         REQUIRE(extent_refs_of(*reader).size() == 3);
-        // The middle extent of the file is the one that does not verify.
         const store::ExtentRef dead{extent_refs_of(*reader)[1].ref.offset,
                                     extent_refs_of(*reader)[1].ref.length,
                                     extent_refs_of(*reader)[1].ref.crc};
@@ -4362,9 +4207,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(report->files == 1);
         CHECK(report->commits == 3);
         CHECK(report->blocks == 3);
-        // The two extent refs that do verify hold a walkable segment each; the
-        // one that does not is reported as the commit that fails, not as a
-        // segment, since its bytes are not there to walk.
         CHECK(report->segments == 2);
         CHECK(report->bad_segments.empty());
         REQUIRE(report->bad_commits.size() == 1);
@@ -4372,7 +4214,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(report->bad_commits[0].sequence ==
               extent_refs_of(*reader)[1].sequence);
         CHECK(report->bytes_read > 0);
-        // The check leaves the state of every commit it read as it found it.
         CHECK(snapshot->state(spec, scope) == ScopeState::Bad);
     }
 
@@ -4380,8 +4221,6 @@ TEST_SUITE("index store snapshot") {
         dftu_utils_test::ScopedTestDir dir("snapshot_directory_levels");
         const NamespaceSpec spec = put_spec("dftu.test.put");
         const std::string path = dir.file("w-levels.dfs");
-        // Long paths make each separator of the top table long, so a few
-        // thousand scopes fill more than one top table.
         constexpr std::uint32_t SCOPES = 12000;
         const auto scope_path = [](std::uint32_t index) {
             std::string digits = std::to_string(index);
@@ -4389,8 +4228,6 @@ TEST_SUITE("index store snapshot") {
                    std::string(7 - digits.size(), '0') + digits + ".pfw";
         };
 
-        // Copies without a commit: the directory lists every scope, and no
-        // extent is written.
         {
             auto file = store::DataFileWriter::create(path, SMALL_EXTENT,
                                                       "host", "label");
@@ -4427,7 +4264,6 @@ TEST_SUITE("index store snapshot") {
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
         CHECK(snapshot->read_stats().read_calls == 0);
-        // One scope reads one block per level, and nothing else.
         CHECK(snapshot->state(spec, file_scope(scope_path(SCOPES / 2))) ==
               ScopeState::Ready);
         CHECK(snapshot->read_stats().metadata_blocks_read == levels);
@@ -4486,8 +4322,6 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(close_writer(*writer).has_value());
         }
 
-        // The whole file fits one extent: how many pages it holds comes from
-        // the stored bytes themselves.
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const auto refs = extent_refs_of(*reader);
@@ -4559,7 +4393,6 @@ TEST_SUITE("index store snapshot") {
                 }
             }
 
-            // The reader names the namespace without its codec.
             auto snapshot = Snapshot::open(dir.str());
             REQUIRE(snapshot.has_value());
             auto found = snapshot->get(put_spec("dftu.test.codec"), scope,
@@ -4609,8 +4442,6 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(close_writer(*writer).has_value());
         }
 
-        // One segment of several granules fills one extent, so how many pages
-        // it holds comes from the stored bytes themselves.
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const auto refs = extent_refs_of(*reader);
@@ -4693,8 +4524,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(head.has_value());
         REQUIRE(head->has_value());
         CHECK(to_std((*head)->bytes()) == "small");
-        // The head of the segment has a page of its own, then the page of the
-        // first granule.
         CHECK(snapshot->read_stats().pages_decoded == 2);
 
         auto wide = snapshot->get(spec, scope, view_of(std::string("m")));
@@ -4726,9 +4555,6 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->skipped().empty());
         CHECK(snapshot->read_stats().metadata_blocks_read == 0);
 
-        // The directory of three scopes is one leaf block, and every commit of
-        // one scope fits in one segment block, so a cold get reads two metadata
-        // blocks however many commits the file holds.
         auto one = snapshot->get(spec, scopes[0], view_of(key_of(0)));
         REQUIRE(one.has_value());
         REQUIRE(one->has_value());
@@ -4747,7 +4573,6 @@ TEST_SUITE("index store snapshot") {
                 snapshot->scan(spec, scopes[s], ByteView{}, ByteView{});
             CHECK(collect(cursor) == expected);
         }
-        // The same leaf and one segment block per scope, whatever is asked.
         CHECK(snapshot->read_stats().metadata_blocks_read == 1 + SCOPES);
         auto absent = snapshot->get(spec, scopes[0], view_of(key_of(1000)));
         REQUIRE(absent.has_value());
@@ -4766,7 +4591,6 @@ TEST_SUITE("index store snapshot") {
         auto reader = DataFileReader::open(path);
         REQUIRE(reader.has_value());
         const ClosedSegments closed = closed_segments(*reader);
-        // Every commit of the one copy of the scope names the same block.
         REQUIRE(closed.blocks.size() == 1);
         CHECK(closed.blocks[0].length < store::SEGMENT_BLOCK_BYTES);
 
@@ -4776,8 +4600,6 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(report.has_value());
         CHECK(report->bad_commits.empty());
         CHECK(report->bad_segments.empty());
-        // One directory leaf and the one segment block, and every segment of
-        // the file once.
         CHECK(report->metadata_blocks == 2);
         CHECK(report->segments == static_cast<std::size_t>(COMMITS));
 

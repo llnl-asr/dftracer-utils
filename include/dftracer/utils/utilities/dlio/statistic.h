@@ -11,9 +11,8 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-/// Lightweight min/max/mean/count accumulator with an optional quantile store
-/// for quantile queries. When no store is attached, quantile() falls back to a
-/// uniform interpolation between observed min and max.
+/// Min/max/mean/count accumulator with an optional quantile store.
+/// Without a store, quantile() interpolates uniformly between min and max.
 class Statistic {
    public:
     using Quantiles = index::schemas::dft::agg::QuantileStore;

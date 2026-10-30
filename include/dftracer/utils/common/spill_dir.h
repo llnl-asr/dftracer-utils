@@ -23,7 +23,7 @@ namespace dftracer::utils {
 Result<std::string> spill_dir();
 
 /// True when `dir` is on a RAM-backed file system (tmpfs). Decided once per
-/// directory; the first such directory logs one warning per process naming it
+/// directory. The first such directory logs one warning per process naming it
 /// and DFTRACER_UTILS_SPILL_DIR. Thread safe.
 bool spill_dir_in_memory(const std::string& dir);
 
@@ -68,11 +68,10 @@ class ScopedSpillSubdir {
 
     const std::string& path() const noexcept { return path_; }
 
-    /// The charge for the files written in this directory.
     SpillCharge& charge() const noexcept { return *charge_; }
 
     /// The charge of the live ScopedSpillSubdir that holds `file`, for a writer
-    /// that knows only the path; null when no such directory is open. Takes a
+    /// that knows only the path. Null when no such directory is open. Takes a
     /// lock, so call it once per file, not per write.
     static std::shared_ptr<SpillCharge> charge_for(const std::string& file);
 

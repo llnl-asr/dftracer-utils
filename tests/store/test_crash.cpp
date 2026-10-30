@@ -85,10 +85,6 @@ constexpr bool SANITIZED = false;
 constexpr bool SANITIZED = false;
 #endif
 
-// ---------------------------------------------------------------------------
-// Small helpers.
-// ---------------------------------------------------------------------------
-
 ByteView view_of(const std::string& bytes) {
     return {bytes.data(), bytes.size()};
 }
@@ -161,8 +157,6 @@ std::string read_bytes(const std::string& path) {
                        std::istreambuf_iterator<char>());
 }
 
-/// One seed per (kill point, variant, index), so every image of a run is the
-/// same image on the next run.
 std::uint64_t seed_of(std::size_t kill, std::size_t variant,
                       std::size_t index) {
     std::uint64_t seed = 0x9E3779B97F4A7C15ULL;
@@ -172,7 +166,6 @@ std::uint64_t seed_of(std::size_t kill, std::size_t variant,
     return seed;
 }
 
-/// Waits for a submitted task and fails the test instead of hanging it.
 template <class Handle>
 void await_handle(Handle& handle, std::chrono::seconds limit) {
     REQUIRE(handle.future.wait_for(limit) == std::future_status::ready);
@@ -190,10 +183,6 @@ dstd::Expected<void, dstd::Error> flush_writer(store::Writer& writer) {
 bool is_busy(const dstd::Error& error) {
     return error.is_code(store::WriterErrc::Busy);
 }
-
-// ---------------------------------------------------------------------------
-// The workload.
-// ---------------------------------------------------------------------------
 
 struct Namespaces {
     store::NamespaceId sums;
@@ -226,7 +215,6 @@ std::string raw_value(int index, int round, std::size_t k) {
            std::to_string(k);
 }
 
-/// The commit of one batch with the retry the writer documents.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
     store::Writer& writer, store::Batch batch, int attempts) {
     for (int attempt = 0; attempt < attempts; ++attempt) {
@@ -304,8 +292,6 @@ coro::CoroTask<void> write_coroutine(store::Writer& writer, Namespaces ids,
         }
         if (round != first_round) continue;
         if (index == 0) {
-            // A whole-scope drop ends the live copy; a ranged drop hides two
-            // keys of the copy just committed.
             auto dropped =
                 writer.drop(ids.raw, scope, view_of(raw_key(index, round, 0)),
                             view_of(raw_key(index, round, 1)));
@@ -324,17 +310,11 @@ coro::CoroTask<void> write_coroutine(store::Writer& writer, Namespaces ids,
     co_return;
 }
 
-// ---------------------------------------------------------------------------
-// The dump of one image.
-// ---------------------------------------------------------------------------
-
 /// A canonical dump: every row of every namespace the workload wrote, and the
 /// state and generation of every scope the snapshot knows, both in std::map
 /// order and length-prefixed, so two dumps compare as text.
 struct Dump {
     std::map<std::string, std::string> rows;
-    /// The group (namespace and scope) of each row, so a group a lost copy owns
-    /// can withdraw its rows.
     std::map<std::string, std::string> row_group;
     std::map<std::string, std::string> scopes;
 
@@ -391,8 +371,6 @@ std::string scope_text(const store::ScopeKey& scope) {
     return out;
 }
 
-/// The key of one group: the namespace name and the scope, length-prefixed the
-/// way a dump writes them.
 std::string group_text(const std::string& space, const store::ScopeKey& scope) {
     std::string key = space;
     Dump::put(key, scope_text(scope));
@@ -404,7 +382,6 @@ std::string group_text(const std::string& space, const store::ScopeKey& scope) {
 struct Dumped {
     bool ok = false;
     std::string error;
-    /// Files the reader skipped whole, so an image it refuses as a whole shows.
     std::size_t skipped = 0;
     Dump dump;
 
@@ -465,15 +442,10 @@ Dumped dump_snapshot(const store::Snapshot& snapshot,
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// Images.
-// ---------------------------------------------------------------------------
-
 bool is_sync(const io_fault::Event& event) {
     return event.type == io_fault::Event::Type::Sync;
 }
 
-/// The whole bytes of one write, or 0 for a sync.
 std::uint64_t whole_length(const io_fault::Event& event) {
     return is_sync(event) ? 0 : event.length;
 }
@@ -532,7 +504,6 @@ std::uint64_t header_tail_end(const io_fault::Event& event) {
     return at + 16 <= size ? at + 16 : size;
 }
 
-/// The prefix a torn write keeps.
 std::uint64_t torn_prefix(const io_fault::Event& event, std::mt19937_64& rng) {
     if (event.kind == io_fault::WriteKind::Header) {
         const std::uint64_t end = header_tail_end(event);
@@ -549,7 +520,6 @@ std::size_t records_below(const std::vector<std::size_t>& record_at,
         record_at.begin());
 }
 
-/// The last write below `k`, or `k` when there is none.
 std::size_t last_write_below(const dstd::Vector<io_fault::Event>& log,
                              std::size_t k) {
     for (std::size_t i = k; i > 0; --i) {
@@ -558,7 +528,6 @@ std::size_t last_write_below(const dstd::Vector<io_fault::Event>& log,
     return k;
 }
 
-/// One event per line, for a failure report.
 std::string log_text(const dstd::Vector<io_fault::Event>& log) {
     static const char* const KINDS[] = {"header", "record",  "big",
                                         "footer", "trailer", "extent"};
@@ -579,10 +548,6 @@ std::string log_text(const dstd::Vector<io_fault::Event>& log) {
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// The oracle: which copies a lost write makes Bad.
-// ---------------------------------------------------------------------------
-
 store::ScopeKey scope_key_of(const store::ScopeItem& item) {
     store::ScopeKey key;
     key.kind = item.kind;
@@ -596,16 +561,13 @@ store::ScopeKey scope_key_of(const store::ScopeItem& item) {
 /// The log decoded once: the copies every record announces, the extent and big
 /// writes of every sequence, the group of every copy, and which copies are
 /// durable. An extent ref keeps the sequence of the commit that wrote it, so a
-/// checkpoint that lists it again does not change which sequence a lost extent
-/// withdraws: the reader marks every copy of an extent whose sequence does not
-/// verify Bad.
+/// checkpoint that lists it again does not change which sequence a loss hits.
 struct CrashModel {
     std::vector<std::map<std::uint32_t, std::uint64_t>> copies;
     std::map<std::uint64_t, std::vector<std::pair<std::size_t, std::uint32_t>>>
         extents;
     std::map<std::uint64_t, std::vector<std::pair<std::size_t, std::uint32_t>>>
         bigs;
-    /// The big value runs each sequence lists as blocks of its commit.
     std::map<std::uint64_t, std::vector<std::size_t>> big_blocks;
     std::map<std::uint32_t, std::string> group_of_copy;
     std::set<std::uint32_t> durable_copies;
@@ -636,8 +598,6 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
         auto record = store::decode_record(
             ByteView{event.bytes.data(), event.bytes.size()});
         REQUIRE(record.has_value());
-        // One commit record per sequence, in order: m records are the first m
-        // sequences, which is what makes m the state of the oracle.
         REQUIRE(record->sequence == c + 1);
         for (const store::RecordItem& item : record->items) {
             if (const auto* ns = std::get_if<store::NamespaceItem>(&item)) {
@@ -708,11 +668,8 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
 struct LostOracle {
     std::vector<std::string> expected;
     std::vector<std::size_t> lost;
-    /// A synced write of the durable namespace the image dropped: never.
     std::size_t durable_lost = 0;
-    /// Synced writes of the durable namespace the image kept.
     std::size_t durable_kept = 0;
-    /// States in range where a lost record behind a checkpoint made a copy Bad.
     std::size_t summary_records_lost = 0;
 };
 
@@ -743,7 +700,6 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
                     extent_lost = true;
                     break;
                 }
-                // A big value run is a block of its commit too.
                 const auto blocks = model.big_blocks.find(m);
                 if (blocks != model.big_blocks.end()) {
                     for (const std::size_t write : blocks->second) {
@@ -830,7 +786,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     REQUIRE(created.has_value());
     std::unique_ptr<Writer> writer = std::move(*created);
 
-    // Record what the writer issues from here on; create() wrote the header
+    // Record what the writer issues from here on. Create() wrote the header
     // before this, so no image carries it and every image that carries a
     // header carries a rewrite.
     io_fault::start(WriterTestHook::file(*writer).fd());
@@ -910,21 +866,16 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
         log.size(), record_at.size(), header_at.size(), extents, bigs, syncs,
         final_bytes.size());
 
-    // Coverage: the log has to be rich enough for the oracle to say anything.
     CHECK(log.size() > 40);
     CHECK(record_at.size() >= static_cast<std::size_t>(ROUNDS));
-    // Past 64 records the writer writes a checkpoint record.
     CHECK(record_at.size() > 64);
-    // The one big value the workload writes is there to be lost on its own.
     CHECK(bigs >= 1);
     // Every durable round commits to the durable namespace and every round is
     // flushed, so every durable round's group commit syncs twice. This is what
     // makes m_lo below a statement about durability: a writer that skips the
     // durable sync says nothing about the commits that must survive.
     CHECK(syncs >= static_cast<std::size_t>(2 * (ROUNDS / DURABLE_EVERY)));
-    // The last write of the run released every extent byte it held.
     CHECK(WriterTestHook::extents(*writer).held == 0);
-    // One header per commit, plus the one close() writes last.
     REQUIRE(header_at.size() == record_at.size() + 1);
 
     const std::vector<NamespaceSpec> specs = {
@@ -968,7 +919,6 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             }
         }
         Dumped dumped = dump_of(render_image(applied, log, final_bytes));
-        // A reference loses no write, so the reader always reads it whole.
         REQUIRE(dumped.ok);
         texts.push_back(dumped.text());
         refs.push_back(std::move(dumped.dump));
@@ -976,11 +926,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
 
     const CrashModel model = build_model(log, record_at, final_bytes);
 
-    // Durable placement, from the log itself: a commit that names a durable
-    // copy has a sync after every write before its record, and a sync after
-    // its header before the next record. A writer that syncs in the wrong
-    // place fails here even though m_lo, taken from its own syncs, would let
-    // the images pass.
+    // Durable placement from the log itself: a commit that names a durable copy
+    // has a sync after every write before its record and after its header. A
+    // writer that syncs in the wrong place fails here, though m_lo would pass.
     const auto sync_between = [&](std::size_t begin, std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
             if (is_sync(log[i])) return true;
@@ -1155,11 +1103,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
                    render_image(applied, log, final_bytes), exact);
         }
 
-        // c. an unsynced record, header, tail, extent or big value is lost with
-        // probability 1/2, once per seed. An extent written before the record
-        // that names it leaves that record's copies unreadable, and a big value
-        // lost on its own leaves its segment pointing at bytes that are gone,
-        // so a dump of the image says which copies read Bad.
+        // c. an unsynced write is lost with probability 1/2, once per seed. A
+        // lost extent leaves the copies of the record that names it unreadable,
+        // and a lost big value leaves its segment pointing at gone bytes.
         for (std::size_t seed = 0; seed < LOST_SEEDS; ++seed) {
             std::mt19937_64 rng(seed_of(k, 2, seed));
             std::vector<char> dropped(log.size(), 0);
@@ -1194,11 +1140,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             }
         }
 
-        // d. the unsynced writes in a random order, once per seed; the second
-        // seed reverses them, so a header the file already held is applied
-        // after the later rewrites of it. Only the header is written at an
-        // offset twice, so only the order of the headers can change what the
-        // file says.
+        // d. the unsynced writes in a random order, once per seed. The second
+        // seed reverses them. Only the header is written at an offset twice, so
+        // only the order of the headers can change what the file says.
         for (std::size_t seed = 0; seed < REORDER_SEEDS; ++seed) {
             std::mt19937_64 rng(seed_of(k, 3, seed));
             std::vector<std::size_t> order;
@@ -1249,11 +1193,9 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     for (const VariantStats& stat : stats) {
         CHECK(stat.images > 0);
     }
-    // Something was really lost and the reader recovered from it, per variant.
     CHECK(stats[1].lowered);
     CHECK(stats[2].lowered);
     CHECK(stats[3].lowered);
-    // The m of a match has to fall where durability says it does.
     CHECK(stats[0].have_m);
     // A copy that lost its extent reads Bad in at least one image, a big value
     // is dropped in at least one, a durable copy the writer synced before its

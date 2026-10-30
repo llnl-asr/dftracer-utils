@@ -20,18 +20,14 @@
 
 namespace dftracer::utils::index::build {
 
-/// Admits the files of an index build or a view bootstrap by the bytes each
-/// holds in flight, through reservations in a pool of its own, not by worker
-/// count. A file that does not fit waits in the pool's queue, in order, and
-/// runs once earlier files release their bytes. A file larger than the budget
-/// holds all but 1 / PIECE_ROOM_DIVISOR of it, which runs it alone, and the
-/// rest is room for its pieces.
-///
-/// Thread safe. It must outlive every Ticket and every driver that uses its
-/// gate, and is destroyed on a thread that may close the pool it opened.
+/// Admits files by the bytes each holds in flight, in a pool of its own. A file
+/// that does not fit waits in order. A file over the budget holds all but
+/// 1 / PIECE_ROOM_DIVISOR of it and runs alone. Thread safe. It must outlive
+/// every Ticket and driver using its gate, and die on a thread that may close
+/// it.
 class FileAdmission {
    public:
-    /// What a file in flight holds, its reservation released on destruction.
+    /// A Ticket releases its reservation on destruction.
     class Ticket {
        public:
         Ticket() noexcept = default;
@@ -52,8 +48,8 @@ class FileAdmission {
         Ticket& operator=(const Ticket&) = delete;
         ~Ticket() { reset(); }
 
-        /// Bytes of the reservation that the file's spillable state may use
-        /// before it goes to disk; NO_SPILL_BUDGET when the build is unbounded.
+        /// Bytes the file's spillable state may use before it goes to disk.
+        /// NO_SPILL_BUDGET when the build is unbounded.
         std::uint64_t elastic_bytes() const noexcept { return elastic_; }
 
        private:
@@ -69,9 +65,8 @@ class FileAdmission {
         std::uint64_t elastic_ = memory::NO_SPILL_BUDGET;
     };
 
-    /// @p budget is the resolved bytes the build may hold,
-    /// memory::NO_SPILL_BUDGET for none; @p sink_bytes of it are set aside for
-    /// the workers' sinks.
+    /// @p budget is the resolved bytes the build may hold (NO_SPILL_BUDGET for
+    /// none). @p sink_bytes of it are set aside for the workers' sinks.
     FileAdmission(std::uint64_t budget, std::size_t workers,
                   std::uint64_t sink_bytes, std::size_t files)
         : workers_(std::max<std::size_t>(workers, 1)),
@@ -81,9 +76,7 @@ class FileAdmission {
     FileAdmission(const FileAdmission&) = delete;
     FileAdmission& operator=(const FileAdmission&) = delete;
 
-    /// The workers that run and the bytes each sink holds before it commits,
-    /// for a build of @p workers workers: a worker keeps a sink of up to
-    /// @p max_sink bytes, and the sinks take a share of @p budget.
+    /// The workers that run and the bytes each sink holds before it commits.
     struct SinkPlan {
         std::size_t workers;
         std::size_t sink_bytes;
@@ -101,8 +94,6 @@ class FileAdmission {
         return {workers, static_cast<std::size_t>(each)};
     }
 
-    /// Bytes of reservation a file of @p plaintext bytes asks for, and how many
-    /// of them are elastic.
     struct Estimate {
         std::uint64_t total;
         std::uint64_t elastic;
@@ -121,9 +112,8 @@ class FileAdmission {
         return {fa::FIXED_BYTES + piece + agg + elastic, elastic};
     }
 
-    /// Bytes a file inflates to, as far as admission can tell before it
-    /// parses the file: @p known_plaintext when the index recorded it, else
-    /// the @p compressed size scaled by what a trace file usually inflates to.
+    /// @p known_plaintext when the index recorded it, else @p compressed scaled
+    /// by what a trace file usually inflates to.
     static std::uint64_t plaintext_estimate(std::uint64_t known_plaintext,
                                             std::uint64_t compressed) noexcept {
         return known_plaintext != 0
@@ -132,8 +122,7 @@ class FileAdmission {
                                       PLAINTEXT_PER_COMPRESSED_BYTE;
     }
 
-    /// Waits for room for a file of @p plaintext bytes, then returns its
-    /// ticket. Throws a cancelled error when the executor shuts down first.
+    /// Throws a cancelled error when the executor shuts down first.
     coro::CoroTask<Ticket> admit(std::uint64_t plaintext) {
         Ticket ticket;
         if (!pool_) {
@@ -164,9 +153,9 @@ class FileAdmission {
 
     ParseGate& gate() noexcept { return gate_; }
 
-    /// Inflate workers for a file that starts now: one per
-    /// INFLATE_PARSERS_PER_WORKER workers that no file in flight and no file
-    /// still to start can use, and one while every worker has a file to take.
+    /// Inflate workers for a file that starts now. One per
+    /// INFLATE_PARSERS_PER_WORKER workers that no file can use, and one while
+    /// every worker has a file to take.
     std::size_t inflate_ways() const noexcept {
         const std::size_t started = started_.load(std::memory_order_relaxed);
         const std::size_t claimed =

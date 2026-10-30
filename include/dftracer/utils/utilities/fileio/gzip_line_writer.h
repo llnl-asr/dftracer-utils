@@ -45,15 +45,10 @@ struct GzipWriterOptions {
     std::size_t workers = 0;    ///< 0: the machine's parallelism
     std::size_t part_size = 0;  ///< 0: one file
     bool compress = true;       ///< false: the same members as plain bytes
-    /// Bytes the writer may hold: producer, shared and append_with buffers
-    /// plus the plaintext and compressed buffers of in-flight members. 0 is
-    /// auto (memory::resolve_spill_budget(0)); memory::NO_SPILL_BUDGET is no
-    /// limit. A call that would pass the budget waits. The budget is kept in
-    /// two halves, one for buffers being filled and one for in-flight members,
-    /// and the writer holds at least one member of each, so a budget below one
-    /// member plus its compressed bound is exceeded by that member, and one
-    /// append batch or append_with `max_bytes` larger than its half by that
-    /// call.
+    /// Bytes the writer may hold in buffers and in-flight members. 0 is auto
+    /// (memory::resolve_spill_budget(0)), memory::NO_SPILL_BUDGET is no limit.
+    /// A call that would pass the budget waits. One member, append batch or
+    /// `max_bytes` can still exceed it.
     std::uint64_t memory_budget = 0;
     /// false: each compress worker writes its own members, in no total order.
     /// on_member, on_part, part_size and part_name are refused at open;

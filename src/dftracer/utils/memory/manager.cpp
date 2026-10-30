@@ -58,7 +58,6 @@ constexpr std::size_t REPORT_BYTES = 1024;
 constexpr std::size_t TABLE_ALIGN = std::size_t{16} << 10;
 constexpr std::size_t MAX_POSTS = 64;
 constexpr std::size_t NAME_MAX_BYTES = 47;
-// The arrival of no waiter; the counter never reaches it.
 constexpr std::uint64_t NO_WAITER = ~std::uint64_t{0};
 
 constexpr std::uint32_t ENTRY_FREE = 0;
@@ -129,9 +128,6 @@ void for_each_entry(AttribCache& cache, Fn&& fn) noexcept {
 
 }  // namespace
 
-// A zero-filled mapping is the initial state of every entry, so none is
-// constructed. The reclaimable and requested counts are the only fields the
-// arbiter touches.
 struct alignas(64) ReclaimEntry {
     std::atomic<std::uint32_t> state;
     std::atomic<std::uint32_t> generation;
@@ -152,7 +148,6 @@ struct ManagerAccess {
     static Pool& slot(Manager& m, std::size_t id) noexcept {
         return m.table_[id];
     }
-    // The mapping is zero-filled, which is the initial state of every field.
     // A constructor would write the atomics while a counter read walks them.
     static Pool* init_slot(Manager& m, std::size_t id) noexcept {
         Pool* p = &m.table_[id];
@@ -248,8 +243,6 @@ struct PoolAccess {
                             std::size_t capacity) noexcept;
 };
 
-// Every slot below the high-water mark: its flushed counters plus what the
-// threads have not flushed yet, then each total added to its ancestors.
 PoolAccess::Snapshot PoolAccess::snapshot(Manager& m) {
     std::size_t n = ManagerAccess::slot_count(m);
     Snapshot s;
@@ -385,8 +378,6 @@ void ManagerAccess::report_sites(Manager& m, std::uint16_t pool) noexcept {
 constexpr std::size_t TOP_SITES = 20;
 constexpr std::size_t TOP_PEAK_SITES = 25;
 
-// The symbol of a caller address, or its module and offset when the symbol is
-// not exported.
 static void describe_site(std::uintptr_t site, char* out,
                           std::size_t capacity) {
     Dl_info info{};
@@ -475,8 +466,6 @@ static void report_peak_sites() noexcept {
     }
 }
 
-// Fails the process when bytes are still live that no host buffer owns, or a
-// scratch pool leaked. Debug mode adds the callers of the live blocks.
 void ManagerAccess::exit_check() noexcept {
     if (g_exit_ran.exchange(true, std::memory_order_relaxed)) return;
     const bool check = g_exit_check.load(std::memory_order_relaxed);
@@ -664,9 +653,8 @@ void attrib_switch(AttribEntry& entry, std::uint16_t id) noexcept {
     entry.id.store(id, std::memory_order_relaxed);
 }
 
-// The entry that names `id`, else the first empty one from its home slot, so
-// two pools whose ids share a slot (a task pool and general) do not evict each
-// other on every resume. The home slot when every entry holds counts.
+// Pools whose ids share a home slot, such as a task pool and general, must not
+// evict each other on every resume.
 static AttribEntry& attrib_park_entry(AttribCache& cache,
                                       std::uint16_t id) noexcept {
     AttribEntry* empty = nullptr;
@@ -678,9 +666,8 @@ static AttribEntry& attrib_park_entry(AttribCache& cache,
     return empty ? *empty : cache.entries[id % ATTRIB_ENTRIES];
 }
 
-// Parks the hot counts in the leaving pool's entry rather than flushing, so a
-// switch on the resume path does no atomic read-modify-write. A concurrent
-// read may see them twice or not at all, as with a flush.
+// Parks the hot counts in the leaving pool's entry instead of flushing, so a
+// switch on the resume path does no atomic read-modify-write.
 void attrib_set_scope(AttribCache& cache, std::uint16_t id) noexcept {
     AttribEntry& hot = cache.hot;
     std::int64_t word = hot.word.load(std::memory_order_relaxed);
@@ -818,7 +805,7 @@ std::size_t heap_reserved() noexcept {
 }  // namespace
 
 // The dirty flag goes down before the terms are read, so a change that lands
-// meanwhile raises it again and the next call reads once more.
+// meanwhile raises it again.
 void ManagerAccess::refresh(Manager& m, bool read_process) noexcept {
     std::uint64_t now = now_ms();
     if (read_process ||
@@ -985,9 +972,8 @@ bool PoolAccess::try_add(Manager& m, Pool& p, std::ptrdiff_t n,
     return true;
 }
 
-// Bring the amount charged to the parent to the rounded total, one level at a
-// time up to the root. Growing can fail at a limit or the budget; it leaves
-// every level as it found it. Shrinking cannot fail.
+// Growing can fail at a limit or the budget and then leaves every level as it
+// found it. Shrinking cannot fail.
 Status PoolAccess::settle(Manager& m, Pool& p, std::size_t slack,
                           std::size_t& shortfall) noexcept {
     if (p.id_ == ROOT_POOL_ID) return Status::Ok;
@@ -1037,8 +1023,6 @@ bool PoolAccess::never_fits(Manager& m, const Pool& p,
     return false;
 }
 
-// A request above the budget or above a limit on the way to the root can
-// never fit, so it carries no shortfall and nobody is asked for bytes.
 Admit PoolAccess::add_reserved(Manager& m, Pool& p, std::size_t bytes,
                                std::size_t slack) noexcept {
     if (never_fits(m, p, bytes)) return {Status::OverBudget, 0};
@@ -1099,9 +1083,9 @@ void PoolAccess::own_totals(Manager& m, std::uint16_t id, std::ptrdiff_t& bytes,
     }
 }
 
-// A slot is reused only when no block, reservation, child or export still
-// names it. A thread that flushes while the totals are read can show a total
-// twice or not at all, so two reads in a row must agree on zero.
+// A slot is reused only when no block, reservation, child or export names it. A
+// flush during the read can show a total twice or not at all, so two reads in a
+// row must agree on zero.
 bool PoolAccess::reapable(Manager& m, Pool& p) noexcept {
     if (p.children_.load(std::memory_order_acquire) != 0 ||
         p.reserved_.load(std::memory_order_relaxed) != 0 ||
@@ -1196,8 +1180,6 @@ void PoolAccess::close(Pool& p, std::uint32_t generation) noexcept {
     if (take_closed(m, p)) retire(m, p);
 }
 
-// A slot that take_closed claimed goes back to the free stack, and its closed
-// parent may have been waiting for it.
 void PoolAccess::retire(Manager& m, Pool& p) noexcept {
     Pool& parent = ManagerAccess::slot(m, p.parent_);
     p.state_.store(STATE_FREE, std::memory_order_release);
@@ -1311,7 +1293,6 @@ bool ReserveWait::cancel() noexcept {
                                         std::memory_order_acq_rel)) {
         return false;
     }
-    // A cancelled head no longer blocks the waiters behind it.
     ManagerAccess::wake(Manager::get());
     return true;
 }
@@ -1322,10 +1303,10 @@ Reservation ReserveWait::take() noexcept {
     return Reservation{pool_, bytes_, Status::Ok};
 }
 
-// The seq_cst fence pairs with the one in wake(): either the releaser sees
-// this waiter in the count, or the grant pass below sees the released bytes.
-// The pusher names its node by arrival, never by address: once listed, the
-// node can be granted, freed and its block reused by a newer node.
+// The seq_cst fence pairs with the one in wake(), so either the releaser sees
+// this waiter or the grant pass sees the released bytes. The pusher names its
+// node by arrival, never by address, since a listed node can be granted, freed
+// and its block reused.
 bool ManagerAccess::push_wait(Manager& m, ReserveWait& w) noexcept {
     w.refs_.fetch_add(1, std::memory_order_relaxed);
     std::uint64_t arrival =
@@ -1347,11 +1328,10 @@ void ManagerAccess::wake(Manager& m) noexcept {
     grant(m, NO_WAITER);
 }
 
-// `again` is raised before `granting` is tried, and the holder re-reads it
-// after it lowers `granting`, so a caller that loses the flag is always
-// served by the holder or wins the flag itself. Every write to `again` is a
-// read-modify-write, so the holder that clears it synchronizes with each
-// caller that raised it.
+// `again` is raised before `granting` is tried and the holder re-reads it after
+// lowering `granting`, so a caller that loses the flag is served by the holder.
+// Every write to `again` is a read-modify-write, so the holder synchronizes
+// with each caller that raised it.
 bool ManagerAccess::grant(Manager& m, std::uint64_t self) noexcept {
     bool self_granted = false;
     m.again_.exchange(true, std::memory_order_seq_cst);
@@ -1367,9 +1347,8 @@ bool ManagerAccess::grant(Manager& m, std::uint64_t self) noexcept {
     }
 }
 
-// Runs only while `granting` is held, which owns wait_held_. The held nodes
-// are sorted by arrival and every newer push has a larger number, so merging
-// the taken list keeps strict first in, first out order.
+// Runs only while `granting` is held, which owns wait_held_. Held nodes are
+// sorted by arrival, so merging the taken list keeps first in, first out.
 void ManagerAccess::grant_pass(Manager& m, std::uint64_t self,
                                bool& self_granted) noexcept {
     ReserveWait* taken =
@@ -1498,9 +1477,8 @@ Reservation Pool::reserve(std::size_t bytes) noexcept {
         }
     }
     if (admit.status != Status::Ok) {
-        // A failed attempt may have charged a level and taken it back while a
-        // grant pass looked, so that pass may have stopped on room that is
-        // free again.
+        // A failed attempt that charged a level and took it back can make a
+        // grant pass stop on room that is free again.
         ManagerAccess::wake(m);
         return Reservation{nullptr, 0, admit.status};
     }
@@ -1607,9 +1585,6 @@ std::uint16_t ManagerAccess::top_of(Manager& m, std::uint16_t id) noexcept {
     return ROOT_POOL_ID;
 }
 
-// Each round picks the entry with the most bytes to give among those not
-// picked yet, entries below the caller's child of the root first, and asks it
-// for the smaller of what it can give and what is still missing.
 std::size_t ManagerAccess::post_requests(Manager& m, const Pool& caller,
                                          std::size_t shortfall) noexcept {
     std::uint16_t home = top_of(m, caller.id_);
@@ -1791,8 +1766,6 @@ void ExternalSlot::set(std::size_t bytes) noexcept {
     if (bytes < old) ManagerAccess::wake(m);
 }
 
-// Reported bytes never reach the budget, so they neither dirty the pressure
-// flag nor wake a waiter.
 void ExternalSlot::add(std::ptrdiff_t delta, Kind kind) noexcept {
     if (entry_ == nullptr || delta == 0) return;
     if (kind == Kind::Reported) {

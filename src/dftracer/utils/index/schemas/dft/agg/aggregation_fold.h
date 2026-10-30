@@ -31,12 +31,9 @@ class IndexWrite;
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-/// Reads the aggregation core's Accessor concept off an owned FoldEvent,
-/// reproducing DFTracerEvent/ArgsValueProxy semantics so a fold-built
-/// aggregation tier is byte-identical to the DOM-driven visitor. hhash/fhash
-/// are read from the POD's dedicated fields (they are not in `args`); the fixed
-/// metric args are matched by the intern ids of MetricArgIds and their values
-/// clamp exactly like ArgsValueProxy::get<uint64>.
+/// The aggregation core's Accessor over an owned FoldEvent. hhash and fhash
+/// come from the POD's dedicated fields, not from `args`. The metric arg values
+/// clamp like ArgsValueProxy::get<uint64>.
 class PodAccessor {
    public:
     PodAccessor(const trace::views::detail::FoldEvent& ev,
@@ -119,14 +116,10 @@ class PodAccessor {
     const MetricArgIds& metric_ids_;
 };
 
-/// Builds the chunk partials, the chunk column blocks and the dictionary
-/// entries they use for a file (when the fold has a file id) as a fold on the
-/// fused scan, so it rides the same single parse as BloomFold / DictFold.
-/// `build_intern` is the fused-scan intern that produced the events (resolves
-/// the POD's ids); `agg_intern` is the per-index aggregation intern table
-/// whose ids the partial keys embed. write emits the partials, the column
-/// blocks, the dictionary entries the partials reference and the file's
-/// manifest; the time-bound outputs are returned out-of-band.
+/// Builds the chunk partials, column blocks and dictionary entries of a file as
+/// a fold on the fused scan. `build_intern` resolves the ids of the events.
+/// `agg_intern` is the per-index table whose ids the partial keys embed. The
+/// time-bound outputs are returned out-of-band.
 class AggregationFold : public trace::views::detail::Fold {
    public:
     AggregationFold(dftracer::utils::dstd::StringIntern& build_intern,
@@ -174,9 +167,8 @@ class AggregationFold : public trace::views::detail::Fold {
         co_return false;
     }
 
-    /// Emit the partials and the chunk column blocks of the fold, with the
-    /// dictionary entries they reference, into `w`, and the dftracer.agg
-    /// manifest entry of the fold's file when it has one.
+    /// Emits the partials, column blocks and referenced dictionary entries into
+    /// `w`, and the file's manifest entry when the fold has a file.
     void write(index::store::IndexWrite& w);
 
     std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
@@ -187,8 +179,6 @@ class AggregationFold : public trace::views::detail::Fold {
     static constexpr std::uint32_t NO_ID =
         dftracer::utils::dstd::StringIntern::NO_ID;
 
-    /// The root-dictionary ids of the category, name and host hash text of a
-    /// partial.
     struct SlotKey {
         std::uint32_t cat;
         std::uint32_t name;
@@ -210,15 +200,13 @@ class AggregationFold : public trace::views::detail::Fold {
         }
     };
 
-    /// The newest bin of one thread in a slot's partial.
     struct ThreadBin {
         std::uint64_t pid;
         std::uint64_t tid;
         std::uint32_t at;
     };
 
-    /// The partial being built for one (category, name, host) of the current
-    /// chunk; a slot is reused by every chunk and holds nothing until `used`.
+    /// A slot is reused by every chunk and holds nothing until `used`.
     struct Slot {
         AggPartial partial;
         dftracer::utils::dstd::Vector<ThreadBin> threads;
@@ -229,15 +217,14 @@ class AggregationFold : public trace::views::detail::Fold {
         Slot(double accuracy, SlotKey k) : partial(accuracy), key(k) {}
     };
 
-    /// A serialized partial of a closed chunk: its stored value, the layout
-    /// header included, in a buffer of exactly its size.
+    /// The stored value, layout header included, in a buffer of exactly its
+    /// size.
     struct Closed {
         dftracer::utils::dstd::Vector<std::uint8_t> value;
         std::uint64_t chunk;
         SlotKey key;
     };
 
-    /// A column block of a closed chunk, in a buffer of exactly its size.
     struct ClosedColumns {
         dftracer::utils::dstd::Vector<std::uint8_t> value;
         std::uint64_t chunk;
@@ -245,24 +232,16 @@ class AggregationFold : public trace::views::detail::Fold {
 
     void add_to_partial(const trace::views::detail::FoldEvent& ev,
                         const PodAccessor& acc);
-    /// Adds the event to the column block of the current chunk.
     void add_to_columns(const trace::views::detail::FoldEvent& ev);
-    /// The bin of `slot` for the thread and bin of an event.
     TimeBin& bin_of(Slot& slot, std::uint64_t pid, std::uint64_t tid,
                     std::uint64_t bin);
-    /// The root-dictionary id of the string with `build_id` (lower-cased for
-    /// `lower`), cached by that id.
+    /// Cached by `build_id`.
     std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
                           std::uint32_t build_id, bool lower);
-    /// Serializes the partials of the current chunk into buffers of their own
-    /// and clears them, keeping their capacity.
     void close_chunk();
-    /// Encodes the column block of the current chunk into a buffer of its own
-    /// and clears it, keeping its capacity.
     void close_columns();
 
     dftracer::utils::dstd::StringIntern* build_intern_;
-    /// The ids of the fixed metric args in `build_intern_`.
     index::schemas::dft::agg::MetricArgIds metric_ids_;
     index::schemas::dft::agg::AggInternPtr agg_intern_;
     index::schemas::dft::agg::AggregationConfig config_;
@@ -285,16 +264,13 @@ class AggregationFold : public trace::views::detail::Fold {
     dftracer::utils::dstd::Vector<std::uint32_t> host_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> fhash_ids_;
     dftracer::utils::dstd::Vector<std::uint32_t> path_ids_;
-    /// Root ids of the category texts of the column block, in their own case;
-    /// the partials use the lower case of `cat_ids_`.
+    /// The column block keeps the category case. The partials use `cat_ids_`.
     dftracer::utils::dstd::Vector<std::uint32_t> cat_text_ids_;
-    /// The payload being encoded, reused for every closed value.
     dftracer::utils::dstd::Vector<std::uint8_t> scratch_;
     dftracer::utils::dstd::Vector<Closed> closed_;
     index::schemas::dft::agg::ChunkColumnBuilder columns_;
     dftracer::utils::dstd::Vector<ClosedColumns> closed_columns_;
-    /// Every dictionary id the partials and column blocks of this file
-    /// reference, duplicates included; cleared once they are written.
+    /// Duplicates included. Cleared once written.
     dftracer::utils::dstd::Vector<std::uint32_t> referenced_;
 };
 

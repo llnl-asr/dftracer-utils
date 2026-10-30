@@ -14,10 +14,8 @@ static_assert(KINDS == static_cast<std::size_t>(WriteKind::Extent) + 1,
 namespace {
 
 /// The recorder: one descriptor, one log, one lock, plus the counters of the
-/// counting mode, which cover every descriptor.
-///
-/// Both modes share one word, so a write or sync with neither on returns after
-/// one relaxed load: bits 0..31 are the recording descriptor plus one (zero
+/// counting mode. Both modes share one word, so a write or sync with neither on
+/// costs one relaxed load. Bits 0..31 are the recording descriptor plus one (0
 /// means none) and bit 63 is set while counting.
 struct Recorder {
     static constexpr std::uint64_t COUNTING = std::uint64_t{1} << 63;
@@ -39,7 +37,6 @@ Recorder& recorder() {
     return *instance;
 }
 
-/// True while `mode` names `fd` as the recording descriptor.
 bool records(std::uint64_t mode, int fd) {
     return fd >= 0 &&
            (mode & Recorder::FD_MASK) == static_cast<std::uint64_t>(fd) + 1U;

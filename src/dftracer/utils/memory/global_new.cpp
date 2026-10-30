@@ -1,6 +1,6 @@
 // Replaces the global operator new and delete with this heap. Link it into
-// executables only: a replacement inside a shared library would interpose for
-// the whole host process.
+// executables only, since a shared library would interpose for the whole host
+// process.
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 
@@ -16,8 +16,7 @@ using memory::PoolHandle;
 constexpr std::size_t DEFAULT_ALIGN = alignof(std::max_align_t);
 
 // Blocks of the global operator new have a pool of their own, left out of the
-// exit check: the C++ runtime keeps singletons that are never freed.
-// It is not a scope pool, so a block that outlives a scope is no leak of it.
+// exit check because the C++ runtime keeps singletons that are never freed.
 Pool& new_pool() {
     alignas(PoolHandle) static unsigned char storage[sizeof(PoolHandle)];
     static Pool* pool = [] {
@@ -30,7 +29,6 @@ Pool& new_pool() {
     return *pool;
 }
 
-// The caller of the operator is the site the debug mode records.
 [[gnu::always_inline]] inline void* get(std::size_t size, std::size_t align,
                                         void* site) {
     return memory::allocate_at(size, align, new_pool(), site);
@@ -45,10 +43,9 @@ Pool& new_pool() {
     }
 }
 
-// After the shared libraries are initialized and before the static
-// constructors of the executable: the exit check then runs before the static
-// destructors of the libraries, whose exit hooks need their globals, and after
-// those of the executable, which free their blocks.
+// Runs after the shared libraries are initialized and before the executable's
+// static constructors, so the exit check runs before the libraries' static
+// destructors and after the executable's.
 [[gnu::constructor(101)]] void init() {
     (void)new_pool();
     memory::rearm_exit_check();

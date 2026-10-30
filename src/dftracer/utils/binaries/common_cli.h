@@ -155,8 +155,7 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     program.add_description(description);
     CliT cli(program);
     if (!setup_and_parse(cli, argc, argv)) return 1;
-    // One cache of input stats for this run; it ends with the run. It starts
-    // after the parse, which exits the process itself for --help.
+    // Starts after the parse, which exits the process itself for --help.
     dftracer::utils::InputStatScope input_stats;
     try {
         return run(cli);
@@ -312,9 +311,8 @@ struct FilesArgs : CliSchema {
     }
 };
 
-/// --memory-budget, shared by every tool that bounds its memory. 0 means auto:
-/// memory::resolve_spill_budget turns it into a third of the memory available
-/// to the process.
+/// --memory-budget, shared by every tool that bounds its memory. 0 means auto,
+/// a third of the memory available to the process.
 struct MemoryArgs : CliSchema {
     std::uint64_t memory_budget = 0;
     std::string help =
@@ -530,10 +528,9 @@ struct WatchdogArgs : CliSchema {
     }
 };
 
-// A CLI's run coroutine is driven by CoroTask::get() on main, whose RunLoop is
-// one thread, so work it awaits outside its Pipeline runs serially. A heavy
-// step there runs here instead, on the process runtime configured from the
-// CLI's thread flags, and blocks until done.
+// A CLI's run coroutine runs on main's one-thread RunLoop, so work awaited
+// outside a Pipeline is serial. A heavy step runs here instead, on the process
+// runtime, and blocks until done.
 template <typename Func>
 void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
     RuntimeSettings settings;
@@ -574,10 +571,8 @@ inline std::vector<std::string> split_csv(const std::string& str) {
     return out;
 }
 
-// How many input files a tool may hold open at once. Raises the soft limit on
-// open files to the hard limit and keeps half of it for the tool's other
-// files, so a pass over the inputs hands each file's descriptor on to the next
-// pass instead of opening it again.
+// How many input files a tool may hold open at once. Raises the soft open-file
+// limit to the hard limit and keeps half of it for the tool's other files.
 inline std::size_t open_file_budget() {
     struct rlimit lim{};
     if (::getrlimit(RLIMIT_NOFILE, &lim) != 0) return 0;
@@ -610,9 +605,7 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
 }
 
 // The trace files under `directory`, scanned recursively on a pool of its own
-// (see scan_on_pool), which stats as many batches at once as the stat latency
-// allows. The scan does no I/O of its own beyond the stats, so the pool has
-// one I/O thread.
+// (see scan_on_pool) with one I/O thread.
 inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
     const PipelineArgs& pipeline, const std::string& directory,
     bool populate_size = true) {
@@ -689,9 +682,8 @@ int run_single_task(const std::string& name, const PipelineArgs& pipeline,
 }
 
 // Split out so the run_single_task lambda below holds no coroutine locals,
-// which ICEs GCC 12/13. Scans `directory` (or stats `files`) once, brings the
-// indexes of what it found up to date and leaves the scan in `entries` for the
-// caller to resolve again without walking or stat'ing the files a second time.
+// which ICEs GCC 12/13. Leaves the scan in `entries` so the caller resolves
+// again without scanning.
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
     CoroScope& ctx, std::string directory, std::vector<std::string> files,
     std::string index_dir, bool force_rebuild,
@@ -724,7 +716,6 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
     co_return 0;
 }
 
-// The files found, as scanned, for a Resolver call that must not scan again.
 inline std::vector<utilities::filesystem::FileEntry>
 ensure_indexes_fresh_blocking(
     const std::string& name, const PipelineArgs& pipeline,

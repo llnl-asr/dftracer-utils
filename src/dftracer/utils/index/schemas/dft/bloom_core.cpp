@@ -277,8 +277,8 @@ std::string join_value_types(const std::string& a, const std::string& b) {
 bool observe_type(index::extensions::ChunkDimensionStats& ds,
                   const char* type) {
     ++ds.present;
-    // The value types ("string", "uint", "int", "double", "mixed") start with
-    // distinct letters, so the first byte tells them apart.
+    // The value types start with distinct letters, so the first byte tells them
+    // apart.
     if (!ds.value_type.empty()) {
         if (ds.value_type[0] == 'm') return false;
         if (ds.value_type[0] == type[0]) return true;
@@ -512,8 +512,8 @@ void BloomCore::observe_data(ChunkState& chunk, EventCache& cache,
     chunk.statistics.update_from_event(ns.stats, ps.stats, name, cat, pid, tid,
                                        ts, dur, has_dur);
 
-    // A value already in a chunk's bloom adds nothing, so a slot remembers
-    // that it was added and skips the probe.
+    // A value already in a chunk's bloom adds nothing, so a slot skips the
+    // probe.
     auto observe_known = [&chunk](int bloom_idx, std::size_t dim_idx,
                                   std::string_view val, bool& in_bloom,
                                   std::uint32_t& dim_slot) {

@@ -31,11 +31,9 @@ std::string write_trace(const std::string& dir, int n, int events) {
 }  // namespace
 
 TEST_SUITE("IndexFoldDriver") {
-    // Each file's driver once had a "fold buffers" pool of its own; a buffer
-    // a fold still held when its driver closed was freed under another
-    // driver's pool, so one pool closed with 16 live bytes and another went
-    // to -16 (seen on 8,404 files on Corona). The drivers of a build now
-    // share one pool.
+    // A buffer a fold still held when its driver closed would be freed under
+    // another driver's pool, leaving live bytes in one pool and a negative
+    // count in another. The drivers of a build share one pool.
     TEST_CASE("fold buffer pools close with no live bytes over many files") {
         dftu_utils_test::TestEnvironment env(10);
         std::vector<std::string> files;

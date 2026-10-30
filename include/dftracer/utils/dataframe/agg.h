@@ -349,18 +349,10 @@ struct AggSeedValue {
 /// seeded groups still finalizes with the right key columns.
 void agg_seed_begin(AggState& state, std::size_t nkeys);
 
-/// Seed one already-reduced group observation into `state` with no raw events,
-/// for a fast path that reads per-group stats (the aggregation tier) instead of
-/// events. `state` must have been built by agg_new with the same specs the
-/// equivalent scan uses. `str_keys` is the composite key, one string per key
-/// column (every seeded key column is a String column); a key k with
-/// `null_keys[k]` set is null, as a scan keys a row that lacks the value.
-/// `null_keys` is empty or has one entry per key. `count` is the group's
-/// row count; each `values` entry merges its FieldStat (and sketch) into the
-/// value column's per-group slot. Repeated calls for the same composite key
-/// merge (FieldStat/sketch merge), exactly like accumulating then merging the
-/// equivalent events. Call agg_seed_finalize once, after all agg_seed_group
-/// calls and before agg_finalize/agg_serialize.
+/// Seeds one reduced group into `state` (built by agg_new with the scan's
+/// specs). `str_keys` is one String per key column and `null_keys[k]` set makes
+/// key k null (empty means none). Repeated calls for a key merge. Call
+/// agg_seed_finalize once, after all calls and before agg_finalize/serialize.
 void agg_seed_group(AggState& state, const std::vector<std::string>& str_keys,
                     const std::vector<bool>& null_keys, std::uint64_t count,
                     const std::vector<AggSeedValue>& values);

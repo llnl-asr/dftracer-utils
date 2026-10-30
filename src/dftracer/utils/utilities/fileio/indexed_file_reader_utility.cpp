@@ -34,9 +34,8 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
     if (need_build) {
         // Remove old index if forcing rebuild
         if (input.force_rebuild && input_exists(normalized_index_path)) {
-            // Force rebuild drops the handle this process keeps before
-            // removing the root directory, so the next open reads the new
-            // directory.
+            // Force rebuild drops the handle this process keeps before removing
+            // the root directory.
             dftracer::utils::index::store::release_index(normalized_index_path);
             fs::remove_all(normalized_index_path);
             forget_input(normalized_index_path);

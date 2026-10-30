@@ -22,7 +22,6 @@ using dftracer::utils::coro::CoroTask;
 
 namespace {
 
-// Tasks running at once, and the most seen.
 struct Concurrency {
     std::atomic<int> now{0};
     std::atomic<int> most{0};
@@ -50,7 +49,6 @@ int most_at_once(int tasks) {
 
 CoroTask<void> tiny() { co_return; }
 
-// CPU time this process used, user and system.
 std::chrono::microseconds cpu_time() {
     rusage usage{};
     ::getrusage(RUSAGE_SELF, &usage);

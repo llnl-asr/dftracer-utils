@@ -54,8 +54,7 @@ constexpr const char* SHASH[] = {"5a5a5a5a00000001", "5a5a5a5a00000002"};
 
 constexpr std::size_t MEMBER_BYTES = 32 * 1024;
 constexpr std::size_t LARGE_MEMBER_BYTES = 256 * 1024;
-// A scan reads through a buffer of one small member, so it crosses buffers
-// within a member; the 4 MB default would zero-fill per scan unit for no gain.
+// The 4 MB default buffer would zero-fill per scan unit for no gain.
 constexpr std::size_t SCAN_BUFFER_BYTES = MEMBER_BYTES;
 
 // Deterministic linear congruential generator; the corpus must not change
@@ -313,7 +312,6 @@ coro::CoroTask<std::uint64_t> scan_unit(
     co_return n;
 }
 
-// The View scan: the units `gather_units` plans, each scanned.
 std::uint64_t count_view(const std::string& trace,
                          const std::string& index_path,
                          const std::string& text) {
@@ -536,9 +534,9 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     spill.index_dir = corpus.env.get_dir() + "/idx_spill";
     spill.memory_budget = 64 * 1024;
     index::Indexer::open(corpus.traces, spill).build();
-    // The aggregation tier keys its rows by interned string ids, which follow
-    // the order the build reads the files, and a memory budget changes that
-    // order: its bytes may differ, its answers may not.
+    // The aggregation tier keys its rows by interned string ids that follow the
+    // build's file order, and a memory budget changes that order. Its bytes may
+    // differ, its answers may not.
     auto contents = [](const std::string& index_path) {
         store::release_index(index_path);
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
@@ -603,7 +601,6 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
         }
         return rows;
     };
-    // The traces are gone, so only the aggregation tier can answer.
     for (const auto& t : corpus.traces) fs::remove(t);
     const auto from_full = summary(corpus.index_of(trace));
     CHECK_FALSE(from_full.empty());

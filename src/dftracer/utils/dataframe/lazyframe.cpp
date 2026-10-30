@@ -1883,8 +1883,6 @@ class IsDupCursor : public Cursor {
                 keys[static_cast<std::size_t>(i)] = row_key(m.columns, i);
             return Series::strings(keys);
         };
-        // The state's size at the last batch and the bytes of the batch read
-        // so far: what the governor sees at each morsel.
         std::uint64_t state_bytes = 0;
         std::uint64_t batch_bytes = 0;
         bool asked = false;
@@ -1953,10 +1951,9 @@ class IsDupCursor : public Cursor {
             gov_.check(spool_.memory_bytes() +
                            static_cast<std::uint64_t>(d) * COUNT_ENTRY_BYTES,
                        0);
-        // The aggregate's tables live on the C library, and glibc keeps the
+        // The aggregate's tables live on the C library and glibc keeps the
         // pages their rehashes freed. The map comes from the cursor's pool and
-        // cannot reuse them, so give them back first: at 2 million keys they
-        // are about 32 MiB, the size of the map's bucket array.
+        // cannot reuse them, so give them back first (32 MiB at 2M keys).
 #if defined(__GLIBC__)
         ::malloc_trim(0);
 #endif
@@ -1981,7 +1978,7 @@ class IsDupCursor : public Cursor {
         return gov_.pool() ? *gov_.pool() : memory::current_pool();
     }
 
-    // Declared first: its pool closes after the counts free.
+    // Declared first, so its pool closes after the counts free.
     Governor gov_{"is_duplicated"};
     std::unique_ptr<Cursor> first_, pass2_, external_;
     spill::Spool spool_;
@@ -2614,7 +2611,6 @@ class JoinCursor : public Cursor {
     std::unique_ptr<GraceJoin> grace_;
     std::uint64_t budget_;
     ExpansionGovernor gov_;
-    // The right side's place in the memory governor.
     Governor governor_{"join"};
     MorselFeed feed_;
     ResultChunks flush_;
@@ -5215,9 +5211,8 @@ namespace {
 // The pull chain a streaming terminal drives: the source cursor with every
 // op the source did not apply stacked on it, plus the schema at its output.
 struct CursorChain {
-    // The query run's Results pool, when the chain is a run; the stateful
-    // cursors' Scratch pools sit below it. Declared first so it closes after
-    // every cursor.
+    // The query run's Results pool, when the chain is a run. Declared first so
+    // it closes after every cursor.
     memory::PoolHandle pool;
     // Declared before the cursor so it outlives the cursor built over it.
     std::shared_ptr<const Source> source;
@@ -5390,10 +5385,9 @@ coro::AsyncGenerator<DataFrame> stream_plan(PlanParts plan,
         morsel_rows > 0 ? morsel_rows : DEFAULT_MORSEL_ROWS;
 
     // The run's pool is the scope while the chain is built and of every
-    // coroutine the driver makes, so the cursors' Scratch pools sit below it
-    // and the output blocks are charged to it. It has no limit: the plan's
-    // budget stays with the fraction triggers, and the governor answers to
-    // the process budget.
+    // coroutine the driver makes. It has no limit, as the plan's budget stays
+    // with the fraction triggers and the governor answers to the process
+    // budget.
     memory::PoolHandle pool =
         memory::Manager::get().root().child("query", memory::PoolKind::Results);
     memory::Scope scope{pool ? *pool : memory::current_pool()};

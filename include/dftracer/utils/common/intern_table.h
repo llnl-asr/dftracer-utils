@@ -34,13 +34,9 @@ inline constexpr InternId InternId::NONE{dstd::StringIntern::NO_ID};
 class InternRef;
 
 /**
- * @brief A string table shared by reference count.
- *
- * Made by InternTable::create. It allocates everything from its own pool,
- * "intern" below the root, so the pool shows its bytes. The last InternRef
- * destroys the table and closes the pool; the pool is a Results pool, so a
- * chunk that a column still holds is adopted by the parent instead of being
- * reported as a leak. Thread safe.
+ * The last InternRef destroys the table and closes the pool. The pool is a
+ * Results pool, so a chunk that a column still holds is adopted by the parent
+ * instead of being reported as a leak. Thread safe.
  */
 class InternTable {
    public:
@@ -90,7 +86,7 @@ class InternRef {
     static InternRef adopt(InternTable* table) noexcept {
         return InternRef(table);
     }
-    /// Adds a reference; null stays null.
+    /// Adds a reference. Null stays null.
     static InternRef share(InternTable* table) noexcept {
         if (table) table->add_ref();
         return InternRef(table);
@@ -124,7 +120,7 @@ class InternRef {
 InternTable* current_intern() noexcept;
 
 /// Make @p table the calling thread's table without restoring it. For a
-/// coroutine that enters its own table each time it resumes; whoever resumed
+/// coroutine that enters its own table each time it resumes. Whoever resumed
 /// it restores its own with an InternScope.
 void enter_intern(InternTable* table) noexcept;
 

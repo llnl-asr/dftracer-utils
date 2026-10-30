@@ -48,7 +48,6 @@ TEST_SUITE("index store page cache") {
     }
 
     TEST_CASE("the cache stays within its capacity") {
-        // Four pages a shard.
         const std::size_t capacity = 16 * 4 * PAGE;
         store::PageCache cache(capacity);
         for (std::uint64_t i = 0; i < 4096; ++i) {

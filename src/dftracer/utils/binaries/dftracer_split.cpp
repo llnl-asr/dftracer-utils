@@ -107,7 +107,6 @@ class SplitArgParse : public cli::ArgParse {
 
 namespace {
 
-/// A trace file ready to read and what its first gzip member says about it.
 struct FileProbe {
     std::string path;    ///< The rechunked copy when the input was rechunked
     std::uint64_t bytes = 0;
@@ -118,18 +117,16 @@ struct FileProbe {
     dstd::SharedPtr<ScopedFd> fd;
 };
 
-/// Files that one writer streams, in order, into chunk files.
 struct FileGroup {
     std::vector<std::string> files;
     std::vector<dstd::SharedPtr<ScopedFd>> open_files;
     double ratio = 1.0;
 };
 
-/// Compressed bytes of a file decoded to estimate its compression ratio.
 constexpr std::uint64_t RATIO_SAMPLE_BYTES = 1 << 20;
 
-/// A group ends with a chunk that is usually short, so a group holds several
-/// chunks of input, and not so many that a large input has too few groups.
+/// A group ends with a short chunk, so it holds several chunks of input, but
+/// not so many that a large input has too few groups.
 constexpr std::size_t GROUP_MIN_CHUNKS = 4;
 constexpr std::size_t GROUP_MAX_CHUNKS = 16;
 constexpr double MAX_DEFLATE_RATIO = 1032.0;
@@ -150,9 +147,8 @@ struct RechunkDir {
     }
 };
 
-// A group takes its files until it holds `target` compressed bytes. The target
-// is a small share of the input when there are many threads, so that every
-// thread gets a group.
+// The target is a small share of the input when there are many threads, so
+// that every thread gets a group.
 std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
                                    std::size_t chunk_bytes,
                                    std::size_t threads) {
@@ -188,7 +184,7 @@ std::vector<FileGroup> group_files(const std::vector<FileProbe>& probes,
 }
 
 // A chunk file ends at the first member end at or past its size, so aiming half
-// a member low puts the end at the member end nearest to the target.
+// a member low ends it nearest the target.
 std::size_t chunk_uncompressed_bytes(std::size_t chunk_bytes, double ratio,
                                      std::size_t member_bytes) {
     const double aim = static_cast<double>(chunk_bytes) * ratio -
@@ -261,10 +257,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     std::vector<std::string> input_files;
     {
         auto matched = cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
-        // Never read back this run's own output. The output directory is
-        // resolved once and a file is tested by its walked path, so no input
-        // file or the input root is resolved again. A symlink that points into
-        // the output directory from outside its spelling is not caught.
+        // Never read back this run's own output. A file is tested by its walked
+        // path, so a symlink into the output directory from outside its
+        // spelling is not caught.
         std::error_code ec;
         const fs::path out_canonical = fs::weakly_canonical(output_dir, ec);
         const fs::path out_walked =
@@ -309,10 +304,8 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
         [](CoroScope&) -> coro::CoroTask<void> { co_return; }, "Start");
     graph.add(start_task);
 
-    // A single huge gzip member cannot be read with bounded memory (the read
-    // paths decode a whole member at once). Rechunk any such input to bounded
-    // multi-member gzip first and split the rechunked copy. Regular
-    // multi-member traces are left untouched.
+    // The read paths decode a whole member at once, so a single huge gzip
+    // member is rechunked to bounded multi-member gzip first.
     RechunkDir rechunk_dir;
     auto* rechunk_dir_ptr = &rechunk_dir;
     auto* input_files_ptr = &input_files;
@@ -396,8 +389,6 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     auto* app_name_ptr = &app_name;
     auto* output_dir_ptr = &output_dir;
 
-    // The verify task takes over the result of the extract task, so the
-    // report reads this copy.
     ExtractChunksOutput split_results;
     auto* split_results_ptr = &split_results;
 
@@ -409,10 +400,9 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
             DFTRACER_UTILS_LOG_INFO("Splitting %zu groups in parallel...",
                                     groups.size());
 
-            // Each running group holds the buffers of its writer until it is
-            // done, and its compress workers already use every core, so only
-            // a few groups run at once, and only as many as the memory budget
-            // holds.
+            // A running group holds its writer's buffers and its compress
+            // workers use every core, so few groups run at once, within the
+            // memory budget.
             const std::size_t max_parallel =
                 std::max<std::size_t>(2, executor_threads / 4);
             const auto extraction = trace::plan_extraction_budget(

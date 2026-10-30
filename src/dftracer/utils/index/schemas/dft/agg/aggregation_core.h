@@ -19,15 +19,10 @@
 
 // The aggregation-tier accumulation, templated on an Accessor so callers only
 // differ in how they read fields/args. AggregationFold drives it with a
-// POD-backed accessor.
-// The Accessor concept:
-//   has_phase()/is_metadata()/is_system()/is_profile()/is_counter()/
-//   is_aggregated() -> bool
-//   name()/cat() -> string_view ; pid()/tid()/ts()/dur() -> uint64
-//   has_dur() -> bool (whether the record carried a duration)
-//   arg_is_number(key) -> bool
-//   arg_string(key) -> string_view (empty on miss / non-string)
-//   metric_args(MetricArgs&) fills the fixed metric args the event carries.
+// POD-backed accessor. The Accessor provides has_phase, is_metadata, is_system,
+// is_profile, is_counter, is_aggregated, has_dur and arg_is_number(key),
+// name, cat and arg_string(key) (empty on miss), pid, tid, ts, dur and
+// metric_args(MetricArgs&).
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// dftracer hashes are hex; reuse their bits rather than hashing again.
@@ -48,14 +43,14 @@ inline std::uint64_t agg_hash_of_hex(std::string_view sv) {
     return v ? v : 1;
 }
 
-/// The mutable accumulation state of the fold: the time range of the events.
+/// The time range of the events folded so far.
 struct AggState {
     std::uint64_t min_time_bucket = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_time_bucket = 0;
     std::size_t events_processed = 0;
 };
 
-/// The arg names the metric rules read, in the order of METRIC_ARG_NAMES.
+/// In the order of METRIC_ARG_NAMES.
 enum class MetricArg : std::uint8_t {
     DftuCnt,
     DftCnt,
@@ -82,8 +77,8 @@ inline constexpr std::array<std::string_view, METRIC_ARG_COUNT>
                         "ret",      "ret_min",    "ret_max",   "offset_sum",
                         "offset",   "offset_min", "offset_max"};
 
-/// The intern ids of METRIC_ARG_NAMES, resolved once per fold: the metric rules
-/// then match the args of an event by id instead of hashing a name per event.
+/// The intern ids of METRIC_ARG_NAMES, resolved once per fold so an event's
+/// args match by id.
 struct MetricArgIds {
     std::array<std::uint32_t, METRIC_ARG_COUNT> ids;
 
@@ -93,8 +88,8 @@ struct MetricArgIds {
     }
 };
 
-/// The fixed metric args an event carries, gathered by one pass over its args.
-/// A value is 0 for an arg that is not a number, as a get<uint64> miss was.
+/// The fixed metric args an event carries. A value is 0 for an arg that is not
+/// a number.
 struct MetricArgs {
     std::array<std::uint64_t, METRIC_ARG_COUNT> values{};
     std::uint32_t present = 0;
@@ -118,14 +113,10 @@ struct MetricArgs {
 
 static_assert(METRIC_ARG_COUNT <= 32);
 
-/// Applies one event's metric rules to `sink`. The rules live here once; the
-/// Sink decides where the numbers go (a partial).
-/// A Sink provides:
-///   add_count(n) ; span(ts, len) ; duration(dur) ; size(v) ; offset(v)
-///   merge_duration(FieldStat) ; merge_size(FieldStat) ;
-///   merge_offset(FieldStat)
-/// duration(dur) counts the event and its duration; add_count(n) counts
-/// events with no duration: a pre-aggregated count or a record without dur.
+/// Applies one event's metric rules to `sink`. A Sink provides add_count(n),
+/// span(ts, len), duration(dur), size(v), offset(v) and merge_duration,
+/// merge_size and merge_offset(FieldStat). add_count counts events with no
+/// duration (a pre-aggregated count or a record without dur).
 template <class Acc, class Sink>
 void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
                               Sink& sink) {
@@ -212,8 +203,8 @@ void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
     }
 }
 
-/// Accounts one event in `st`: it widens the time range of the fold (its
-/// metrics are the partials', see agg_partial_update.h).
+/// Widens the time range of `st` by one event. Its metrics go to the partials
+/// (see agg_partial_update.h).
 template <class Acc>
 void aggregate_event(const Acc& acc, AggState& st,
                      const AggregationConfig& cfg) {

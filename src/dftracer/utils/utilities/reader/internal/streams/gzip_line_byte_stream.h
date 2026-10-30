@@ -55,9 +55,9 @@ class GzipLineByteStream : public GzipStream {
         std::size_t actual_start = target_start;
 
         // A piece that starts inside a line owns its lines from the first
-        // newline on: the line it opens belongs to the piece before, which
-        // reads past its end to finish it. A target before that newline, the
-        // start of the piece included, starts at the newline's successor.
+        // newline on, as the piece before reads past its end to finish the line
+        // it opens. A target before that newline starts at the newline's
+        // successor.
         if (mid_line_start_) {
             const std::size_t first = co_await first_line_start_after_anchor();
             co_await restart_compression();
@@ -116,7 +116,7 @@ class GzipLineByteStream : public GzipStream {
 
    private:
     /// Uncompressed offset just past the first newline of the piece the
-    /// stream sits at, read from its start; the end of the file when there is
+    /// stream sits at, read from its start. The end of the file when there is
     /// none. Leaves the stream past that data, so the caller restarts it.
     coro::CoroTask<std::size_t> first_line_start_after_anchor() {
         std::size_t pos = seek_anchor_offset();

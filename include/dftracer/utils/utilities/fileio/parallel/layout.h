@@ -13,8 +13,6 @@ enum class FileLayout {
     Striped,  ///< single file, atomic-offset pwrite; used on local and PFS
 };
 
-/// Filesystem classification lives in common; re-exported here so existing
-/// callers keep using parallel::FilesystemKind.
 using dftracer::utils::FilesystemKind;
 
 struct LayoutInfo {

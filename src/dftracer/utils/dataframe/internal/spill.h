@@ -71,7 +71,6 @@ class Dir {
     std::string run_path(int id) const;
     /// A run id no other caller of this directory has taken. Thread-safe.
     int next_run();
-    /// The charge for the files written here (see SpillCharge).
     SpillCharge& charge() const noexcept { return dir_.charge(); }
     /// Delete the file `path` in this directory and release its bytes from
     /// the charge.
@@ -199,12 +198,10 @@ class Spool {
     /// A cursor replaying every added morsel from the last to the first; the
     /// rows of one morsel stay in their order. The same rules as reader().
     std::unique_ptr<Cursor> reverse_reader();
-    /// Move the morsels held in memory to disk, and every later one with
-    /// them, and return the bytes freed. Does nothing once the spool writes
-    /// to disk already, since the morsels in memory come first, or after a
-    /// reader.
+    /// Move the morsels held in memory to disk, and every later one with them,
+    /// and return the bytes freed. Does nothing once the spool writes to disk
+    /// or after a reader.
     std::uint64_t spill();
-    /// The bytes of the morsels held in memory.
     std::uint64_t memory_bytes() const noexcept { return bytes_; }
     /// Whether the overflow went to disk.
     bool spilled() const noexcept { return spilling_; }

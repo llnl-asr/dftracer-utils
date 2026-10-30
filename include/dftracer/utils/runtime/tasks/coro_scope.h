@@ -117,7 +117,6 @@ class CoroScope {
 
     explicit CoroScope(Executor* executor) : executor_(executor) {}
 
-    /// Child scope of a spawn, running on the chain made for it.
     CoroScope(Executor* executor, std::shared_ptr<CancelChain> chain)
         : executor_(executor), cancel_chain_(std::move(chain)) {}
 
@@ -129,9 +128,8 @@ class CoroScope {
    public:
     /// A scope for an owner that outlives the call that made it and joins it
     /// itself (a writer's member). Everything its children touch must live in
-    /// heap state the owner holds by pointer, and the owner's destructor must
-    /// join the scope off the executor thread or hand it to a joiner task.
-    /// The long_lived_scopes ctest lists the callers.
+    /// heap state the owner holds by pointer. The owner's destructor must join
+    /// the scope off the executor thread or hand it to a joiner task.
     static std::unique_ptr<CoroScope> long_lived(
         Executor* executor = Executor::current()) {
         return std::unique_ptr<CoroScope>(new CoroScope(executor));
@@ -195,8 +193,7 @@ class CoroScope {
         auto make_coro =
             [](auto f, Executor* exec, std::shared_ptr<CancelChain> own_chain,
                std::shared_ptr<coro::SharedState<void>> st) -> coro::Coro {
-            // Each spawned coroutine gets its own CoroScope (child) with its
-            // own cancel flag, so cancelling one child leaves its siblings.
+            // Own cancel flag, so cancelling one child leaves its siblings.
             CoroScope child_scope(exec, std::move(own_chain));
             // Publish an exception only after the handler ends: the awaiter
             // may run at once, and the handler still holds the thrown object.

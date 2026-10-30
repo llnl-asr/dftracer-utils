@@ -61,11 +61,11 @@ struct TaskInfo {
     std::size_t worker_id;
 
     enum State {
-        Queued,     ///< In queue (shared or local)
-        Running,    ///< Currently executing
-        Waiting,    ///< Waiting for child tasks
-        Completed,  ///< Successfully finished
-        Failed      ///< Failed with error
+        Queued,
+        Running,
+        Waiting,  ///< Waiting for child tasks
+        Completed,
+        Failed
     } state;
 
     std::chrono::steady_clock::time_point queued_at;
@@ -136,7 +136,7 @@ class TaskExecutor : public Executor {
 
     /// Runs `task` and then calls `owner->finish_task(task)`, once, from the
     /// worker that ends it, so `owner` must outlive the task. A task whose
-    /// owner is stopping before it starts does not run; it ends with an
+    /// owner is stopping before it starts does not run. It ends with an
     /// Interrupted error, as does a queued task that shutdown() destroys.
     virtual void submit_task(std::shared_ptr<Task> task,
                              std::shared_ptr<std::any> input, TaskOwner* owner,
@@ -148,14 +148,13 @@ class TaskExecutor : public Executor {
     /// Task the calling worker is running, -1 when not on a worker thread.
     virtual TaskIndex current_worker_task_id() const = 0;
 
-    /// Moves the running cap to `threads` (0 = hardware_concurrency) while
-    /// work runs: a larger cap lets more tasks run at once, a smaller one lets
-    /// fewer start until the running ones finish. `eager` set spawns the full
-    /// pool (true) or lets it grow on demand from one worker (false); unset
-    /// keeps the current mode. Thread safe.
+    /// Moves the running cap to `threads` (0 = hardware_concurrency) while work
+    /// runs. A smaller cap lets fewer tasks start until running ones finish.
+    /// `eager` true spawns the full pool, false grows it on demand from one
+    /// worker, unset keeps the mode. Thread safe.
     virtual void set_threads(std::size_t threads,
                              std::optional<bool> eager) = 0;
-    /// Raises the I/O threads to `threads`; a smaller count changes nothing.
+    /// Raises the I/O threads to `threads`. A smaller count changes nothing.
     virtual void grow_io_threads(std::size_t threads) = 0;
     /// The stall after which is_responsive() reports a deadlock.
     virtual void set_deadlock_timeout(std::chrono::seconds timeout) = 0;

@@ -172,10 +172,6 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
     return out;
 }
 
-// ---------------------------------------------------------------------------
-// build_index_batch: run the indexer pipeline into the index of this worker
-// ---------------------------------------------------------------------------
-
 static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
                                       PyObject *kwds) {
     static const char *kwlist[] = {
@@ -240,8 +236,8 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         rt = dftracer::utils::python::get_default_runtime();
     }
 
-    // The aggregation tier is built by every batch; the Python dataclass only
-    // customizes its config.
+    // The aggregation tier is built by every batch, the dataclass only
+    // customizes it.
     std::shared_ptr<
         dftracer::utils::index::schemas::dft::agg::AggregationConfig>
         agg_config_ptr;
@@ -308,10 +304,10 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
-            // Held across the build, so the builder shares this process's
-            // writer of the index, which then closes and leaves a complete
-            // data file. Each worker writes the index directly and numbers its
-            // own files, since a file id is a label inside one process.
+            // Held across the build, so the builder shares this process's index
+            // writer, which then closes and leaves a complete data file. Each
+            // worker numbers its own files, since a file id is a label inside
+            // one process.
             dftracer::utils::index::store::IndexDatabase store_db(index_dir);
             // A worker process may hold this index from an earlier task.
             store_db.refresh();
@@ -342,7 +338,6 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         }
     }
 
-    // Each file's aggregation data is in the index already.
     Py_RETURN_NONE;
 }
 

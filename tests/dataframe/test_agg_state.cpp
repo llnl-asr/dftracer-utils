@@ -464,11 +464,10 @@ TEST_CASE("agg_regroup over serialize/deserialize round-trip is exact") {
 
 namespace {
 
-// The dyn side-table has two cell layouts: the light record (an id word and the
-// cells a mask names), which a state takes when its first batch carries the
-// dynamics, and the full FieldStat per cell, which a state takes when it holds
-// the group already. Every reduction must answer the same columns, values,
-// nulls and types from either.
+// The dyn side-table has two cell layouts, the light record (taken when the
+// first batch carries the dynamics) and the full FieldStat per cell (taken when
+// the state holds the group already). Every reduction must answer the same from
+// either.
 df::AggStatePtr dyn_light_state(const std::vector<AggDynSpec>& specs,
                                 const std::vector<const Series*>& keys,
                                 const std::vector<AggDynInput>& inputs) {
@@ -480,14 +479,13 @@ df::AggStatePtr dyn_light_state(const std::vector<AggDynSpec>& specs,
 df::AggStatePtr dyn_full_state(const std::vector<AggDynSpec>& specs,
                                const std::vector<const Series*>& keys,
                                const std::vector<AggDynInput>& inputs) {
-    // The same batches regrouped: agg_regroup re-keys into a fresh state that
-    // holds no light record, so its cells are FieldStats unpacked from the
-    // light ones, and its answer must not differ.
+    // The same batches regrouped into a fresh state, whose cells are FieldStats
+    // unpacked from the light ones.
     auto st = dyn_light_state(specs, keys, inputs);
     return df::agg_regroup(*st, {0});
 }
 
-// Every column, bit for bit: the two layouts must not differ in one bit.
+// Every column, bit for bit. The two layouts must not differ in one bit.
 void check_same_columns(const DataFrame& a, const DataFrame& b) {
     REQUIRE(a.names == b.names);
     REQUIRE(a.num_rows() == b.num_rows());
@@ -523,7 +521,7 @@ void check_same_dyn(const std::vector<AggDynSpec>& specs,
                        df::agg_finalize(*full, "k"));
 }
 
-// k = {0,0,0,0,1,1,2,2}; a: Int64 with rows 1 and 4 null; b: Float64 with row
+// k = {0,0,0,0,1,1,2,2}, a: Int64 with rows 1 and 4 null, b: Float64 with row
 // 7 null, so one group holds four values of each and the higher moments are not
 // all zero. Every dyn reduction reads both.
 struct DynData {
@@ -554,7 +552,7 @@ TEST_CASE("AggState dyn: the light cells finalize like the full ones") {
     check_same_dyn({{AggOp::Pct, 0.9, "p90_"}}, d.keys,
                    {{"a", &d.sa}, {"b", &d.sb}});
 
-    // The values themselves: group 0 is a = {5, null, 7, 11} (three present,
+    // The values themselves. Group 0 is a = {5, null, 7, 11} (three present,
     // sum 23) and b = {1.5, 2.5, 3.5, 4.5}.
     auto st =
         dyn_light_state({{AggOp::Sum, 0.0, "sum_"}, {AggOp::Count, 0.0, "n_"}},
@@ -593,7 +591,7 @@ TEST_CASE("AggState dyn: an Int64 sum stays exact through the light cells") {
     auto st = dyn_light_state(specs, keys, in);
     df::agg_sort_groups(*st);
     DataFrame r = df::agg_finalize(*st, "k");
-    // Group 0 sums to big exactly; group 1 wraps, so its sum column is null.
+    // Group 0 sums to big exactly. Group 1 wraps, so its sum column is null.
     CHECK(!r.column("sum_a").is_null(0));
     CHECK(r.column("sum_a").data<std::int64_t>()[0] == big);
     CHECK(r.column("sum_a").is_null(1));
@@ -601,8 +599,8 @@ TEST_CASE("AggState dyn: an Int64 sum stays exact through the light cells") {
 
 TEST_CASE("AggState dyn: a name fed two domains keeps the full cells") {
     // The light words are read in a name's first domain, so a later batch in
-    // another one settles the side-table into full cells; the sum stays the
-    // exact Int64 one either way (the layout's domain is the first seen).
+    // another one settles the side-table into full cells. The sum stays the
+    // exact Int64 one either way.
     std::vector<std::int64_t> k{0, 0, 1, 1};
     std::vector<std::int64_t> ai{1, 2, 3, 4};
     std::vector<double> af{10.5, 20.5, 30.5, 40.5};
@@ -643,7 +641,7 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
     const std::vector<AggDynSpec> specs{{AggOp::Sum, 0.0, "sum_"},
                                         {AggOp::Count, 0.0, "n_"}};
 
-    // Two batches, one naming a only and one naming a and b: folding them into
+    // Two batches, one naming a only and one naming a and b. Folding them into
     // one state is the merge's answer. a is in both, so it counts twice.
     auto ref = df::agg_new({}, specs);
     agg_accumulate(*ref, keys, {}, {{"a", &sa}});
@@ -664,7 +662,7 @@ TEST_CASE("AggState dyn: merge unions names through both layouts") {
     df::agg_sort_groups(*into_full);
     check_same_columns(df::agg_finalize(*into_full, "k"), w);
 
-    // A full other, one pass of both names, into a fresh destination: the same
+    // A full other, one pass of both names, into a fresh destination. The same
     // batches folded once into one state.
     auto one_pass = df::agg_new({}, specs);
     agg_accumulate(*one_pass, keys, {}, {{"a", &sa}, {"b", &sb}});

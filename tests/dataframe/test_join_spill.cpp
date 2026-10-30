@@ -173,7 +173,7 @@ std::vector<std::string> nest_rows_of(const DataFrame& f) {
     return out;
 }
 
-// The right side of a spilled join must outgrow the budget: three times the
+// The right side of a spilled join must outgrow the budget, at three times the
 // largest budget below, at 16 bytes a row.
 constexpr int LARGEST_BUDGET = 4096;
 constexpr int RIGHT_ROWS = 3 * LARGEST_BUDGET / 16;

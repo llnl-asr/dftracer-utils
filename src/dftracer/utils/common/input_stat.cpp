@@ -9,7 +9,7 @@ namespace dftracer::utils {
 namespace {
 
 // The published cache. Held by shared_ptr so a lookup that is under way when
-// its owner ends still has a live cache; empty outside any scope.
+// its owner ends still has a live cache. Empty outside any scope.
 std::mutex g_published_mutex;
 dstd::SharedPtr<InputStatCache> g_published;
 

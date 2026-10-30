@@ -26,7 +26,6 @@ constexpr std::uint32_t SIXTEEN_MIB = 16U << 20;
 constexpr std::uint32_t SIXTY_FOUR_MIB = 64U << 20;
 constexpr std::uint32_t ONE_TWENTY_EIGHT_KIB = 128U << 10;
 
-/// Sets DFTRACER_UTILS_STORE_EXTENT_BYTES for the lifetime of the scope.
 struct ExtentBytesOverride {
     explicit ExtentBytesOverride(const char* value) {
         ::setenv(constants::store::STORE_EXTENT_BYTES_ENV, value, 1);
@@ -119,8 +118,6 @@ TEST_CASE(
     const std::size_t stripe = lustre_stripe(dir.path.string()).size;
     auto result = store::extent_size_for(dir.path.string());
     REQUIRE(result.has_value());
-    // A local or network file system reports no stripe, so a test host that is
-    // not Lustre exercises the default.
     if (stripe == 0) {
         CHECK(*result == ONE_MIB);
     } else {

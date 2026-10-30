@@ -64,7 +64,7 @@ DriverPark& driver_park() noexcept {
 }  // namespace
 
 void notify_task_finished() noexcept {
-    // Orders the caller's store of `finished` before the count read; pairs
+    // Orders the caller's store of `finished` before the count read. Pairs
     // with the fence in park_driver.
     std::atomic_thread_fence(std::memory_order_seq_cst);
     if (g_parked_drivers.load(std::memory_order_relaxed) != 0)

@@ -22,9 +22,8 @@ class AsyncMutexLockOperation;
  *
  * Ownership is not tied to any thread. A coroutine holding the lock can
  * migrate across threads freely. Waiting coroutines suspend without
- * blocking the thread and are resumed in FIFO order. Locking and unlocking
- * an uncontended mutex is one atomic operation; only a contended lock
- * takes the internal queue lock, which is never held across a suspension.
+ * blocking the thread and are resumed in FIFO order. An uncontended lock or
+ * unlock is one atomic operation.
  *
  * A coroutine waiting for the lock when its executor shuts down is resumed
  * with a cancelled error (see coro::is_cancelled), without the lock.
@@ -64,8 +63,7 @@ class AsyncMutex {
     /// steps of an uncontended lock and unlock.
     static constexpr std::uint32_t LOCKED_WAITERS = 2;
 
-    /// The unlock that finds waiters. Out of line, so the uncontended
-    /// unlock() stays a few inline instructions.
+    /// Out of line to keep the uncontended unlock() a few inline instructions.
     [[gnu::noinline]] inline void unlock_contended();
 
     /// Waiters that a same-thread unlock handed the lock to while an outer
@@ -134,8 +132,7 @@ class AsyncMutexLockOperation {
         return queue(awaiter);
     }
 
-    /// The contended case, kept out of line so the uncontended lock stays a
-    /// few inline instructions.
+    /// Out of line to keep the uncontended lock a few inline instructions.
     [[gnu::noinline]] bool queue(std::coroutine_handle<> awaiter) noexcept {
         std::uint32_t s;
         awaiter_ = awaiter;
@@ -267,7 +264,7 @@ void AsyncMutex::unlock_contended() {
             state_.store(FREE, std::memory_order_release);
             return;
         }
-        // The lock passes to `next`; the state keeps saying locked.
+        // The lock passes to `next`. The state keeps saying locked.
         remove_locked(next);
     }
 

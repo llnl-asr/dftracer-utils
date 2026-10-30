@@ -73,27 +73,24 @@ struct AggregationConfig {
             h.update_value(percentiles.size());
             for (double p : percentiles) h.update_value(p);
         }
-        // An aggregation built without chunk partials, their time bins, the
-        // partials of samples and aggregated records or the per-chunk column
-        // blocks with their file column, or one that held records of an
-        // unknown phase, is stale.
+        // An aggregation built without one of these parts, or that held records
+        // of an unknown phase, is stale.
         text("partials+bins+columns+file+phase");
         return h.finish();
     }
 };
 
 /// The aggregation every index build makes: the struct defaults with the
-/// percentile sketches on. A caller may pass a config of its own, but there is
-/// no build without the tier.
+/// percentile sketches on.
 inline AggregationConfig standard_aggregation_config() {
     AggregationConfig config;
     config.compute_percentiles = true;
     return config;
 }
 
-/// The start of the window of `timestamp`: it is rounded down to a multiple of
-/// the interval, from the reference timestamp with relative time. An interval
-/// of 0 gives one window per timestamp.
+/// The start of the window of `timestamp`, rounded down to a multiple of the
+/// interval (counted from the reference timestamp with relative time). An
+/// interval of 0 gives one window per timestamp.
 inline std::uint64_t compute_time_bucket(std::uint64_t timestamp,
                                          const AggregationConfig& config) {
     if (config.use_relative_time) timestamp -= config.reference_timestamp;

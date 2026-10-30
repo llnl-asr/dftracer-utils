@@ -29,7 +29,6 @@ int compare_views(dstd::StringView a, dstd::StringView b) {
     return cmp < 0 ? -1 : (cmp > 0 ? 1 : 0);
 }
 
-/// A reader over one key or payload, failing on any byte past its end.
 class Cursor {
    public:
     explicit Cursor(ByteView bytes) : bytes_(bytes) {}
@@ -79,7 +78,6 @@ class Cursor {
 
     bool done() const { return at_ == bytes_.size(); }
 
-    /// The read position, for the bytes a caller reads in another format.
     std::size_t& position() { return at_; }
 
    private:
@@ -119,7 +117,6 @@ int compare_key(ByteView key, dstd::StringView name, std::uint32_t version,
     return 0;
 }
 
-/// One entry of a directory being built.
 struct Draft {
     const NamespaceItem* namespace_item = nullptr;
     const ScopeItem* scope = nullptr;
@@ -205,7 +202,6 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     std::stable_sort(scope_ids.begin(), scope_ids.end(), by_id);
     std::stable_sort(copy_ids.begin(), copy_ids.end(), by_id);
 
-    // One draft per copy and per drop, merged below by key.
     dstd::Vector<Draft> drafts;
     for (const CopyItem& copy : copies) {
         const NamespaceItem* namespace_item =
@@ -229,8 +225,6 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         draft.drops.push_back(&drop);
         drafts.push_back(std::move(draft));
     }
-    // An erase names its copy, and its namespace and scope are the ones of that
-    // copy's item.
     for (const EraseItem& erase : erases) {
         const CopyItem* copy = find_local(copy_ids, erase.copy_id);
         if (copy == nullptr) continue;
@@ -594,7 +588,6 @@ ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-/// Appends one slot and its key and payload bytes to a table being built.
 void append_block(dstd::Vector<std::uint8_t>& out,
                   dstd::Vector<std::uint8_t>& data, ByteView key,
                   ByteView payload, std::size_t data_start) {

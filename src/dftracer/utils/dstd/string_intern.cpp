@@ -153,7 +153,6 @@ std::string_view StringIntern::intern(std::string_view sv) {
     return resolve(get_or_insert(sv));
 }
 
-/// The record bound to `id`, or null when the slot is free.
 const char* StringIntern::slot_value(std::uint32_t id) const {
     if (id >= FAST_CAPACITY) return nullptr;
     auto* block = directory_.load(id >> BLOCK_BITS);
@@ -324,8 +323,8 @@ void StringIntern::advance_num_strings(std::uint32_t id) {
     }
 }
 
-/// A slot holds `id + 1`, so a reader stops at the first empty slot and
-/// never sees a hole below the count it returns.
+/// A slot holds `id + 1`, so a reader stops at the first empty slot and never
+/// sees a hole below the count it returns.
 void StringIntern::log_entry(std::uint32_t id) {
     const auto n = log_next_.fetch_add(1, std::memory_order_relaxed);
     auto& dir = entry(log_, n >> BLOCK_BITS);
@@ -342,7 +341,6 @@ void StringIntern::log_entry(std::uint32_t id) {
     block[n & (BLOCK_SIZE - 1)].store(id + 1, std::memory_order_release);
 }
 
-/// False when `id` is already bound to another record.
 bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
     if (id >= FAST_CAPACITY) {
         throw std::length_error("string intern: exhausted the id space at " +
@@ -372,10 +370,9 @@ bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
     return true;
 }
 
-/// Deterministic ids are this hash, so they must agree across independently
-/// built processes and stay as stored: FNV-1a, fixed unlike std::hash. Other
-/// tables use only the order of their inserts, so they take wyhash, which
-/// reads eight bytes a step rather than one.
+/// Deterministic ids are this hash, so it must agree across processes and stay
+/// as stored. It is FNV-1a, unlike std::hash. Other tables take wyhash, which
+/// is faster.
 std::size_t StringIntern::hash(std::string_view sv) const {
     if (deterministic_ids_.load(std::memory_order_relaxed))
         return utils::hash::fnv1a_mix(utils::hash::fnv1a_hash(sv));

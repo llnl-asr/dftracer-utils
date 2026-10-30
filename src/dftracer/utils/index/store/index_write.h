@@ -26,18 +26,15 @@ class IndexWrite {
     virtual ~IndexWrite() = default;
     virtual void put(std::string_view key, std::string_view value) = 0;
     virtual void delete_range(std::string_view begin, std::string_view end) = 0;
-    /// Removes exactly `key`.
     virtual void del(std::string_view key) = 0;
 
-    /// Marks `file_id` as reserved by this build: the index holds no data for
-    /// it, so the clears of `records` write nothing for it. -1 marks none.
+    /// Marks `file_id` as reserved by this build, so the clears of `records`
+    /// write nothing for it. -1 marks none.
     void set_fresh_file(int file_id) noexcept { fresh_file_ = file_id; }
     bool is_fresh_file(int file_id) const noexcept {
         return file_id == fresh_file_;
     }
 
-    /// Bytes this write holds in memory so far, for a caller that commits when
-    /// a write has grown past a budget.
     std::size_t buffered_bytes() const noexcept { return buffered_bytes_; }
 
    protected:
@@ -51,30 +48,25 @@ class IndexWrite {
     std::size_t buffered_bytes_ = 0;
 };
 
-/// One write to an index database, with what a build asks the database
-/// itself.
 class IndexDatabaseWrite : public IndexWrite {
    public:
     ~IndexDatabaseWrite() override = default;
 
-    /// Makes every key of this write visible to later reads. A second call
-    /// does nothing.
+    /// A second call does nothing.
     virtual void commit() = 0;
-    /// commit() for a coroutine: a write that can waits for its writes
-    /// without holding a worker; the default runs commit().
+    /// commit() for a coroutine. A write that can waits without holding a
+    /// worker. The default runs commit().
     virtual coro::CoroTask<void> commit_async();
     /// A staged write (IndexDatabase::begin_staged_write) writes what it holds
-    /// so far as part of what commit() publishes, and frees it, so a write of
-    /// one file larger than memory lands in pieces that no reader sees until
-    /// commit(). Throws std::logic_error on any other write.
+    /// so far and frees it, so a file larger than memory lands in pieces that
+    /// no reader sees until commit(). Throws std::logic_error on any other
+    /// write.
     virtual void stage() {
         throw std::logic_error("index write: only a staged write stages");
     }
-    /// The id of `logical_path`, assigned when the path is new.
     virtual int file_id_for(std::string_view logical_path) = 0;
-    /// Binds `file_id` to `logical_path` before the file's record is written,
-    /// for a write that puts the file's data first. Nothing to do where ids
-    /// are global to the index.
+    /// Binds `file_id` to `logical_path` before the file's record is written.
+    /// Nothing to do where ids are global to the index.
     virtual void bind_file(std::string_view /*logical_path*/, int /*file_id*/) {
     }
 };
@@ -159,40 +151,33 @@ void put_catalog_path(IndexWrite& w, int file_id, std::string_view path,
 void put_rowset(IndexWrite& w, int file_id, std::string_view name,
                 std::string_view frame);
 
-/// One partial of the file's aggregation, `payload` the serialized AggPartial;
-/// the ids are dictionary ids of the category, name, host hash text and extra
-/// key values.
+/// `payload` is the serialized AggPartial. The ids are dictionary ids.
 void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
                      std::uint32_t cat_id, std::uint32_t name_id,
                      std::uint32_t host_id, std::uint32_t extra_id,
                      std::uint8_t kind, std::string_view payload);
 
-/// The same partial record, `value` its whole stored value, the layout header
-/// of (Agg, PARTIAL) included (layout::append_value), so it is stored without
-/// a second copy.
+/// As put_agg_partial, with `value` the whole stored value including the layout
+/// header (layout::append_value), so it is stored without a copy.
 void put_agg_partial_value(IndexWrite& w, int file_id, std::uint64_t chunk,
                            std::uint32_t cat_id, std::uint32_t name_id,
                            std::uint32_t host_id, std::uint32_t extra_id,
                            std::uint8_t kind, std::string_view value);
 
-/// The column block of `chunk` of the file's aggregation, `payload` the
-/// encoded block (see schemas/dft/agg/chunk_columns.h).
+/// `payload` is the encoded block (see schemas/dft/agg/chunk_columns.h).
 void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
                            std::string_view payload);
 
-/// The same column block, `value` its whole stored value, the layout header
-/// of (Agg, COLUMNS) included (layout::append_value).
+/// As put_agg_chunk_columns, with `value` the whole stored value including the
+/// layout header (layout::append_value).
 void put_agg_chunk_columns_value(IndexWrite& w, int file_id,
                                  std::uint64_t chunk, std::string_view value);
 
-/// The dictionary text `id` stands for, as the file's partials use it.
 void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
                               std::string_view text);
 
-/// Index-wide aggregation record `name` (config, time bounds).
 void put_agg_meta(IndexWrite& w, std::string_view name,
                   std::string_view payload);
-/// Removes index-wide aggregation record `name`.
 void del_agg_meta(IndexWrite& w, std::string_view name);
 
 }  // namespace records

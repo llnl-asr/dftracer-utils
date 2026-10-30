@@ -66,9 +66,9 @@ class BasicDDSketch {
     /// exact zero, matching the kernel's sentinel; `value` keeps min / max.
     void add_key(std::int32_t key, double value, std::uint32_t weight = 1);
     /// Sizes a growing store once for keys in [min_key, max_key], so adds of
-    /// keys inside that range never reallocate or shift. Where the store must
-    /// grow it grows by `RESERVE_MARGIN` bins past max_key, once. Keys
-    /// outside the range still work as in `add`. No-op for a fixed store.
+    /// keys in that range never reallocate or shift. A store that must grow
+    /// grows by `RESERVE_MARGIN` bins past max_key. Keys outside the range
+    /// still work. No-op for a fixed store.
     void reserve_keys(int min_key, int max_key);
     void merge(const BasicDDSketch& other);
     double quantile(double q) const;

@@ -41,8 +41,6 @@ namespace {
 constexpr std::string_view SENTINEL = "agg_extension.sentinel";
 
 // `n` POSIX reads of 100 us each, one per millisecond from `start_us`.
-/// `n` reads from `start_us`, one per millisecond; with `system`, also one
-/// system counter event per read.
 std::string write_trace(const std::string& dir, const std::string& name, int n,
                         std::uint64_t start_us, bool system = false) {
     const std::string pfw = dir + "/" + name + ".pfw";
@@ -77,7 +75,6 @@ std::string index_of(const std::string& trace) {
     return trace::internal::determine_index_path(trace, "");
 }
 
-/// The counters of a typed collect over `traces`, all shards.
 dataframe::DataFrame counters_of(const std::vector<std::string>& traces) {
     std::vector<ViewFile> files;
     for (const auto& t : traces) files.push_back({t, index_of(t)});
@@ -187,7 +184,6 @@ TEST_SUITE("AggExtension") {
         {
             IndexDatabase db(index_of(gz));
             auto w = db.begin_write();
-            // A record with no value header is in no format the reader knows.
             auto key = layout::file_prefix(
                 layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
             key.append("config");
@@ -258,8 +254,8 @@ TEST_SUITE("AggExtension") {
                             fs::last_write_time(b) + std::chrono::seconds(10));
 
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
-        // The build aggregates `b` as it rebuilds it whole, which replaces its
-        // own partials and column blocks, so no whole-tier rebuild is due.
+        // Rebuilding `b` replaces its own partials and column blocks, so no
+        // whole-tier rebuild is due.
         CHECK_FALSE(ix.status().aggregation_needs_rebuild);
         ix.build();
         CHECK(has_sentinel(a));
@@ -277,7 +273,6 @@ TEST_SUITE("AggExtension") {
         fs::copy_file(b, fb);
         Indexer::open({fa, fb}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({fa, fb}) == 75);
-        // The rebuild replaced b's counters rather than dropping them.
         const auto rebuilt = counters_of({a, b});
         CHECK(rebuilt.num_rows() > 0);
         CHECK(same_counters(rebuilt, counters_of({fa, fb})));
@@ -293,7 +288,6 @@ TEST_SUITE("AggExtension") {
         const auto b = write_trace(env.get_dir(), "b", 20, 500'000);
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
         ix.build();
-        // B loses its aggregation data, so the tier holds only A.
         {
             const int fid = file_id(b);
             IndexDatabase db(index_of(b));

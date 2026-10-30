@@ -70,10 +70,8 @@ class BloomFold : public trace::views::detail::Fold {
     void observe(const Lane& lane,
                  const trace::views::detail::FoldBatch& batch);
     bool spills() const { return staged_ != nullptr; }
-    /// Whether finish_staged writes the tier rather than write(): the file
-    /// spilled while it was parsed. A file that fit its share goes through
-    /// the shared write, so many small files share one write rather than
-    /// each publishing a staged write of its own.
+    /// Whether finish_staged writes the tier rather than write(), because the
+    /// file spilled while it was parsed. Small files share one write.
     bool writes_runs() const {
         if (!spills() || files_.empty()) return false;
         const auto& sp = files_.begin()->second.spill;
@@ -103,40 +101,33 @@ class BloomFold : public trace::views::detail::Fold {
         return total;
     }
 
-    /// Bounds the streaming build of one file whose chunks arrive in order:
-    /// once the finished chunks held pass `share` bytes, they are written to
-    /// a run, a stage() of `staged` (IndexDatabase::begin_staged_write) for
-    /// `file_id`, whose commit publishes the tier whole; finish_staged hands
-    /// it back. A fresh `file_id` was reserved by this build, so its runs
-    /// clear nothing.
+    /// Past `share` bytes the finished chunks of a file are written as a run, a
+    /// stage() of `staged` (begin_staged_write) whose commit publishes the tier
+    /// whole. finish_staged hands it back. A fresh `file_id` was reserved by
+    /// this build, so its runs clear nothing.
     void enable_spill(std::uint64_t share,
                       std::unique_ptr<index::store::IndexDatabaseWrite> staged,
                       int file_id, bool fresh_id = false);
-    /// The on-disk size of the file being folded, which caps its auto keys.
-    /// Unset, the size is read from the path when the file is written.
+    /// Caps the auto keys. Unset, the size is read from the path at write.
     void set_file_bytes(std::uint64_t bytes) { file_bytes_ = bytes; }
-    /// Bytes the open run of a file that has written @p runs runs holds before
-    /// it is committed, for a spill @p share. It never falls under
-    /// MIN_SPILL_RUN_BYTES and doubles every SPILL_RUNS_PER_DOUBLING runs, so
-    /// a tiny budget writes few large runs, not many small ones.
+    /// Bytes the open run holds before it is committed. It never falls under
+    /// MIN_SPILL_RUN_BYTES and doubles every SPILL_RUNS_PER_DOUBLING runs, so a
+    /// tiny budget writes few large runs.
     static std::uint64_t run_limit(std::uint64_t share,
                                    std::size_t runs) noexcept;
     /// Runs written so far; 0 means the file is still wholly in memory.
     std::size_t spill_runs() const;
     /// For a file with spill enabled, with or without runs so far: writes the
     /// rest of the tier and its manifest entries into the staged write and
-    /// returns it. Its commit()
-    /// publishes the tier; the caller adds the file's record first, so the
-    /// tier carries the file's sources.
+    /// returns it. The caller adds the file's record first, so the tier carries
+    /// the file's sources, then commits it to publish the tier.
     std::unique_ptr<index::store::IndexDatabaseWrite> finish_staged(
         int file_id);
 
-    /// The catalog of `file` as a full scan of its records so far leaves it
-    /// (empty if unseen).
+    /// Empty if the file is unseen.
     index::schemas::dft::BloomCore::Catalog file_catalog(
         const std::string& file);
-    /// Calls that folded one path into a catalog since construction: one per
-    /// distinct (leaf, tag) pair a flush met, not one per event.
+    /// One per distinct (leaf, tag) pair a flush met, not one per event.
     std::uint64_t catalog_observations() const { return catalog_observations_; }
 
     /// Harvested per-checkpoint chunks for a file (nullptr if unseen), for
@@ -214,15 +205,11 @@ class BloomFold : public trace::views::detail::Fold {
         /// Each spilled chunk's data events and own auto keys.
         std::vector<SpilledChunk> keys;
         ankerl::unordered_dense::set<std::uint32_t> key_union;
-        /// Stages committed, and the bytes the staged write holds since the
-        /// last one.
         std::size_t staged_runs = 0;
         std::uint64_t staged_bytes = 0;
     };
 
     using SchemaLeaf = std::pair<std::uint32_t, std::uint8_t>;
-    // A distinct leaves list and the data events that carried it since the
-    // last flush into FileState::paths.
     struct Shape {
         dstd::Vector<SchemaLeaf> leaves;
         std::uint64_t events = 0;
@@ -285,7 +272,6 @@ class BloomFold : public trace::views::detail::Fold {
     void spill(FileState& fs, std::uint64_t upto);
 
     StringViewMap<FileState> files_;
-    // The file the last open() found, until files_ gains or loses a file.
     std::string last_file_;
     FileState* last_state_ = nullptr;
     std::uint64_t catalog_observations_ = 0;

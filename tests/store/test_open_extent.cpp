@@ -29,8 +29,6 @@
 namespace dftracer::utils::store {
 
 struct DataFileWriterTestHook {
-    /// Swaps the writer's descriptor for a read-only one on the same file, so
-    /// every pwrite fails with EBADF.
     static void reopen_read_only(DataFileWriter& writer,
                                  const std::string& path) {
         if (writer.fd_ >= 0) ::close(writer.fd_);
@@ -78,7 +76,6 @@ struct TempDir {
     }
 };
 
-/// Collects the extents the writer reports from its I/O completion threads.
 struct Collector {
     std::mutex mutex;
     std::condition_variable cv;
@@ -108,8 +105,6 @@ void collect_written(void* context, WrittenExtent&& extent) {
     static_cast<Collector*>(context)->add(std::move(extent));
 }
 
-/// Counts one discarded context; pass the counter itself as the segment
-/// context.
 void count_discarded(void* context) {
     static_cast<std::atomic<std::size_t>*>(context)->fetch_add(
         1, std::memory_order_relaxed);
@@ -209,8 +204,6 @@ std::uint32_t read_id(const std::uint8_t* in) {
     return static_cast<std::uint32_t>(dftracer::utils::read_u64_le(in));
 }
 
-/// A sealed segment whose single entry names `id` and whose value is
-/// `value_bytes` long and derived from `id`.
 std::vector<std::uint8_t> make_segment(std::uint32_t id,
                                        std::size_t value_bytes) {
     std::uint8_t key[8];
@@ -228,7 +221,6 @@ std::vector<std::uint8_t> make_segment(std::uint32_t id,
     return std::vector<std::uint8_t>(sealed->begin(), sealed->end());
 }
 
-/// A segment-shaped payload of exactly `length` bytes that names `id`.
 std::vector<std::uint8_t> make_payload(std::uint32_t id, std::size_t length) {
     std::vector<std::uint8_t> bytes(length, 0);
     write_id(bytes.data(), id);
@@ -238,8 +230,6 @@ std::vector<std::uint8_t> make_payload(std::uint32_t id, std::size_t length) {
     return bytes;
 }
 
-/// A sealed segment of exactly `length` bytes that names `id`, empty when no
-/// value length seals to it.
 std::vector<std::uint8_t> make_segment_of(std::uint32_t id,
                                           std::size_t length) {
     std::size_t value_bytes = length > 128 ? length - 128 : 0;
@@ -269,8 +259,6 @@ std::vector<std::uint8_t> read_range(int fd, std::uint64_t offset,
     return bytes;
 }
 
-/// The raw bytes of one written extent: its stored bytes, checked against the
-/// extent crc, then decoded.
 std::vector<std::uint8_t> read_extent_raw(int fd, const WrittenExtent& extent) {
     const std::vector<std::uint8_t> stored =
         read_range(fd, extent.offset, extent.length);
@@ -280,7 +268,6 @@ std::vector<std::uint8_t> read_extent_raw(int fd, const WrittenExtent& extent) {
     return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
-/// Ascending extents, none of them overlapping another.
 void check_extent_layout(std::vector<WrittenExtent>& extents,
                          std::uint32_t extent_size) {
     std::sort(extents.begin(), extents.end(),
@@ -300,8 +287,6 @@ void check_extent_layout(std::vector<WrittenExtent>& extents,
     }
 }
 
-/// Checks every extent against the file and reports how often each segment id
-/// was found. `ids` bounds the ids the caller appended.
 void check_extents_on_disk(int fd, const std::vector<WrittenExtent>& extents,
                            std::vector<int>& seen) {
     for (const WrittenExtent& extent : extents) {
@@ -506,7 +491,6 @@ TEST_CASE(
     ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
                         &collect_written, &collector);
 
-    // The extent keeps room for the header of its stored form.
     const std::size_t first = EIGHT_KIB - store::EXTENT_HEADER_BYTES - 64;
     std::vector<std::uint8_t> a = make_segment_of(1, first);
     std::vector<std::uint8_t> b = make_segment_of(2, 64);
@@ -595,8 +579,6 @@ TEST_CASE("store open extent: a failed write latches and reports no extent") {
     REQUIRE_FALSE(idle.has_value());
     CHECK(idle.error().is(dstd::Condition::Io));
     CHECK(collector.take().empty());
-    // The extent write failed, so no record will ever name that segment and the
-    // failure path is the only one that can hand its context back.
     CHECK(discarded.load() == 1);
 
     auto later = writer.append(21, ByteView(payload.data(), payload.size()),
@@ -636,7 +618,6 @@ TEST_CASE(
         }
         CHECK(discarded.load() == 0);
     }
-    // Nothing sealed the extent, so its contexts are the writer's to hand back.
     CHECK(discarded.load() == 3);
     CHECK(collector.take().empty());
 }
@@ -1036,8 +1017,6 @@ TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
     }
     CHECK(store::ExtentWriterTestHook::retired_bytes(writer) <
           2 * std::size_t{EIGHT_KIB});
-    // Sealing an empty extent retires nothing, so 2000 seals leave only the
-    // extent that held the append.
     CHECK(store::ExtentWriterTestHook::retired_extents(writer) <= 2);
 
     REQUIRE(writer.wait_idle().has_value());

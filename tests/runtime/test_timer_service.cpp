@@ -13,7 +13,7 @@ using namespace dftracer::utils;
 
 namespace {
 
-// Only a hang reaches this; a slow machine just runs fewer rounds.
+// Only a hang reaches this. A slow machine just runs fewer rounds.
 constexpr auto DEADLINE = std::chrono::seconds(60);
 constexpr auto RUN_FOR = std::chrono::seconds(3);
 

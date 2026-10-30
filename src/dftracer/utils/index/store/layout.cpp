@@ -102,8 +102,8 @@ namespace dftracer::utils::index::store::layout {
 
 std::span<const KindSpec> kinds() { return KINDS; }
 
-// Every extension is at version 0 until the first release: stored formats
-// change freely before then, and a development index is deleted, not migrated.
+// Version 0 until the first release. A development index is deleted, not
+// migrated.
 std::uint32_t ext_version(Ext /*ext*/) { return 0; }
 
 namespace {

@@ -531,9 +531,8 @@ class AsofCursor : public OrderedJoin {
 
 // Each left point pairs with every right interval [lo, hi] that holds it in
 // its by-group, ordered by (lo, hi, right position). The intervals that have
-// started and not ended stay as the active set: a min-heap on hi. Its rows
-// point into the right morsels until the feed leaves them, and a sweep then
-// copies them compactly, so a long interval does not keep its whole morsel.
+// started and not ended stay as the active set, a min-heap on hi. A sweep
+// copies their rows out of the right morsels so a long interval pins none.
 class IntervalCursor : public OrderedJoin {
    public:
     IntervalCursor(std::unique_ptr<Cursor> left, LazyFrame right_sorted,
@@ -548,7 +547,7 @@ class IntervalCursor : public OrderedJoin {
     bool busy() const override { return emitting_; }
 
     // Pairs point into the morsels the feed left, so only a flush lets a
-    // sweep copy their rows out; past the pin share the output flushes.
+    // sweep copy their rows out. Past the pin share the output flushes.
     bool full() const override {
         return out_left_.size() >= row_cap_ ||
                (!out_left_.empty() && left_bytes_ > pin_cap_);
@@ -629,9 +628,8 @@ class IntervalCursor : public OrderedJoin {
         if (emit_pos_ >= ordered_.size()) emitting_ = false;
     }
 
-    // Sums the bytes of the right morsels the feed left that active rows
-    // still point into, only when the feed or chunks_ changed since the last
-    // sum.
+    // Sums the bytes of the right morsels the feed left that active rows still
+    // point into, only when the feed or chunks_ changed.
     void track_left() {
         const Seg* at = feed_.seg().get();
         if (at == left_at_ && chunks_.size() == left_n_) return;

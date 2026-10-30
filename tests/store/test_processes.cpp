@@ -173,7 +173,6 @@ std::string durable_value(int child, int n, int round) {
            std::to_string(round);
 }
 
-/// A row of a scan, named by (namespace path, scope, key).
 std::string row_id(const std::string& scope, const std::string& key) {
     return scope + '\x1f' + key;
 }
@@ -188,8 +187,6 @@ std::string visible(const std::string& id) {
 
 using Expected = std::map<std::string, std::string>;
 
-/// One scan, indexed by (scope, key), so the exactly-once check counts rows and
-/// compares values. `expected` names every row that must appear.
 struct ScanDump {
     std::size_t rows = 0;
     std::map<std::string, std::size_t> counts;
@@ -215,7 +212,6 @@ struct ScanDump {
         return true;
     }
 
-    /// A bounded report of what the scan held against what was expected.
     std::string report(const Expected& expected) const {
         std::string out = "rows " + std::to_string(rows) + " keys " +
                           std::to_string(counts.size()) + " expected " +
@@ -331,8 +327,6 @@ std::string skipped_report(const Snapshot& snapshot) {
     return out;
 }
 
-/// The shared scope is written by every child under the same generation and
-/// the same keys. One copy is current, so every key folds exactly once.
 void check_shared_scope(const Snapshot& snapshot, const NamespaceSpec& sum,
                         int round) {
     ScanCursor cursor = snapshot.scan(sum, file_scope(SHARED_SCOPE), {});
@@ -426,8 +420,6 @@ struct ChildFailure {
     ::_exit(1);
 }
 
-/// The commit retry the writer documents: a Busy commit left the batch whole,
-/// so the same batch commits again after the wait for space.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
     Writer& writer, Batch batch, int attempts) {
     for (int attempt = 0; attempt < attempts; ++attempt) {
@@ -641,7 +633,6 @@ void reap_children(const std::vector<pid_t>& pids) {
     }
 }
 
-/// Forks the children, releases them together, and fails on any nonzero exit.
 void run_round(const std::string& root, int round) {
     int barrier[2];
     if (::pipe(barrier) != 0) {
@@ -675,7 +666,6 @@ void run_round(const std::string& root, int round) {
     reap_children(pids);
 }
 
-/// Copies every regular file of `from` into `to`.
 void copy_files(const std::string& from, const std::string& to) {
     for (const auto& entry : std::filesystem::directory_iterator(from)) {
         if (!entry.is_regular_file()) continue;

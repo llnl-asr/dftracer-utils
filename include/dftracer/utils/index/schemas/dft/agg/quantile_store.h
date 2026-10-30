@@ -14,15 +14,9 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// Mergeable quantiles of one metric. Up to EXACT_CAPACITY values are kept
-/// exactly (sorted); the next value turns the store into a MergeSketch of
-/// the given relative accuracy, sized once from the key range of the values.
-/// Stores that merge must share one accuracy.
-///
-/// Layout: a 24 byte union of the exact buffer and the sketch pointer, the
-/// accuracy and a tag, 40 bytes in all. The exact buffer is a dstd::Vector
-/// that grows from the first add, so a store of few values holds few bytes
-/// and an empty store holds none; 64 inline doubles (512 B) per metric per
-/// (chunk, category, name) would be too much.
+/// exactly. The next value turns the store into a MergeSketch of the given
+/// relative accuracy. Stores that merge must share one accuracy. The exact
+/// buffer grows from the first add, as there is one store per metric per chunk.
 class QuantileStore {
    public:
     static constexpr std::size_t EXACT_CAPACITY = 64;
@@ -38,32 +32,29 @@ class QuantileStore {
     /// A NaN is ignored.
     void add(double value);
 
-    /// Adds every value of `values` (NaNs ignored). On a sketch the bucket
-    /// keys come from the SIMD bulk kernel, in blocks with no allocation.
+    /// Adds every value of `values` (NaNs ignored).
     void add_many(dstd::Span<const double> values);
 
     /// Merges `other` in place; `other` must not be `*this`. The result is
     /// exact only when both are exact and the total fits EXACT_CAPACITY.
     void merge(const QuantileStore& other);
 
-    /// Exact store: linear interpolation between the two nearest ranks at
-    /// position q * (n - 1), the rule of dataframe::quantile
-    /// (dataframe/kernels/stats.cpp); q is clamped to [0, 1]. Sketch store:
-    /// MergeSketch::quantile. NaN when empty.
+    /// Exact store: linear interpolation at position q * (n - 1), the rule of
+    /// dataframe::quantile. Sketch store: MergeSketch::quantile. q is clamped
+    /// to [0, 1]. NaN when empty.
     double quantile(double q) const;
 
     std::uint64_t count() const;
 
-    /// Adds the values to `out`: each exact value, or for a sketch store a
-    /// value inside each occupied bin with the bin's count, so `out` has the
-    /// bins of the store (to within `out`'s own bin limit).
+    /// Adds each exact value, or for a sketch store a value inside each
+    /// occupied bin with the bin's count (to within `out`'s own bin limit).
     void add_to(dataframe::DDSketch& out) const;
     bool is_exact() const noexcept { return !sketch_mode_; }
     double relative_accuracy() const noexcept { return accuracy_; }
 
-    /// Appends to `buf`: tag byte, accuracy, then the values (exact) or the
-    /// sketch bytes (sketch). Integers and the exact doubles are little
-    /// endian; the sketch bytes keep the sketch's own byte order.
+    /// Appends a tag byte, the accuracy, then the values (exact) or the sketch
+    /// bytes. Integers and exact doubles are little endian. The sketch bytes
+    /// keep the sketch's own byte order.
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
     static dstd::Expected<QuantileStore, ErrorCode> deserialize(
         const std::uint8_t* data, std::size_t len);
@@ -72,8 +63,6 @@ class QuantileStore {
     using SketchPtr = dstd::UniquePtr<dataframe::MergeSketch>;
     using ExactVec = dstd::Vector<double>;
 
-    /// Turns an exact store into a sketch holding its values and the NaN-free
-    /// `extra`, in one sizing of the bins.
     void to_sketch(const double* extra, std::size_t n);
     void destroy() noexcept;
 

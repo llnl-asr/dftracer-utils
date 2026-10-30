@@ -44,24 +44,17 @@ struct PromiseBase : FrameAllocation {
     Scheduler* scheduler_{nullptr};
     Executor* executor_{nullptr};
     std::atomic<bool>* cancellation_token_{nullptr};
-    /// Set by CoroTask::cancel(). The next wait of this task, or of any task
-    /// it awaits, ends the task as cancelled instead of waiting.
     std::atomic<bool> cancel_requested_{false};
-    /// The task ended at a wait because it was cancelled, not by returning or
-    /// throwing. Written before the awaiter is released, read after.
+    /// Written before the awaiter is released and read after.
     bool cancelled_{false};
-    /// Set when CoroTask::await_suspend or CoroTask::resume starts the task.
     bool started_{false};
-    /// The frame holds a CoroScope, so it must reach its join: a cancelled
-    /// child does not end it (see propagate_cancel).
+    /// A cancelled child does not end a frame that holds a CoroScope, which
+    /// must reach its join.
     bool owns_scope_{false};
-    /// Ends the awaiter of this task on its done path when this task ended
-    /// cancelled; returns false when the awaiter must resume instead. Set by
-    /// CoroTask::await_suspend for an awaiter that has propagate_cancel().
+    /// Ends the awaiter on this task's done path when it ended cancelled;
+    /// false means the awaiter resumes instead.
     bool (*parent_cancel_)(std::coroutine_handle<>) noexcept {nullptr};
     PromiseBase* root_promise_{nullptr};
-    /// The pool and intern table current when the coroutine was created; it
-    /// enters them each time it resumes.
     detail::RunContext context_;
 #if DFTRACER_UTILS_LOGGER_TRACE_ENABLED
     void* trace_handle_{nullptr};  ///< logging::coro_trace enter/leave handle
@@ -77,16 +70,14 @@ struct PromiseBase : FrameAllocation {
         return root_promise_ ? root_promise_ : this;
     }
 
-    /// True once this task or the root of the chain awaiting it was cancelled.
     bool cancel_requested() const noexcept {
         return cancel_requested_.load(std::memory_order_acquire) ||
                (root_promise_ && root_promise_->cancel_requested_.load(
                                      std::memory_order_acquire));
     }
 
-    /// Releases the awaiter of a task that ended, by return or by a throw.
-    /// Nothing reads the frame after the release or the exchange: a blocked
-    /// get() or the awaiter may destroy it from then on.
+    /// Releases the awaiter of a task that ended. The frame must not be read
+    /// afterwards, since the awaiter may destroy it.
     void complete() noexcept {
         std::coroutine_handle<> next = continuation_;
         const bool cancelled = cancelled_;
@@ -103,20 +94,17 @@ struct PromiseBase : FrameAllocation {
         }
     }
 
-    /// A child of this task ended cancelled. When this task is cancelled too
-    /// and holds no scope, it ends as cancelled as well, with no exception,
-    /// and returns true. Call it only while this task is suspended on that
-    /// child.
+    /// Ends this task as cancelled too, with no exception, when it holds no
+    /// scope and is cancelled, and returns true then. Call only while suspended
+    /// on that child.
     bool propagate_cancel() noexcept {
         if (owns_scope_ || !cancel_requested()) return false;
         finish_cancelled();
         return true;
     }
 
-    /// Ends the task as cancelled at the await it is suspending on, with no
-    /// exception: the body is not resumed, and the owner of the frame destroys
-    /// it, which runs the destructors of its locals. Call it only from the
-    /// await_suspend of this task's own frame.
+    /// Ends the task as cancelled with no exception. The owner destroys the
+    /// frame. Call only from the await_suspend of this task's own frame.
     void finish_cancelled() noexcept {
         cancelled_ = true;
         complete();
@@ -125,8 +113,6 @@ struct PromiseBase : FrameAllocation {
 
 namespace detail {
 
-/// Awaited first in a coroutine that holds a CoroScope; see
-/// PromiseBase::owns_scope_.
 struct OwnsScopeTag {};
 inline constexpr OwnsScopeTag OWNS_SCOPE{};
 
@@ -219,8 +205,8 @@ class CoroTask {
 
         void unhandled_exception() { exception_ = std::current_exception(); }
 
-        /// Awaiting a task or a join is not a cancel point: the awaited task
-        /// reaches its own, and a scope must always reach its join.
+        /// Awaiting a task or a join is not a cancel point. A scope must always
+        /// reach its join.
         template <typename U>
         static constexpr bool CANCEL_EXEMPT_V =
             requires { requires std::remove_cvref_t<U>::CANCEL_EXEMPT; };
@@ -234,14 +220,12 @@ class CoroTask {
             }
         }
 
-        /// Marks this frame as holding a CoroScope; see owns_scope_.
         std::suspend_never await_transform(detail::OwnsScopeTag) noexcept {
             this->owns_scope_ = true;
             return {};
         }
 
-        /// Not double-wrapped by YieldCheckAwaitable: YieldAwaitable makes
-        /// its own timeslice check.
+        /// YieldAwaitable makes its own timeslice check.
         auto await_transform(coro::YieldAwaitable y) {
             return detail::InPool<coro::YieldAwaitable>{
                 y, &this->context_, false, this->cancel_requested()};
@@ -273,8 +257,6 @@ class CoroTask {
     std::coroutine_handle<promise_type> coro_handle_;
 
    public:
-    /// Awaiting a task is not a cancel point of the awaiter (see
-    /// promise_type::at_cancel_point).
     static constexpr bool CANCEL_EXEMPT = true;
 
     /// Type alias for result type (used by combinators)
@@ -372,7 +354,6 @@ class CoroTask {
         if constexpr (requires {
                           awaiting_coro.promise().propagate_cancel();
                       }) {
-            // The child ended cancelled before it returned here.
             if (p.cancelled_ && awaiting_coro.promise().propagate_cancel())
                 return true;
         }
@@ -410,16 +391,10 @@ class CoroTask {
     // ========================================================================
 
     /**
-     * Ask the task to stop. Thread-safe and idempotent. Cooperative: at its
-     * next wait, and at that of any task it awaits, the task ends as
-     * cancelled without an exception, and its owner destroys the suspended
-     * frame, which runs the destructors of its locals. Awaiting a task or a
-     * scope join is not a wait. Call it on the task that was handed to its
-     * awaiter, not on one it awaits.
-     *
-     * An awaiter that wants no exception tests cancelled() before
-     * await_resume(); await_resume() of a cancelled task throws a cancelled
-     * error (dstd::Condition::Cancelled).
+     * Asks the task to stop. Thread-safe and idempotent. At its next wait, or
+     * that of a task it awaits, it ends as cancelled. Call it on the task
+     * handed to its awaiter, not one it awaits. await_resume() throws
+     * dstd::Condition::Cancelled, so test cancelled() first to avoid it.
      */
     void cancel() noexcept {
         if (coro_handle_) {
@@ -428,12 +403,10 @@ class CoroTask {
         }
     }
 
-    /// True when the task ended at a wait because it was cancelled.
     bool cancelled() const noexcept {
         return coro_handle_ && coro_handle_.promise().cancelled_;
     }
 
-    /// True once the task ran or began to run. A task never awaited has not.
     bool started() const noexcept {
         return coro_handle_ && coro_handle_.promise().started_;
     }

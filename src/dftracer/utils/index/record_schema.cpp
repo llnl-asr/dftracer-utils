@@ -50,7 +50,7 @@ template <typename Emit>
 void for_each_head_line(int fd, const std::string& path, Emit&& emit) {
     std::vector<char> comp(CHUNK);
     off_t offset = 0;
-    // Reads the next chunk; returns the byte count, 0 at the end, -1 on error.
+    // Returns the byte count, 0 at the end and -1 on error.
     auto read_chunk = [&](std::size_t n) -> ssize_t {
         ssize_t got;
         do {
@@ -872,8 +872,8 @@ void load_into(Registry& reg, const std::string& path) {
     }
 }
 
-// The registry, with $DFTRACER_UTILS_SCHEMA_PATH loaded on first use; a failed
-// load throws here and is retried by the next access.
+// Loads $DFTRACER_UTILS_SCHEMA_PATH on first use. A failed load throws and the
+// next access retries.
 Registry& registry() {
     static Registry r;
     static std::once_flag env;
@@ -1022,8 +1022,8 @@ struct CachedDetection {
 
 struct DetectionCache {
     std::mutex mu;
-    // A std map: this is a process-lifetime static, and pool memory alive at
-    // exit would fail the memory exit check.
+    // A std map, since pool memory alive at exit would fail the memory exit
+    // check for this process-lifetime static.
     std::unordered_map<std::string, CachedDetection> map;
 };
 
@@ -1032,8 +1032,6 @@ DetectionCache& detection_cache() {
     return cache;
 }
 
-// Cached per process by path, modification time, size and the registered
-// schemas.
 std::optional<SchemaDetection> cached_detection(const std::string& file_path,
                                                 std::uint64_t size,
                                                 std::int64_t mtime_ns) {

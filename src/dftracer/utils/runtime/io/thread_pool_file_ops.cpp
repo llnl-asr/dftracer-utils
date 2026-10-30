@@ -41,7 +41,7 @@ bool waits_for_peer(IoOp op, short& events) {
 
 // A regular file never waits for a peer, so a read of one skips the cancellable
 // wait. The type is looked up once per descriptor. The entry is dropped when
-// the descriptor is closed or opened through this backend; one closed and
+// the descriptor is closed or opened through this backend. One closed and
 // reused behind its back keeps the old answer.
 constexpr int FD_KIND_SLOTS = 4096;
 constexpr std::uint8_t FD_UNKNOWN = 0;

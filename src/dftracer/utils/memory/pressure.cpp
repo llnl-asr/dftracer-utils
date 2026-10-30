@@ -36,8 +36,7 @@ bool readable(const char* dir, const char* file) noexcept {
     return true;
 }
 
-// The path of the cgroup in the hierarchy this process sees; "/" in a
-// container that mounts only its own cgroup.
+// "/" in a container that mounts only its own cgroup.
 void read_cgroup_paths(char* v2, char* v1, std::size_t capacity) noexcept {
     v2[0] = '\0';
     v1[0] = '\0';

@@ -19,8 +19,8 @@ namespace dftracer::utils::memory {
 
 namespace {
 
-// The debug values wrap the backend that the same name without Debug selects,
-// so the two backends keep their own case and debug costs them nothing.
+// The debug values wrap the backend of the same name without Debug, so debug
+// costs the plain cases nothing.
 enum class Dispatch : std::uint8_t {
     PageHeap,
     System,
@@ -61,9 +61,8 @@ bool read_flag(const char* name, bool fallback) noexcept {
     abort_with(message);
 }
 
-// The one getenv function in memory: the backend, the decay time and the
-// debug and exit check switches must be fixed before the first allocation,
-// which can come before common reads the environment.
+// The one getenv in memory. These settings must be fixed before the first
+// allocation, which can come before common reads the environment.
 Resolved resolve_environment() noexcept {
     Resolved resolved;
     Config& config = resolved.config;
@@ -105,8 +104,8 @@ constexpr Dispatch dispatch_of(Backend backend, bool debug) noexcept {
     return debug ? Dispatch::DebugSystem : Dispatch::System;
 }
 
-// Racing first callers resolve the same values. The other settings are stored
-// before the dispatch value, which readers load with acquire.
+// The other settings are stored before the dispatch value, which readers load
+// with acquire.
 [[gnu::noinline]] Dispatch resolve_dispatch() noexcept {
     Resolved resolved = resolve_environment();
     g_decay_ms.store(resolved.config.decay_ms, std::memory_order_relaxed);
@@ -123,9 +122,9 @@ Dispatch dispatch() noexcept {
     return d;
 }
 
-// The cases that leave the page heap and system paths below tail calls, so
-// those two run without a frame of their own. The site is the return address
-// of the public entry, which a tail call from there keeps intact.
+// The page heap and system paths below are tail calls, so they run without a
+// frame of their own and keep the return address of the public entry as the
+// site.
 [[gnu::noinline]] void* allocate_other(std::size_t size, std::size_t align,
                                        void* site) {
     switch (dispatch()) {

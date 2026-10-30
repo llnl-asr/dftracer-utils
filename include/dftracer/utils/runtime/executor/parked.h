@@ -9,20 +9,16 @@
 
 namespace dftracer::utils {
 
-/// Wakes one parked waiter so its await_resume reports cancellation. Called
-/// with one registry shard lock held, possibly more than once and concurrently
-/// with the awaitable's own wake path: it must wake the waiter exactly once
-/// overall and do nothing when it was already woken. Because a waiter
-/// registers while it holds its awaitable's lock, it must only try-lock that
-/// lock and return when it is busy; shutdown calls again. Must not call park()
-/// or unpark().
+/// Wakes one parked waiter with a cancelled status. Called with a registry
+/// shard lock held, possibly concurrently with the awaitable's own wake path,
+/// so it must wake the waiter exactly once. It must only try-lock the
+/// awaitable's lock and return if busy (shutdown calls again), and not call
+/// park()/unpark().
 using ParkCancelFn = void (*)(void* waiter) noexcept;
 
 /// The registry entry of a coroutine suspended on an awaitable that only
-/// another party can finish. The awaitable registers once the waiter is
-/// queued, so executor shutdown can wake the waiter with a cancelled status
-/// instead of leaving the frame suspended for ever. The entry is allocated at
-/// that point, so a path that never queues pays only for a null pointer.
+/// another party can finish. Shutdown wakes the waiter with a cancelled status
+/// through it.
 struct ParkNode {
     ParkNode(ParkCancelFn c, void* w) noexcept
         : cancel(c),
@@ -33,7 +29,7 @@ struct ParkNode {
 
     ParkCancelFn cancel;
     void* waiter;
-    /// Free for the awaitable to use; set by its cancel callback.
+    /// Free for the awaitable to use. Set by its cancel callback.
     bool cancelled;
 
    private:
@@ -42,8 +38,7 @@ struct ParkNode {
     ParkNode* next;
 };
 
-/// The waiters of one executor. Thread-safe. Sharded by node address so that
-/// waiters on different threads do not share a lock.
+/// The waiters of one executor. Thread-safe.
 class ParkRegistry {
    public:
     ParkRegistry() = default;

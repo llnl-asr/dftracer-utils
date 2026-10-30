@@ -1970,7 +1970,7 @@ coro::CoroTask<std::string> when_any_cancellation_parent_func(CoroScope& ctx) {
     auto winner_result = result.result;
     CHECK(winner_result == "fast_completed");
 
-    // when_any already cancelled and awaited the losers; this is a no-op
+    // when_any already cancelled and awaited the losers. This is a no-op
     // because spawned futures expose no tokens
     result.cancel_remaining();
 
@@ -2029,7 +2029,6 @@ static coro::CoroTask<int> timer_service_basic_func(CoroScope& ctx) {
     int winner = result.result;
     CHECK(winner == 99);
 
-    // when_any already cancelled and awaited the slow task before returning
     result.cancel_remaining();
 
     co_return winner;
@@ -2069,7 +2068,6 @@ static coro::CoroTask<std::string> fast_task_timeout_func(CoroScope& ctx) {
     auto winner_result = result.result;
     CHECK(winner_result == "fast_completed");
 
-    // when_any already cancelled and awaited the slow task before returning
     result.cancel_remaining();
 
     co_return winner_result;
@@ -2115,7 +2113,6 @@ static coro::CoroTask<int> multi_timeout_func(CoroScope& ctx) {
     int winner = result.result;
     CHECK(winner == 1);
 
-    // when_any already cancelled and awaited the slower tasks
     result.cancel_remaining();
 
     co_return winner;
@@ -2588,10 +2585,6 @@ TEST_CASE("PipelineConfig - Fluent API chaining") {
     CHECK(config.enable_watchdog == true);
     CHECK(config.global_timeout == std::chrono::seconds(60));
 }
-
-// ============================================================================
-// Schedulers sharing one executor
-// ============================================================================
 
 namespace {
 

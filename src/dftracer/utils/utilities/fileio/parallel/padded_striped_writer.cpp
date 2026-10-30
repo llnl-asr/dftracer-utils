@@ -130,7 +130,7 @@ struct PaddedStripedImpl {
         if (!packer_drained) {
             producers.clear();
             if (packer_future.has_value()) {
-                // A shutdown cancels the wait with an exception; the scope
+                // A shutdown cancels the wait with an exception. The scope
                 // must still be joined before the Impl can be destroyed.
                 int rc = 0;
                 std::exception_ptr cancelled;
@@ -167,7 +167,7 @@ struct PaddedStripedImpl {
             if (rc != 0 && final_rc == 0) final_rc = rc;
         };
 
-        // `stripes` consecutive stripes from `emit_idx`: one for packed
+        // `stripes` consecutive stripes from `emit_idx`, one for packed
         // members, more for a member larger than a stripe.
         auto launch_emit = [&](std::vector<std::uint8_t>&& payload,
                                std::uint64_t emit_idx,
@@ -192,9 +192,8 @@ struct PaddedStripedImpl {
             const std::size_t need =
                 chunk->data.size() + PAD_MEMBER_FIXED_OVERHEAD;
             if (need > stripe_size) {
-                // A member larger than a stripe, such as one copied whole
-                // from an input file, takes whole stripes of its own, so
-                // every stripe still starts on a member.
+                // A member larger than a stripe takes whole stripes of its own,
+                // so every stripe still starts on a member.
                 const std::uint64_t stripes =
                     (need + stripe_size - 1) / stripe_size;
                 std::uint64_t first = current_stripe_idx;
@@ -240,7 +239,7 @@ struct PaddedStripedImpl {
             }
             buf.insert(buf.end(), chunk->data.begin(), chunk->data.end());
         }
-        // Written even when empty, as padding: the footer goes after it, and a
+        // Written even when empty, as padding. The footer goes after it, and a
         // stripe left unwritten would read as zeros, where gzip stops.
         co_await launch_emit(std::move(buf), current_stripe_idx, 1);
 

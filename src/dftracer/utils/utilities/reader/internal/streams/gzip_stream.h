@@ -261,7 +261,8 @@ class GzipStream : public StreamBase {
     }
 
     /// A restart piece starts where the inflater stopped, and the byte before
-    /// it is the last of its window: inside a line unless that is a newline.
+    /// it is the last of its window. It is inside a line unless that byte is a
+    /// newline.
     bool piece_starts_mid_line() const {
         if (member_.kind !=
             dftracer::utils::index::gzip::GzipRecordKind::Restart)

@@ -62,10 +62,8 @@ struct StripeInfo {
 };
 
 /// Lustre stripe geometry for `path` (or its parent when absent): the largest
-/// stripe size over the layout components and that component's stripe count. A
-/// progressive file layout gives its components different stripe sizes, so the
-/// largest is reported. Returns an all-zero StripeInfo off Lustre or when the
-/// query is unavailable.
+/// stripe size over the layout components and that component's stripe count.
+/// Returns an all-zero StripeInfo off Lustre or when the query is unavailable.
 StripeInfo lustre_stripe(const std::string& path) noexcept;
 
 }  // namespace dftracer::utils

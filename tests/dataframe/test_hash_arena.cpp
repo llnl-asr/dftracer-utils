@@ -105,13 +105,13 @@ TEST_SUITE("hash arena") {
             dftracer::utils::memory::Manager::get().root().child("grow");
         REQUIRE(pool);
         HashArena a(*pool);
-        // About 80 bytes a record: enough keys to fill the 64 KiB to 1 MiB
+        // About 80 bytes a record, with enough keys to fill the 64 KiB to 1 MiB
         // chunks and start the next ones.
         constexpr int KEYS = 40000;
         auto key_of = [](int i) {
             return "key-" + std::to_string(i) + std::string(56, 'x');
         };
-        // One hash for two keys: the chain must keep them apart.
+        // One hash for two keys. The chain must keep them apart.
         constexpr std::uint64_t SHARED = 99;
         const std::string first = "shared-" + key_of(0);
         const std::string second = "shared-" + key_of(1);
@@ -169,7 +169,7 @@ TEST_SUITE("hash arena") {
 
     TEST_CASE("a small key set reserves no table four times its size") {
         // The keys unique() takes from one morsel before a 4 MiB budget
-        // spills: a table grown four times at once held 7.1 MiB here.
+        // spills. A table grown four times at once held 7.1 MiB here.
         dftracer::utils::memory::PoolHandle pool =
             dftracer::utils::memory::Manager::get().root().child("small");
         REQUIRE(pool);

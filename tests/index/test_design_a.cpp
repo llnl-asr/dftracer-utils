@@ -55,8 +55,8 @@ std::string small_trace(const std::string& dir, int n) {
         dir + "/s" + std::to_string(n) + ".pfw.gz", out.str());
 }
 
-// Segments of SEGMENT_LINES lines each walk the same names in another order,
-// so the first appearance of a string depends on which segment is read first.
+// Each segment walks the same names in another order, so the first appearance
+// of a string depends on which segment is read first.
 constexpr int SEGMENT_LINES = 4096;
 constexpr int NAMES = 61;
 
@@ -145,7 +145,7 @@ Dump dump_index(const std::string& first_file, const std::string& index_dir) {
     store::release_index(path);
     store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
     Dump out;
-    // Grouped by what precedes the first '|': the namespace, or #copy.
+    // Grouped by what precedes the first '|', the namespace or #copy.
     db.for_each_record([&out](std::string_view key, std::string_view value) {
         const auto bar = key.find('|');
         out[std::string(key.substr(0, bar))].emplace_back(
@@ -191,7 +191,6 @@ TEST_SUITE("DesignA") {
                 << many.in_flight << " files at once)");
         CHECK(few.bytes < BUDGET + SLACK);
         CHECK(many.bytes < BUDGET + SLACK);
-        // The budget, not the worker count, decides how many files run.
         CHECK(many.in_flight >= 4);
         CHECK(many.in_flight < 16);
         CHECK(few.in_flight <= 2);
@@ -199,8 +198,8 @@ TEST_SUITE("DesignA") {
 
     TEST_CASE("one large file is granted a parse window of most workers") {
         constexpr std::size_t WORKERS = 8;
-        // One file in flight and the rest of the workers free: the gate grants
-        // a slot and the bytes for every other worker, and no more.
+        // With one file in flight the gate grants a slot and the bytes for
+        // every other worker, and no more.
         build::ParseGate gate(nullptr, WORKERS);
         gate.file_in();
         REQUIRE(gate.spare_workers());
@@ -213,7 +212,6 @@ TEST_SUITE("DesignA") {
         CHECK_FALSE(gate.try_slot());
         for (std::size_t i = 0; i < pieces; ++i) gate.give_slot();
 
-        // A file for every worker keeps each file to its own worker.
         build::ParseGate busy(nullptr, WORKERS);
         for (std::size_t i = 0; i < WORKERS; ++i) busy.file_in();
         CHECK_FALSE(busy.spare_workers());

@@ -32,9 +32,8 @@ constexpr std::size_t CLASS_COUNT = 40;
 constexpr std::uint64_t ALL_PAGES_FREE = ~std::uint64_t{1};
 constexpr std::size_t REMOTE_BUFFER = 64;
 constexpr std::size_t USABLE_PAGES = PAGES_PER_SPAN - 1;
-// Large runs come in eight classes per doubling above MEDIUM_MAX, so a run
-// wastes less than an eighth of its size. Class 0 is MEDIUM_MAX itself, for
-// a smaller block whose alignment sends it here.
+// Eight large classes per doubling above MEDIUM_MAX. Class 0 is MEDIUM_MAX
+// itself, for a smaller block whose alignment sends it here.
 constexpr unsigned LARGE_STEPS_LOG = 3;
 constexpr unsigned MEDIUM_SHIFT = std::countr_zero(MEDIUM_MAX);
 constexpr std::size_t LARGE_CLASS_COUNT =
@@ -50,8 +49,6 @@ constexpr std::uint64_t HEAP_ADDR_MASK =
     (std::uint64_t{1} << HEAP_TAG_SHIFT) - 1;
 static_assert(HEAP_SPAN_SIZE == std::size_t{1} << HEAP_ADDR_SHIFT);
 
-// The k with 2^k < size <= 2^(k+1). A run is the steps of 2^k / 8 that
-// cover size, 9 to 16 of them.
 constexpr unsigned large_octave(std::size_t size) noexcept {
     return static_cast<unsigned>(std::bit_width(size - 1)) - 1;
 }
@@ -119,9 +116,9 @@ struct PageDesc {
 
 struct Heap;
 
-// owner and kind are read on every free, so they sit in one cache line that is
-// not the first: spans are 4 MiB aligned and every span starts in the same
-// cache set as the pools of ids and the hot heap fields.
+// owner and kind are read on every free and sit in one cache line that is not
+// the first. Spans are 4 MiB aligned, so the first line would share a cache set
+// with the pool ids and the hot heap fields.
 struct SpanHeader {
     SpanHeader* prev;
     SpanHeader* next;
@@ -164,18 +161,15 @@ static_assert(sizeof(Heap) <= HEAP_PAGE_SIZE);
 
 thread_local Heap* t_heap = nullptr;
 
-// Low bits: heap address >> 22 (heaps are 4 MiB aligned). High bits: a tag
-// that grows on every push and pop, so a stale pop cannot succeed (ABA).
+// Low bits are heap address >> 22. High bits are a tag that grows on every push
+// and pop, so a stale pop cannot succeed (ABA).
 std::atomic<std::uint64_t> g_free_heaps{0};
 std::atomic<Heap*> g_all_heaps{nullptr};
 
-// A cache holds idle spans (index 0) or idle large runs (index 1 + i holds
-// the runs of large class i, so a run is reused only for its own class). Pushes
-// land on young. A decay pass moves the whole young stack to old when old is
-// empty, then purges old from its newest entry down once that entry is past the
-// delay, and parks purged entries on cold. Entries are never unmapped and their
-// header page is never purged, so a pop that read a stale head still reads
-// mapped memory; the tag makes its CAS fail.
+// Index 0 caches idle spans and index 1 + i idle large runs of class i. Pushes
+// land on young, a decay pass ages them to old and purged entries go to cold.
+// Entries are never unmapped and their header page is never purged, so a pop
+// that read a stale head still reads mapped memory and the tag fails its CAS.
 struct Cache {
     std::atomic<std::uint64_t> young;
     std::atomic<std::uint64_t> old;
@@ -183,8 +177,6 @@ struct Cache {
     std::atomic<bool> busy;
 };
 Cache g_caches[CACHE_COUNT];
-// Bit i is set while cache i may hold young or old entries, so a decay pass
-// visits only those caches.
 std::atomic<std::uint64_t> g_cache_live{0};
 static_assert(CACHE_COUNT <= 64);
 std::atomic<std::ptrdiff_t> g_cache_reserved{0};
@@ -218,12 +210,9 @@ constexpr std::size_t round_up(std::size_t n, std::size_t to) noexcept {
 
 constexpr std::size_t PAGE_MASK = HEAP_PAGE_SIZE - 1;
 
-// Every small block has a 16-bit pool id. A class of HEADER_IDS_MIN_BLOCK
-// bytes or more keeps its ids in the span's header page, so its page is all
-// blocks. A smaller class keeps them at the start of its page, padded so the
-// blocks keep the alignment of their class. The slot of a block is found by a
-// multiply with the reciprocal of the class size, exact for offsets below a
-// page.
+// A class of HEADER_IDS_MIN_BLOCK bytes or more keeps the 16-bit pool ids of
+// its blocks in the span's header page. A smaller class keeps them at the start
+// of its page, padded to the class alignment.
 constexpr std::size_t HEADER_IDS_MIN_BLOCK = 512;
 constexpr std::size_t HEADER_IDS_PER_PAGE =
     HEAP_PAGE_SIZE / HEADER_IDS_MIN_BLOCK;
@@ -238,10 +227,9 @@ struct SmallLayout {
     std::uint32_t delta;
 };
 
-// The ids of a page start at `color` bytes, a different one for each class.
-// Pages are 64 KiB aligned, so with all ids at offset 0 the ids lines of the
-// classes in use fall into one cache set, and a few classes evict each other
-// on every allocation and free.
+// The ids of a page start at `color` bytes, different for each class. At offset
+// 0 the ids lines of all classes share one cache set, since pages are 64 KiB
+// aligned, and a few classes evict each other on every allocation and free.
 constexpr SmallLayout make_small_layout(std::size_t block,
                                         std::size_t color) noexcept {
     bool in_header = block >= HEADER_IDS_MIN_BLOCK;
@@ -310,8 +298,6 @@ constexpr std::size_t class_index(std::size_t size) noexcept {
     return 4 + (k - 6) * 4 + q;
 }
 
-// Every class size up to TABLE_MAX is a multiple of MIN_ALIGN, so the class of
-// a size is the class of its round up to MIN_ALIGN.
 constexpr std::size_t TABLE_MAX = 1024;
 
 constexpr std::array<std::uint8_t, TABLE_MAX / MIN_ALIGN + 1>
@@ -371,8 +357,8 @@ void* map_aligned(std::size_t bytes) noexcept {
     return reinterpret_cast<void*>(base);
 }
 
-// Only the thread that holds a heap writes its counters, so a relaxed load
-// and store replaces a read-modify-write; other threads only read them.
+// Only the thread that holds a heap writes its counters, so a relaxed load and
+// store replaces a read-modify-write.
 void bump(std::atomic<std::ptrdiff_t>& counter, std::size_t n,
           bool grow) noexcept {
     auto delta = static_cast<std::ptrdiff_t>(n);
@@ -395,8 +381,7 @@ void raise_peak(std::atomic<std::size_t>& peak, std::size_t value) noexcept {
     }
 }
 
-// The live total walks every pool and thread cache, so it is read once per
-// USED_SAMPLE_BYTES mapped rather than at every map.
+// The live total walks every pool and thread cache, so it is sampled.
 void sample_used(std::size_t bytes) noexcept {
     const std::size_t total =
         g_mapped_total.fetch_add(bytes, std::memory_order_relaxed) + bytes;
@@ -405,15 +390,12 @@ void sample_used(std::size_t bytes) noexcept {
         !g_next_used_sample.compare_exchange_strong(
             next, total + USED_SAMPLE_BYTES, std::memory_order_relaxed))
         return;
-    // The bytes being mapped are not live yet, but are about to be.
     if (const auto live = attrib_live_total_if_ready())
         raise_peak(g_used_peak, static_cast<std::size_t>(
                                     std::max<std::ptrdiff_t>(*live, 0)) +
                                     bytes);
 }
 
-// Called before bytes are mapped, never for a cached span or run: those move
-// between the cache and a heap and leave the total as it was.
 void check_cap(std::size_t bytes) {
     std::size_t cap = hard_cap();
     std::size_t after = page_reserved() + bytes;
@@ -488,8 +470,8 @@ void push_chain(const Chain& c) noexcept {
     } while (!d->thread_free.compare_exchange_weak(
         old, c.head, std::memory_order_acq_rel, std::memory_order_relaxed));
     if (old != nullptr) return;
-    // Only the push onto an empty list registers the page, so a page is in
-    // the inbox at most once and its inbox_next is free to reuse.
+    // Only the push onto an empty list registers the page, so it is in the
+    // inbox at most once.
     Heap* owner = span_of(d)->owner;
     PageDesc* head = owner->inbox.load(std::memory_order_relaxed);
     do {
@@ -567,9 +549,8 @@ void thread_exit(void* arg) {
 }
 
 // Blocks in the remote buffers of threads that did not survive the fork are
-// lost, and so are cache entries such a thread had popped for a flip or a
-// purge and not yet pushed back. They stay mapped and stay counted in the
-// child.
+// lost, as are cache entries such a thread had popped and not pushed back. They
+// stay mapped and counted in the child.
 void after_fork_child() noexcept {
     Heap* own = t_heap;
     g_free_heaps.store(0, std::memory_order_relaxed);
@@ -591,8 +572,8 @@ void process_init() {
     }
 }
 
-// A thread that allocates or frees after its key destructor ran lands here
-// again: the key is set again, so the destructor runs another round.
+// A thread that allocates after its key destructor ran lands here again and the
+// destructor runs another round.
 Heap& attach_heap() {
     ::pthread_once(&g_once, process_init);
     Heap* h = pop_free_heap();
@@ -763,7 +744,6 @@ void cache_put(std::size_t index, SpanHeader* s, std::size_t backed) noexcept {
     g_cache_live.fetch_or(std::uint64_t{1} << index, std::memory_order_acq_rel);
 }
 
-// A run whose purge fails is cached warm instead.
 void cache_put_purged(std::size_t index, SpanHeader* s) noexcept {
     if (!purge_range(page_base(s, 1), s->map_bytes - HEAP_PAGE_SIZE)) {
         cache_put(index, s, s->map_bytes);
@@ -796,8 +776,7 @@ void decay_cache(std::size_t index, std::uint64_t now, std::uint64_t delay,
                  std::size_t budget) noexcept {
     Cache& c = g_caches[index];
     if (c.busy.exchange(true, std::memory_order_acquire)) return;
-    // Cleared before the pass and set again after it when entries remain. A
-    // put whose bit set lands before the clear has its push seen below.
+    // A put whose bit set lands before the clear has its push seen below.
     const std::uint64_t bit = std::uint64_t{1} << index;
     g_cache_live.fetch_and(~bit, std::memory_order_acq_rel);
     bool flipped = false;
@@ -862,9 +841,6 @@ void purge_heap(Heap& h, std::uint64_t now, std::uint64_t delay,
     h.purge_cursor = s;
 }
 
-// Work per call: at most PURGE_SPANS_PER_CALL spans of the heap, and
-// CACHE_ENTRIES_PER_CALL purged entries in each cache with young or old
-// entries.
 void decay_step(Heap& h) noexcept {
     std::uint64_t now = now_ms();
     std::uint64_t delay = decay_ms();
@@ -893,10 +869,9 @@ void cache_empty_span(Heap& h, SpanHeader* s) noexcept {
     cache_put(0, s, backed);
 }
 
-// Warm runs first, as pac_alloc_real in jemalloc (src/pac.c, BSD-2-Clause)
-// tries dirty extents before muzzy and retained ones: the own class, then up
-// to WARM_LARGER_CLASSES larger classes, and only then a cold run of the own
-// class. A larger run keeps its usable size and class.
+// Warm runs first, as pac_alloc_real in jemalloc (src/pac.c, BSD-2-Clause):
+// the own class, then up to WARM_LARGER_CLASSES larger classes, and only then a
+// cold run of the own class. A larger run keeps its usable size and class.
 constexpr std::size_t WARM_LARGER_CLASSES = 2;
 
 SpanHeader* adopt_cached_run(Heap& h, std::size_t run) noexcept {
@@ -973,10 +948,8 @@ void trim_decayed(std::uint64_t now) noexcept {
     decay_live_caches(now, delay, UNLIMITED);
 }
 
-// Purges cached entries, old stacks before young ones, until `want` backed
-// bytes are gone. A popped entry belongs to this thread alone, and entries
-// stay mapped, so a concurrent pop from another heap is safe. A cache that a
-// decay pass holds is skipped: that pass is purging it already.
+// Purges cached entries, old before young, until `want` backed bytes are gone.
+// A cache held by a decay pass is skipped.
 std::size_t purge_cached(std::size_t want) noexcept {
     std::size_t freed = 0;
     for (bool young : {false, true}) {
@@ -998,9 +971,8 @@ std::size_t purge_cached(std::size_t want) noexcept {
     return freed;
 }
 
-// Backed bytes are page_reserved(): mapped bytes less purged pages, so they
-// bound what the heap adds to the resident set. Under the budget this is a walk
-// of the heap counters and a compare; it purges only when the map would cross.
+// Backed bytes are page_reserved(): mapped bytes less purged pages. Purges only
+// when the map would pass the budget.
 void before_map(std::size_t bytes) {
     std::size_t budget = map_budget();
     if (budget != 0) {
@@ -1076,7 +1048,6 @@ void give_run(Heap& h, SpanHeader* s, std::size_t index,
     }
 }
 
-// Backed free pages in any span before pages that would fault in again.
 bool find_in_spans(Heap& h, std::size_t n, std::size_t step,
                    Run& run) noexcept {
     std::size_t index = 0;
@@ -1183,8 +1154,7 @@ void free_small_block(Heap& h, SpanHeader* s, std::size_t index,
     }
 }
 
-// The medium and mapped tiers stay out of line, so the small path's code and
-// its saved registers do not change when they do.
+// Out of line so the small path's code and saved registers stay unchanged.
 [[gnu::noinline]] void* allocate_medium(Heap& h, std::size_t size,
                                         std::size_t align) {
     std::size_t n =
@@ -1242,8 +1212,7 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
     attrib_direct(s->pool_id, static_cast<std::ptrdiff_t>(run), 1);
     if (kind == SpanKind::Large) decay_step(h);
     char* p = reinterpret_cast<char*>(s) + offset;
-    // A huge run can be gigabytes, so only its slack is poisoned, from the
-    // granule that holds the last byte so an overrun into it is seen.
+    // A huge run can be gigabytes, so only its slack is poisoned.
     std::size_t from = kind == SpanKind::Large ? 0 : (size & ~std::size_t{7});
     asan_poison(p + from, run - from);
     asan_unpoison(p, size);
@@ -1251,8 +1220,6 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
     return p;
 }
 
-// Any thread unmaps a block that owns its mapping and credits its own heap;
-// only the sum over all heaps is meaningful.
 [[gnu::noinline]] void free_mapped(Heap& h, SpanHeader* s,
                                    [[maybe_unused]] std::size_t size,
                                    [[maybe_unused]] bool sized) noexcept {
@@ -1274,7 +1241,7 @@ void free_medium_run(Heap& h, SpanHeader* s, std::size_t index) noexcept {
         decay_step(h);
         return;
     }
-    // The shadow of an unmapped range stays; another mapping may land there.
+    // Another mapping may land in the range, so its shadow must be clean.
     std::size_t from =
         s->kind == SpanKind::Large ? 0 : (s->size & ~std::size_t{7});
     asan_unpoison(user + from, s->usable - from);
@@ -1350,8 +1317,6 @@ std::uint16_t pool_of(SpanHeader* s, void* p) noexcept {
     return d->pool_id;
 }
 
-// True when page_allocate(size, align) would pick the class or the run that
-// already holds @p p.
 bool fits_in_place(SpanHeader* s, void* p, std::size_t size,
                    std::size_t align) noexcept {
     if ((addr(p) & (align - 1)) != 0) return false;
@@ -1371,7 +1336,6 @@ bool fits_in_place(SpanHeader* s, void* p, std::size_t size,
     return size > LARGE_MAX && round_up(size, HEAP_PAGE_SIZE) == s->usable;
 }
 
-// The bytes the run or class that holds @p p can hold.
 std::size_t capacity_of(SpanHeader* s, void* p) noexcept {
     if (s->kind != SpanKind::Standard) return s->usable;
     PageDesc* d = &s->pages[(addr(p) - addr(s)) / HEAP_PAGE_SIZE];
@@ -1387,8 +1351,6 @@ void resize_in_place(SpanHeader* s, void* p, std::size_t old_size,
         PageDesc* d = &s->pages[(addr(p) - addr(s)) / HEAP_PAGE_SIZE];
         if (d->kind != PageKind::Small) d->size = new_size;
     }
-    // Both sizes share one run, so the range poisoned again stays below a
-    // page even for a huge block.
     std::size_t from = std::min(old_size, new_size) & ~std::size_t{7};
     asan_poison(static_cast<char*>(p) + from,
                 round_up(std::max(old_size, new_size), 8) - from);
@@ -1458,8 +1420,6 @@ void* page_grow_huge(void* p, std::size_t size, std::size_t align) {
     std::size_t old_size = s->size;
     std::size_t bytes = round_up(offset + size, HEAP_PAGE_SIZE);
     before_map(bytes - old_bytes);
-    // The old block ends here and the new one starts after the move; a failed
-    // move puts the old one back.
     asan_unpoison(p, old_usable);
     vg_free(p, old_usable);
     auto restore = [&] {
@@ -1536,8 +1496,7 @@ void* page_reallocate(void* p, std::size_t old_size, std::size_t new_size,
         ScopeOverride scope{local_heap().attrib, pool_of(s, p)};
         moved = page_allocate(new_size, align);
     }
-    // An unchecked build cannot trust old_size, so the copy stays inside the
-    // block.
+    // An unchecked build cannot trust old_size.
     std::memcpy(moved, p, std::min({old_size, new_size, capacity_of(s, p)}));
     page_deallocate(p, old_size);
     return moved;

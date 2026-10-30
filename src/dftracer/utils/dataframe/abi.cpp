@@ -479,7 +479,6 @@ dftu_series* dftu_series_share(const dftu_series* col) {
 
 namespace {
 
-// A window of `bytes` bytes at `at` inside `parent`, sharing its block.
 BufferView window(const BufferView& parent, std::size_t at, std::size_t bytes) {
     return parent.slice(at, bytes);
 }

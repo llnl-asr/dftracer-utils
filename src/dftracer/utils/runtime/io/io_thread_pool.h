@@ -37,7 +37,7 @@ class IoThreadPool {
     void stop();
 
     /// Raise the thread count to `threads`, starting the new threads at once
-    /// when the pool runs; a smaller count changes nothing.
+    /// when the pool runs. A smaller count changes nothing.
     void grow(std::size_t threads);
 
     /// Submit work. When batch_threshold > 0, queues without waking

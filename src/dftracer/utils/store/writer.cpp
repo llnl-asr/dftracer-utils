@@ -32,9 +32,8 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 }
 
 /// The bytes one writer may hold in extents when the caller names no quota: the
-/// commits of four executor threads, counted in extents of the store's default
-/// extent size at least, so an extent size the caller shrank for a test does
-/// not shrink the bound to a few kilobytes.
+/// commits of four executor threads, counted in extents of the default size at
+/// least, so a shrunk test extent size does not shrink the bound.
 std::uint64_t default_extent_quota(Executor& executor,
                                    std::uint32_t extent_size) {
     const std::uint64_t threads =
@@ -92,7 +91,6 @@ dstd::Vector<std::uint8_t> copy_bytes(ByteView bytes) {
     return out;
 }
 
-/// The exact length SegmentBuilder::seal produces for the entries added so far.
 struct SegmentSizer {
     std::size_t index_bytes = SEGMENT_HEADER_BYTES;
     std::size_t body_bytes = 0;
@@ -144,10 +142,9 @@ struct KeyGroup {
     std::uint64_t value_length = 0;
 };
 
-/// Frees a batch whose extent no write carried, including the one a failed
-/// extent write left behind, and releases the bytes it charged so no wait for
-/// them outlives the failure. A discard means a failed write or a writer going
-/// away, so the count latches too.
+/// Frees a batch whose extent no write carried and releases the bytes it
+/// charged, so no wait outlives the failure. A discard means a failed write or
+/// a writer going away, so the count latches too.
 void discard_batch(void* context) {
     auto* pending = static_cast<PendingBatch*>(context);
     if (pending->extents != nullptr) {
@@ -304,9 +301,8 @@ dstd::Expected<std::unique_ptr<Writer>, dstd::Error> Writer::create(
         extent_quota = default_extent_quota(executor, extent_size);
     }
 
-    // The bytes of the extents in flight are charged here, so a caller that
-    // builds one writer inside its own pool bounds this writer's extent memory
-    // with that pool's limit.
+    // Charged to the current pool, so a caller that builds a writer inside its
+    // own pool bounds the extent memory with that pool's limit.
     auto extent_pool = memory::current_pool().child(
         "index store writer", memory::PoolKind::Scratch, memory::Limits{});
     if (!extent_pool) {
@@ -609,7 +605,6 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
         if (cmp != 0) return cmp < 0;
         return a < b;
     };
-    // A caller that puts in key order needs no sort.
     if (!std::is_sorted(order.begin(), order.end(), before)) {
         std::sort(order.begin(), order.end(), before);
     }
@@ -641,9 +636,6 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
         i = end;
     }
 
-    // One batch is one segment: a segment of an extent or more becomes a run of
-    // its own in ExtentWriter, and an extent holds the segments of several
-    // batches.
     SegmentSizer sizer;
     for (const KeyGroup& group : groups) {
         sizer.add(group.key_length,
@@ -655,16 +647,13 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
     }
 
     // Charged before the seal places big values and before any id is
-    // assigned, so a Busy commit writes nothing and changes no writer state.
+    // assigned, so a Busy commit changes no writer state.
     const std::uint64_t charged = static_cast<std::uint64_t>(sizer.size());
     if (extent_bytes_.take(charged) == WriterExtents::Take::Busy) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(WriterErrc::Busy));
     }
 
     const FoldFn fold = fold_fn(batch.fold_);
-    // The batch outlives the commit, so the builder reads its bytes in place,
-    // in the order just sorted, and writes the segment straight into its
-    // extent.
     SegmentBuilder& builder = segment.builder;
     for (std::size_t i = 0; i < order.size(); ++i) {
         builder.add_ref(key_of(order[i]), value_of(order[i]));
@@ -705,8 +694,7 @@ dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
                          batch.scope_, scope_entry->id);
     if (batch.building_) {
         if (!copy_entry->building) {
-            // A new copy under the next generation; the one readers see stays
-            // theirs until this one is published.
+            // The copy readers see stays theirs until this one is published.
             if (copy_entry->announced) {
                 const std::uint64_t generation =
                     copy_entry->highest_generation + 1U;
@@ -810,7 +798,7 @@ dstd::Expected<void, dstd::Error> Writer::commit(Batch&& batch) {
         delete pending;
         return appended;
     }
-    // A waiter needs a release. A write in flight brings one; with none in
+    // A waiter needs a release. A write in flight brings one. With none in
     // flight, this append's extent must be sealed or the waiter waits forever.
     // Sealing only then keeps extents full under steady back pressure.
     if (extent_bytes_.waiting() && !extents_.writing()) {
@@ -849,10 +837,8 @@ coro::CoroTask<void> Writer::space() {
         extent_bytes_.latched()) {
         co_return;
     }
-    // Announced before the check: a write in flight at the check releases
-    // bytes after the announce, and with none in flight the seal here, or the
-    // seal of an append the seal misses, starts one. Either way the release
-    // this waits for comes.
+    // Announced before the check, so the release this waits for comes either
+    // from a write in flight or from the seal here.
     WriterExtents::WaitAnnounce announce(extent_bytes_);
     if (!extents_.writing()) {
         auto sealed = extents_.seal_all();

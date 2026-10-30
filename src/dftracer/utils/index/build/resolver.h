@@ -63,8 +63,7 @@ struct ResolverInput {
     /// with no current schema record, or another schema, is rebuilt whole.
     std::string schema;
 
-    /// The aggregation the tier is compared with: a file whose rows were
-    /// built with another config needs aggregation work.
+    /// A file whose rows were built with another config needs aggregation work.
     index::schemas::dft::agg::AggregationConfig aggregation_config =
         index::schemas::dft::agg::standard_aggregation_config();
 };
@@ -106,11 +105,9 @@ struct ResolverResult {
     std::size_t total_cached() const { return cached.size(); }
 };
 
-/// The files of `result` as scanned, to resolve them again without a walk or a
-/// stat.
+/// The files of `result` as scanned, to resolve them again without a scan.
 std::vector<utilities::filesystem::FileEntry> scanned_entries(
     const ResolverResult& result);
-/// Only the files of `items`.
 std::vector<utilities::filesystem::FileEntry> scanned_entries(
     const ResolverResult& result, const std::vector<FileWorkItem>& items);
 

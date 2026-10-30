@@ -45,12 +45,10 @@ namespace compress = dftracer::utils::utilities::fileio::compress;
  * zlib stream instead, which can start inside a deflate stream; at the end of
  * the stream the reader goes back to whole-member decoding.
  *
- * A member larger than the bound is never held whole: it is read with a zlib
- * stream in steps of whole lines. With the index's records (set_index_hint)
- * the reader knows which members are big before it decodes anything. A member
- * the index does not call big is still tried in a buffer that stops at the
- * bound, and one that does not fit there goes to the stream, so the work lost
- * is at most one bound per big member.
+ * A member larger than the bound is never held whole but streamed in steps of
+ * whole lines. One the index (set_index_hint) does not call big is tried in a
+ * buffer that stops at the bound, so the work lost is at most one bound per
+ * big member.
  */
 class ReaderInflater {
    public:
@@ -67,15 +65,14 @@ class ReaderInflater {
     }
 
     /// Members larger than `bytes` (at least 1 MiB) are streamed. Set once
-    /// before reads; the default is the checkpoint size of the indexer.
+    /// before reads. The default is the checkpoint size of the indexer.
     void set_member_bound(std::size_t bytes) {
         bound_ = std::max<std::size_t>(bytes, INIT_OUT);
     }
 
     /// The compressed offsets where the index puts the HEAD of a member too
     /// big to hold whole (empty when it has none). Such a member is streamed
-    /// without a libdeflate attempt; any other member is tried whole, in a
-    /// buffer that stops at the bound.
+    /// without a libdeflate attempt.
     void set_index_hint(dstd::Vector<std::uint64_t> heads) {
         big_heads_ = std::move(heads);
         std::sort(big_heads_.begin(), big_heads_.end());
@@ -336,7 +333,7 @@ class ReaderInflater {
     /// Stream the member at comp_off_ from its header, over the input already
     /// read for it.
     bool begin_member_stream() {
-        // Cached decodes advance comp_off_ and leave no input behind: the
+        // Cached decodes advance comp_off_ and leave no input behind, so the
         // stream reads from the member's offset. A local decode leaves in comp_
         // the input that starts at comp_off_, which the stream consumes first.
         if (cache_) {
@@ -384,7 +381,6 @@ class ReaderInflater {
             co_return false;
         }
         if (!member_shared_) {
-            // Bigger than the bound: stream it.
             if (!begin_member_stream()) co_return false;
             co_return co_await decode_next_stream(fd, offset);
         }
@@ -413,8 +409,6 @@ class ReaderInflater {
                 if (status == compress::GzipDecode::Ok) break;
                 if (status == compress::GzipDecode::InsufficientSpace) {
                     if (member_owned_.size() >= bound_) {
-                        // Bigger than the bound: stream it from its header,
-                        // over the input read so far.
                         if (!begin_member_stream()) co_return false;
                         co_return co_await decode_next_stream(fd, offset);
                     }

@@ -50,7 +50,7 @@ static int Runtime_init(RuntimeObject *self, PyObject *args, PyObject *kwds) {
     }
 
     try {
-        // The process has one runtime: this configures it and holds it.
+        // The process has one runtime, which this configures and holds.
         dftracer::utils::RuntimeSettings settings;
         settings.threads = static_cast<std::size_t>(threads);
         settings.io_threads = static_cast<std::size_t>(io_threads);

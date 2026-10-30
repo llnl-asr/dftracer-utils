@@ -34,28 +34,28 @@ enum class PoolKind : std::uint8_t {
 
 enum class Status : std::uint8_t {
     Ok,
-    /// Bytes were requested from holders and are not free yet.
+    /// Holders were asked for bytes that are not free yet.
     Pending,
     OverBudget,
     OverCap,
     PoolTableFull,
     /// Every reclaimer or external slot is taken.
     SlotTableFull,
-    /// The wait was abandoned because the executor is shutting down. It is not
-    /// a budget condition and a retry cannot succeed.
+    /// The wait ended because the executor is shutting down. A retry cannot
+    /// succeed.
     Cancelled,
 };
 
 struct Limits {
-    /// Largest reserved total of the pool, counted with every pool below it by
-    /// its rounded amount (see Pool::reserve); zero is no limit.
+    /// Largest reserved total of the pool and the pools below it, as
+    /// Pool::reserve rounds it. Zero is no limit.
     std::size_t bytes = 0;
 };
 
 /**
  * @brief A reservation of bytes in one pool, released on destruction.
  *
- * Empty when Pool::reserve failed; status() says why. Moving transfers the
+ * Empty when Pool::reserve failed. Then status() says why. Moving transfers the
  * bytes. A reservation counts against the pool limit and the budget but
  * allocates nothing.
  */
@@ -90,7 +90,7 @@ class Reservation {
      * @brief Move up to @p bytes of @p other into this reservation without
      * touching the pool and return the bytes moved.
      *
-     * Both must hold bytes of the same pool; an empty reservation takes the
+     * Both must hold bytes of the same pool. An empty reservation takes the
      * pool of @p other.
      */
     std::size_t take_from(Reservation& other, std::size_t bytes) noexcept;
@@ -116,17 +116,9 @@ enum class WaitState : std::uint8_t {
 /**
  * @brief A request for bytes in a pool that waits for a release to free room.
  *
- * Waiters are granted strictly in push order, and the grant stops at the
- * first waiter that does not fit. A grant applies the same checks as
- * Pool::reserve: the pool limit, each ancestor's limit and the budget with
- * the external bytes. It charges the bytes before the node turns Granted, so
- * no other reservation can take the room before the waiter resumes.
- *
- * The node is reference counted: create() returns one reference, push() adds
- * one for the list, and each other holder (a timer) calls retain(). The
- * last drop() frees it and releases granted bytes that nobody took. The pool
- * must stay open until the waiter is cancelled or its reservation is
- * released. Every call takes no lock and never waits.
+ * Granted in push order, charging the bytes before the node turns Granted.
+ * Reference counted: create() and push() each add one, other holders call
+ * retain(), the last drop() frees it. The pool must stay open until then.
  */
 class ReserveWait {
    public:
@@ -135,7 +127,7 @@ class ReserveWait {
     using Resume = void (*)(void* context) noexcept;
 
     /// Null when the heap has no memory. The node is charged to the general
-    /// pool, so a node that outlives its pool is no leak of that pool.
+    /// pool, so it may outlive @p pool.
     static ReserveWait* create(Pool& pool, std::size_t bytes, Resume resume,
                                void* context) noexcept;
 
@@ -148,11 +140,9 @@ class ReserveWait {
     /**
      * @brief List the waiter, then grant waiters on the calling thread.
      *
-     * Call once. Status::Ok means this call granted the waiter and Resume is
-     * never called. Status::Pending means another thread grants it later and
-     * calls Resume; from the push on, it may do so before push() returns.
-     * Status::OverBudget means the request is larger than the budget or a
-     * limit on the way to the root, so it can never fit; it is not listed.
+     * Call once. Ok means Resume is never called. Pending means another thread
+     * grants it later and calls Resume, possibly before push() returns.
+     * OverBudget means the request can never fit and is not listed.
      */
     Status push() noexcept;
 
@@ -189,8 +179,8 @@ class ReserveWait {
 /**
  * @brief Owns an open pool and closes it on destruction.
  *
- * Empty when Pool::child failed; status() says why. Close each child before
- * its parent.
+ * Empty when Pool::child failed. Then status() says why. Close each child
+ * before its parent.
  */
 class PoolHandle {
    public:
@@ -221,9 +211,9 @@ class PoolHandle {
 /**
  * @brief A holder that can give bytes back: a cursor, an arena, a cache.
  *
- * The manager never calls it and keeps no pointer to it. A pool over budget
- * posts a request to the holder's ReclaimSlot; the holder reads it with
- * ReclaimSlot::take_request() on its own thread and calls reclaim() there.
+ * The manager never calls it and keeps no pointer to it. The holder reads
+ * requests with ReclaimSlot::take_request() and calls reclaim() on its own
+ * thread.
  */
 class Reclaimer {
    public:
@@ -237,9 +227,9 @@ class Reclaimer {
 /**
  * @brief Marks a pool as reclaiming until destruction.
  *
- * Reservations of the pool may pass the budget by the spill headroom and
- * never post requests, so a spill can allocate its buffers. Destroy it before
- * the pool closes.
+ * Reservations of the pool may pass the budget by the spill headroom and no
+ * pressure requests are posted while it lives. Destroy it before the pool
+ * closes.
  */
 class ReclaimGuard {
    public:
@@ -262,10 +252,9 @@ class ReclaimGuard {
 /**
  * @brief A holder's entry in the reclaimer table, released on destruction.
  *
- * Empty when Pool::attach failed; every call below then does nothing. The
- * calls are thread safe and take no lock. A request that was posted while the
- * slot detached can reach the next holder of the same entry, so a request is
- * advice: act on it or ignore it.
+ * Empty when Pool::attach failed. Every call below then does nothing. Calls are
+ * thread safe and take no lock. A request can reach the next holder of a reused
+ * entry, so treat it as advice.
  */
 class ReclaimSlot {
    public:
@@ -279,11 +268,10 @@ class ReclaimSlot {
     explicit operator bool() const noexcept { return entry_ != nullptr; }
     Status status() const noexcept { return status_; }
 
-    /// Tell the arbiter how many bytes the holder could give back. Cheap
-    /// enough to call once per morsel.
+    /// Tell the manager how many bytes the holder could give back. Cheap.
     void set_reclaimable(std::size_t bytes) noexcept;
 
-    /// The bytes asked for since the last call; resets them to zero.
+    /// The bytes asked for since the last call. Resets them to zero.
     std::size_t take_request() noexcept;
 
     /// Mark the pool as reclaiming until the guard dies.
@@ -307,14 +295,11 @@ class ReclaimSlot {
 };
 
 /**
- * @brief Bytes the process holds outside this library, such as spill files in
- * a RAM-backed directory, released on destruction. Memory that comes from the
- * global operator new of an executable is in the heap already and must not be
- * attached here as well.
+ * @brief Bytes held outside this library, such as spill files in a RAM disk.
  *
- * Counted bytes count toward the budget like reservations do; reported
- * bytes, such as spill files on a disk, show in Stats::external only. Empty
- * when attach_external failed; set() and add() then do nothing.
+ * Counted bytes count toward the budget, reported bytes only show in
+ * Stats::external. Do not attach global operator new memory, the heap counts
+ * it. Empty when attach_external failed.
  */
 class ExternalSlot {
    public:
@@ -333,8 +318,8 @@ class ExternalSlot {
 
     /// Replace the bytes this slot reports, all counted. Thread safe.
     void set(std::size_t bytes) noexcept;
-    /// Add `delta` bytes of `kind`; a negative delta must not exceed what was
-    /// added of that kind. Thread safe, and concurrent calls never lose one.
+    /// Add `delta` bytes of `kind`. A negative delta must not exceed what was
+    /// added of that kind. Thread safe.
     void add(std::ptrdiff_t delta, Kind kind) noexcept;
     std::size_t bytes() const noexcept;
     void detach() noexcept;
@@ -359,11 +344,9 @@ ExternalSlot attach_external(std::string_view name);
 /**
  * @brief A node of the pool tree: the process, a query, a task, an operator.
  *
- * A pool is a slot in a table that is never unmapped, so a Pool reference
- * stays readable after the pool closes. Blocks are charged to the pool that
- * was the scope when they were allocated and credited to it when they are
- * freed, on any thread. The counters read below are exact while no thread
- * allocates or frees; a concurrent read is a snapshot.
+ * A Pool reference stays readable after the pool closes. Blocks are charged to
+ * the pool that was the scope when they were allocated. The counters are exact
+ * while no thread allocates or frees and a snapshot otherwise.
  */
 class Pool {
    public:
@@ -374,8 +357,7 @@ class Pool {
      * @brief Open a pool below this one.
      *
      * The name is cut at 47 bytes. The handle is empty with
-     * Status::PoolTableFull when all 65,535 slots are taken; a slot is never
-     * reused while a block or a reservation still names it.
+     * Status::PoolTableFull when all 65,535 slots are taken.
      */
     PoolHandle child(std::string_view name, PoolKind kind = PoolKind::Scratch,
                      Limits limits = {});
@@ -383,22 +365,9 @@ class Pool {
     /**
      * @brief Reserve @p bytes in this pool.
      *
-     * Reservations reach the parent in quanta of 1 MiB below 16 MiB, 4 MiB
-     * below 64 MiB and 8 MiB above, by the pool's total, so the root counts
-     * the rounded amount. The root total plus the external bytes must stay
-     * within the budget, and the pool total within the limit of this pool and
-     * of each ancestor.
-     *
-     * A request larger than the budget or a limit fails with
-     * Status::OverBudget and asks nobody for bytes. When a request fits in
-     * neither and holders are attached, the call posts requests to their
-     * slots, trims idle heap memory and tries once more. It returns
-     * Status::Pending when it posted anything and the retry still failed, and
-     * Status::OverBudget when no slot had bytes to give. It never calls a
-     * holder and never waits.
-     *
-     * While a ReclaimGuard of this pool lives, the budget check allows the
-     * spill headroom on top of the budget and the call posts nothing.
+     * The pool total must stay within every limit above it. A request over the
+     * budget or a limit fails with OverBudget. Else a refusal posts to holders,
+     * trims, retries once and returns Pending or OverBudget. Never waits.
      */
     Reservation reserve(std::size_t bytes) noexcept;
 
@@ -406,8 +375,7 @@ class Pool {
      * @brief Reserve as reserve() does, but on a refusal ask no holder for
      * bytes and trim nothing.
      *
-     * For a holder that answers a refusal itself, such as by writing what it
-     * holds to disk: a refusal costs only the failed check.
+     * For a holder that answers a refusal itself, such as by spilling to disk.
      */
     Reservation try_reserve(std::size_t bytes) noexcept;
 
@@ -423,10 +391,9 @@ class Pool {
     /**
      * @brief Register a holder of this pool that can give bytes back.
      *
-     * Reads Reclaimer::reclaimable() once, on the calling thread, as the first
-     * value of the slot. The manager keeps no pointer to @p reclaimer. The
-     * slot is empty with Status::SlotTableFull when all RECLAIMER_SLOTS are
-     * taken.
+     * Reads Reclaimer::reclaimable() once, on the calling thread. The manager
+     * keeps no pointer to @p reclaimer. The slot is empty with
+     * Status::SlotTableFull when all RECLAIMER_SLOTS are taken.
      */
     ReclaimSlot attach(Reclaimer& reclaimer);
 
@@ -447,7 +414,7 @@ class Pool {
     /// Bytes and blocks held by this pool and every pool below it.
     std::size_t live() const;
     std::size_t blocks() const;
-    /// Largest live() seen by a counter read; the heap does not sample it.
+    /// Largest live() seen by a counter read. The heap does not sample it.
     std::size_t peak() const;
     /// Reserved bytes, with every pool below counted by its rounded amount.
     std::size_t reserved() const noexcept;
@@ -519,16 +486,13 @@ struct Stats {
     /// Anonymous and shared memory of this process (resident footprint on
     /// macOS), read when stats() runs.
     std::size_t measured;
-    /// The memory counted against `limit`: in a cgroup, its anonymous and
-    /// shared memory, which includes every process of the group (other jobs
-    /// in a container or a batch allocation); else `measured`.
+    /// The memory counted against `limit`. In a cgroup it is the anonymous and
+    /// shared memory of every process of the group, else `measured`.
     std::size_t limit_used;
-    /// measured minus reserved and counted external, zero when that is
-    /// negative: memory of Python, pandas, pyarrow and the C library in this
-    /// process.
+    /// measured minus reserved and counted external, never negative. Memory of
+    /// Python, pandas, pyarrow and the C library.
     std::size_t unattributed;
-    /// The process limit: the cgroup limit, else the available memory at the
-    /// first read.
+    /// The cgroup limit, else the available memory at the first read.
     std::size_t limit;
 };
 
@@ -540,9 +504,8 @@ struct ExternalStats {
 /**
  * @brief The one memory manager of the process.
  *
- * Created at the first use and never destroyed, so blocks freed after static
- * destructors have run still find their pool. Its state is a mapping that is
- * never unmapped. The calls below take no lock and never wait.
+ * Never destroyed, so blocks freed after static destructors still find their
+ * pool. The calls below take no lock and never wait.
  */
 class Manager {
    public:
@@ -572,13 +535,9 @@ class Manager {
     /**
      * @brief True when holders should give bytes back.
      *
-     * Either max(heap reserved, root reservations) plus counted external
-     * bytes pass
-     * the budget, or the measured memory passes the limit minus the limit
-     * headroom. Memory that is neither ours nor external never trips the
-     * budget. The budget term follows a reservation or an external change at
-     * the next call; the heap and process terms are read at most every
-     * constants::PRESSURE_SAMPLE_MS. Takes no lock, never waits.
+     * Either reservations plus counted external bytes pass the budget, or
+     * measured memory passes the limit minus the limit headroom. Sampled every
+     * constants::PRESSURE_SAMPLE_MS. Takes no lock.
      */
     bool under_pressure() noexcept;
 
@@ -622,11 +581,9 @@ class Manager {
 /**
  * @brief Charge the blocks this thread allocates to a pool until destruction.
  *
- * Nests and restores the previous pool and the task pointer (see TaskTag).
- * It sets the pool of the calling thread, so a task that resumes on another
- * thread opens its own Scope there. The one-argument form leaves the task
- * pointer as it is; the two-argument form sets it for the lifetime of the
- * Scope. The pool must stay open while any Scope names it.
+ * Nests and restores the previous pool and task pointer. It acts on the calling
+ * thread, so a task that resumes elsewhere opens its own Scope. Only the
+ * two-argument form sets the task pointer. The pool must stay open.
  */
 class Scope {
    public:
@@ -662,8 +619,8 @@ PoolTag current_pool_tag() noexcept;
 /**
  * @brief The pool and the opaque pointer a task runs with.
  *
- * The pointer is the calling thread's task pointer: this library never reads
- * it, a higher layer sets it with set_task_user() and a Scope clears it.
+ * This library never reads the pointer. A higher layer sets it with
+ * set_task_user() and a Scope clears it.
  */
 struct TaskTag {
     PoolTag pool;
@@ -691,9 +648,8 @@ void set_task_user(void* user) noexcept;
  * @brief Make the tagged pool the calling thread's scope without restoring
  * it, or the general pool when that pool has closed.
  *
- * For a coroutine that enters its own pool each time it resumes; whoever
- * resumed it restores its own scope with a Scope. Takes no lock and does no
- * atomic read-modify-write.
+ * For a coroutine that enters its own pool each time it resumes. Whoever
+ * resumed it restores its scope with a Scope. No lock is taken.
  */
 void enter_pool(PoolTag tag) noexcept;
 
@@ -718,56 +674,44 @@ Reporter set_reporter(Reporter reporter) noexcept;
 /**
  * @brief Turn the exit check on or off.
  *
- * Starts as constants::EXIT_CHECK_ENV set it. When on, the process exit
- * prints the leak report to the reporter and calls _Exit with
- * constants::EXIT_CHECK_STATUS if live bytes minus the exported bytes of every
- * pool are not zero or a Scratch pool leaked. A host that may keep blocks at
- * exit, such as the Python extension, turns it off.
+ * Starts as constants::EXIT_CHECK_ENV set it. When on, exit prints the report
+ * and calls _Exit with constants::EXIT_CHECK_STATUS if live minus exported
+ * bytes are not zero or a Scratch pool leaked.
  */
 void set_exit_check(bool enabled) noexcept;
 
 /**
- * @brief Print one line at process exit with the peak, live, measured and
- * limit bytes of Stats.
+ * @brief Print one line at exit with the peak, live, measured and limit bytes.
  *
- * Off by default; constants::memory_settings::REPORT_ENV turns it on through
- * configure_memory_from_env. The line goes to the reporter after the exit
- * hooks have run, with the exit check on or off, and allocates nothing
- * through this library.
+ * Off by default. constants::memory_settings::REPORT_ENV turns it on through
+ * configure_memory_from_env. The line goes to the reporter after the hooks.
  */
 void set_exit_report(bool enabled) noexcept;
 
 /**
- * @brief Register the exit hook once more, so it runs before the static
- * destructors of every object constructed after this call.
+ * @brief Register the exit hook again, after later static objects.
  *
- * The first allocation of the process creates the manager and registers the
- * hook, which can be inside the static initialization of a shared library,
- * and the hook then runs after the destructors of that library's globals that
- * its exit hooks use. An executable that replaces the global operator new
- * calls this once its libraries are initialized. The hook runs once: the
- * later registration finds it done.
+ * An executable that replaces the global operator new calls this once its
+ * libraries are initialized, since the first allocation may register the hook
+ * too early.
  */
 void rearm_exit_check() noexcept;
 
 /**
  * @brief Leave the live blocks of @p pool out of the exit check.
  *
- * For a pool that holds process-lifetime blocks that no check can tell from
- * a leak, such as the blocks of the global operator new, where the C++
- * runtime keeps singletons to the end. The pool still counts in every
- * counter and report. Only one pool is exempt; a later call replaces it.
+ * For a pool that holds process-lifetime blocks, such as the global operator
+ * new. The pool still counts in every counter. Only one pool is exempt and a
+ * later call replaces it.
  */
 void exempt_from_exit_check(Pool& pool) noexcept;
 
 /**
  * @brief Run `hook` at exit, before the exit check reads the counters.
  *
- * For a library whose threads still free blocks at exit, such as a runtime
- * whose workers destroy the last frames: its hook stops those threads.
- * Hooks run in reverse order of registration and only when the exit check
- * or the exit report is on. At most a few are kept; one more aborts. Safe from
- * any thread.
+ * For a library whose threads still free blocks at exit. Hooks run in reverse
+ * order of registration and only when the exit check or report is on. A few
+ * are kept and one more aborts. Safe from any thread.
  */
 void add_exit_hook(void (*hook)()) noexcept;
 

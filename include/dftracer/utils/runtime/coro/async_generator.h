@@ -173,8 +173,6 @@ class AsyncGenerator {
         std::coroutine_handle<> continuation_{};
         /// The CoroTask handoff, once per next(): see CoroTask::await_suspend.
         std::atomic<bool> handoff_{false};
-        /// The pool and intern table current when the generator was created;
-        /// it enters them each time it resumes.
         detail::RunContext context_;
 
         T* value_ptr() noexcept {

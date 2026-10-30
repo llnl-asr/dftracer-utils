@@ -19,11 +19,10 @@ namespace dftracer::utils::coro {
 
 namespace detail {
 
-// Lives off the frame because it is the node's resume context. `self` keeps
-// it alive while a grant may still call on_grant; only the party that moves
-// the node out of Waiting resets it. The timer holds it weakly, so a cancelled
-// timer that waits for its expiry keeps nothing alive.
-// Resume is noexcept: an enqueue that fails for lack of memory terminates.
+// Lives off the frame as the node's resume context. `self` keeps it alive while
+// a grant may still call on_grant, and only the party that moves the node out
+// of Waiting resets it. The timer holds it weakly. Resume is noexcept, so an
+// enqueue that fails for lack of memory terminates.
 struct ReserveWaitState {
     std::shared_ptr<ReserveWaitState> self;
     std::coroutine_handle<> handle;
@@ -31,7 +30,7 @@ struct ReserveWaitState {
     TimerService* timers = nullptr;
     memory::ReserveWait* node = nullptr;
     std::atomic<TimerService::TimerId> timer{0};
-    // Set once the node is listed; before that, a shutdown cancel is skipped
+    // Set once the node is listed. Before that, a shutdown cancel is skipped
     // and the next round finds the waiter.
     std::atomic<bool> listed{false};
     // Set when shutdown, not a deadline, ended the wait.
@@ -73,12 +72,10 @@ struct ReserveWaitState {
 }  // namespace detail
 
 /**
- * @brief The awaitable of reserve_async(); co_await it once.
- *
- * Yields the reservation, or the status when there is none: Status::Cancelled
- * when the executor shut down while it waited, Status::OverBudget when the
- * request can never fit or the deadline passed first, else the status of the
- * failed Pool::reserve when the call did not wait.
+ * @brief The awaitable of reserve_async(). Await it once.
+ * Yields the reservation, or the status when there is none: Cancelled at
+ * executor shutdown, OverBudget when the request can never fit or the deadline
+ * passed, else the Pool::reserve status when the call did not wait.
  */
 class ReserveAsync {
    public:
@@ -147,7 +144,7 @@ class ReserveAsync {
                 });
             state->timer.store(id, std::memory_order_release);
         } catch (...) {
-            // A grant that already won owns the resume; else the frame
+            // A grant that already won owns the resume. Else the frame
             // resumes here with the error.
             if (!state->node->cancel()) return true;
             state->self.reset();
@@ -198,16 +195,10 @@ class ReserveAsync {
 };
 
 /**
- * @brief Reserve @p bytes in @p pool, waiting until a release frees room or
- * @p deadline passes.
- *
- * Tries Pool::reserve first, which also asks holders to give bytes back. When
- * that fails on an executor thread, the coroutine waits in the pool's wait
- * list and resumes on the same executor, never inline on the releasing
- * thread. Off an executor, on one that does not run remote wake-ups (the
- * RunLoop of a blocking get()), or with the deadline already past, it does
- * not wait. Clock::time_point::max() waits with no deadline. The pool must stay
- * open until the coroutine resumes and its reservation is released.
+ * Reserves @p bytes in @p pool, waiting for a release until @p deadline
+ * (Clock::time_point::max() means none). Resumes on its executor, never inline
+ * on the releasing thread. Does not wait off an executor or past the deadline.
+ * The pool must stay open until the reservation is released.
  */
 inline ReserveAsync reserve_async(memory::Pool& pool, std::size_t bytes,
                                   ReserveAsync::Clock::time_point deadline) {

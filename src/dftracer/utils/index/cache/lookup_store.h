@@ -30,7 +30,7 @@ std::optional<std::uint64_t> lookup_signature(
 
 /// Open (or reuse) the lookup store at `path`. A ReadWrite open creates the
 /// folder. Null when the store cannot be opened, or for a ReadOnly open of a
-/// folder with no store; never throws.
+/// folder with no store. Never throws.
 std::shared_ptr<CacheStore> open_lookup_db(const std::string& path,
                                            CacheStore::Mode mode);
 

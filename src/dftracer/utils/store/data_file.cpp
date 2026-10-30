@@ -423,10 +423,8 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
 namespace {
 
 constexpr std::string_view SUMMARY_MAGIC = "DFSM";
-/// An entry starts with the magic, the payload length and the payload crc.
 constexpr std::size_t SUMMARY_ENTRY_HEADER_BYTES = 12;
 
-/// The directory and the name of a path, split at its last slash.
 std::pair<std::string, std::string> split_path(dstd::StringView path) {
     const std::string whole(path.data(), path.size());
     const std::size_t slash = whole.find_last_of('/');
@@ -670,7 +668,6 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
         page_starts(dstd::Span<const SegmentSpan>(&span, 1), span.length);
     auto stored = encode_extent(bytes, starts, EXTENT_ALIGN_BYTES);
     if (!stored) return dstd::Unexpected<dstd::Error>(stored.error());
-    // The reservation records the extent range; the write below is its bytes.
     const std::uint64_t offset = reserve_range(
         stored->size(), EXTENT_ALIGN_BYTES, io_fault::WriteKind::Extent);
     ExtentRef ref{offset, static_cast<std::uint32_t>(stored->size()), 0};
@@ -763,12 +760,10 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
 
 void DataFileWriter::add(RecordItem item) {
     if (latched() || closed_.load(std::memory_order_acquire)) return;
-    // An extent ref lives in its commit's record only: a checkpoint and the
-    // footer list the commit by the summary commit() adds once the record is
-    // written.
+    // An extent ref lives in its commit's record only. Checkpoints and the
+    // footer list the commit by summary.
     if (const auto* copy = std::get_if<CopyItem>(&item)) {
-        // A later item of the same copy publishes it: the copy is listed once,
-        // as it stands now.
+        // A later item of the same copy publishes it, so it is listed once.
         const auto known =
             copy_item_at_.try_emplace(copy->local_id, all_items_.size());
         if (!known.second) {
@@ -793,7 +788,6 @@ RecordItems DataFileWriter::items_with_pending_extents() const {
 dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     const RecordItems& items, std::uint64_t base,
     dstd::Vector<std::uint8_t>& out) const {
-    // Each block goes at the end of `out`, which lands at `base` in the file.
     // An empty block takes no bytes and a zero handle.
     const auto place = [base, &out](const dstd::Vector<std::uint8_t>& raw) {
         if (raw.empty()) return BlockHandle{};
@@ -806,8 +800,8 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         out.insert(out.end(), bytes.begin(), bytes.end());
         return handle;
     };
-    // Every extent ref the file holds a segment of, sorted by offset and
-    // deduplicated, so the index of an extent in this order names the extent.
+    // Sorted by offset and deduplicated, so an extent's index in this order
+    // names it.
     dstd::Vector<const ExtentRefItem*> extents;
     for (const ExtentRefItem& extent : committed_extents_) {
         if (!extent.segments.empty()) extents.push_back(&extent);
@@ -831,11 +825,8 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     if (extents.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    // Segment blocks, packed copy by copy: every segment sorted once by copy,
-    // commit, extent and place in the extent, then the runs of one copy of one
-    // commit packed into blocks of at most SEGMENT_BLOCK_BYTES. A block never
-    // spans copies and never splits a run, so a run larger than the limit has a
-    // block of its own.
+    // Packed copy by copy. A block never spans copies and never splits a run,
+    // so a run larger than the limit has a block of its own.
     struct SegmentKey {
         std::uint32_t copy_id = 0;
         std::uint64_t sequence = 0;
@@ -868,7 +859,6 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
                          b.segment->offset_in_extent;
               });
     dstd::Vector<BlockHandle> block_handles;
-    // The runs in the order their blocks were placed, by copy then commit.
     dstd::Vector<std::pair<SegmentKey, std::uint32_t>> runs;
     dstd::Vector<std::uint8_t> block;
     dstd::Vector<std::uint8_t> run_bytes;
@@ -987,8 +977,6 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
                                                           key->paths.size())));
     }
 
-    // The directory: blocks of entries in key order, then one separator per
-    // child while the table is too large for the footer, then the top table.
     auto leaves =
         split_slot_table(bytes_of(*directory), DIRECTORY_BLOCK_ENTRIES);
     if (!leaves) return dstd::Unexpected<dstd::Error>(leaves.error());
@@ -1037,8 +1025,6 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
 }
 
 void DataFileWriter::add_commit_refs() {
-    // One item per segment, sorted by sequence and copy so each copy of each
-    // commit is one run: one allocation, and each key copied once per copy.
     struct Item {
         std::uint64_t sequence;
         std::uint32_t copy_id;
@@ -1100,9 +1086,8 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
                                        ? RecordKind::Checkpoint
                                        : kind;
 
-    // A record names its own offset, so its size is measured at a fixed
-    // placeholder offset and the range is reserved before the real bytes are
-    // built. The item encoding, and so the size, does not depend on it.
+    // A record names its own offset, so its size is measured at a placeholder
+    // offset first. The item encoding does not depend on it.
     auto probe = encode_record(actual_kind, sequence, tail_offset_,
                                FILE_HEADER_BYTES, items);
     if (!probe) return dstd::Unexpected<dstd::Error>(probe.error());
@@ -1151,8 +1136,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return {};
     const RecordItems items = items_with_pending_extents();
-    // Every block in one write, at a range whose offset the blocks name: the
-    // range is taken only if no write took the end of the file meanwhile.
+    // The range is taken only if no write took the end of the file meanwhile.
     dstd::Vector<std::uint8_t> blocks;
     dstd::Expected<FileTail, dstd::Error> tail = invalid_error();
     std::uint64_t base = 0;
@@ -1180,16 +1164,15 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         io_fault::on_write(fd_, io_fault::WriteKind::Footer, base,
                            blocks.data(), blocks.size());
     }
-    // One sync covers the extents and every block above them, before the footer
-    // that names them. Every extent before the footer, so a reader trusts the
-    // extents of a closed file one by one.
+    // Every extent is synced before the footer, so a reader trusts the extents
+    // of a closed file one by one.
     auto extents_synced = sync_data();
     if (!extents_synced) {
         latch(extents_synced.error());
         return extents_synced;
     }
-    // The footer holds the namespaces and the tail: the items block holds
-    // every other item again, and only a full open reads it.
+    // The items block holds every other item again, and only a full open reads
+    // it.
     RecordItems footer;
     for (const RecordItem& item : items) {
         if (std::holds_alternative<NamespaceItem>(item)) footer.push_back(item);
@@ -1224,9 +1207,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
     fd_ = -1;
     closed_.store(true, std::memory_order_release);
     if (!header) return header;
-    // The blocks the tail names are synced above, so the entry holds whether or
-    // not the footer survives a crash. A failed append only leaves the file for
-    // readers to open as before.
+    // A failed append only leaves the file for readers to open as before.
     append_summary(path_, base + blocks.size(), last_sequence_, footer);
     return {};
 }
@@ -1272,8 +1253,7 @@ dstd::Expected<DataFileReader, dstd::Error> DataFileReader::open(
     reader.fd_.store(fd, std::memory_order_relaxed);
     reader.file_size_ = file_size;
 
-    // One bounded read of the file end: the trailer, the footer and the whole
-    // directory top table. Nothing else is read until a query needs it.
+    // One bounded read of the file end.
     if (footer == FooterItems::Directory) {
         auto light = reader.open_light(file_size);
         if (!light) return dstd::Unexpected<dstd::Error>(light.error());
@@ -1654,8 +1634,6 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
             ++at;
             continue;
         }
-        // One group is a head ref and every ref after it that is readable and
-        // starts where that ref leaves off, up to what one preadv takes.
         std::size_t end = at + 1;
         while (end < refs.size() && end - at < IOV_MAX && in_file(refs[end]) &&
                adjacent(refs[end - 1U], refs[end])) {
@@ -1710,8 +1688,7 @@ dstd::Expected<BlockReads, dstd::Error> DataFileReader::read_extents(
             if (complete && crc32(0, bytes.data(), bytes.size()) == ref.crc) {
                 continue;
             }
-            // An extent past the end of the file, or one whose crc fails, keeps
-            // no bytes: the codes of a copy reach the caller through its state.
+            // A bad extent keeps no bytes.
             *targets[i].bad = 1;
             dstd::Vector<std::uint8_t>().swap(bytes);
         }
@@ -1772,7 +1749,6 @@ namespace dstd = dftracer::utils::dstd;
 /// and its bytes.
 constexpr std::size_t SEGMENT_ENTRY_BYTES = 52;
 
-/// One byte range of a file that the space report classifies.
 struct SpaceRange {
     std::uint64_t offset = 0;
     std::uint64_t length = 0;
@@ -1782,8 +1758,6 @@ bool space_range_before(const SpaceRange& a, const SpaceRange& b) {
     return a.offset < b.offset;
 }
 
-/// The end of the range of `ranges`, which ascend by offset, that holds
-/// `offset`, and zero when no range holds it.
 std::uint64_t space_range_end_at(dstd::Span<const SpaceRange> ranges,
                                  std::uint64_t offset) {
     const auto after =
@@ -1910,9 +1884,8 @@ dstd::Expected<void, dstd::Error> space_segment_block(
     return {};
 }
 
-/// Walks the directory from its top table down to its leaves: every leaf block
-/// is a slot table of directory entries and every separator block one of
-/// child handles. The segment blocks the entries name leave by reference.
+/// Walks the directory from its top table down to its leaves. The segment
+/// blocks the entries name leave by reference.
 dstd::Expected<void, dstd::Error> space_directory(
     SpaceScan& scan, const FileTail& tail,
     dstd::Vector<BlockHandle>& segment_blocks) {
@@ -1971,10 +1944,8 @@ dstd::Expected<void, dstd::Error> space_directory(
     return {};
 }
 
-/// Every commit and checkpoint record of the file, found by the record magic in
-/// each block the file lets a record start in. A record a block already covers
-/// is skipped, so an extent or a block that holds the bytes of one adds no
-/// record.
+/// Every commit and checkpoint record of the file, found by the record magic.
+/// A record a block already covers is skipped.
 dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
     std::stable_sort(scan.ranges.begin(), scan.ranges.end(),
                      space_range_before);

@@ -37,9 +37,8 @@ using when_any_result_t =
 
 namespace detail {
 
-/// Awaits `a` in place. An awaitable that ends as cancelled (it has
-/// cancelled() and it is true) gives an empty result, not an exception, so a
-/// loser that was stopped costs no throw.
+/// Awaits `a` in place. A cancelled awaitable gives an empty result, not an
+/// exception.
 template <typename A>
 struct CancelAware {
     using Value = when_any_result_t<typename A::result_type>;
@@ -66,8 +65,7 @@ struct CancelAware {
     }
 };
 
-/// A loser that has a cancel hook and was never started is dropped without
-/// running once a winner exists.
+/// A never-started loser with a cancel hook is dropped once a winner exists.
 template <typename A>
 bool never_started(A& a) {
     if constexpr (requires(A& x) {
@@ -128,7 +126,6 @@ struct WhenAnySharedState : WhenAnyCompletionState {
     WhenAnyResult<typename Awaitable::result_type> result;
     std::exception_ptr exception;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
-    /// The first awaitable to end was cancelled, so there is no result.
     bool cancelled_winner = false;
     std::vector<Awaitable> awaitables;
     ChildClaims claims;
@@ -148,9 +145,8 @@ struct WhenAnySharedState : WhenAnyCompletionState {
         }
     }
 
-    /// Sets every token and calls cancel() on each loser that has one. A
-    /// cancel() that throws does not stop the others; the first error is
-    /// kept unless the winner already has one.
+    /// A throwing cancel() does not stop the others. The first error is kept
+    /// unless the winner already has one.
     void cancel_losers(std::size_t winner) noexcept {
         for (std::size_t j = 0; j < awaitables.size(); ++j) {
             if (cancellation_tokens[j]) {
@@ -168,9 +164,7 @@ struct WhenAnySharedState : WhenAnyCompletionState {
         }
     }
 
-    /// Releases the awaiter once the winner is recorded, with `*error` if the
-    /// winner or its bookkeeping threw (null for none). Runs exactly once, by
-    /// the winner.
+    /// Runs once, by the winner. `error` is null when nothing threw.
     void finish_winner(std::size_t winner, std::exception_ptr* error) noexcept {
         if (error != nullptr) exception = std::move(*error);
         cancel_losers(winner);
@@ -181,27 +175,16 @@ struct WhenAnySharedState : WhenAnyCompletionState {
 /**
  * WhenAnyAwaitable - Completes when first awaitable completes
  *
- * Losers are cancelled and awaited before when_any returns, so no loser runs
- * after the awaiting coroutine resumes. Cancellation is cooperative: an
- * awaitable may expose get_cancellation_token() (its token is set) and
- * cancel() (called once from the winner's thread, possibly while the loser is
- * suspended or running, so it must be thread-safe and make the loser finish).
- * An awaitable with neither runs to completion and delays the return.
+ * Losers are cancelled and awaited before when_any returns. An awaitable may
+ * expose get_cancellation_token() (its token is set) and cancel() (called once
+ * from the winner's thread, possibly while the loser runs, so it must be
+ * thread-safe and make the loser finish). An awaitable with neither runs to
+ * completion and delays the return.
  *
  * Usage:
  * @code
- * auto result = co_await when_any({
- *     io::async_read(fd1, buf1, len1),
- *     io::async_read(fd2, buf2, len2),
- *     timeout(5s)
- * });
- *
- * if (result.index == 2) {
- *     // Timeout occurred
- * } else {
- *     // Got data from index 0 or 1
- *     process(result.result);
- * }
+ * auto first = co_await when_any(fetch(a), fetch(b));
+ * use(first.index, first.result);
  * @endcode
  */
 template <typename Awaitable>
@@ -266,16 +249,13 @@ class WhenAnyAwaitable {
 
    private:
     void launch_wrapper() {
-        // Fire-and-forget Coro wrapper. It takes the next child it can, awaits
-        // it to the end and reports in on_wrapper_finished() for it, until no
-        // child is left or one suspends it; the launcher then starts another
-        // wrapper. on_wrapper_finished() resumes the awaiter after the last
-        // child.
+        // Fire-and-forget wrapper. It takes children until none is left or one
+        // suspends it, then the launcher starts another wrapper.
         auto wrapper = [](std::shared_ptr<SharedState> state) -> coro::Coro {
             for (;;) {
                 const std::size_t index = state->claims.claim();
-                // Not awaitables.size(): the awaiter clears the vector once the
-                // last child has reported in, while this loop is still ending.
+                // Not awaitables.size(): the awaiter clears the vector after
+                // the last child reports in.
                 if (index >= state->wrappers_total_) co_return;
                 if (state->completed.load(std::memory_order_acquire) &&
                     detail::never_started(state->awaitables[index])) {
@@ -330,8 +310,6 @@ class WhenAnyAwaitable {
         // deferred destruction when the wrapper completes.
         auto h = wrapper.release();
         // Resume past initial_suspend.  The wrapper will either:
-        // (a) suspend at co_await on the awaitable (most common), or
-        // (b) run to completion if the awaitable was already ready.
         h.resume();
     }
 };
@@ -344,16 +322,14 @@ class WhenAnyAwaitable {
  *
  * Usage:
  * @code
- * auto result = co_await when_any({
- *     io::async_read(cache_fd, buf, len),
- *     io::async_read(disk_fd, buf, len),
- *     io::async_read(net_fd, buf, len)
- * });
+ * std::vector<coro::CoroTask<int>> reads;
+ * reads.push_back(read_cache());
+ * reads.push_back(read_disk());
+ * auto result = co_await when_any(std::move(reads));
  *
  * switch (result.index) {
  *     case 0: std::cout << "Cache hit!\n"; break;
  *     case 1: std::cout << "Local disk\n"; break;
- *     case 2: std::cout << "Network fetch\n"; break;
  * }
  * process(result.result);
  * @endcode
@@ -479,7 +455,6 @@ struct WhenAnyTupleState : WhenAnyCompletionState {
     std::atomic<bool> completed{false};
     WhenAnyTupleResult<Awaitables...> result;
     std::exception_ptr exception;
-    /// The first awaitable to end was cancelled, so there is no result.
     bool cancelled_winner = false;
     std::vector<std::shared_ptr<std::atomic<bool>>> cancellation_tokens;
 
@@ -505,7 +480,7 @@ struct WhenAnyTupleState : WhenAnyCompletionState {
             *awaitables_);
     }
 
-    /// True for the first wrapper to call; it then owns the result.
+    /// True for the first wrapper to call, which then owns the result.
     bool claim() {
         bool expected = false;
         return completed.compare_exchange_strong(expected, true,
@@ -518,7 +493,6 @@ struct WhenAnyTupleState : WhenAnyCompletionState {
         record_winner<I>();
     }
 
-    /// Records the index and the tokens of the losers.
     template <std::size_t I>
     void record_winner() {
         result.index = I;
@@ -532,8 +506,7 @@ struct WhenAnyTupleState : WhenAnyCompletionState {
         }
     }
 
-    /// Releases the awaiter once the winner is recorded, with `error` if the
-    /// winner or its bookkeeping threw. Runs exactly once, by the winner.
+    /// Runs once, by the winner. `error` is null when nothing threw.
     template <std::size_t I>
     void finish_winner(std::exception_ptr* error) noexcept {
         if (error != nullptr) exception = std::move(*error);
@@ -541,9 +514,8 @@ struct WhenAnyTupleState : WhenAnyCompletionState {
         on_first_complete();
     }
 
-    /// Sets every token and calls cancel() on each loser that has one. A
-    /// cancel() that throws does not stop the others; the first error is
-    /// kept unless the winner already has one.
+    /// A throwing cancel() does not stop the others. The first error is kept
+    /// unless the winner already has one.
     template <std::size_t... Is>
     void cancel_losers(std::size_t winner,
                        std::index_sequence<Is...>) noexcept {
@@ -695,20 +667,16 @@ auto when_any(A1&& a1, A2&& a2, Rest&&... rest) {
  * Can be used with when_any to implement timeouts:
  *
  * @code
- * auto result = co_await when_any({
- *     io::async_read(fd, buf, len),
- *     timeout(std::chrono::seconds(5))
- * });
- *
+ * auto& timers = Executor::current()->get_timer_service();
+ * auto result = co_await when_any(read_task(), timeout(5s, &timers));
  * if (result.index == 1) {
  *     // Timeout occurred
  * }
  * @endcode
  *
  * co_await throws "Operation timed out" when the time passes, and a cancelled
- * error (see coro::is_cancelled) after cancel() or when the executor shuts
- * down. cancel() is thread-safe and may be called at any time, so a timeout
- * that loses a when_any race does not hold the winner back.
+ * error (see coro::is_cancelled) after cancel() or executor shutdown. cancel()
+ * is thread-safe.
  */
 template <typename Duration>
 class TimeoutAwaitable {
@@ -826,7 +794,7 @@ class TimeoutAwaitable {
         throw DFTUtilsException(ErrorCode::Pipeline, "Operation timed out");
     }
 
-    /// Ends the wait early. Thread-safe; does nothing once the wait is over.
+    /// Ends the wait early. Thread-safe. Does nothing once the wait is over.
     void cancel() noexcept { state_->cancel(); }
 };
 
@@ -836,11 +804,8 @@ class TimeoutAwaitable {
  * Usage:
  * @code
  * using namespace std::chrono_literals;
- * auto& timer_service = ctx.get_executor()->get_timer_service();
- * auto result = co_await when_any({
- *     some_operation(),
- *     timeout(5s, &timer_service)
- * });
+ * auto& timers = Executor::current()->get_timer_service();
+ * auto result = co_await when_any(some_operation(), timeout(5s, &timers));
  * @endcode
  */
 template <typename Rep, typename Period>

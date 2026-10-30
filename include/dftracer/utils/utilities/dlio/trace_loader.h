@@ -53,8 +53,6 @@ struct AggregatedTraces {
     dstd::SharedPtr<QuantileStore> preprocess_quantiles;
     dstd::SharedPtr<QuantileStore> getitem_quantiles;
 
-    /// Statistics with min/max/mean/count populated, quantiles attached when
-    /// present.
     Statistic fetch_block_stats;
     Statistic fetch_iter_stats;
     Statistic preprocess_stats;
@@ -80,8 +78,7 @@ struct AggregatedTraces {
     /// True if any AGGREGATION entry was found.
     bool any_data = false;
 
-    /// True if any component has duration quantiles. Drives whether sample
-    /// synthesis uses inverse-CDF or mean replication.
+    /// True if any component has duration quantiles.
     bool quantiles_available = false;
 
     /// Chunks the query read again from the trace. Zero when the stored
@@ -114,11 +111,9 @@ struct TraceLoaderOptions {
 };
 
 /// Loads aggregated DLIO trace data with one aggregation query over `files`,
-/// grouped by (pid, `config.time_interval_us` window, cat, name), and
-/// materializes per-rank trace arrays, distribution sample arrays, and
-/// trace-side ComponentTimeMetrics. `index_path` is the index store of `files`
-/// and `config` the config it was built with. Blocks until the query ends.
-/// Throws DFTUtilsException when the query fails.
+/// grouped by (pid, `config.time_interval_us` window, cat, name). `index_path`
+/// is the index store of `files` and `config` the config it was built with.
+/// Blocks until the query ends and throws DFTUtilsException on failure.
 AggregatedTraces load_aggregated_traces(
     const std::string& index_path, const dstd::Vector<dstd::String>& files,
     const index::schemas::dft::agg::AggregationConfig& config,

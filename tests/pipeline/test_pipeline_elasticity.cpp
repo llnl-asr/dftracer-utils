@@ -1,8 +1,7 @@
 // Every pipeline runs on the one process runtime. An explicit
 // with_elastic()/with_eager() sets the mode of its pool, a pipeline that sets
-// none keeps it, and DFTRACER_UTILS_ELASTIC decides the mode of a runtime when
-// it is made. The live worker count is the observable: an elastic pool settles
-// at its floor, an eager pool runs at the full width.
+// none keeps it, and DFTRACER_UTILS_ELASTIC decides the mode of a new runtime.
+// The observable is the live worker count.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/platform_compat.h>

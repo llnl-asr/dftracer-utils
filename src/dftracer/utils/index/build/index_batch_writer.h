@@ -25,7 +25,6 @@ using index::schemas::dft::agg::AggregationFold;
 
 struct ParsedIndexJob {
     int file_id = 0;
-    /// The index holds no data for `file_id` yet, so nothing is cleared.
     bool fresh_id = false;
     std::string file_path;
     std::string logical_path;
@@ -46,8 +45,8 @@ struct ParsedIndexJob {
     /// The schema the file was decoded with; written with its members.
     const index::RecordSchema* schema = nullptr;
     std::string error_message;
-    /// The staged write a spill left, which the caller publishes
-    /// once write_index_job returns.
+    /// The staged write a spill left. The caller publishes it after
+    /// write_index_job returns.
     std::unique_ptr<index::store::IndexDatabaseWrite> staged;
 };
 
@@ -59,14 +58,12 @@ struct BatchWriterMetrics {
 };
 
 /// Write `job` into `sink`, which the caller commits. A file whose bloom fold
-/// spilled writes its tier into a staged write instead, left in `job.staged`
-/// for the caller to publish before the next file, so a sink holds none of
-/// them. Returns false, with `job.error_message` set, when the write failed;
-/// what was already written for the file is left in the sink.
+/// spilled writes its tier into `job.staged`, which the caller publishes before
+/// the next file. Returns false, with `job.error_message` set, when the write
+/// failed. What was already written for the file is left in the sink.
 inline bool write_index_job(index::store::IndexWrite& sink,
                             ParsedIndexJob& job) {
     sink.set_fresh_file(job.fresh_id ? job.file_id : -1);
-    // Only a file that spilled while parsed writes its tier as runs.
     const bool spills = job.bloom_fold && job.bloom_fold->writes_runs();
     try {
         if (!job.tier_only) {
@@ -75,14 +72,13 @@ inline bool write_index_job(index::store::IndexWrite& sink,
                                                        job.record);
             index::gzip::persist_gzip_index_artifacts(sink, job.file_id,
                                                       job.artifacts);
-            // New members renumber the chunks, so tier data the bloom fold
-            // does not rewrite would describe old ones. A spilled tier clears
-            // in its own staged write instead. A fresh id has no old data, so
-            // its clears write nothing.
+            // New members renumber the chunks, so tier data the bloom fold does
+            // not rewrite would describe old ones. A spilled tier clears in its
+            // own staged write. A fresh id has nothing to clear.
             for (auto ext : index::store::ALL_EXTENSIONS)
                 if (!spills && ext != index::store::IndexExtension::Members)
                     index::store::records::clear_file(sink, ext, job.file_id);
-            // Plugin data is never in a spill run, so it clears here.
+            // Plugin data is never in a spill run.
             index::store::records::clear_file(
                 sink, index::store::IndexExtension::Plugin, job.file_id);
             // After the clears, which cover core.profile too.
@@ -93,7 +89,6 @@ inline bool write_index_job(index::store::IndexWrite& sink,
         }
         if (spills) {
             auto staged = job.bloom_fold->finish_staged(job.file_id);
-            // The file's record gives the published tier the file's sources.
             if (!job.logical_path.empty())
                 index::store::records::put_file_record(
                     *staged, job.logical_path, job.record);

@@ -54,7 +54,7 @@ DataFrame run(CoroTask<DataFrame> t) {
     return out;
 }
 
-// Whether the fixed-width values p[i] and q[j] have the same bytes; false for
+// Whether the fixed-width values p[i] and q[j] have the same bytes, false for
 // any other type. Equal bytes are equal values, so row_key, which builds a
 // string per cell, is only asked about cells whose bytes differ.
 bool same_bytes(const Series& p, std::int64_t i, const Series& q,
@@ -2235,11 +2235,10 @@ TEST_SUITE("lazyframe") {
 
     TEST_CASE(
         "group transform under a tiny budget matches the in-memory plan") {
-        // Chunks of about 1 KiB cut every partition (125 rows) several
-        // times, so the carry of each function across a cut is exercised:
-        // seed rows (running sum/min/max, fill), context rows (shift, diff,
-        // rolling), shifted counts and ranks, and the partition-aligned
-        // fallback (average and max rank, float rolling sums).
+        // Chunks of about 1 KiB cut every partition (125 rows) several times,
+        // so the carry of each function across a cut is exercised, including
+        // seed rows, context rows, shifted counts and ranks and the
+        // partition-aligned fallback.
         const std::int64_t MANY_GROUPS = 24;
         const std::int64_t n = MANY_GROUPS * 125;
         auto frame = [&](std::int64_t groups) {

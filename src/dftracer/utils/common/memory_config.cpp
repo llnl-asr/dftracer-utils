@@ -11,7 +11,7 @@ namespace dftracer::utils {
 
 namespace {
 
-// Unset or empty leaves the field at zero; a value that does not parse is an
+// Unset or empty leaves the field at zero. A value that does not parse is an
 // error that names the variable.
 Result<std::size_t> read_bytes(const char* name) {
     auto raw = Env::get<std::string_view>(name);

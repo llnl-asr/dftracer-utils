@@ -37,8 +37,8 @@ bool get_varint(LeReader& r, std::uint64_t& out) {
     return true;
 }
 
-// Every encoded element takes at least one byte, so a count above the bytes
-// left is malformed; checking it first keeps a reserve small.
+// Every element takes at least one byte, so a count above the bytes left is
+// malformed. Checking it first keeps a reserve small.
 bool get_count(LeReader& r, std::uint64_t limit, std::uint64_t& n) {
     return get_varint(r, n) && n <= limit && n <= r.remaining();
 }
@@ -511,9 +511,9 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     }
 
     if ((flags & HAS_BINS) == 0) return;
-    // Per bin: the pid delta, then the tid (a delta within one pid), then the
-    // bin (a delta within one thread), the count, the events without a
-    // duration, the duration sum, the size count and the size sum.
+    // Per bin: pid delta, tid (a delta within one pid), bin (a delta within one
+    // thread), count, events without a duration, duration sum, size count and
+    // size sum.
     append_varint(buf, bin_interval);
     append_varint(buf, bins.size());
     const TimeBin* prev_bin = nullptr;

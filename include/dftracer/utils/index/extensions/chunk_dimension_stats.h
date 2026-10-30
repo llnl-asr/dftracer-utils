@@ -105,10 +105,9 @@ struct ChunkDimensionStats {
     /// value_counts.
     void observe(std::string_view value);
 
-    /// As observe. `slot` is where `value` sits in value_counts: NO_SLOT
-    /// finds it by the string and sets it, and any other value skips the
-    /// lookup. A slot holds while value_counts only gains entries, so the
-    /// caller keeps it for one dimension and one value.
+    /// As observe. `slot` is where `value` sits in value_counts. NO_SLOT finds
+    /// it by the string and sets it. Keep a slot for one dimension and one
+    /// value.
     void observe(std::string_view value, std::uint32_t& slot);
     void observe_range_only(std::uint64_t value);
 

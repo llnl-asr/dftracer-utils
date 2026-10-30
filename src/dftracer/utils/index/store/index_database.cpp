@@ -191,11 +191,9 @@ StringViewMap<std::uint64_t> decode_count_map_value(std::string_view value) {
 
 namespace {
 
-/// One store namespace a data scan reads.
 struct StoreNamespace {
     std::string name;
     std::uint32_t version = 0;
-    /// The plugin or the aggregation record the namespace belongs to.
     std::string owner;
 };
 
@@ -206,55 +204,41 @@ struct IndexDatabase::Impl {
     IndexOpenMode open_mode_ = IndexOpenMode::ReadWrite;
     std::shared_ptr<StoreRoot> store_;
 
-    /// The value stored at the full index key `key`.
     std::optional<std::string> raw_get(std::string_view key);
-    /// Calls fn(full_key, value) for every key under `prefix`, in
-    /// ascending byte order; the full index key goes to fn.
+    /// Passes the full index key to fn, in ascending byte order.
     template <typename Fn>
     void raw_scan(std::string_view prefix, Fn&& fn);
 
-    /// The payload at `key` of (ext, kind); nullopt when absent or when its
-    /// header does not match.
+    /// nullopt when absent or when the header does not match.
     std::optional<std::string> get(layout::Ext ext, std::uint8_t kind,
                                    std::string_view key);
-    /// Calls fn(key, payload) for every key of (ext, kind) under `prefix`
-    /// whose value carries the (ext, kind) header.
     template <typename Fn>
     void scan(layout::Ext ext, std::uint8_t kind, std::string_view prefix,
               Fn&& fn);
-    /// Calls fn(key) for every presence key under `prefix`.
     template <typename Fn>
     void scan_keys(std::string_view prefix, Fn&& fn);
-    /// Calls fn(file_id, key, payload) for the rows of (ext, kind) of the
-    /// files in `file_ids`, in key order.
+    /// In key order.
     template <typename Fn>
     void scan_files(layout::Ext ext, std::uint8_t kind,
                     const std::vector<int>& file_ids, Fn&& fn);
     bool any_with_prefix(std::string_view prefix);
     std::optional<layout::FileRecord> file_record(std::string_view path);
 
-    // The store mapping: one form per key of the index key space.
-    /// The store as it stands, null when the root holds no store yet, where
-    /// every read answers nothing.
+    /// Null when the root holds no store yet, where every read answers nothing.
     std::shared_ptr<const kv::Snapshot> snapshot() const;
     std::optional<std::string> store_get(std::string_view key);
     template <typename Fn>
     void store_scan(std::string_view prefix, Fn&& fn);
-    /// The plugin namespaces the store declares, highest version each, in
-    /// plugin name order.
+    /// Highest version of each, in plugin name order.
     std::vector<StoreNamespace> plugin_namespaces() const;
-    /// The aggregation record namespaces the store declares, highest version
-    /// each, in record name order.
+    /// Highest version of each, in record name order.
     std::vector<StoreNamespace> meta_namespaces() const;
-    /// The file ids that hold a copy of `spec`, ascending.
     std::vector<std::uint32_t> file_ids_of(const kv::NamespaceSpec& spec) const;
     std::optional<std::string> registered_path(std::uint32_t file_id) const;
     std::optional<std::string> store_manifest(int file_id, layout::Ext ext,
                                               std::string_view plugin);
     std::optional<layout::FileRecord> store_file_record(
         std::string_view path) const;
-    /// The manifest keys of the plugins that hold a copy of `file_id` whose
-    /// plugin name starts with `plugin`.
     template <typename Fn>
     void store_manifests(std::uint32_t file_id, std::string_view plugin,
                          Fn&& fn);
@@ -312,8 +296,8 @@ void throw_store_error(const char* what, const dstd::Error& error) {
 
 template <typename Fn>
 void IndexDatabase::Impl::raw_scan(std::string_view prefix, Fn&& fn) {
-    // The snapshot and the blocks it loads live in the root's pool; the
-    // caller's work on each record stays in the caller's pool.
+    // The snapshot lives in the root's pool. The caller's work on each record
+    // stays in the caller's pool.
     memory::Pool& caller = memory::current_pool();
     memory::Scope in_store(store_->pool());
     store_scan(prefix, [&](std::string_view key, std::string_view value) {
@@ -384,8 +368,7 @@ bool IndexDatabase::Impl::any_with_prefix(std::string_view prefix) {
 
 std::optional<layout::FileRecord> IndexDatabase::Impl::file_record(
     std::string_view path) {
-    // A file record carries its own header, so the value goes through
-    // decode_file_record whole rather than through get().
+    // A file record carries its own header, so it skips get().
     auto value = raw_get(layout::file_by_path_key(path));
     if (!value) return std::nullopt;
     return layout::decode_file_record(*value);
@@ -603,7 +586,6 @@ std::optional<std::string> IndexDatabase::Impl::store_get(
         return std::nullopt;
     }
     const auto target = store_layout::target_of(key);
-    // A key the mapping cannot express holds nothing.
     if (!target) return std::nullopt;
     kv::NamespaceSpec spec;
     kv::ScopeKey scope;
@@ -775,8 +757,7 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
     auto scan_copy = [&](const StoreNamespace& ns, const kv::ScopeKey& scope,
                          std::uint32_t file_id) {
         const auto spec = namespace_spec(ns.name, ns.version);
-        // The cursor reads through this snapshot, which a commit on another
-        // thread may replace in the root.
+        // A commit on another thread may replace the root's snapshot.
         const auto held = snapshot();
         if (!held) return false;
         auto cursor = held->scan(spec, scope, ByteView(inner_prefix));
@@ -837,10 +818,9 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
 namespace {
 std::atomic<std::uint64_t> read_write_open_count{0};
 
-/// The store roots of the read-only opens a process made last. A StoreRoot
-/// lives only while something holds it, and building one numbers every file
-/// of its store, so a reader that opens the index once per file would number
-/// them all each time.
+/// A StoreRoot lives only while something holds it, and building one numbers
+/// every file of its store, so retaining the last read-only opens spares a
+/// reader that opens the index once per file.
 constexpr std::size_t STORE_ROOTS_RETAINED = 64;
 
 class RetainedStoreRoots {
@@ -848,8 +828,7 @@ class RetainedStoreRoots {
     static RetainedStoreRoots& instance() {
         static RetainedStoreRoots* roots = [] {
             auto* made = new RetainedStoreRoots();
-            // Closes the writers of retained roots before the process ends,
-            // so each data file gets its footer and summary entry.
+            // Each data file needs its footer and summary entry.
             std::atexit([] { RetainedStoreRoots::instance().clear(); });
             return made;
         }();
@@ -893,7 +872,6 @@ class RetainedStoreRoots {
 
    private:
     std::mutex mutex_;
-    /// Most recently opened first.
     std::list<std::pair<std::string, std::shared_ptr<StoreRoot>>> roots_;
 };
 }  // namespace
@@ -924,8 +902,7 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
         RetainedStoreRoots::instance().retain(impl_->db_path_, impl_->store_);
         return;
     }
-    // An index root opened for writing exists from then on. Only a write
-    // creates the store inside it.
+    // Only a write creates the store inside the root.
     std::error_code error;
     fs::create_directories(impl_->db_path_, error);
     if (error) {
@@ -1547,8 +1524,6 @@ std::optional<std::string> AggRowReader::get_row(const IndexDatabase& db,
 }
 
 std::vector<std::uint32_t> AggRowReader::file_ids(const IndexDatabase& db) {
-    // The scope directory lists the files that hold an aggregation copy, so
-    // no row is decoded to find them.
     return db.impl_->file_ids_of(ext_spec(layout::Ext::Agg));
 }
 

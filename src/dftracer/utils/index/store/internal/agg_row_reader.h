@@ -12,30 +12,24 @@
 
 namespace dftracer::utils::index::store {
 
-/// Reads the aggregation extension's records on whichever backend holds the
-/// index, so the aggregation tier never names a backend. IndexDatabase's
-/// friend: the records are read by their index keys, which the typed query
-/// API does not expose.
+/// Reads the aggregation extension's records by their index keys, which the
+/// typed query API does not expose. IndexDatabase's friend.
 class AggRowReader {
    public:
-    /// A record of the aggregation extension: its full index key and its
-    /// payload, the value without the header of its (ext, kind).
+    /// The full index key and the payload (the value without its header).
     using RowFn =
         std::function<bool(std::string_view key, std::string_view body)>;
 
-    /// Calls fn(full key, payload) for every record of (Ext::Agg, kind) under
-    /// `prefix`, in key order, until fn returns false. Records whose header
-    /// names another type or version are left out. Throws on a read error.
+    /// In key order until fn returns false. Records whose header names another
+    /// type or version are left out. Throws on a read error.
     static void for_each_row(const IndexDatabase& db, std::uint8_t kind,
                              std::string_view prefix, const RowFn& fn);
 
-    /// The payload at the full key `key` of (Ext::Agg, kind); nullopt when it
-    /// is absent or its header names another type or version.
+    /// nullopt when absent or when the header names another type or version.
     static std::optional<std::string> get_row(const IndexDatabase& db,
                                               std::uint8_t kind,
                                               std::string_view key);
 
-    /// The file ids the index holds aggregation data for, ascending.
     static std::vector<std::uint32_t> file_ids(const IndexDatabase& db);
 };
 

@@ -42,7 +42,6 @@ IndexRun run_index(const std::string& dir, bool force) {
     return run;
 }
 
-// Every file the index holds, with its size.
 std::vector<std::string> index_files(const std::string& dir) {
     std::vector<std::string> files;
     const fs::path root = fs::path(dir) / ".dftindex";

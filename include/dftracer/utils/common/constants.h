@@ -17,11 +17,9 @@ inline constexpr const char* SPILL_DIR_ENV = "DFTRACER_UTILS_SPILL_DIR";
 inline constexpr const char* SPILL_COMPRESS_ENV =
     "DFTRACER_UTILS_SPILL_COMPRESS";
 
-/// The memory settings and their defaults, repeated in memory/constants.h; a
-/// test keeps the two sets equal. The backend, decay time, debug and exit check
-/// are read by the memory library before its first allocation. The rest are
-/// read by configure_memory_from_env (common/memory_config.h). Byte values take
-/// a number or a unit such as "512MB".
+/// Repeated in memory/constants.h. A test keeps the two equal. The backend,
+/// decay, debug and exit check are read by the memory library before its first
+/// allocation. Byte values take a number or a unit such as "512MB".
 namespace memory_settings {
 inline constexpr const char* MEMORY_BACKEND_ENV =
     "DFTRACER_UTILS_MEMORY_BACKEND";
@@ -56,21 +54,19 @@ inline constexpr const char* BACKEND_ENV = "DFTRACER_UTILS_IO_BACKEND";
 }  // namespace io_settings
 
 namespace store {
-/// The extent size P of a new index store data file: the most raw bytes one
-/// data extent holds before it is compressed. A Lustre file takes the largest
-/// stripe size of its layout, capped at MAX_EXTENT_BYTES; anything else takes
-/// STORE_DEFAULT_EXTENT_BYTES. STORE_EXTENT_BYTES_ENV overrides both, and must
-/// be a multiple of 4096 in [STORE_MIN_EXTENT_BYTES, STORE_MAX_EXTENT_BYTES].
+/// The raw bytes of a data extent of a new index store file. A Lustre file
+/// takes its largest stripe size, capped at STORE_MAX_EXTENT_BYTES, and
+/// anything else STORE_DEFAULT_EXTENT_BYTES. STORE_EXTENT_BYTES_ENV overrides
+/// both and must be a multiple of 4096 between STORE_MIN_EXTENT_BYTES and
+/// STORE_MAX_EXTENT_BYTES.
 inline constexpr const char* STORE_EXTENT_BYTES_ENV =
     "DFTRACER_UTILS_STORE_EXTENT_BYTES";
 inline constexpr std::uint32_t STORE_DEFAULT_EXTENT_BYTES = std::uint32_t{1}
                                                             << 20;
 inline constexpr std::uint32_t STORE_MIN_EXTENT_BYTES = 4096;
 inline constexpr std::uint32_t STORE_MAX_EXTENT_BYTES = std::uint32_t{16} << 20;
-/// The most bytes of decoded pages one snapshot of the store keeps for its
-/// queries to share. STORE_PAGE_CACHE_BYTES_ENV overrides it with a plain
-/// number of bytes: more memory makes a scan over many scopes and repeated
-/// point reads decode fewer pages again.
+/// The most bytes of decoded pages one store snapshot keeps for its queries.
+/// STORE_PAGE_CACHE_BYTES_ENV overrides it with a plain number of bytes.
 inline constexpr const char* STORE_PAGE_CACHE_BYTES_ENV =
     "DFTRACER_UTILS_STORE_PAGE_CACHE_BYTES";
 inline constexpr std::size_t STORE_DEFAULT_PAGE_CACHE_BYTES = std::size_t{64}
@@ -78,42 +74,37 @@ inline constexpr std::size_t STORE_DEFAULT_PAGE_CACHE_BYTES = std::size_t{64}
 }  // namespace store
 
 /// What a file in flight and each piece parsed at once reserve from the memory
-/// budget. The values are bytes held per byte of plaintext, set from the
-/// manager's peak on traces of 1 to 30 MiB compressed.
+/// budget, in bytes held per byte of plaintext. Set from the manager's peak on
+/// traces of 1 to 30 MiB compressed.
 namespace file_admission {
-/// What a file holds besides its pieces and its elastic state: its intern,
-/// folds, driver and queues.
+/// The intern, folds, driver and queues of a file.
 inline constexpr std::uint64_t FIXED_BYTES = std::uint64_t{2} << 20;
 /// A piece holds its plaintext and its decoded events.
 inline constexpr std::uint64_t PIECE_BYTES_PER_PLAINTEXT_BYTE = 3;
 /// A trace file inflates to about this many times its size.
 inline constexpr std::uint64_t PLAINTEXT_PER_COMPRESSED_BYTE = 16;
-/// State that grows with the file and can go to disk, the share the bloom
-/// tier spills at: ELASTIC_PERCENT of the plaintext, at least MIN_ELASTIC_BYTES
-/// and at most 1 / ELASTIC_POOL_DIVISOR of the pool.
+/// State that grows with the file and can go to disk: ELASTIC_PERCENT of the
+/// plaintext, at least MIN_ELASTIC_BYTES and at most 1 / ELASTIC_POOL_DIVISOR
+/// of the pool.
 inline constexpr std::uint64_t ELASTIC_PERCENT = 150;
 inline constexpr std::uint64_t MIN_ELASTIC_BYTES = std::uint64_t{4} << 20;
 inline constexpr std::uint64_t ELASTIC_POOL_DIVISOR = 4;
-/// The share of the plaintext the aggregation tier holds per file until the
-/// file is written; measured at 6 to 7%.
+/// Share of the plaintext the aggregation tier holds per file until it is
+/// written. Measured at 6 to 7%.
 inline constexpr std::uint64_t AGG_PERCENT = 8;
 /// The sinks of the workers take at most 1 / SINK_BUDGET_DIVISOR of a budget,
-/// each at least MIN_SINK_BYTES, so a budget too small for that runs fewer
-/// workers.
+/// each at least MIN_SINK_BYTES; a smaller budget runs fewer workers.
 inline constexpr std::uint64_t SINK_BUDGET_DIVISOR = 2;
 inline constexpr std::uint64_t MIN_SINK_BYTES = std::uint64_t{8} << 20;
-/// 1 / UNTRACKED_DIVISOR of a budget is left for what a build holds besides its
-/// files and sinks: the runtime, the index database and memory the allocator
-/// keeps after it is freed.
+/// 1 / UNTRACKED_DIVISOR of a budget is left for the runtime, the index
+/// database and memory the allocator keeps after it is freed.
 inline constexpr std::uint64_t UNTRACKED_DIVISOR = 8;
 /// A file holds at most all but 1 / PIECE_ROOM_DIVISOR of the budget, so the
-/// pieces of a file larger than the budget still find room.
+/// pieces of a larger file still find room.
 inline constexpr std::uint64_t PIECE_ROOM_DIVISOR = 4;
-/// The smallest run a spill writes, whatever the budget, so a tiny budget
-/// makes few large runs rather than many small ones. A run grows by a factor of
-/// two every SPILL_RUNS_PER_DOUBLING runs, up to 2^MAX_SPILL_DOUBLINGS times
-/// that, so the runs of a tier of up to MAX_SPILL_TIER_BYTES stay within
-/// MAX_SPILL_RUNS.
+/// The smallest spill run. A run doubles every SPILL_RUNS_PER_DOUBLING runs, up
+/// to 2^MAX_SPILL_DOUBLINGS times that, so a tier of up to MAX_SPILL_TIER_BYTES
+/// stays within MAX_SPILL_RUNS.
 inline constexpr std::uint64_t MIN_SPILL_RUN_BYTES = std::uint64_t{4} << 20;
 inline constexpr std::size_t SPILL_RUNS_PER_DOUBLING = 16;
 inline constexpr std::size_t MAX_SPILL_DOUBLINGS = 6;
@@ -122,8 +113,7 @@ inline constexpr std::size_t MAX_SPILL_RUNS = 128;
 /// Parse workers that one inflate worker feeds.
 inline constexpr std::size_t INFLATE_PARSERS_PER_WORKER = 4;
 /// A file parses pieces at once only while at least 1 / SPAWN_FREE_DIVISOR of
-/// the workers have no file, so a build with a file for every worker parses
-/// each file on its own worker.
+/// the workers have no file.
 inline constexpr std::size_t SPAWN_FREE_DIVISOR = 4;
 }  // namespace file_admission
 

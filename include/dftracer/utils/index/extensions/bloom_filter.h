@@ -43,8 +43,8 @@ class BloomFilter {
 
     static BloomFilter from_blob(const unsigned char* data, std::size_t size);
 
-    /// The two hashes of a value. They depend on the value alone, so a caller
-    /// that probes and then inserts it computes them once.
+    /// Depend on the value alone, so a caller that probes and then inserts
+    /// computes them once.
     struct Hashes {
         std::uint64_t block;
         std::uint64_t mask;

@@ -50,8 +50,8 @@ struct IndexerOptions {
     /// with the tier.
     std::vector<std::string> extensions = {"zonemap", "bloom", "counts",
                                            "postings"};
-    /// The aggregation tier every build makes; a caller may change the
-    /// windows, the keys and the sketches but cannot turn it off.
+    /// The aggregation tier every build makes. A caller may change the windows,
+    /// keys and sketches but cannot turn it off.
     schemas::dft::agg::AggregationConfig aggregation =
         schemas::dft::agg::standard_aggregation_config();
     /// RecordSchema every trace is decoded with ("dftracer" or "generic");
@@ -155,10 +155,10 @@ class Indexer {
     static Indexer open(std::vector<std::string> paths,
                         IndexerOptions options = {});
 
-    /// Opens trace files a caller already scanned, with the size and mtime
-    /// that scan read. Nothing is walked or stat'ed again until the first
-    /// status(), build() or rebuild() has used them; after that, and for
-    /// every call on an Indexer from open(), each call stats the files.
+    /// Opens trace files a caller already scanned, with the size and mtime that
+    /// scan read. The first status(), build() or rebuild() uses them without
+    /// stat'ing. Later calls, and every call on an Indexer from open(), stat
+    /// the files.
     static Indexer open_scanned(
         std::vector<utilities::filesystem::FileEntry> files,
         IndexerOptions options = {});
@@ -217,7 +217,6 @@ class Indexer {
     explicit Indexer(std::shared_ptr<Impl> impl);
     static void validate_options(Impl& impl);
     static Indexer finish_open(std::shared_ptr<Impl> impl);
-    /// status() over files already stat'ed.
     coro::CoroTask<IndexStatus> status_of(
         CoroScope& scope,
         std::vector<utilities::filesystem::FileEntry> entries) const;

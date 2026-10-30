@@ -149,7 +149,6 @@ dstd::Expected<std::size_t, dstd::Error> SegmentBuilder::plan(
         if (cmp != 0) return cmp < 0;
         return a.ordinal < b.ordinal;
     };
-    // A caller that adds in key order, as the writer does, needs no sort.
     if (!std::is_sorted(records_.begin(), records_.end(), before)) {
         std::sort(records_.begin(), records_.end(), before);
     }

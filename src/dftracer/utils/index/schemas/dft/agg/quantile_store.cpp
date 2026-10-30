@@ -15,7 +15,7 @@ namespace {
 constexpr std::uint8_t TAG_EXACT = 0;
 constexpr std::uint8_t TAG_SKETCH = 1;
 
-// Keys and values of one block stay on the stack: 4 KiB of keys.
+// Keeps the keys of one block on the stack (4 KiB).
 constexpr std::size_t BLOCK = 1024;
 
 bool has_nan(const double* v, std::size_t n) {
@@ -24,8 +24,7 @@ bool has_nan(const double* v, std::size_t n) {
     return any;
 }
 
-// `v` holds no NaN. One SIMD key pass, one sizing of the bins for the block's
-// key range, then the scalar scatter.
+// `v` holds no NaN.
 void feed_block(dataframe::MergeSketch& sk, const double* v, std::size_t n) {
     if (n == 0) return;
     std::int32_t keys[BLOCK];
@@ -96,8 +95,8 @@ void QuantileStore::destroy() noexcept {
 void QuantileStore::to_sketch(const double* extra, std::size_t n) {
     if (sketch_mode_) return;
     auto sketch = dstd::make_unique<dataframe::MergeSketch>(accuracy_);
-    // The exact values and the head of `extra` share one block, so the bins
-    // are sized once; this copy is bounded by BLOCK doubles.
+    // The exact values and the head of `extra` share one block, so the bins are
+    // sized once.
     double head[BLOCK];
     std::size_t m = exact_.size();
     std::copy(exact_.begin(), exact_.end(), head);

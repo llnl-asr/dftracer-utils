@@ -1,6 +1,3 @@
-// The chunk partials the index build stores: how many there are, that their
-// quantiles hold, and that an index without them is built again.
-
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
@@ -48,8 +45,6 @@ using Key = std::pair<std::string, std::string>;
 
 const char* const NAMES[] = {"read", "write", "open", "close"};
 
-// Events of file `n`: POSIX and STDIO calls shared by every file, and a
-// category and name only this file has.
 std::string write_trace(const std::string& dir, int n,
                         std::map<Key, std::vector<double>>& durations) {
     std::ostringstream out;
@@ -114,7 +109,6 @@ struct Stored {
     std::set<std::uint32_t> chunks;
 };
 
-// Every partial of `fid`, merged per (category, name).
 Stored read_partials(const IndexDatabase& db, int fid,
                      const agg::AggInternTable& dictionary) {
     Stored out;
@@ -136,8 +130,7 @@ Stored read_partials(const IndexDatabase& db, int fid,
     return out;
 }
 
-// A sketch answers with a value near the rank, so it lies between the values
-// next to the rank, widened by its relative accuracy.
+// A sketch answers near the rank, within its relative accuracy.
 void check_quantiles(const agg::AggPartial& p, const agg::QuantileStore& q,
                      std::vector<double> truth) {
     REQUIRE(q.count() == truth.size());
@@ -196,7 +189,6 @@ TEST_SUITE("AggPartialsStore") {
             REQUIRE(members > 1);
 
             const auto file = read_partials(db, fid, *dictionary);
-            // A file holds the 8 shared groups at most plus its own.
             CHECK(file.count > 0);
             CHECK(file.chunks.size() <= members);
             CHECK(file.count <= members * file.merged.size());
@@ -204,7 +196,6 @@ TEST_SUITE("AggPartialsStore") {
             stored += file.count;
             bound += members * file.merged.size();
 
-            // The group only this file has holds all of its events.
             const Key own{"file" + std::to_string(n), "step"};
             const auto mine = file.merged.find(own);
             REQUIRE(mine != file.merged.end());
@@ -252,8 +243,7 @@ TEST_SUITE("AggPartialsStore") {
             }
         }
 
-        // What an index of an earlier build holds: another params hash and no
-        // partials.
+        // An index of an earlier build: another params hash and no partials.
         {
             IndexDatabase db(index_path);
             const auto config = agg::tier::read_config(db);
@@ -313,8 +303,8 @@ TEST_SUITE("AggPartialsStore") {
             }
         }
 
-        // What an index of an earlier build holds: no config record where it
-        // is kept now, and a partial whose key tail is the older 12 bytes.
+        // An index of an earlier build: no config record where it is kept now
+        // and a partial whose key tail is the older 12 bytes.
         {
             IndexDatabase db(index_path);
             auto w = db.begin_write();

@@ -60,7 +60,6 @@ TEST_SUITE("index store scope filter") {
         for (const std::uint64_t hash : absent) {
             if (store::scope_filter_may_hold(view_of(filter), hash)) ++passed;
         }
-        // Ten bits and seven probes a scope pass about 1% of absent scopes.
         CHECK(passed < absent.size() / 50);
     }
 
@@ -99,7 +98,6 @@ TEST_SUITE("index store scope filter") {
         CHECK(base != hash("ns", 2, ScopeKind::Files, one));
         CHECK(base != hash("nt", 1, ScopeKind::Files, one));
         CHECK(base != hash("ns", 1, ScopeKind::File, one));
-        // The string paths and the views of a decoded key hash the same.
         const dstd::StringView views[] = {dstd::StringView("ab"),
                                           dstd::StringView("c")};
         CHECK(base ==

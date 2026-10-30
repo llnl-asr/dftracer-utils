@@ -24,7 +24,6 @@ namespace records = dftu_utils_test::index_records;
 
 constexpr std::size_t CHECKPOINT = 4096;
 
-/// The plugin extension the comparison writes into both indexes.
 constexpr std::string_view PLUGIN = "test_ext";
 
 constexpr IndexExtension PATH_KEYED[] = {
@@ -54,7 +53,7 @@ void note(std::string& out, std::string_view what, std::uint64_t value) {
     out += '\n';
 }
 
-/// Bytes the store keeps as they are, so the dump stays text.
+/// Keeps the dump text.
 void note_bytes(std::string& out, const char* what, std::string_view bytes) {
     static constexpr char HEX[] = "0123456789abcdef";
     out += what;
@@ -66,7 +65,6 @@ void note_bytes(std::string& out, const char* what, std::string_view bytes) {
     out += '\n';
 }
 
-/// The keys of an unordered map, sorted.
 template <typename Map>
 std::vector<std::string_view> sorted_keys(const Map& map) {
     std::vector<std::string_view> keys;
@@ -76,13 +74,12 @@ std::vector<std::string_view> sorted_keys(const Map& map) {
     return keys;
 }
 
-/// One file of the registry: its logical path and its id.
 struct RegisteredFile {
     std::string path;
     int file_id;
 };
 
-/// The registry in logical path order. File ids are not compared.
+/// File ids are not compared.
 std::vector<RegisteredFile> registered_files(std::string& out,
                                              const IndexDatabase& db) {
     std::vector<RegisteredFile> files;
@@ -268,7 +265,6 @@ void dump_freshness(std::string& out, const IndexDatabase& db,
     for (const auto& path : stale.removed) note(out, "stale.removed", path);
 }
 
-/// Everything the typed read API of `index_path` answers, as one string.
 std::string dump_index(const std::string& index_path,
                        const std::vector<std::string>& traces) {
     std::string out;
@@ -280,7 +276,6 @@ std::string dump_index(const std::string& index_path,
     return out;
 }
 
-/// Builds `traces` into the index root of `dir`, in the order given.
 std::string build_into(const std::string& dir,
                        const std::vector<std::string>& traces) {
     const auto index_path = dir + "/.dftindex";
@@ -289,7 +284,6 @@ std::string build_into(const std::string& dir,
     return index_path;
 }
 
-/// Writes what a plugin build writes for the plugin extension of every file.
 void put_plugin_extension(const std::string& index_path,
                           const std::vector<std::string>& traces) {
     IndexDatabase db(index_path);
@@ -307,8 +301,7 @@ void put_plugin_extension(const std::string& index_path,
     write->commit();
 }
 
-/// Three gzip traces under `dir` whose creation order, c then a then b, is not
-/// their path order.
+/// Created in the order c, a, b, which is not their path order.
 std::vector<std::string> create_unsorted_traces(
     dftu_utils_test::TestEnvironment& env, const std::filesystem::path& dir) {
     std::vector<std::string> traces;
@@ -348,7 +341,6 @@ TEST_CASE("index_database answers fresh, then stale, from the store") {
     CHECK(fresh.find(stale_line) == std::string::npos);
     CHECK(fresh.find(fresh_line) != std::string::npos);
 
-    // One trace changes on disk: it alone is then stale.
     std::filesystem::last_write_time(
         traces[1],
         std::filesystem::last_write_time(traces[1]) + std::chrono::hours(48));

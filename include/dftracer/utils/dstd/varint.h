@@ -32,8 +32,8 @@ inline void append_varint(Buf& out, std::uint64_t v) {
 }
 
 /// Decodes one varint from [p, end). On success advances p past it and returns
-/// true. A truncated or over-long (more than 64 bits) value returns false and
-/// leaves p and out unchanged.
+/// true. A truncated or over-long value returns false and leaves p and out
+/// unchanged.
 inline bool read_varint(const std::uint8_t*& p, const std::uint8_t* end,
                         std::uint64_t& out) {
     std::uint64_t v = 0;

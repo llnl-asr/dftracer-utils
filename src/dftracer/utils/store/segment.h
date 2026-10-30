@@ -34,7 +34,6 @@ using PlacerFn = BigRef (*)(void* context, ByteView value);
 
 class SegmentBuilder {
    public:
-    /// Copies `key` and `value` into the builder.
     void add(ByteView key, ByteView value);
     /// Adds `key` and `value` without a copy: their bytes must stay valid and
     /// unchanged until seal() returns and first_key() and last_key() are read.
@@ -66,8 +65,6 @@ class SegmentBuilder {
         std::uint64_t ordinal = 0;
     };
 
-    /// One entry after plan(): its key, and its value in place, or in the
-    /// folded values, or as a big run.
     struct PlannedEntry {
         ByteView key;
         ByteView value;
@@ -83,13 +80,11 @@ class SegmentBuilder {
         std::size_t bytes = 0;
     };
 
-    /// `bytes` copied into the builder's arena, which never moves them.
     ByteView keep(ByteView bytes);
     ByteView value_of(const PlannedEntry& entry) const;
 
     dstd::Vector<Record> records_;
-    /// Opened by the first add() that copies; add_ref() needs none. Behind a
-    /// pointer, so the builder moves.
+    /// Opened by the first add() that copies. add_ref() needs none.
     dstd::UniquePtr<StringArena> arena_;
     dstd::Vector<PlannedEntry> entries_;
     dstd::Vector<PlannedGroup> groups_;
@@ -103,7 +98,6 @@ class SegmentBuilder {
 
 class SegmentView {
    public:
-    /// The bytes of one granule within its segment.
     struct GranuleSpan {
         std::uint32_t offset = 0;
         std::uint32_t length = 0;
@@ -127,7 +121,6 @@ class SegmentView {
 
     class Cursor {
        public:
-        /// At its end, over no segment.
         Cursor() = default;
 
         bool at_end() const;
@@ -170,24 +163,19 @@ class SegmentView {
 
     std::size_t granule_count() const { return granules_.size(); }
 
-    /// The bytes of granule `i` within the segment, for `i` below
-    /// granule_count().
     GranuleSpan granule(std::size_t i) const;
 
-    /// The byte length of the header and the index that follow it in `prefix`,
-    /// walked in place and allocated nothing. Zero when `prefix` is shorter
-    /// than they are, when the header is not a segment header, or when an index
-    /// entry does not parse. A segment of no granules answers the header
-    /// length alone.
+    /// The byte length of the header and index at the front of `prefix`, walked
+    /// in place. Zero when `prefix` is shorter, is not a segment header, or an
+    /// index entry does not parse. A segment of no granules gives the header
+    /// alone.
     static std::uint32_t head_length(ByteView prefix);
 
-    /// The granule of the segment whose bytes `head` holds, the header and the
-    /// index of a segment of `segment_length` bytes, that can hold `key`: the
-    /// last one whose first key is at most it. Nullopt for a key below the
-    /// first granule's first key and for a segment of no granules. A Parse
-    /// error when the header is not one of a segment of `segment_length`, or
-    /// when the granules are not contiguous from the end of the index, empty,
-    /// ascending by first key and inside the segment.
+    /// The granule of the segment (`head` holds its header and index) that can
+    /// hold `key`: the last one whose first key is at most it. Nullopt for a
+    /// key below the first granule or a segment of no granules. A Parse error
+    /// when the header does not match `segment_length` or the granules are
+    /// malformed.
     static dstd::Expected<dstd::Optional<GranuleSpan>, dstd::Error>
     find_granule(ByteView head, std::uint32_t segment_length, ByteView key);
 
@@ -216,10 +204,9 @@ class SegmentView {
 };
 
 /// Appends the spans of one sealed segment that starts at `offset` in an
-/// extent, for `page_starts`: the header and the index as one span marked
-/// alone, then one span per granule with the last one ending at the segment
-/// end, so the padding goes with it. A segment of at most PAGE_BYTES gives one
-/// span. False when the segment does not open.
+/// extent, for `page_starts`: the header and index as one span marked alone,
+/// then one per granule, the last ending at the segment end. False when the
+/// segment does not open.
 bool append_segment_spans(ByteView segment, std::uint32_t offset,
                           dstd::Vector<SegmentSpan>& out);
 

@@ -10,9 +10,8 @@ namespace dftracer::utils::memory {
 /// when unreadable. Opens files and allocates nothing through this library.
 std::size_t read_process_memory() noexcept;
 
-/// The memory counted against read_process_limit(), in bytes: in a cgroup,
-/// its anonymous plus shared memory (cgroup v2 `anon` and `shmem`, v1 `rss`
-/// and `shmem`), which takes in every process of the group; else
+/// The memory counted against read_process_limit(), in bytes. In a cgroup it is
+/// the anonymous plus shared memory of every process of the group, else
 /// read_process_memory(). Zero when unreadable.
 std::size_t read_limit_memory() noexcept;
 

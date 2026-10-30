@@ -80,8 +80,8 @@ std::vector<scan::FileEntry> scan_dir(const std::string& dir) {
     return entries;
 }
 
-// The scan as the CLIs run it: from a coroutine that get() drives on the main
-// thread, through scan_on_pool, which fans it out over the CLI's pool.
+// The scan as the CLIs run it, from a coroutine that get() drives on the main
+// thread.
 coro::CoroTask<std::vector<scan::FileEntry>> cli_scan_task(std::string dir) {
     auto entries = scan::scan_on_pool<scan::PatternDirectoryScannerUtility>(
         WORKERS, 2,
@@ -114,7 +114,6 @@ std::string view_index_root(const std::string& file,
     return trace::internal::determine_index_path(file, index_dir);
 }
 
-// A cold first aggregate of `files`, which bootstraps their index.
 void cold_count(const std::vector<std::string>& files,
                 const std::string& index_dir) {
     std::vector<views::ViewFile> view_files;
@@ -135,9 +134,8 @@ void cold_count(const std::vector<std::string>& files,
 
 using Rows = std::vector<std::pair<std::string, std::string>>;
 
-// Every record of an index, in the order the store lists them. A scope is named
-// by its paths, so two indexes of the same files compare equal whatever ids
-// they gave them.
+// A scope is named by its paths, so two indexes of the same files compare equal
+// whatever ids they gave them.
 Rows dump_index(const std::string& root) {
     store::release_index(root);
     store::IndexDatabase db(root, store::IndexOpenMode::ReadOnly);
@@ -155,8 +153,8 @@ struct SinkLimit {
     std::size_t previous;
 };
 
-// The traces of the view cases and one cold run of them with a sink that
-// commits after every file, built once and shared by the cases that read it.
+// Built once and shared by the cases that read it. The sink commits after every
+// file.
 struct ViewRun {
     ViewRun() : env(10) {
         files = write_view_traces(env.get_dir(), VIEW_FILES);

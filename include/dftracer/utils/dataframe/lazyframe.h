@@ -106,15 +106,12 @@ class Cursor {
     virtual coro::CoroTask<bool> narrow(const Expr&) { co_return false; }
 
     /// The bytes this cursor holds resident beyond one in-flight morsel: a
-    /// build table, a spool, a cache. A stateful cursor reports the
-    /// reservation it holds for that state in the memory governor. 0 (the
-    /// default) means either nothing or unknown.
+    /// build table, a spool, a cache. 0 (the default) means nothing or unknown.
     virtual std::uint64_t resident_bytes() const { return 0; }
     /// Free up to `want` resident bytes however this cursor can (spill,
     /// compact, drop a cache) and return how many it freed. ADVISORY: a
     /// cursor may free less, or nothing, and the result it produces must not
-    /// change. A plugin node may call it on its input through the cursor
-    /// ABI. Modelled on Velox's reclaim.
+    /// change. A plugin node may call it on its input through the cursor ABI.
     virtual coro::CoroTask<std::uint64_t> reclaim(std::uint64_t) {
         co_return 0;
     }
@@ -587,8 +584,7 @@ class LazyFrame {
     /// when a sink's in-memory state grows past this many bytes it spills to a
     /// sorted temp run, k-way merged at the end, so peak memory stays bounded.
     /// 0 (the default) means "auto": ~1/3 of available memory. Pass
-    /// memory::NO_SPILL_BUDGET to disable spilling. Same knob and policy as
-    /// View.
+    /// memory::NO_SPILL_BUDGET to disable spilling.
     LazyFrame memory_budget(std::uint64_t bytes) const;
     /// Explicitly set the budget to ~1/3 of available memory (same as the
     /// default); sugar for readers who want spilling stated at the call site.

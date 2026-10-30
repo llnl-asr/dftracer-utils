@@ -43,7 +43,7 @@ class ThreadPoolExecutor : public TaskExecutor {
         std::atomic<bool> is_idle{false};
         std::atomic<uint64_t> tasks_executed{0};
         // Run-queue entries this worker resumed. Written only by its own
-        // thread; is_responsive() sums them to see progress.
+        // thread, and is_responsive() sums them to see progress.
         std::atomic<std::uint64_t> resumes{0};
         std::chrono::steady_clock::time_point last_activity;
 
@@ -84,7 +84,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     std::atomic<std::size_t> num_threads_{0};     // the running cap
     // Elastic floor; == num_threads_ when eager.
     std::atomic<std::size_t> min_workers_{0};
-    // The full pool up front (true) or grown on demand from the floor; kept
+    // The full pool up front (true) or grown on demand from the floor. Kept
     // apart from the floor, which is also the cap of an elastic pool of one.
     std::atomic<bool> eager_{true};
     // Live-thread ceiling for blocking-handoff replacements; the permit gate
@@ -171,7 +171,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     // hot enqueue path, or a semaphore-backed queue.
     std::mutex idle_mutex_;
     std::condition_variable idle_cv_;
-    // Set while one idle worker parks on the short backoff; the others park
+    // Set while one idle worker parks on the short backoff. The others park
     // for IDLE_PARK_MAX.
     std::atomic<bool> idle_poller_{false};
     static constexpr std::chrono::milliseconds IDLE_PARK_MIN{1};

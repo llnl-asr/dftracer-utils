@@ -9,12 +9,10 @@ namespace dftracer::utils::cache {
 
 /**
  * Eviction policy for a bounded cache: tracks which keys to drop first. The
- * policy orders keys only; the cache owns the values and their weights.
+ * policy orders keys only and the cache owns the values and their weights.
  *
- * Runtime-polymorphic so a cache is one type regardless of policy and the
- * policy can be chosen from config. Calls happen under the cache's (per-shard)
- * lock, so implementations need not be thread-safe and a virtual dispatch is
- * negligible next to the lock and map work.
+ * Calls happen under the cache's (per-shard) lock, so implementations need not
+ * be thread safe.
  */
 template <typename Key>
 class EvictionPolicy {

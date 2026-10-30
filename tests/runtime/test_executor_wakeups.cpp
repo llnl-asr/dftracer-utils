@@ -31,7 +31,6 @@ std::int64_t context_switches() {
     return static_cast<std::int64_t>(usage.ru_nvcsw) + usage.ru_nivcsw;
 }
 
-// CPU time of the process, user plus system.
 std::chrono::microseconds cpu_time() {
     rusage usage{};
     getrusage(RUSAGE_SELF, &usage);
@@ -45,10 +44,8 @@ std::chrono::microseconds cpu_time() {
 
 TEST_SUITE("ExecutorWakeups") {
     TEST_CASE("idle workers between bursts do not poll on the short timer") {
-        // A gap lets idle workers back off from the shortest park. When every
-        // worker walks the backoff ladder a gap costs about 8 switches per
-        // worker (about 255 here); with one poller it costs about 80, most of
-        // them the burst's own wake-ups.
+        // With every worker on the backoff ladder a gap costs about 8 switches
+        // per worker (about 255 here), and with one poller about 80.
         constexpr std::size_t THREADS = 32;
         constexpr int BURSTS = 20;
         [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES_PER_GAP = 120;
@@ -73,17 +70,15 @@ TEST_SUITE("ExecutorWakeups") {
         MESSAGE("context switches per gap: " << switches / BURSTS);
 #ifndef DFTRACER_UTILS_TSAN_ENABLED
         // ThreadSanitizer adds switches of its own, so the count says nothing
-        // there; the bursts still run for its race checks.
+        // there. The bursts still run for its race checks.
         CHECK(switches / BURSTS < MAX_SWITCHES_PER_GAP);
 #endif
     }
     TEST_CASE("a worker blocked in get() parks while its task waits") {
-        // Each round's task waits on a semaphore that this thread releases
-        // after WAIT. A waiter that spins burns about the whole wait of CPU,
-        // and one that re-checks every millisecond switches about once per
-        // millisecond. One that backs off and is woken by the task's end does
-        // neither, and returns well before its next timeout; the median of
-        // the rounds keeps one slow wake-up from deciding the check.
+        // The task waits on a semaphore that this thread releases after WAIT.
+        // A waiter that spins burns about the whole wait of CPU, and one that
+        // re-checks every millisecond switches about once per millisecond. The
+        // median of the rounds keeps one slow wake-up from deciding the check.
         constexpr std::size_t THREADS = 4;
         constexpr int ROUNDS = 5;
         constexpr auto WAIT = 40ms;

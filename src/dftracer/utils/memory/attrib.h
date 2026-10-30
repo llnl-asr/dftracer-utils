@@ -14,11 +14,10 @@ inline constexpr std::size_t POOL_SLOTS = 65535;
 inline constexpr std::size_t ATTRIB_ENTRIES = 16;
 inline constexpr std::ptrdiff_t ATTRIB_FLUSH_BYTES = std::ptrdiff_t{1} << 20;
 
-// An entry packs its byte and block deltas into one word, bytes in the low
-// ATTRIB_BYTE_BITS bits (signed) and blocks above them. Every charge or credit
-// that reaches an entry is at most ATTRIB_FLUSH_BYTES, and an entry flushes as
-// soon as its bytes pass that bound, so the bytes stay within twice the bound,
-// far inside the 24-bit field. A bigger block goes straight to its pool slot.
+// An entry packs its deltas into one word, signed bytes in the low
+// ATTRIB_BYTE_BITS bits and blocks above. An entry flushes once its bytes pass
+// ATTRIB_FLUSH_BYTES, so they stay far inside the field. A bigger block goes
+// straight to its pool slot.
 inline constexpr unsigned ATTRIB_BYTE_BITS = 24;
 inline constexpr std::int64_t ATTRIB_BLOCK = std::int64_t{1}
                                              << ATTRIB_BYTE_BITS;
@@ -46,9 +45,8 @@ struct alignas(16) AttribEntry {
 };
 
 /// Per-thread attribution state, kept in the thread's heap. `hot` belongs to
-/// the current scope, so a charge needs no lookup. The other entries are
-/// mapped by pool id, so a miss flushes the entry that was there. A cache is
-/// linked into one process-wide list when it is created and never leaves it.
+/// the current scope and the other entries are mapped by pool id. A cache is
+/// linked into a process-wide list when created and never leaves it.
 struct AttribCache {
     AttribCache() noexcept {
         hot.id.store(GENERAL_POOL_ID, std::memory_order_relaxed);
@@ -58,13 +56,10 @@ struct AttribCache {
     AttribEntry entries[ATTRIB_ENTRIES];
     std::atomic<AttribCache*> next{nullptr};
     std::uint16_t scope = GENERAL_POOL_ID;
-    // The generation of pool `tag_id`, read when the scope was last named by
-    // current_pool_tag; valid while tag_id equals scope. A pool that a scope
-    // names stays open, so its generation cannot change.
+    // The generation of pool `tag_id`, valid while tag_id equals scope. A pool
+    // a scope names stays open, so the generation cannot change.
     std::uint16_t tag_id = 0xffff;
     std::uint32_t tag_generation = 0;
-    // Opaque to this library: a higher layer's per-task pointer, saved and
-    // cleared by Scope and carried by TaskTag.
     void* user = nullptr;
 };
 
@@ -98,12 +93,12 @@ void attrib_register(AttribCache& cache) noexcept;
 /// Bytes charged to every pool and not yet credited, from the flushed
 /// counters and every cache.
 std::ptrdiff_t attrib_live_total() noexcept;
-/// attrib_live_total, or nullopt before the manager exists; never makes it,
+/// attrib_live_total, or nullopt before the manager exists. It never makes it,
 /// so the heap can call it while it maps.
 std::optional<std::ptrdiff_t> attrib_live_total_if_ready() noexcept;
 
 /// The cache of the calling thread's page heap when that is the active
-/// backend, else null; also null before the thread first allocates.
+/// backend, else null. Also null before the thread first allocates.
 extern thread_local AttribCache* t_page_attrib;
 
 /// The calling thread's cache for the active backend.

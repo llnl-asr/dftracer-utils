@@ -305,8 +305,6 @@ ExtentRefItem make_extent_ref(const ExtentRef& extent,
     return item;
 }
 
-/// A segment of one entry whose key is `key_bytes` long, so a few of them make
-/// a run longer than a segment block.
 SegmentData make_wide_segment(std::uint32_t seed, std::size_t key_bytes) {
     SegmentBuilder builder;
     std::string key = std::to_string(seed);
@@ -319,7 +317,6 @@ SegmentData make_wide_segment(std::uint32_t seed, std::size_t key_bytes) {
             bytes_of(builder.first_key()), bytes_of(builder.last_key())};
 }
 
-/// One entry of a segment block of a closed file, as the writer lays it out.
 struct SegmentBlockEntry {
     std::uint32_t extent_index = 0;
     std::uint64_t sequence = 0;
@@ -340,15 +337,12 @@ struct SegmentBlockView {
     std::vector<SegmentBlockEntry> entries;
 };
 
-/// One commit of one copy of a closed file, with the block that holds its run.
 struct ClosedRun {
     std::uint32_t copy_id = 0;
     std::uint64_t sequence = 0;
     store::BlockHandle handle;
 };
 
-/// Every run the scope directory of a closed file names, read through the
-/// directory blocks of the file.
 std::vector<ClosedRun> closed_runs(const DataFileReader& reader) {
     std::vector<ClosedRun> runs;
     const FileIndex& index = reader.index();
@@ -515,8 +509,6 @@ void check_index_equal(const FileIndex& actual, const FileIndex& expected) {
     }
 }
 
-/// Compares the index of an open file, with the extent refs its summaries name
-/// read from their records, to the expected state.
 void check_index_equal(const DataFileReader& reader,
                        const FileIndex& expected) {
     FileIndex actual = reader.index();
@@ -784,9 +776,6 @@ TEST_SUITE("index store file") {
             check_namespace(opened->index().namespaces[i],
                             expected_namespaces[i]);
         }
-        // The chain lists the newest checkpoint's own extents and the commits
-        // after it itself, and the checkpoint lists the 191 earlier ones by
-        // summary.
         CHECK(opened->index().commit_refs.size() == 191);
         for (std::size_t i = 0; i < expected_extents.size(); ++i) {
             const auto& found = std::find_if(
@@ -1322,7 +1311,6 @@ TEST_SUITE("index store file") {
             check_erase(*found, item);
         }
 
-        // An empty end is to the last key and round-trips as empty.
         {
             EraseItem open_end = item;
             open_end.end_key.clear();
@@ -1348,7 +1336,6 @@ TEST_SUITE("index store file") {
             }
         }
 
-        // A copy id or an ordinal of zero names nothing.
         {
             std::vector<std::uint8_t> record = encode(item);
             write_u32_le_at(record, first_item_payload_offset(record), 0U);
@@ -1631,8 +1618,6 @@ TEST_SUITE("index store file") {
         namespaces[1].name = dstring("a.space");
         namespaces[1].format_version = 3;
 
-        // Ids out of path order, a files scope after the file scopes, and one
-        // path that is a prefix of another.
         const std::vector<std::vector<std::string>> scope_paths = {
             {"/t/b.pfw"}, {"/t/a.pfw"}, {"/t/a.pfw", "/t/c.pfw"}, {"/t/a"}};
         dstd::Vector<ScopeItem> scopes;
@@ -1651,8 +1636,6 @@ TEST_SUITE("index store file") {
             copies.push_back(
                 {100 + i, 1, 10 + i, 7, i + 1, CopyState::Ready, {}});
         }
-        // The same scope in the other namespace, and a copy whose scope no
-        // item names, which the directory leaves out.
         copies.push_back({200, 2, 10, 0, 5, CopyState::Failed, {}});
         copies.push_back({201, 2, 99, 0, 6, CopyState::Ready, {}});
         dstd::Vector<DropItem> drops;
@@ -1661,8 +1644,6 @@ TEST_SUITE("index store file") {
         const std::string low = "k0";
         const std::string mid = "k5";
         const std::string high = "k9";
-        // An erase of copy 100 of the entry that copy keys, and one of a copy
-        // no item names, which the directory leaves out.
         dstd::Vector<EraseItem> erases;
         EraseItem erase;
         erase.copy_id = 100;
@@ -1671,7 +1652,6 @@ TEST_SUITE("index store file") {
         erase.end_key = bytes_of_string(high);
         erases.push_back(std::move(erase));
         erases.push_back({999, 4, bytes_of_string(low), bytes_of_string(mid)});
-        // Two ranges of one copy in one commit merge into one.
         const std::vector<store::DirectoryCommit> commits = {
             {4, 100, view_of(mid), view_of(high), {}},
             {4, 100, view_of(low), view_of(mid), {}},
@@ -1686,8 +1666,6 @@ TEST_SUITE("index store file") {
         REQUIRE(directory.has_value());
         REQUIRE(directory->size() == 5);
 
-        // a.space sorts first, then b.space with its file scopes by path
-        // ("/t/a" before "/t/a.pfw") and the files scope last.
         const std::vector<std::pair<std::string, std::vector<std::string>>>
             order = {{"a.space", {"/t/b.pfw"}},
                      {"b.space", {"/t/a"}},
@@ -1720,8 +1698,6 @@ TEST_SUITE("index store file") {
         CHECK(directory->find("b.space", 0, ScopeKind::File, absent) ==
               directory->size());
 
-        // b.space /t/b.pfw: copy 100 with its two commits, the second merged,
-        // and the drop of generation 9.
         auto entry = directory->entry(3);
         REQUIRE(entry.has_value());
         CHECK(entry->highest_generation == 9);
@@ -1759,7 +1735,6 @@ TEST_SUITE("index store file") {
         scopes[0].paths.push_back(dstring("/t/a.pfw"));
         scopes[0].paths.push_back(dstring("/t/b.pfw"));
 
-        // One copy with a source per path, and one with none.
         dstd::Vector<CopyItem> copies;
         copies.push_back({100, 1, 10, 5, 1, CopyState::Ready, {}});
         copies.back().sources.push_back(SourceStat{11, 12, 13});
@@ -1786,7 +1761,6 @@ TEST_SUITE("index store file") {
         CHECK(entry->copies[1].sources.empty());
         CHECK(entry->copies[1].state == CopyState::Failed);
 
-        // A count that is neither zero nor the path count of its scope.
         dstd::Vector<CopyItem> wrong;
         wrong.push_back({102, 1, 10, 7, 3, CopyState::Ready, {}});
         wrong.back().sources.push_back(SourceStat{1, 2, 3});
@@ -1811,7 +1785,6 @@ TEST_SUITE("index store file") {
         REQUIRE(built.has_value());
         CHECK(store::ScopeDirectory::open(view_of(*built)).has_value());
         dstd::Vector<std::uint8_t> broken = *built;
-        // The payload length of the one slot, past the end.
         dftracer::utils::write_u32_le(broken.data() + 4 + 12, 1U << 20);
         CHECK_FALSE(store::ScopeDirectory::open(view_of(broken)).has_value());
         CHECK(store::ScopeDirectory::open(ByteView{}).has_value());
@@ -1834,9 +1807,6 @@ TEST_SUITE("index store file") {
         writer.add(make_copy(small_copy, 1, 1));
         writer.add(make_copy(other_copy, 1, 1));
 
-        // Two commits of one copy of one segment each, then a commit of that
-        // copy whose run alone passes the block limit, then a commit of another
-        // copy.
         const SegmentData first = make_segment(1, 4);
         REQUIRE_FALSE(first.bytes.empty());
         auto first_extent = writer.append_extent(view_of(first.bytes));
@@ -1896,13 +1866,9 @@ TEST_SUITE("index store file") {
         REQUIRE(reader.has_value());
         const std::vector<ClosedRun> runs = closed_runs(*reader);
 
-        // A run entry is 52 fixed bytes and two keys, so this run alone passes
-        // one block.
         const std::size_t wide_entry_bytes = 52 + 2 * (2 + WIDE_KEY_BYTES);
         REQUIRE(WIDE_SEGMENTS * wide_entry_bytes > store::SEGMENT_BLOCK_BYTES);
 
-        // Every run of a copy is in one block, and no block holds a run of two
-        // copies.
         const auto handle_of = [&runs](std::uint32_t copy_id,
                                        std::uint64_t sequence) {
             for (const ClosedRun& run : runs) {
@@ -1938,8 +1904,6 @@ TEST_SUITE("index store file") {
               std::string(reinterpret_cast<const char*>(first.first_key.data()),
                           first.first_key.size()));
 
-        // A run larger than the block limit gets a block of its own, and its
-        // segments are not split over two.
         const SegmentBlockView wide_block =
             read_segment_block(*reader, wide_handle);
         REQUIRE(wide_block.entries.size() == WIDE_SEGMENTS);
@@ -1962,7 +1926,6 @@ TEST_SUITE("index store file") {
     TEST_CASE("a space report accounts for every byte of a closed file") {
         TempDir temp;
         const std::string path = temp.file("space.dfs");
-        // One MiB per extent, so the one large copy fits in a single extent.
         constexpr std::size_t SPACE_EXTENT_SIZE = std::size_t{1} << 20;
         auto created = DataFileWriter::create(path, SPACE_EXTENT_SIZE,
                                               "host.example", "rank-0");
@@ -2004,8 +1967,6 @@ TEST_SUITE("index store file") {
             return item;
         };
 
-        // Six commits of two extents each: one holds the segments of two copies
-        // end to end, the other the segment of the fold copy.
         constexpr std::uint64_t COMMITS = 6;
         dstd::Vector<ExtentRef> written;
         std::uint64_t raw_written = 0;
@@ -2048,7 +2009,6 @@ TEST_SUITE("index store file") {
             REQUIRE(writer.commit().has_value());
         }
 
-        // One large copy of one entry, over ten pages of raw bytes.
         SegmentBuilder large;
         const std::string large_key = "large-key";
         const std::string large_value(300U * 1024U, 'x');
@@ -2092,7 +2052,6 @@ TEST_SUITE("index store file") {
         REQUIRE(index.tail.has_value());
         REQUIRE(written.size() == index.tail->extent_count);
 
-        // The extents and pages the writer wrote, counted through the reader.
         std::uint64_t extents = 0;
         std::uint64_t extent_bytes = 0;
         std::uint64_t table_bytes = 0;
@@ -2133,7 +2092,6 @@ TEST_SUITE("index store file") {
                                         space.page_bytes +
                                         space.extent_padding_bytes);
 
-        // The blocks of the directory and the items block the footer names.
         const std::vector<ClosedRun> runs = closed_runs(*opened);
         CHECK(space.segment_entries == EXPECTED_SEGMENT_ENTRIES);
         CHECK(space.segment_entries == runs.size());
@@ -2153,8 +2111,6 @@ TEST_SUITE("index store file") {
         CHECK(space.copies == index.copies.size());
         CHECK(space.footer_bytes > store::FILE_TRAILER_BYTES);
 
-        // Every extent, record and block the writer wrote is aligned, so the
-        // only bytes no category counts align the footer.
         const std::uint64_t blocks =
             space.segment_block_bytes + space.items_block_bytes +
             space.directory_leaf_bytes + space.directory_separator_bytes;
@@ -2171,7 +2127,6 @@ TEST_SUITE("index store file") {
         REQUIRE(created.has_value());
         auto& writer = *created;
 
-        // Past the entries of one leaf, so the directory has two of them.
         constexpr std::uint32_t ENTRIES = 300;
         static_assert(ENTRIES > store::DIRECTORY_BLOCK_ENTRIES);
         for (std::uint32_t id = 1; id <= ENTRIES; ++id) {

@@ -185,8 +185,6 @@ class Indexer:
     ):
         checkpoint_size = coerce_bytes(checkpoint_size, "checkpoint_size")
 
-        # The aggregation tier is built by every build; a caller customizes it
-        # and otherwise gets the standard config.
         agg_config = aggregation_config if aggregation_config is not None else AggregationConfig()
 
         bloom = require_bloom if isinstance(require_bloom, BloomConfig) else BloomConfig()

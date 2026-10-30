@@ -21,7 +21,6 @@ namespace dftracer::utils::index::build {
 struct ResolveAndBuildInput {
     std::string directory;
     std::vector<std::string> files;
-    /// See ResolverInput::entries.
     std::vector<utilities::filesystem::FileEntry> entries;
     std::string index_dir;
 
@@ -40,8 +39,7 @@ struct ResolveAndBuildInput {
     /// require_bloom is set.
     ChunkIndexerConfig bloom_config;
 
-    /// The aggregation every build makes; see
-    /// IndexerOptions::aggregation.
+    /// See IndexerOptions::aggregation.
     index::schemas::dft::agg::AggregationConfig aggregation_config =
         index::schemas::dft::agg::standard_aggregation_config();
 
@@ -66,13 +64,12 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
 
 /// The files of `input` that need a whole-file build: not indexed, changed
 /// since they were, or indexed with other settings than `input` names. Uses the
-/// same decision as resolve_and_build_index, with the size and mtime of
-/// `input.entries` when it holds them. An index in another format is removed
-/// first. Each entry holds the path, size and mtime.
+/// size and mtime of `input.entries` when it holds them. An index in another
+/// format is removed first.
 struct IndexWork {
     std::vector<utilities::filesystem::FileEntry> files;
-    /// Index roots whose aggregation tier was built with other settings; the
-    /// build clears each before it aggregates into it.
+    /// Roots whose aggregation tier was built with other settings. The build
+    /// clears each before it aggregates into it.
     std::vector<std::string> stale_aggregation_roots;
 };
 coro::CoroTask<IndexWork> files_needing_index(ResolverInput input);

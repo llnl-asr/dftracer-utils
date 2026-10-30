@@ -1,6 +1,4 @@
-// The index fold walks each record's top-level object once and each args
-// object once, and the stored index does not change. The cases count walks,
-// not time.
+// The cases count walks, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -38,14 +36,13 @@ constexpr int RECORDS = 4000;
 constexpr int SHAPES = 8;
 constexpr std::time_t FIXED_MTIME = 1700000000;
 
-// Schema detection samples the head of the file, so the records that do not
-// look like dftracer events come after it.
+// Schema detection samples the head of the file, so records that do not look
+// like dftracer events come after it.
 constexpr int HEAD_RECORDS = 1000;
 
 int shape_of(int i) { return i < HEAD_RECORDS ? i % 3 : i % SHAPES; }
 
-// Shapes 0, 2, 3, 5 and 6 carry an args object, which may be empty. Shape 7
-// has no phase: it is walked once and then dropped.
+// Shape 7 has no phase, so it is walked once and then dropped.
 bool has_args_object(int shape) {
     return shape == 0 || shape == 2 || shape == 3 || shape == 5 || shape == 6;
 }
@@ -139,8 +136,7 @@ build::IndexBuildBatchResult build_one(const std::string& file,
     return result;
 }
 
-// The digest of each namespace of the index write_trace builds, recorded from
-// the build on the store. A namespace missing here fails the check.
+// A namespace missing here fails the check.
 struct NamespaceDigest {
     std::string_view name;
     std::uint64_t digest;
@@ -158,8 +154,7 @@ constexpr NamespaceDigest RECORDED[] = {
     {"dftu.idx.zonemap", 10281655885967840629ULL},
 };
 
-// FNV-1a of every record of each namespace, as for_each_record gives them,
-// with the test directory (whose length varies) cut out of each.
+// The test directory is cut out of each record, since its length varies.
 std::map<std::string, std::uint64_t> namespace_digests(
     const store::IndexDatabase& db, const std::string& dir) {
     std::map<std::string, std::uint64_t> out;
@@ -190,8 +185,7 @@ std::map<std::string, std::uint64_t> namespace_digests(
 namespace views = dftracer::utils::trace::views::detail;
 using dftracer::utils::dstd::StringIntern;
 
-// A FoldEvent with every interned id resolved to its string, so two events
-// from different interns compare.
+// Resolves interned ids, so events from different interns compare.
 std::string describe(const views::FoldEvent& ev, const StringIntern& in) {
     const auto text = [&](std::uint32_t id) {
         return id == StringIntern::NO_ID ? std::string("<none>")

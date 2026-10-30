@@ -55,7 +55,7 @@ class CheckpointIndexer {
     /// indexed.
     virtual std::vector<GzipMemberRecord> get_members() const = 0;
 
-    /// The compressed offsets of the HEAD records: the members too big to hold
+    /// The compressed offsets of the HEAD records, the members too big to hold
     /// whole. Empty when there are none or the file was never indexed.
     virtual dstd::Vector<std::uint64_t> piece_heads() const = 0;
 

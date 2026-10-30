@@ -93,11 +93,9 @@ struct ReplayConfig {
     int mpi_rank = 0;  ///< MPI rank of this process
     int mpi_size = 1;  ///< Total number of MPI processes
 
-    /// Optional observation hook fired after the timing wait and before the
-    /// executor runs. Used by fidelity tests to measure dispatch lateness vs.
-    /// the trace's wall-clock anchor; left unset in production so the
-    /// per-event branch is the only cost. run_pipelined replays files in
-    /// parallel, so it calls the hook from several threads at once.
+    /// Optional hook fired after the timing wait and before the executor runs,
+    /// to measure dispatch lateness. run_pipelined calls it from several
+    /// threads at once.
     std::function<void(const Trace&, std::chrono::steady_clock::time_point)>
         on_dispatch;
 };
@@ -135,9 +133,8 @@ struct ReplayResult {
      */
     void print_summary() const;
 
-    /// Adds another result into this one: sums the counts, bytes and
-    /// durations, keeps the earliest first and the latest last timestamp,
-    /// merges the maps by key and appends the errors.
+    /// Adds `other` into this result. The earliest first and latest last
+    /// timestamp are kept.
     void merge(const ReplayResult& other);
 };
 
@@ -212,9 +209,9 @@ class DFTracerExecutor : public TraceExecutor {
 /**
  * Main replay engine that coordinates trace reading and execution
  *
- * Each input file replays on its own lane: its own executor (so its open
- * file table) and its own timing anchor, so files from different processes
- * keep their own timelines. max_events caps the whole run.
+ * Each input file replays on its own lane (executor and timing anchor), so
+ * files from different processes keep their own timelines. max_events caps
+ * the whole run.
  *
  * Usage:
  * @code
@@ -276,19 +273,10 @@ class ReplayEngine {
     coro::AsyncGenerator<Trace> stream_traces(std::string file);
 
     /**
-     * Replay files in parallel, one lane per file, at most as many files at
-     * once as the executor has threads. Within a file a producer fills a
-     * bounded channel and a consumer waits for each event's time and
-     * executes it, so read latency hides behind the timing waits. Waits of
-     * a millisecond or more suspend on the executor's timer instead of
-     * blocking a worker.
-     *
-     * @param scope Parent CoroScope (typically a Pipeline task scope); the
-     *              file workers are spawned on it.
-     * @param files Trace files to replay.
-     * @param result The per-file results merged in input order. Must
-     *               outlive the awaited coroutine.
-     * @param channel_capacity Max in-flight parsed Traces per file.
+     * Replay files in parallel, one lane per file, at most one file per
+     * executor thread. Waits of a millisecond or more suspend on the timer.
+     * @param result Per-file results merged in input order. Must outlive the
+     *               awaited coroutine.
      */
     coro::CoroTask<void> run_pipelined(dftracer::utils::CoroScope& scope,
                                        const std::vector<std::string>& files,
@@ -296,7 +284,6 @@ class ReplayEngine {
                                        std::size_t channel_capacity = 4096);
 
    private:
-    /// Per-file replay state.
     struct Lane {
         std::chrono::steady_clock::time_point start{};
         std::unique_ptr<TraceExecutor> executor;
@@ -316,19 +303,16 @@ class ReplayEngine {
                                   const std::string& index_file);
 
     /**
-     * Count one event into the lane's result and decide whether it runs.
-     * Returns false when it is skipped (filtered or over max_events);
-     * otherwise sets `wait` to how long to wait before executing it.
+     * Counts the event into the lane's result. Returns false when it is skipped
+     * (filtered or over max_events), otherwise sets `wait` to the time to wait
+     * before executing it.
      */
     bool admit(const Trace& trace, Lane& lane, std::chrono::microseconds& wait);
 
-    /// Run one admitted event on the lane's executor.
     void execute(const Trace& trace, Lane& lane);
 
-    /// admit, a blocking wait, then execute. For the sync paths.
     void replay_one_trace(const Trace& trace, Lane& lane);
 
-    /// One file through a producer, a bounded channel and a consumer.
     coro::CoroTask<void> replay_file(std::string file, Lane& lane,
                                      std::size_t channel_capacity);
 
@@ -339,7 +323,8 @@ class ReplayEngine {
                           Trace& trace);
 
     /**
-     * How long to wait before executing `trace` to keep the lane's timeline
+     * The time to wait before executing `trace`, keeping the lane on its
+     * timeline.
      */
     std::chrono::microseconds timing_wait(const Trace& trace, Lane& lane) const;
 

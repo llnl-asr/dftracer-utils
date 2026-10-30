@@ -22,7 +22,7 @@ inline BufferView new_buffer(std::size_t bytes,
 
 /// The bytes of `view` for writing while the column that holds it is being
 /// built. The view must be the only reference to an owned block, so no
-/// reader sees the bytes change; debug builds assert.
+/// reader sees the bytes change. Debug builds assert.
 inline std::uint8_t* writable(BufferView& view) noexcept {
     assert(view.block() && view.block().kind() == memory::Block::Kind::Owned &&
            view.block().unique());
@@ -48,7 +48,7 @@ inline BufferView borrow_buffer(const void* data, std::size_t bytes,
     }
 }
 
-/// A scratch array of trivially copyable T in one owned block: no value
+/// A scratch array of trivially copyable T in one owned block with no value
 /// initialization, the same allocation path as a column. Move only.
 template <class T>
 class Scratch {

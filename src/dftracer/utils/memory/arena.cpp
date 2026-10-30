@@ -42,10 +42,9 @@ Arena::Chunk* Arena::new_chunk(std::size_t size) {
     return chunk;
 }
 
-// A request too big for the next chunk gets a chunk of its own, which does
-// not move the bump range, so the current chunk keeps serving small requests.
-// It still counts as a step of growth, or a run of requests just above the
-// chunk size would never reach a bigger chunk.
+// A request too big for the next chunk gets a chunk of its own and the current
+// chunk keeps serving small requests. It still counts as a step of growth, or
+// requests just above the chunk size would never reach a bigger chunk.
 void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
     if (align == 0 || (align & (align - 1)) != 0) {
         abort_with("dftracer-utils memory: alignment is not a power of two\n");
@@ -72,7 +71,7 @@ void* Arena::allocate_chunk(std::size_t n, std::size_t align) {
     return allocate(n, align);
 }
 
-// A destructor may put new objects on the list; they run in the next pass.
+// A destructor may put new objects on the list. They run in the next pass.
 void Arena::run_destructors() noexcept {
     while (destructors_ != nullptr) {
         Destructor* d = destructors_;

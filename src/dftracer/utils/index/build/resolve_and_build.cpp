@@ -91,8 +91,8 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
     co_return failures;
 }
 
-// Resolves `input`. An index in another format is never read; unless the
-// build is forced, it is removed and the files are resolved again.
+// An index in another format is never read. Unless the build is forced, it is
+// removed and the files are resolved again.
 coro::CoroTask<ResolverResult> resolve_dropping_outdated(ResolverInput input,
                                                          bool force_rebuild) {
     Resolver resolver;
@@ -368,13 +368,10 @@ coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
 
 namespace {
 
-// The aggregation tier's own message for data it cannot read.
 bool mentions_corruption(std::string_view text) {
     return text.find("is corrupt") != std::string_view::npos;
 }
 
-// Corruption the repair did not cure: name the index directories and say what
-// to do.
 [[noreturn]] void throw_corrupt(const std::set<std::string>& roots,
                                 const std::string& cause, bool tier_cleared,
                                 ErrorCode code) {
@@ -384,10 +381,9 @@ bool mentions_corruption(std::string_view text) {
 
 }  // namespace
 
-// A corrupt aggregation tier is the one failure the build repairs itself: the
-// tier holds only data derived from the traces, so it is cleared and
-// aggregated again, once. Corruption the repair did not cure reaches the
-// caller with the index directories named. Any other error is passed on.
+// A corrupt aggregation tier holds only data derived from the traces, so the
+// build clears it and aggregates again, once. Corruption that persists reaches
+// the caller with the index directories named. Any other error is passed on.
 coro::CoroTask<ResolverResult> resolve_and_build_index(
     CoroScope* scope, ResolveAndBuildInput input) {
     std::set<std::string> roots;

@@ -117,7 +117,7 @@ class IoBackend {
     /// Returns number of operations flushed.
     virtual int flush() { return 0; }
 
-    /// Grows the threads that run blocking operations to `threads`; a smaller
+    /// Grows the threads that run blocking operations to `threads`. A smaller
     /// count changes nothing. False for a backend with no such threads.
     virtual bool grow_threads(std::size_t threads) {
         (void)threads;
@@ -132,7 +132,7 @@ class IoBackend {
     /// Cancel every operation in flight and fail any submitted later. Each
     /// operation completes with -ECANCELED and resumes its waiter as usual,
     /// so in_flight() falls to zero without waiting for the peer of a pipe or
-    /// socket. Sticky until stop(); thread-safe. Called by executor shutdown.
+    /// socket. Sticky until stop(). Thread-safe. Called by executor shutdown.
     virtual void cancel_pending() {}
 
     /// Accept a connection on a listening socket.

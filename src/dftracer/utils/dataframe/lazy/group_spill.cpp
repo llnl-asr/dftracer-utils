@@ -166,8 +166,6 @@ class GroupByCursor : public Cursor {
         std::int64_t taken = 0;
         SlicedRows sliced(*in_, cap, taken);
         const std::uint64_t threshold = budget_ / share::SPILL_STATE;
-        // The state's size at the last batch and the bytes of the batch read
-        // so far: what the governor sees at each morsel.
         std::uint64_t state_bytes = 0;
         std::uint64_t batch_bytes = 0;
         co_await accumulate_batches(
@@ -416,7 +414,7 @@ class GroupByCursor : public Cursor {
     std::vector<Part> todo_;
     ResultChunks chunks_;
     Governor gov_{"group_by"};
-    // The governor asked for bytes while a batch was read: spill after it.
+    // The governor asked for bytes while a batch was read, so spill after it.
     bool asked_ = false;
 };
 

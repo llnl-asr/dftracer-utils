@@ -13,8 +13,8 @@
 
 namespace dftracer::utils::dstd {
 
-/// The default hasher of HashMap and HashSet; std::hash is never the default.
-/// Every specialization avalanches, so ankerl uses the value as it is.
+/// The default hasher of HashMap and HashSet. Every specialization avalanches,
+/// so ankerl uses the value as it is.
 template <class T, class = void>
 struct Hash;
 

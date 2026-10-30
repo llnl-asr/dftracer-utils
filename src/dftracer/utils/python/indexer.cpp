@@ -19,7 +19,6 @@
 
 static void CheckpointIndexer_dealloc(CheckpointIndexerObject *self) {
     if (self->handle) {
-        // The Python wrapper owns only the native indexer handle.
         delete self->handle;
         self->handle = NULL;
     }

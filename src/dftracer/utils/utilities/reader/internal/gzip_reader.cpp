@@ -432,12 +432,11 @@ std::unique_ptr<ReaderStream> GzipReader::stream(const StreamConfig &config) {
             // LineStream then drops [first_line_num, start) and serves
             // [start, end]. Decoding from the containing member avoids
             // re-inflating earlier members.
-            // A restart piece starts inside a line unless the byte before it
-            // is a newline. The folds count a line in the piece where it
-            // ends, so the line the piece opens is `first_line_num`, and the
-            // piece owns its lines from the next one on when it opens
-            // mid-line. A piece qualifies when the first line it owns whole
-            // is at or before `start`; one whose window is missing does not.
+            // A restart piece starts inside a line unless the byte before it is
+            // a newline, and then owns its lines from the next one on (the
+            // line it opens is `first_line_num`). It qualifies when the first
+            // line it owns whole is at or before `start`. One with no window
+            // does not.
             bool found_start = false;
             std::size_t at = members.size();
             while (at > 0 && !found_start) {

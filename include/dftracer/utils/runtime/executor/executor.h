@@ -42,17 +42,16 @@ class Executor {
     /// executor with a shared queue keeps serving it and loses no capacity.
     virtual void drive_until(const std::function<bool()>& done) = 0;
 
-    /// False when the executor runs only work that is ready on the driving
-    /// thread, so a coroutine woken from another thread (a timer, a release)
-    /// is never run while it waits. Awaitables that wait for such a wake-up
-    /// do not wait there.
+    /// False when the executor runs only ready work on the driving thread, so
+    /// a coroutine woken from another thread is not run while it waits.
+    /// Awaitables that wait for such a wake-up do not wait there.
     virtual bool runs_remote_wakeups() const noexcept { return true; }
 
-    /// Registers a waiter suspended on an awaitable that only another party
-    /// can finish, so shutdown can call `cancel(waiter)` (see ParkCancelFn).
-    /// Register once the waiter is queued and before its lock is released,
-    /// and unpark() the returned entry from await_resume. Default: no
-    /// registry, returns null and the waiter is never cancelled.
+    /// Registers a waiter suspended on an awaitable that only another party can
+    /// finish, so shutdown can cancel it (see ParkCancelFn). Register once the
+    /// waiter is queued and before its lock is released, and unpark() the
+    /// returned entry from await_resume. The default returns null and the
+    /// waiter is never cancelled.
     virtual ParkNode* park(void* /*waiter*/, ParkCancelFn) noexcept {
         return nullptr;
     }

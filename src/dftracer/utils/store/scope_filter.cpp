@@ -41,7 +41,6 @@ std::uint64_t hash_key(dstd::StringView name, std::uint32_t version,
     return hash::fnv1a_mix(hash);
 }
 
-/// The bit of probe `probe` for `hash` in a filter of `bits` bits.
 std::uint64_t probe_bit(std::uint64_t hash, std::size_t probe,
                         std::uint64_t bits) {
     const std::uint64_t step = hash::splitmix64(hash) | 1U;

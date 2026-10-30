@@ -74,28 +74,21 @@ namespace rowset_kind {
 inline constexpr std::uint8_t FRAME = 0;
 }  // namespace rowset_kind
 
-/// Aggregation partials: one PARTIAL record per file, chunk, category, name,
-/// host, extra values and kind, keyed [chunk u32][category id u32][name id
-/// u32][host id u32][extra id u32][kind u8] after the file id, so a file's
-/// partials are one range in chunk order. The ids are the index root's
-/// dictionary ids; the extra id is that of the extra group key values joined
-/// by 0x1F, the empty text when there are none. DICT holds the dictionary
-/// entries the file's partials and rows name, keyed [id u32], so a file's data
-/// is replaced without touching another file's. META is index-wide (file_id
-/// INDEX_WIDE) and holds named records (config, time bounds), keyed
-/// [name]; each name is its own store namespace. COLUMNS holds one record per
-/// file and chunk, keyed [chunk u32] like PARTIAL, with the rows of the
-/// chunk's records the partials keep as an exact column block: the core
-/// columns of every row and one numeric column per arg path, with the
-/// dictionary ids the block names in a block-local table (see
-/// schemas/dft/agg/chunk_columns.h).
+/// Aggregation kinds, keyed as follows after the file id, so a file's records
+/// are one range in key order.
+///   PARTIAL  [chunk u32][category id u32][name id u32][host id u32]
+///            [extra id u32][kind u8]
+///   DICT     [id u32]
+///   META     [name], index-wide (file_id INDEX_WIDE), a namespace per name
+///   COLUMNS  [chunk u32], a column block (see schemas/dft/agg/chunk_columns.h)
+/// The ids are the index root's dictionary ids. The extra id is that of the
+/// extra group key values joined by 0x1F, the empty text when there are none.
 namespace agg_kind {
 inline constexpr std::uint8_t PARTIAL = 0;
 inline constexpr std::uint8_t META = 1;
 inline constexpr std::uint8_t DICT = 2;
-/// No kind: this was the per-second system metric rows, which the column
-/// blocks answer. The value stays unused, so a kind added later does not take
-/// the id of an older store's namespace.
+/// Retired kind. The value stays unused so a later kind does not take the id
+/// of an older store's namespace.
 inline constexpr std::uint8_t UNUSED_SYSTEM = 3;
 inline constexpr std::uint8_t COLUMNS = 4;
 }  // namespace agg_kind
@@ -108,7 +101,6 @@ struct KindSpec {
     std::uint8_t kind;
 };
 
-/// Every (ext, kind) of index data.
 std::span<const KindSpec> kinds();
 
 /// Code version of each extension's data; a manifest entry with another
@@ -138,8 +130,7 @@ inline constexpr std::size_t VALUE_HEADER_BYTES = 9;
 /// Prepends the value header for (ext, kind) to `payload`.
 std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload);
 
-/// Appends the value header for (ext, kind) and then `payload` to `out`: the
-/// bytes with_header(ext, kind, payload) gives, written in place.
+/// Appends what with_header(ext, kind, payload) returns to `out`, in place.
 void append_value(dstd::Vector<std::uint8_t>& out, Ext ext, std::uint8_t kind,
                   std::string_view payload);
 

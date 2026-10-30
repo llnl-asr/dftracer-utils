@@ -18,16 +18,11 @@ inline constexpr std::size_t BLOCK_PADDING = 64;
 class BlockRef;
 
 /**
- * @brief A reference-counted buffer: memory from the C library (owned) or
- * foreign memory with a release function (borrowed).
+ * @brief A reference-counted buffer, owned or borrowed from foreign memory.
  *
- * Reached only through BlockRef. An owned block is one C library allocation
- * that holds this header, the payload at the requested alignment and
- * BLOCK_PADDING bytes after it, charged to the scope pool of the allocating
- * thread by its whole size. A borrowed
- * block allocates only this header there; the foreign bytes are not charged.
- * The last reference frees the block or calls the release function on the
- * thread that drops it.
+ * Reached only through BlockRef. An owned block is charged to the scope pool of
+ * the allocating thread, a borrowed block only for its header. The last
+ * reference frees it on the thread that drops it.
  */
 class Block {
    public:
@@ -50,10 +45,9 @@ class Block {
     /**
      * @brief A borrowed block over @p bytes at @p data.
      *
-     * The memory must stay valid until @p release runs with @p context, which
-     * is exactly once, when the last reference drops. @p release must not be
-     * null. Throws std::bad_alloc when the header is not available, and then
-     * @p release does not run.
+     * The memory must stay valid until @p release runs once with @p context.
+     * @p release must not be null. Throws std::bad_alloc when the header is not
+     * available and @p release then does not run.
      */
     static BlockRef borrow(void* data, std::size_t bytes, Release release,
                            void* context);
@@ -95,17 +89,15 @@ class Block {
     void* context_;
     std::atomic<std::uint32_t> refs_{1};
     Kind kind_;
-    // The pool an owned block is charged to.
     std::uint16_t pool_ = 0;
 };
 
 /**
  * @brief An owning handle to one reference of a Block, or empty.
  *
- * Copy adds a reference, move transfers it, destruction drops it. Copies of
- * one block may be made and dropped on any threads at once; one BlockRef
- * object is not safe to change from two threads. More than 4294967295
- * references to one block is undefined; debug builds assert.
+ * Copies of one block may be made and dropped on any threads at once. One
+ * BlockRef object is not safe to change from two threads. More than 4294967295
+ * references to one block is undefined. Debug builds assert.
  */
 class BlockRef {
    public:
@@ -142,21 +134,21 @@ class BlockRef {
     /**
      * @brief The payload for writing, for the producer that fills a new block.
      *
-     * The block must be owned and this must be its only reference (unique()),
-     * so no reader can see the bytes change; debug builds assert both.
+     * The block must be owned and this must be its only reference (unique()).
+     * Debug builds assert both.
      */
     std::uint8_t* mutable_data() noexcept {
         assert(block_->kind_ == Block::Kind::Owned && unique());
         return block_->data_;
     }
 
-    /// The count at some recent moment; exact only while no other thread
-    /// copies or drops a reference.
+    /// The count at a recent moment. Exact only while no other thread copies or
+    /// drops a reference.
     std::uint32_t use_count() const noexcept {
         return block_->refs_.load(std::memory_order_relaxed);
     }
-    /// True when this is the only reference. Acquire, so writes made through
-    /// references dropped before are visible.
+    /// True when this is the only reference. Writes made through references
+    /// dropped before are visible.
     bool unique() const noexcept {
         return block_->refs_.load(std::memory_order_acquire) == 1;
     }
@@ -186,13 +178,13 @@ static_assert(sizeof(BlockRef) == sizeof(void*));
 class BufferView {
    public:
     BufferView() noexcept = default;
-    /// The whole payload of @p block; an empty @p block gives an empty view.
+    /// The whole payload of @p block. An empty @p block gives an empty view.
     explicit BufferView(BlockRef block) noexcept
         : data_(block ? block.data() : nullptr),
           size_(block ? block.size() : 0),
           block_(std::move(block)) {}
-    /// Bytes [@p offset, @p offset + @p size) of a non-empty @p block, which
-    /// must lie inside the payload; debug builds assert.
+    /// Bytes [@p offset, @p offset + @p size) of a non-empty @p block. The
+    /// range must lie inside the payload. Debug builds assert.
     BufferView(BlockRef block, std::size_t offset, std::size_t size) noexcept
         : data_(block.data() + offset), size_(size), block_(std::move(block)) {
         assert(offset <= block_.size() && size <= block_.size() - offset);
@@ -201,14 +193,14 @@ class BufferView {
     const std::uint8_t* data() const noexcept { return data_; }
     std::size_t size() const noexcept { return size_; }
     bool empty() const noexcept { return size_ == 0; }
-    /// Bytes from the start of the payload; zero for an empty view.
+    /// Bytes from the start of the payload. Zero for an empty view.
     std::size_t offset() const noexcept {
         return block_ ? static_cast<std::size_t>(data_ - block_.data()) : 0;
     }
     const BlockRef& block() const noexcept { return block_; }
 
-    /// Bytes [@p offset, @p offset + @p size) of this view, which must lie
-    /// inside it; debug builds assert.
+    /// Bytes [@p offset, @p offset + @p size) of this view. The range must lie
+    /// inside it. Debug builds assert.
     BufferView slice(std::size_t offset, std::size_t size) const& noexcept {
         assert(offset <= size_ && size <= size_ - offset);
         return BufferView(Within{}, block_, data_ + offset, size);

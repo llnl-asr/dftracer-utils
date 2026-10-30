@@ -31,7 +31,6 @@ ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-/// Repeated event-like text, which zstd shrinks well.
 dstd::Vector<std::uint8_t> text_bytes(std::size_t length) {
     static constexpr char LINE[] =
         "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":7,\"dur\":12}\n";
@@ -42,7 +41,6 @@ dstd::Vector<std::uint8_t> text_bytes(std::size_t length) {
     return bytes;
 }
 
-/// Uniform random bytes, which zstd cannot shrink.
 dstd::Vector<std::uint8_t> random_bytes(std::size_t length) {
     std::mt19937_64 rng(42);
     dstd::Vector<std::uint8_t> bytes(length);
@@ -56,7 +54,6 @@ dstd::Vector<std::uint32_t> starts_of(std::vector<store::SegmentSpan> spans,
                               raw_length);
 }
 
-/// The offset of the page table entry of page `i` in a stored extent.
 std::size_t entry_at(std::size_t i) {
     return store::EXTENT_HEADER_BYTES + i * store::EXTENT_TABLE_ENTRY_BYTES;
 }
@@ -103,8 +100,6 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("a span marked alone takes a page no other span shares") {
-        // A small segment, then the head of a segment over pages and its two
-        // granules: the head starts a page and the first granule another.
         const std::uint32_t head = 200;
         const std::uint32_t granule = PAGE - 64;
         const std::uint32_t at = 100;
@@ -330,7 +325,6 @@ TEST_SUITE("store extent codec") {
         REQUIRE(table.has_value());
         REQUIRE(table->size() == 3);
         CHECK(table->raw_length() == raw.size());
-        // The pages live outside the table, so it decodes none of them.
         dstd::Vector<std::uint8_t> out;
         CHECK_FALSE(table->decode(0, out).has_value());
 
@@ -345,7 +339,6 @@ TEST_SUITE("store extent codec") {
                         .has_value());
             CHECK(std::equal(page.begin(), page.end(),
                              raw.begin() + entry.raw_offset));
-            // A page read short of its stored length is refused.
             CHECK_FALSE(store::ExtentPages::decode_page(
                             entry,
                             ByteView{stored.data() + entry.stored_offset,
@@ -354,7 +347,6 @@ TEST_SUITE("store extent codec") {
                             .has_value());
         }
 
-        // Every page must lie inside the stored extent the caller names.
         const store::PageEntry& last = table->entry(2);
         CHECK_FALSE(store::ExtentPages::open_table(
                         ByteView{stored.data(), head},
@@ -477,8 +469,6 @@ TEST_SUITE("store extent codec") {
     }
 
     TEST_CASE("an extent compressed with a dictionary names it and needs it") {
-        // Event-like lines that differ per sample, so a dictionary learns the
-        // shared text.
         dstd::Vector<std::uint8_t> samples;
         dstd::Vector<std::size_t> sizes;
         std::mt19937_64 rng(11);
@@ -512,8 +502,6 @@ TEST_SUITE("store extent codec") {
         auto decoder = store::PageDict::for_decode(view_of(*trained), ref);
         REQUIRE(decoder.has_value());
 
-        // Pages of 1 KiB, where the text a page shares with the others is
-        // most of what the dictionary saves.
         dstd::Vector<std::uint8_t> raw;
         while (raw.size() < 16 * 1024) {
             for (const char c : line())
@@ -594,7 +582,6 @@ TEST_SUITE("store extent codec") {
             store::PageDict::for_decode(view_of(*trained), store::DictRef{})
                 .has_value());
 
-        // An extent that names no dictionary keeps its offset and crc zero.
         const dstd::Vector<std::uint8_t> raw = text_bytes(PAGE);
         auto stored = store::encode_extent(view_of(raw),
                                            starts_of({{0, PAGE}}, PAGE), ALIGN);
@@ -604,7 +591,6 @@ TEST_SUITE("store extent codec") {
         reseal(stray);
         CHECK_FALSE(store::ExtentPages::open(view_of(stray)).has_value());
 
-        // A ZstdDict page in an extent that names no dictionary.
         auto orphan = *stored;
         orphan[entry_at(0) + 20] =
             static_cast<std::uint8_t>(store::PageCodec::ZstdDict);

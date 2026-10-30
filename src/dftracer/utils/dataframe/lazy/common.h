@@ -357,9 +357,8 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
 // size follows the size of a partial and memory stays near the budget.
 // `accumulate(state, morsel, row_base)` folds one morsel, `make()` makes a
-// fresh state, `active()` says whether folding is still wanted (a caller
-// that gave up on `state` only wants its batches), and `cut(batch)`, called
-// at each morsel the batch takes, ends the batch early when it returns true.
+// fresh state, `active()` says whether folding is still wanted and
+// `cut(batch)`, called per morsel taken, ends the batch early when true.
 template <class Make, class Accumulate, class After, class Active, class Cut>
 inline coro::CoroTask<void> accumulate_batches(
     Cursor& in, std::int64_t max_rows, std::uint64_t budget, AggStatePtr& state,

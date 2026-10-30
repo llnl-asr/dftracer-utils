@@ -90,16 +90,13 @@ void mark_forked_child() noexcept {
     INHERITED_POOLS.store(true, std::memory_order_relaxed);
 }
 
-/// Registered when this code loads, before main, so the child of any later fork
-/// knows that the pools it inherits are empty.
+// Registered at load, before main, so any later fork child is marked.
 [[maybe_unused]] const bool FORK_HANDLER_REGISTERED =
     ::pthread_atfork(nullptr, nullptr, mark_forked_child) == 0;
 
 /// The process-wide default runtime, when a fork-join on it can finish here:
-/// not on a worker of the runtime itself, not inside one of its parallel
-/// regions and not in the child of a fork, whose copy of an inherited runtime
-/// has no workers. A runtime created here has live workers, so it makes the
-/// pools this process's own again.
+/// not on its own worker, not in its parallel regions and not in a fork child.
+/// A runtime created here has live workers, so it resets the inherited pools.
 Runtime* fork_join_runtime() {
     const std::shared_ptr<Runtime> known = peek_default_runtime();
     Runtime& runtime = default_runtime();
@@ -114,8 +111,6 @@ Runtime* fork_join_runtime() {
     return &runtime;
 }
 
-/// Runs `body(i)` for every i below `count`, in parallel on `runtime` when it
-/// is set and serially on this thread when it is not.
 template <class Body>
 void for_each_index(Runtime* runtime, std::size_t count, std::int64_t grain,
                     const Body& body) {
@@ -131,13 +126,11 @@ void for_each_index(Runtime* runtime, std::size_t count, std::int64_t grain,
                           });
 }
 
-/// The error of an extent of a synced commit whose crc or segments fail.
 dstd::Unexpected<dstd::Error> bad_extent_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
 }
 
-/// The bytes that name one directory key in the group index: each part with
-/// its length first, so no two keys give the same bytes.
+/// Each part is length-prefixed, so no two keys give the same bytes.
 dstd::String group_key(dstd::StringView name, std::uint32_t version,
                        ScopeKind kind, dstd::Span<const dstd::String> paths) {
     dstd::String key;
@@ -158,10 +151,9 @@ dstd::String group_key(dstd::StringView name, std::uint32_t version,
     return key;
 }
 
-/// The raw bytes [offset, offset + length) of an extent, decoded from `run`,
-/// the stored bytes of the extent from its offset `run_begin` on, into
-/// `owned`, which holds the whole pages they span. A Parse error when a page
-/// lies outside `run` or does not decode.
+/// The raw bytes [offset, offset + length) of an extent, decoded from `run`
+/// (the extent's stored bytes from `run_begin` on) into `owned`. A Parse error
+/// when a page lies outside `run` or does not decode.
 dstd::Expected<ByteView, dstd::Error> decode_covering(
     const ExtentPages& pages, std::uint32_t offset, std::uint32_t length,
     ByteView run, std::uint64_t run_begin, dstd::Vector<std::uint8_t>& owned,
@@ -193,11 +185,10 @@ dstd::Expected<ByteView, dstd::Error> decode_covering(
     return ByteView{owned.data() + (offset - base), length};
 }
 
-/// Reads the page table of the extent at `ref` into `slot`: Good with the
-/// table, Bad when the extent lies outside the file or its table does not
-/// open, Failed with `slot.error` when a read fails. The read takes the whole
-/// extent, up to READ_RUN_BYTES, so the operating system caches the pages the
-/// next queries read from it.
+/// Reads the page table of the extent at `ref` into `slot`: Good, Bad when the
+/// extent lies outside the file or its table does not open, Failed with
+/// `slot.error` when a read fails. The read takes the whole extent, up to
+/// READ_RUN_BYTES, to warm the operating system cache.
 detail::LoadState read_table(const DataFileReader& reader, const ExtentRef& ref,
                              detail::ExtentSlot& slot, BlockReads& reads) {
     const auto state_of = [&](const dstd::Error& error) {
@@ -224,9 +215,6 @@ detail::LoadState read_table(const DataFileReader& reader, const ExtentRef& ref,
     return detail::LoadState::Good;
 }
 
-/// One in-memory segment block per copy of a commit the chain lists: the
-/// segments of that copy, with the block of the extent that holds each. Good
-/// from the start, since the record is in memory.
 void fill_segment_blocks(detail::Commit& commit) {
     struct Listed {
         std::uint32_t copy_id;
@@ -277,8 +265,6 @@ void fill_segment_blocks(detail::Commit& commit) {
     }
 }
 
-/// The segment block of one copy of one commit, or null when the commit holds
-/// no segment of it.
 detail::LazyBlock* segment_block_of(detail::Commit& commit,
                                     std::uint32_t copy_id) {
     const auto at = std::lower_bound(commit.segment_copies.begin(),
@@ -290,8 +276,6 @@ detail::LazyBlock* segment_block_of(detail::Commit& commit,
         .get();
 }
 
-/// True when an erase of one copy covers `key`, with an empty `end` at the
-/// last key.
 bool erase_covers(ByteView key, const detail::EraseRange& range) {
     if (!range.begin.empty() && compare_bytes(key, range.begin) < 0) {
         return false;
@@ -300,8 +284,8 @@ bool erase_covers(ByteView key, const detail::EraseRange& range) {
     return true;
 }
 
-/// The ordinal below which the erases of one copy hide every version of `key`:
-/// zero when none covers it, and every ordinal is at least one.
+/// The ordinal below which the erases of one copy hide every version of `key`,
+/// or zero when none covers it. Ordinals start at one.
 std::uint64_t erase_limit(ByteView key,
                           const dstd::Vector<detail::EraseRange>& erases) {
     std::uint64_t limit = 0;
@@ -346,8 +330,6 @@ dstd::Vector<std::uint8_t> prefix_end(ByteView prefix) {
 /// The fewest data files an open spreads over the default runtime.
 constexpr std::size_t PARALLEL_OPEN_FILES = 8;
 
-/// How many files one parallel item of the commit phase covers: grouping the
-/// refs of a file is cheap, but a root of many small files still spreads.
 constexpr std::int64_t COMMIT_GRAIN = 4;
 
 /// Builds the blocks, extents and segment blocks of one commit from its extent
@@ -372,9 +354,6 @@ void fill_commit(detail::Commit& commit,
     fill_segment_blocks(commit);
 }
 
-/// One commit per sequence of a file: those the chain lists with their extent
-/// refs, built now, and those a checkpoint or the footer lists by summary,
-/// whose extent refs are read with their first query.
 void build_commits(detail::FileData& file, std::size_t file_index) {
     const FileIndex& index = file.reader.index();
     // A closed file holds no commit object: every commit of it is synced, and
@@ -425,10 +404,6 @@ void build_commits(detail::FileData& file, std::size_t file_index) {
               });
 }
 
-/// The scope directory of a file without a footer, built from the items and
-/// commits its chain gave: each commit's copies with their key ranges, from
-/// the summary of one a checkpoint lists and from the segments of one the
-/// chain lists itself.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> chain_directory(
     const detail::FileData& file) {
     const FileIndex& index = file.reader.index();
@@ -455,9 +430,6 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> chain_directory(
                                  index.drops, index.erases, commits);
 }
 
-/// The directory blocks of one file: the top table of a closed file and the
-/// blocks it names, while its entries stay in its footer; or one in-memory
-/// leaf over the chain of a file without a footer, Good at once.
 dstd::Expected<void, dstd::Error> build_file_directory(detail::FileData& file) {
     const FileIndex& index = file.reader.index();
     if (!index.tail.has_value()) {
@@ -510,7 +482,6 @@ dstd::Expected<void, dstd::Error> build_file_directory(detail::FileData& file) {
     return {};
 }
 
-/// The commit of a file with this sequence, or null.
 detail::Commit* commit_of(const detail::FileData& file,
                           std::uint64_t sequence) {
     const auto at = std::lower_bound(
@@ -627,7 +598,6 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     std::size_t cache_bytes = constants::store::STORE_DEFAULT_PAGE_CACHE_BYTES;
     if (Env::get<std::string_view>(constants::store::STORE_PAGE_CACHE_BYTES_ENV)
             .has_value()) {
-        // A set value that is not a number is a mistake, not an absent setting.
         auto parsed = Env::get<std::uint64_t>(
             constants::store::STORE_PAGE_CACHE_BYTES_ENV);
         if (!parsed.has_value()) {
@@ -662,10 +632,6 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     }
     const auto listed = std::chrono::steady_clock::now();
 
-    // The phases run on the process-wide default runtime, one item per file and
-    // then one per file again for its commits, or serially on this thread for
-    // a few files, where starting the pool costs more than it saves, and when
-    // a fork-join there could not finish.
     Runtime* const runtime =
         names.size() >= PARALLEL_OPEN_FILES ? fork_join_runtime() : nullptr;
 
@@ -707,17 +673,11 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
         files_.push_back(std::move(*opened[index]));
     }
 
-    // One commit per sequence of every file that is not closed, each behind a
-    // pointer its segments and copies keep. No extent and no big value is read
-    // here: the blocks of a commit are read the first time a query needs one.
     const auto group_commits = [&](std::size_t file_index) {
         build_commits(files_[file_index], file_index);
     };
     for_each_index(runtime, files_.size(), COMMIT_GRAIN, group_commits);
 
-    // The scope directory of every file: the blocks a closed file's footer
-    // names, read on demand, or one leaf built in memory over the chain of a
-    // file without a footer. A directory that does not open skips its file.
     dstd::Vector<detail::FileData> kept;
     kept.reserve(files_.size());
     for (detail::FileData& file : files_) {
@@ -787,15 +747,10 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                        ? status.error
                        : dstd::Error(dstd::Condition::Parse);
         };
-        // A big value run a closed file holds, with a commit whose segment
-        // names it.
         struct BigRun {
             BigRef ref;
             std::uint64_t sequence = 0;
         };
-        // Every entry of the segment decodes, not only its index. Its pages
-        // are read the way a query reads them. The big value runs it names are
-        // added to `bigs` when given.
         detail::PageHold walked;
         const auto walkable = [&](const detail::ExtentSlot& extent,
                                   const detail::SegmentSlot& slot,
@@ -838,13 +793,10 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                         return;
                     }
                     if (checked.state != detail::LoadState::Good) {
-                        // Its bytes are not there to walk.
                         bad_commit(commit.sequence);
                         continue;
                     }
                 } else {
-                    // Every block whole against its crc, and the page table of
-                    // each extent the way a query reads it.
                     for (std::size_t block = 0; block < commit.blocks.size();
                          ++block) {
                         const detail::CommitExtent& held = commit.blocks[block];
@@ -900,8 +852,6 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
             return;
         }
 
-        // A closed file: every directory block, every segment block and every
-        // extent, each extent counted once.
         struct Pending {
             std::uint64_t sequence = 0;
             std::uint32_t copy_id = 0;
@@ -997,8 +947,6 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                 }
                 std::uint8_t& known = seen[slot.extent_index];
                 if (known == 0) {
-                    // The extent whole against its crc, then its page table
-                    // the way a query reads it.
                     ++blocks[index];
                     BlockReads reads;
                     auto verified =
@@ -1021,7 +969,6 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
                     }
                 }
                 if (known != 1) {
-                    // Its bytes are not there to walk.
                     bad_commit(slot.sequence);
                     continue;
                 }
@@ -1035,8 +982,7 @@ dstd::Expected<CheckReport, dstd::Error> Snapshot::check() const {
             }
         }
 
-        // The big value runs, each read once: no block of the directory names
-        // them, only the entries that hold them.
+        // Each run is read once. No directory block names them.
         std::sort(bigs.begin(), bigs.end(),
                   [](const BigRun& a, const BigRun& b) {
                       if (a.ref.offset != b.ref.offset) {
@@ -1173,8 +1119,8 @@ Snapshot::generations() const {
 }
 
 detail::GroupSlots::~GroupSlots() {
-    // Each group came from dstd::make_unique, so its own deleter frees it.
     for (std::atomic<ScopeGroup*>& slot : slots_) {
+        // Each group came from dstd::make_unique, so its own deleter frees it.
         dstd::UniquePtr<ScopeGroup> owned(slot.load(std::memory_order_relaxed));
     }
 }
@@ -1206,8 +1152,6 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
     if (const detail::ScopeGroup* known = groups_->find(key)) return known;
     const std::uint64_t hash =
         scope_hash(spec.name, spec.format_version, scope.kind, paths);
-    // The leaf block and the entry of one scope of one file, reading the
-    // blocks on the way there. A null leaf is a scope no entry holds.
     const auto find_leaf = [&](const detail::FileData& file, std::size_t& entry)
         -> dstd::Expected<const detail::LazyBlock*, dstd::Error> {
         if (file.directory_levels == 0) {
@@ -1219,8 +1163,6 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             reads_->add_filtered();
             return static_cast<const detail::LazyBlock*>(nullptr);
         }
-        // The last separator at or before the scope names the child that
-        // can hold it; none means the scope sorts before every entry.
         const auto floor = [&](const SlotTable& table) {
             std::size_t low = 0;
             std::size_t high = table.size();
@@ -1289,7 +1231,6 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
         return known;
     }
 
-    // Every file holding the scope adds its copies and drops.
     auto group = dstd::make_unique<detail::ScopeGroup>();
     dstd::Vector<DirectoryDrop> drops;
     for (std::size_t file = owner; file < files_.size(); ++file) {
@@ -1317,8 +1258,7 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
             for (const DirectoryErase& erase : listed.erases) {
                 copy.erases.push_back({erase.ordinal, erase.begin, erase.end});
             }
-            // The block of one copy of a closed file holds the runs of many of
-            // its commits, so the commits that name its offset share one.
+            // The commits that name one offset share its segment block.
             dstd::Vector<std::pair<std::uint64_t, detail::LazyBlock*>> blocks;
             const auto shared_block = [group = group.get(),
                                        &blocks](const BlockHandle& handle) {
@@ -1342,8 +1282,6 @@ dstd::Expected<const detail::ScopeGroup*, dstd::Error> Snapshot::find_group(
                 detail::Commit* commit =
                     closed_file ? nullptr : commit_of(held, range.sequence);
                 if (!closed_file && commit == nullptr) continue;
-                // The segment block of a commit of a file that is not closed
-                // is found through copy_segments, once its index is loaded.
                 detail::LazyBlock* segments = nullptr;
                 if (closed_file && !range.segments.empty()) {
                     segments = shared_block(range.segments);
@@ -1404,7 +1342,7 @@ CopyInfo Snapshot::copy_info(const NamespaceSpec& spec,
     CopyInfo info;
     auto found = find_group(spec, scope);
     // The state has no channel for the error of a block that could not be
-    // read, so it reads Bad; `get` and a cursor report the error itself.
+    // read, so it reads Bad. `get` and a cursor report the error itself.
     if (!found) {
         info.state = ScopeState::Bad;
         return info;
@@ -1419,7 +1357,7 @@ CopyInfo Snapshot::copy_info(const NamespaceSpec& spec,
     info.sources = copy.sources;
     const detail::LoadStatus status = ensure_copy(copy);
     // The state has no channel for the error of a commit whose block could not
-    // be read, so it reads Bad; `get` and a cursor report the error itself.
+    // be read, so it reads Bad. `get` and a cursor report the error itself.
     if (status.state == detail::LoadState::Bad ||
         status.state == detail::LoadState::Failed) {
         info.state = ScopeState::Bad;
@@ -1482,9 +1420,7 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
             }
         }
     }
-    // The page table of every extent, then every segment of the commit over
-    // the pages it names, so a segment that cannot be read makes the whole
-    // commit Bad. A query reads the pages again through the table it keeps.
+    // A segment that cannot be read makes the whole commit Bad.
     dstd::Vector<dstd::Optional<ExtentPages>> whole(commit.blocks.size());
     dstd::Vector<dstd::SharedPtr<const PageDict>> dicts(commit.blocks.size());
     if (!failure && !any_bad) {
@@ -1550,8 +1486,6 @@ detail::LoadStatus Snapshot::verify_commit(detail::Commit& commit) const {
         }
     }
 
-    // A bad block decides over a failed read: the commit is torn whatever
-    // else could not be read.
     detail::LoadState state = detail::LoadState::Good;
     if (any_bad) {
         state = detail::LoadState::Bad;
@@ -1624,8 +1558,6 @@ detail::LoadStatus Snapshot::load_index(detail::Commit& commit) const {
 
 namespace {
 
-/// The status of a commit index as a query reports it: the read error of a
-/// Failed one, and a Parse error for a record that does not match.
 dstd::Expected<void, dstd::Error> index_result(
     const detail::LoadStatus& status) {
     if (status.state == detail::LoadState::Good) return {};
@@ -1777,8 +1709,6 @@ detail::LoadStatus Snapshot::load_block(const detail::FileData& file,
                     state = detail::LoadState::Bad;
                     break;
                 }
-                // A run is found by its commit sequence, so the sequences of a
-                // block are sorted.
                 for (std::size_t i = 1; i < raws.size(); ++i) {
                     if (raws[i].sequence < raws[i - 1U].sequence) {
                         state = detail::LoadState::Bad;
@@ -1948,8 +1878,6 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
             }
             return bad_extent_error();
         }
-        // The stored pages of an extent lie in page order with no gap, so the
-        // pages a range lacks are one read.
         const PageEntry& first = pages.entry(first_missing);
         const PageEntry& last = pages.entry(last_missing);
         const std::uint64_t run_begin = first.stored_offset;
@@ -2001,8 +1929,6 @@ dstd::Expected<ByteView, dstd::Error> Snapshot::read_raw(
         hold.page = std::move(held[0]);
         return ByteView{hold.page->data() + (offset_in_extent - base), length};
     }
-    // A range over pages reads them joined: one buffer, allocated once by the
-    // query that reads the range.
     const PageEntry& last = pages.entry(covered.second - 1);
     hold.joined.resize(static_cast<std::size_t>(last.raw_offset) +
                        last.raw_length - base);
@@ -2056,7 +1982,6 @@ Snapshot::open_segment(const detail::FileData& file, detail::LazyBlock& block,
     if (!bytes) return dstd::Unexpected<dstd::Error>(bytes.error());
     auto opened = SegmentView::open_index(*bytes);
     if (!opened) return bad_extent_error();
-    // The view reads the page or the joined buffer, which the move keeps.
     return dstd::make_unique<detail::SegmentBody>(std::move(hold),
                                                   std::move(*opened));
 }
@@ -2076,7 +2001,6 @@ Snapshot::find_in_segment(const detail::FileData& file,
         slot.length > pages.raw_length() - slot.offset_in_extent) {
         return bad_extent_error();
     }
-    // Reads the whole segment, the path of a segment that one page holds.
     const auto whole = [&]()
         -> dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error> {
         auto bytes =
@@ -2139,8 +2063,6 @@ dstd::Expected<detail::SegmentRun, dstd::Error> Snapshot::copy_segments(
     const detail::FileData& file = files_[copy.file_index];
     auto segments = block_result(load_block(file, *held.segments));
     if (!segments) return dstd::Unexpected<dstd::Error>(segments.error());
-    // The runs of the block are sorted by commit sequence, so the run of this
-    // commit is a binary search away.
     const dstd::Vector<detail::SegmentSlot>& slots = held.segments->segments;
     const auto begin = std::lower_bound(
         slots.begin(), slots.end(), held.sequence,
@@ -2201,8 +2123,8 @@ detail::ExtentSlot& detail::ExtentSlots::slot(std::size_t index) const {
 }
 
 detail::ExtentSlots::~ExtentSlots() {
-    // Each chunk came from dstd::make_unique, so its own deleter frees it.
     for (std::atomic<Chunk*>& held : chunks_) {
+        // Each chunk came from dstd::make_unique, so its own deleter frees it.
         dstd::UniquePtr<Chunk> owned(held.load(std::memory_order_relaxed));
     }
 }
@@ -2309,7 +2231,6 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
     if (copy.state != CopyState::Ready || key_hidden(key, group->hidden)) {
         return dstd::Optional<Value>{};
     }
-    // A key no range holds is absent, and nothing is read for it.
     const auto holds_key = [key](ByteView first, ByteView last) {
         return compare_bytes(key, first) >= 0 && compare_bytes(key, last) <= 0;
     };
@@ -2331,8 +2252,6 @@ dstd::Expected<dstd::Optional<Value>, dstd::Error> Snapshot::get(
     // The pages each source points into, one buffer per source and a spare: a
     // deque keeps each buffer in place as it grows.
     dstd::Deque<detail::PageHold> holders(1);
-    // The erases of the copy hide the versions of the keys they cover that a
-    // batch with a smaller ordinal put there.
     const std::uint64_t limit = erase_limit(key, copy.erases);
     for (const detail::CopyCommit& held : copy.commits) {
         if (!holds_key(held.first_key, held.last_key)) continue;
@@ -2396,7 +2315,6 @@ dstd::Expected<ByteView, dstd::Error> ScanCursor::value() {
     sources_.clear();
     if (at_end_) return ByteView{};
     if (fold_ != FoldKind::None) {
-        // Each matching segment's cursor already stands on the key.
         for (const std::size_t arm_index : at_key_) {
             const ScopeCursor& cursor = arms_[arm_index].cursor;
             const std::size_t file_index = cursor.copy()->file_index;
@@ -2439,7 +2357,6 @@ void ScanCursor::next() {
 
 bool ScanCursor::take_error(const ScopeCursor& cursor) {
     if (!cursor.error_) return false;
-    // A row after an unreadable extent cannot be trusted, so the scan stops.
     error_ = cursor.error_;
     at_end_ = true;
     key_ = {};
@@ -2447,7 +2364,6 @@ bool ScanCursor::take_error(const ScopeCursor& cursor) {
     return true;
 }
 
-/// The fold heap order: the smaller key first, and on a tie the earlier arm.
 struct ScanCursor::ArmAfter {
     const dstd::Vector<Arm>* arms;
     bool operator()(std::size_t a, std::size_t b) const {
@@ -2470,15 +2386,12 @@ bool ScanCursor::open_arm(std::size_t index) {
     const detail::CopyData& copy = arm.group->copies[arm.group->current];
     const detail::LoadStatus status = snapshot_->ensure_copy(copy);
     if (status.state == detail::LoadState::Failed) {
-        // A block of this scope could not be read, so no row after it can be
-        // trusted: the cursor stops and reports the error.
         error_ = status.error;
         at_end_ = true;
         key_ = {};
         at_key_.clear();
         return false;
     }
-    // A copy with a bad commit is skipped: its cursor stays at its end.
     if (status.state != detail::LoadState::Good) return true;
     arm.cursor.open(*snapshot_, copy, arm.group->hidden,
                     bytes_of(begin_storage_), bytes_of(end_storage_));
@@ -2552,7 +2465,6 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
     bodies_.clear();
     ordinals_.clear();
     heap_.clear();
-    // A range wholly before begin or at or past end yields nothing.
     const auto outside = [&](ByteView first, ByteView last) {
         return compare_bytes(last, begin) < 0 ||
                (!end.empty() && compare_bytes(first, end) >= 0);
@@ -2584,8 +2496,6 @@ void ScopeCursor::open(const Snapshot& snapshot, const detail::CopyData& copy,
     for (std::size_t i = 0; i < segments_.size(); ++i) {
         const detail::SegmentSlot& segment =
             segments_[i].block->segments[segments_[i].index];
-        // Its first key at or after begin is at least the larger of the two,
-        // so the heap orders it right before its extent is read.
         keys_[i] = compare_bytes(segment.first_key, begin) < 0
                        ? begin
                        : segment.first_key;
@@ -2615,7 +2525,6 @@ bool ScopeCursor::load(std::size_t index) {
 
 void ScopeCursor::push(std::size_t index) {
     if (cursors_[index].at_end()) {
-        // Its pages are read no more.
         bodies_[index].reset();
         return;
     }
@@ -2646,8 +2555,6 @@ void ScopeCursor::settle() {
         }
         const std::size_t top = heap_.front();
         if (loaded_[top] == 0) {
-            // The bound from the record is the smallest key on the heap, so
-            // the extent of this segment is the next one to read.
             std::pop_heap(heap_.begin(), heap_.end(),
                           HeapAfter{&keys_, &ordinals_});
             heap_.pop_back();
@@ -2668,8 +2575,6 @@ void ScopeCursor::settle() {
             const std::size_t index = heap_.back();
             heap_.pop_back();
             if (loaded_[index] == 0) {
-                // A segment whose bound ties the key may hold it too: read it,
-                // put back what was taken and settle again.
                 if (!load(index)) return;
                 for (const std::size_t taken : matching_) {
                     heap_.push_back(taken);
@@ -2682,8 +2587,6 @@ void ScopeCursor::settle() {
             matching_.push_back(index);
         }
         if (reload) continue;
-        // The heap pops a tie by batch ordinal, so matching_ runs from the
-        // oldest batch to the newest.
         const std::uint64_t limit = erase_limit(best, copy_->erases);
         if (limit != 0) {
             std::size_t kept = 0;
@@ -2733,8 +2636,6 @@ ScanCursor Snapshot::scan(const NamespaceSpec& spec,
     for (const ScopeKey& scope : scopes) {
         auto found = find_group(spec, scope);
         if (!found) {
-            // A block of the directory could not be read, so no scope after
-            // it can be trusted: the scan stops and reports the error.
             cursor.error_ = found.error();
             cursor.at_end_ = true;
             return cursor;
@@ -2753,13 +2654,11 @@ ScanCursor Snapshot::scan(const NamespaceSpec& spec,
     }
     cursor.fold_ = fold;
     if (fold != FoldKind::None) {
-        // A fold merges every scope by key, so every arm opens now.
         for (std::size_t i = 0; i < cursor.arms_.size(); ++i) {
             if (!cursor.open_arm(i)) return cursor;
             cursor.push_arm(i);
         }
     }
-    // Scopes one after the other open each arm when the scan reaches it.
     cursor.settle();
     return cursor;
 }
@@ -2780,8 +2679,6 @@ ScanCursor Snapshot::scan_all(const NamespaceSpec& spec, ByteView begin,
                               ByteView end) const {
     auto listed = namespace_scopes(spec);
     if (!listed) {
-        // The scopes of a block that could not be read are unknown, so the
-        // scan holds no row and reports the error.
         ScanCursor cursor;
         cursor.snapshot_ = this;
         cursor.error_ = listed.error();

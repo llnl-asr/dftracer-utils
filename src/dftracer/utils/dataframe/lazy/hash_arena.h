@@ -15,22 +15,13 @@
 namespace dftracer::utils::dataframe::lazy_internal {
 
 /// Exact first-seen state over keys the caller hashes, with no per-key heap
-/// allocation. Each distinct key is one record bump-allocated from a chunked
-/// memory::Arena and never moved, as ClickHouse, DuckDB and Velox keep
-/// hash-table keys apart from the slots; a hash maps to the newest record of
-/// the chain of keys that share it, so two keys with the same hash still
-/// compare their real bytes. Growth copies no key bytes: only the table
-/// rehashes. One record per distinct key, never one per input row: a duplicate
-/// pays only a lookup and a compare. Not thread-safe; `hash` must be a pure
-/// function of the key bytes.
-///
-/// The records live in the arena's own child pool below the pool given at
-/// construction, and the table in that pool; it must stay open until the
-/// arena is destroyed.
+/// allocation. Each distinct key is one record in a memory::Arena and never
+/// moves. Not thread-safe, and `hash` must be a pure function of the key bytes.
+/// The pool given at construction must stay open until the arena is destroyed.
 class HashArena {
    public:
     /// Below this many buckets the table doubles as ankerl::unordered_dense
-    /// grows it; from it on, it grows four times at a time.
+    /// grows it. From it on, it grows four times at a time.
     static constexpr std::size_t GROWTH_FROM = std::size_t{1} << 18;
 
     explicit HashArena(memory::Pool& pool)
@@ -76,18 +67,17 @@ class HashArena {
                head_.bucket_count() * sizeof(Head::bucket_type);
     }
 
-    /// At most what bytes() reads after `keys` more inserts of `key_bytes`
-    /// in total, none longer than `max_len`, counting the chunks and every
-    /// container that would grow, so a caller can reserve before the arena
-    /// grows.
+    /// At most what bytes() reads after `keys` more inserts of `key_bytes` in
+    /// total, none longer than `max_len`, counting the chunks and every
+    /// container that would grow, so a caller can reserve first.
     std::uint64_t bytes_after(std::size_t keys, std::size_t key_bytes,
                               std::size_t max_len) const noexcept {
         std::size_t buckets = std::max<std::size_t>(head_.bucket_count(), 4);
         std::size_t cap = table_capacity(buckets);
         const std::size_t entries = head_.size() + keys;
         // The values vector grows by itself. A small table doubles once the
-        // entry past its capacity is in; from GROWTH_FROM on, insert()
-        // reserves the next table's capacity before that entry.
+        // entry past its capacity is in. From GROWTH_FROM on, insert() reserves
+        // first.
         std::size_t values = head_.values().capacity();
         while (entries > cap) {
             if (buckets < GROWTH_FROM) {
@@ -114,21 +104,19 @@ class HashArena {
 
    private:
     // A record is the newest-first chain pointer, the length and the key
-    // bytes, packed with no padding and read with memcpy: most keys are a few
+    // bytes, packed with no padding and read with memcpy. Most keys are a few
     // bytes, so padding to the pointer would cost a third of the arena.
     static constexpr std::size_t NEXT_BYTES = sizeof(const char*);
     static constexpr std::size_t RECORD_HEADER =
         NEXT_BYTES + sizeof(std::uint32_t);
     using Head = dstd::PoolHashMap<std::uint64_t, const char*>;
     // The table grows four times at a time, as Arrow's BinaryMemoTable and
-    // ClickHouse's HashTable do, so the old tables a rehash frees add up to a
-    // third of the new one instead of all of it. Below GROWTH_FROM the
-    // reserve ahead costs more than the old tables: 57 thousand keys held
-    // 7.1 MiB grown four times and 3.9 MiB doubled.
+    // ClickHouse's HashTable do, so the tables a rehash frees add up to a third
+    // of the new one. Below GROWTH_FROM the reserve ahead costs more than that
+    // (57 thousand keys held 7.1 MiB grown four times, 3.9 MiB doubled).
     static constexpr std::size_t GROWTH = 4;
 
-    // The entries a table of `buckets` holds before it rehashes, computed as
-    // ankerl::unordered_dense does.
+    // The entries a table of `buckets` holds before it rehashes, as in ankerl.
     std::size_t table_capacity(std::size_t buckets) const noexcept {
         return static_cast<std::size_t>(static_cast<float>(buckets) *
                                         head_.max_load_factor());
@@ -144,11 +132,10 @@ class HashArena {
         return c;
     }
 
-    // Each record takes its header and its bytes. A chunk switch leaves less
-    // than one record unused, so a chunk holds at least its size less the
-    // header and the largest record. A record too big for the next chunk takes
-    // a chunk of its own and still advances the doubling, so the chunks after
-    // it count at the largest size.
+    // A chunk switch leaves less than one record unused, so a chunk holds at
+    // least its size less the header and the largest record. A record too big
+    // for the next chunk takes a chunk of its own and still advances the
+    // doubling, so the chunks after it count at the largest size.
     std::uint64_t records_after(std::size_t keys, std::size_t key_bytes,
                                 std::size_t max_len) const noexcept {
         constexpr std::uint64_t PER = RECORD_HEADER;
@@ -190,7 +177,7 @@ class HashArena {
         return false;
     }
 
-    // Declared first: the table points into it.
+    // Declared first, as the table points into it.
     memory::Arena keys_;
     Head head_;
 };

@@ -40,7 +40,7 @@ std::string_view intern_sv(std::string_view sv) {
     return replay_intern().intern(sv);
 }
 
-// A wait this long or longer suspends on the executor's timer; a shorter one
+// A wait this long or longer suspends on the executor's timer. A shorter one
 // sleeps the thread, since the timer is not that precise.
 constexpr std::chrono::microseconds TIMER_WAIT_MIN{1000};
 
@@ -289,7 +289,6 @@ bool ReplayEngine::admit(const Trace& trace, Lane& lane,
         }
     }
 
-    // Silently skip once the limit is reached.
     if (config_.max_events > 0 &&
         admitted_.load(std::memory_order_relaxed) >= config_.max_events) {
         return false;
@@ -306,7 +305,6 @@ bool ReplayEngine::admit(const Trace& trace, Lane& lane,
         return false;
     }
 
-    // Timing applies only to a real replay, not to dry-run or dftracer-mode.
     wait = std::chrono::microseconds{0};
     if (config_.maintain_timing && !config_.dry_run && !config_.dftracer_mode &&
         trace.time_start > 0 && trace.type == TraceType::Regular) {
@@ -427,7 +425,6 @@ std::chrono::microseconds ReplayEngine::timing_wait(const Trace& trace,
         return std::chrono::microseconds{0};
     }
 
-    // An event older than the anchor runs at once.
     if (trace.time_start <= lane.first_timestamp) {
         return std::chrono::microseconds{0};
     }

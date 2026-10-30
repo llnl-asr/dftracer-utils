@@ -16,8 +16,7 @@ namespace dftracer::utils::memory {
 
 inline bool g_vg_active = false;
 
-/// Read once by the heap before it hands out a block. Outside Valgrind every
-/// request below is skipped behind one predictable branch.
+/// Read once by the heap before it hands out a block.
 inline void vg_init() noexcept { g_vg_active = RUNNING_ON_VALGRIND != 0; }
 
 inline bool vg_active() noexcept { return g_vg_active; }
@@ -40,7 +39,7 @@ inline void vg_free(void* p, std::size_t usable) noexcept {
     VALGRIND_MAKE_MEM_NOACCESS(p, usable);
 }
 
-/// The block keeps its address; bytes past @p new_size become unaddressable.
+/// The block keeps its address. Bytes past @p new_size become unaddressable.
 inline void vg_resize(void* p, std::size_t old_size,
                       std::size_t new_size) noexcept {
     if (!vg_active()) [[likely]]

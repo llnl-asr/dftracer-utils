@@ -13,10 +13,8 @@ namespace coro {
 
 /// Coordinates an awaiter's suspension with child completion so exactly one
 /// side resumes the awaiting coroutine. Each side fetch_ors its bit on one
-/// atomic; whichever observes the right bits already set is the side that
-/// resumes (single modification order => no lost or double wakeup). A third
-/// party, executor shutdown, may cancel the wait: it resumes the awaiter only
-/// when completion has not.
+/// atomic and the side that sees the other's bit set resumes. Shutdown may
+/// cancel the wait and resumes the awaiter only if completion has not.
 class CompletionLatch {
    public:
     static constexpr std::uint8_t BIT_SUSPENDED = 1;

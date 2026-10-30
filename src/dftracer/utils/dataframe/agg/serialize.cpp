@@ -16,9 +16,9 @@ namespace {
 // Set in a FieldStat's domain byte when a nonzero ecarry follows it.
 constexpr std::uint8_t HAS_ECARRY = 0x80;
 
-// The smallest a serialized dyn cell can be: its 4-byte id, the domain byte
-// and the compact mask. A cell count is honest only when the bytes left could
-// hold that many, so a corrupt count cannot size a vector past the blob.
+// A serialized dyn cell is at least its 4-byte id, the domain byte and the
+// compact mask. A count the bytes left cannot hold is corrupt, so it cannot
+// size a vector past the blob.
 constexpr std::uint64_t MIN_DYN_CELL_BYTES = 7;
 
 template <class T>
@@ -172,8 +172,8 @@ struct Reader {
     void count_cells(std::uint64_t n) const {
         if (n > left() / MIN_DYN_CELL_BYTES) truncated();
     }
-    // A fixed tag of the dyn section's layout; a blob written before the dyn
-    // cells became (id, stat) pairs fails here instead of being misread.
+    // A fixed tag of the dyn section's layout. A blob of an older layout fails
+    // here instead of being misread.
     void expect(const char (&tag)[4]) {
         if (left() < sizeof(tag) || std::memcmp(p, tag, sizeof(tag)) != 0)
             truncated();
@@ -187,9 +187,8 @@ struct Reader {
 // instead of misreading the bytes. A full blob starts with a small spec count.
 constexpr char COMPACT_MAGIC[4] = {'D', 'F', 'T', 'C'};
 
-// The dyn section's tag: what follows the specs. Both were 'DFTD' while every
-// cell held a FieldStat; a light cell (id and words, no stat) needs its own,
-// and a blob of either older layout fails here instead of being misread.
+// The dyn section's tag, after the specs. A blob of an older layout fails here
+// instead of being misread.
 constexpr char DYN_FULL_MAGIC[4] = {'D', 'F', 'T', 'F'};
 constexpr char DYN_LIGHT_MAGIC[4] = {'D', 'F', 'T', 'E'};
 
@@ -314,8 +313,8 @@ std::string agg_serialize(const AggState& st_in, bool compact) {
             put_bytes(s, d.out_prefix);
         }
         put(s, static_cast<std::uint8_t>(st.dyn_has_sketch ? 1 : 0));
-        // The tag, then the name table once (id -> name and the name's domain),
-        // then each group's cells by id (or, in the light form, their words).
+        // Tag, name table once (name and domain), then each group's cells by
+        // id.
         if (st.dyn_light_on) {
             s.append(DYN_LIGHT_MAGIC, sizeof(DYN_LIGHT_MAGIC));
             put(s, static_cast<std::uint32_t>(st.dyn_names.size()));
@@ -669,8 +668,8 @@ AggStatePtr agg_deserialize(const std::string& blob, bool compact) {
             if (d.op == AggOp::Pct) sketch = true;
         if ((r.get<std::uint8_t>() != 0) != sketch) Reader::truncated();
         st->dyn_has_sketch = sketch;
-        // The specs ride the blob, so the light record they need is derived
-        // here, after them (init_layout saw none).
+        // The light record the specs need is derived after them, as init_layout
+        // saw none.
         st->dyn_light_layout();
         if (r.left() < sizeof(DYN_FULL_MAGIC)) Reader::truncated();
         const bool light_cells =

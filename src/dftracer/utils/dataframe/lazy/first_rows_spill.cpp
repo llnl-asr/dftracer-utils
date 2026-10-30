@@ -94,8 +94,8 @@ class FirstRowsSpill {
    public:
     using Already = std::function<std::int64_t(const std::string&)>;
 
-    // `gov` is the owning cursor's; `held` is what that cursor keeps in
-    // memory beside the spool.
+    // `gov` is the owning cursor's. `held` is what that cursor keeps in memory
+    // beside the spool.
     FirstRowsSpill(std::uint64_t budget, std::int64_t keep,
                    std::int64_t first_id, Already already, Governor& gov,
                    std::uint64_t held)
@@ -338,9 +338,8 @@ class FirstRowsSpill {
     std::unique_ptr<Cursor> replay_;
 };
 
-// A key set cannot leave memory: the rest of the input checks against it. So
-// a request posted by another holder frees nothing, and only a refused grow
-// turns the rest of the input to the external path.
+// A key set cannot leave memory, so a request from another holder frees
+// nothing and only a refused grow sends the rest of the input external.
 bool refused(Governor& gov, std::uint64_t budget, std::uint64_t keys) {
     return has_cap(budget) && gov.check(keys, 0) != 0;
 }
@@ -512,7 +511,7 @@ class UniqueCursor : public Cursor {
                            key_off[at];
                 };
                 std::vector<std::uint8_t> keep_mask(nz, 0);
-                // The arenas reserve before they grow: the bound is what they
+                // The arenas reserve before they grow. The bound is what they
                 // would hold if every key of the morsel were new.
                 bool refuse = false;
                 if (seen_p_.empty()) {
@@ -650,7 +649,7 @@ class UniqueCursor : public Cursor {
     std::vector<std::string> sch_;
     std::vector<std::int64_t> key_idx_;
     std::uint64_t budget_;
-    // Declared before the arenas: its pool closes after they free.
+    // Declared before the arenas, so its pool closes after they free.
     Governor gov_{"unique"};
     HashArena seen_;
     std::vector<std::unique_ptr<HashArena>> seen_p_;

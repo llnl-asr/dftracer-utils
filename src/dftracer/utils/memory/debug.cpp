@@ -24,9 +24,8 @@ constexpr std::size_t TABLE_MASK = DEBUG_TABLE_SLOTS - 1;
 constexpr std::size_t GROUP_SLOTS = DEBUG_SITE_GROUPS * 2;
 constexpr std::size_t GROUP_MASK = GROUP_SLOTS - 1;
 
-// A slot keeps its address for good: a freed block stays in the table so a
-// second free finds it, and the next block at that address reuses the slot.
-// The mapping is zero-filled, which is the initial state of every field.
+// A freed block stays in the table so a second free finds it. The next block at
+// that address reuses the slot.
 struct alignas(32) Slot {
     std::atomic<std::uintptr_t> key;
     std::atomic<std::uintptr_t> site;
@@ -51,7 +50,6 @@ struct alignas(32) SiteTotal {
 };
 
 std::atomic<SiteTotal*> g_totals{nullptr};
-// Per-site live bytes at the last snapshot, indexed like the totals.
 std::atomic<std::ptrdiff_t>* g_at_peak = nullptr;
 std::atomic<std::ptrdiff_t> g_live_total{0};
 std::atomic<std::ptrdiff_t> g_live_big{0};
@@ -102,7 +100,7 @@ SiteTotal* totals() noexcept {
     return static_cast<SiteTotal*>(raw);
 }
 
-// Null when the table is full; that caller is then left out of the totals.
+// Null when the table is full, and that caller is left out of the totals.
 SiteTotal* total_of(std::uintptr_t site) noexcept {
     if (site == 0) site = 1;
     SiteTotal* t = totals();
@@ -122,8 +120,7 @@ SiteTotal* total_of(std::uintptr_t site) noexcept {
     return nullptr;
 }
 
-// Copies the per-site live bytes when the total passed the floor. Takes one
-// pass over the totals, and a thread that finds another one running leaves it.
+// A thread that finds another snapshot running leaves it.
 [[gnu::noinline]] void snapshot(std::size_t total) noexcept {
     if (g_snapshotting.exchange(true, std::memory_order_acquire)) return;
     if (total >= g_snapshot_floor.load(std::memory_order_relaxed)) {
@@ -281,7 +278,6 @@ std::atomic<std::uintptr_t>* held_list() noexcept {
     return mine;
 }
 
-// Marks the block freed, checks it and fills it. The block is not released.
 void retire(void* p, std::size_t size, bool sized) noexcept {
     Slot* s = lookup(p, false);
     if (s == nullptr) {

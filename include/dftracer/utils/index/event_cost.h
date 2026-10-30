@@ -6,12 +6,10 @@
 
 namespace dftracer::utils::index::event_cost {
 
-/// Strings an index build interned as schema leaf paths so far. A path is
-/// interned once per record shape, not once per event. For tests.
+/// Schema leaf paths interned by index builds so far. For tests.
 inline std::atomic<std::uint64_t> g_leaf_path_interns{0};
 
-/// Events whose chunk statistics were found by key string rather than by
-/// interned id. For tests.
+/// Chunk statistics lookups by key string instead of interned id. For tests.
 inline std::atomic<std::uint64_t> g_stats_string_lookups{0};
 
 }  // namespace dftracer::utils::index::event_cost

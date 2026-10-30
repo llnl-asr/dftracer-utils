@@ -1262,7 +1262,7 @@ TEST_SUITE("lazyframe plugin node") {
 
     TEST_CASE(
         "a provider under a plugin node is still measured and reclaimed") {
-        // The node owns its input cursor once open() succeeds; the provider
+        // The node owns its input cursor once open() succeeds. The provider
         // has its own place in the governor, so it is measured and asked
         // wherever it ends up.
         constexpr std::uint64_t BUDGET = 64 * 1024 * 1024;

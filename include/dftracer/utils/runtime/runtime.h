@@ -209,8 +209,8 @@ class Runtime {
     void shutdown();
     /// Applies `settings` in place, while work runs. Thread safe.
     void configure(const RuntimeSettings& settings);
-    /// Stops the process runtime, for exit handlers only: nothing may submit
-    /// work after it. Registered as an exit hook when the runtime is made.
+    /// Stops the process runtime. For exit handlers only: nothing may submit
+    /// work after it.
     static void stop_at_exit();
     std::size_t threads() const;
     std::size_t io_threads() const;
@@ -222,7 +222,6 @@ class Runtime {
 
     friend std::shared_ptr<Runtime> default_runtime_shared();
     friend Runtime& configure_default_runtime(const RuntimeSettings& settings);
-    /// Marks this the process runtime and registers stop_at_exit, once.
     void become_process_runtime();
     void stop();
 
@@ -231,7 +230,6 @@ class Runtime {
     std::atomic<std::size_t> threads_;
     io::IoBackendType io_backend_ = io::IoBackendType::Auto;
     unsigned io_batch_threshold_ = 0;
-    /// The process runtime, which shutdown() leaves running.
     bool process_runtime_ = false;
     std::atomic<bool> shutdown_called_{false};
     std::atomic<uint64_t> task_name_counter_{0};
@@ -239,10 +237,9 @@ class Runtime {
     std::mutex futures_mutex_;
 };
 
-/// The process runtime: one per process, made on first use under a lock and
-/// never replaced, so every caller in any order and from any thread gets the
-/// same one. Only process exit stops it. The child of a fork makes its own on
-/// first use, since the copy it inherits has no threads.
+/// The process runtime: one per process, made on first use and never replaced.
+/// Safe from any thread. Only process exit stops it. A forked child makes its
+/// own on first use, since the inherited copy has no threads.
 Runtime& default_runtime();
 std::shared_ptr<Runtime> default_runtime_shared();
 

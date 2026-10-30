@@ -54,9 +54,7 @@ namespace {
 // 1M rows against an 8 MiB budget keeps the input several times the budget and
 // runs in under 10 s. At 4M rows and 16 MiB it took 30 s alone, and the macOS
 // coverage job on three cores ran past its 300 s timeout. The coverage build
-// asserts no peak, only that every op finishes and spills, and runs the
-// kernels many times slower: it keeps the input four times the budget at a
-// tenth of the rows.
+// asserts no peak, only that every op finishes and spills, on a tenth of rows.
 #if defined(DFTRACER_UTILS_COVERAGE_BUILD)
 constexpr std::int64_t DEFAULT_ROWS = 100'000;
 constexpr std::uint64_t DEFAULT_BUDGET_MB = 1;
@@ -712,7 +710,7 @@ bool under_instrumentation() {
     return preload && std::strstr(preload, "vgpreload") != nullptr;
 }
 
-// Runs on worker threads, so it makes no assertion: the caller checks `piped`
+// Runs on worker threads, so it makes no assertion. The caller checks `piped`
 // and `forked`.
 ChildResult run_child(const std::string& op) {
     const auto started = std::chrono::steady_clock::now();
@@ -841,7 +839,7 @@ TEST_CASE("each op stays within its bound at a small budget" *
                     static_cast<unsigned long long>(BUDGET >> 20),
                     static_cast<unsigned long long>(bound >> 20));
     // Each child has its own address space, so its peak does not depend on the
-    // others running; they overlap to finish sooner.
+    // others running, so they overlap to finish sooner.
     std::map<std::string, ChildResult> results;
     {
         std::vector<std::string> names;

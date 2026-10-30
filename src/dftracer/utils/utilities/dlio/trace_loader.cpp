@@ -34,8 +34,7 @@ struct ComponentAccumulator {
         per_pid_bucket_samples;
     // Boundary list (in microseconds) for sweep_union of trace-side wall clock.
     std::vector<Boundary> boundaries;
-    // Merged duration quantiles across all entries; null until the first
-    // entry with values is seen.
+    // Merged duration quantiles across all entries, null until one has values.
     dstd::SharedPtr<QuantileStore> quantiles;
     // Aggregate accumulators.
     double accumulated_time_s = 0.0;  // sum of count * mean (s)
@@ -156,7 +155,8 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
     std::mt19937_64 rng(options.seed);
 
     // The row map has no order, and the sample draws share one generator, so
-    // rows go by their key. Names, not ids: ids follow the order of interning.
+    // rows go by their key. Names, not ids, as ids follow the order of
+    // interning.
     dstd::Vector<const trace::AggQueryResult::Rows::value_type*> rows;
     rows.reserve(result.rows.size());
     for (const auto& row : result.rows) rows.push_back(&row);
@@ -218,7 +218,6 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
                 {static_cast<std::int64_t>(partial.te), -1});
         }
 
-        // Merge quantiles when present.
         if (partial.duration_q.count() > 0) {
             out.quantiles_available = true;
             if (!target->quantiles)
@@ -270,7 +269,6 @@ AggregatedTraces load_aggregated_traces(const std::string& index_path,
         }
     }
 
-    // Quantiles + Statistic objects.
     auto attach_stat = [](Statistic& stat, const ComponentAccumulator& a) {
         if (!a.min_max_seen) return;
         // Seed Statistic with min and max (in seconds) so its fallback quantile

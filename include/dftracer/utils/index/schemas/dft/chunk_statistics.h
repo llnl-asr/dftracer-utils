@@ -66,11 +66,10 @@ struct ChunkStatistics {
     static constexpr std::uint32_t NO_SLOT =
         std::numeric_limits<std::uint32_t>::max();
 
-    /// Where the entries of one (name, category) pair sit in the maps below,
-    /// each as its position in the map, found by string once and reused after.
-    /// A slot holds while the maps only gain entries, so a caller keeps
-    /// the slots of one chunk's statistics for as long as it alone updates
-    /// them, and never applies them to another ChunkStatistics.
+    /// Positions of the entries of one (name, category) pair in the maps below,
+    /// found by string once. A slot holds while the maps only gain entries.
+    /// Keep the slots of one chunk's statistics only while the caller alone
+    /// updates them. Never apply them to another ChunkStatistics.
     struct NameSlots {
         std::uint32_t category_count = NO_SLOT;
         std::uint32_t name_count = NO_SLOT;
@@ -82,16 +81,14 @@ struct ChunkStatistics {
         std::uint32_t cat_sum = NO_SLOT;
     };
 
-    /// As NameSlots, for one (pid, tid) pair.
     struct PidSlots {
         std::uint32_t pid_tid_count = NO_SLOT;
         std::uint32_t pid_sketch = NO_SLOT;
         std::uint32_t pid_sum = NO_SLOT;
     };
 
-    /// As update_from_event, but a key already in `names` or `pids` is found by
-    /// its slot and no key string is hashed or compared; an empty slot is
-    /// filled from the strings.
+    /// As update_from_event, but a key in `names` or `pids` is found by its
+    /// slot without hashing. An empty slot is filled from the strings.
     void update_from_event(NameSlots& names, PidSlots& pids,
                            std::string_view name, std::string_view cat,
                            std::uint64_t pid, std::uint64_t tid,

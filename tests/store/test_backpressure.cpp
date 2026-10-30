@@ -28,8 +28,6 @@
 
 namespace dftracer::utils::store {
 
-/// Swaps the writer's descriptor for a read-only one on the same file, so
-/// every pwrite fails and the extent writes are the ones that fail.
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
                                  const std::string& path) {
@@ -72,10 +70,8 @@ constexpr int RUNTIME_THREADS = 8;
 /// with segments of two commits in it and nothing writing them.
 constexpr std::size_t RAW_KEYS = 3;
 constexpr std::size_t RAW_VALUE_BYTES = 8000;
-/// A segment of one fold batch of 8-byte values, about the size of a raw one.
 constexpr std::size_t FOLD_KEYS = 1600;
 constexpr int SCOPES = 4;
-/// A commit may report Busy this many times before the test calls it stuck.
 constexpr int RETRY_ATTEMPTS = 4000;
 constexpr int BATCH_ATTEMPTS = 64;
 constexpr std::chrono::seconds TASK_LIMIT{60};
@@ -84,7 +80,7 @@ constexpr std::chrono::seconds WAIT_LIMIT{30};
 // A sanitizer build runs under a ctest timeout of 120 s (ASan) or 300 s (TSan)
 // and makes a commit tens of times slower, so the thread and batch counts of
 // the concurrent cases shrink there. Each case keeps its shape and every
-// assertion; only the number of commits differs.
+// assertion. Only the number of commits differs.
 #if defined(__SANITIZE_THREAD__) || defined(__SANITIZE_ADDRESS__)
 constexpr bool SANITIZED = true;
 #elif defined(__has_feature)
@@ -127,7 +123,6 @@ std::int64_t read_i64(ByteView bytes) {
         reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
-/// A child pool of the calling thread's pool, with @p limit bytes or none.
 memory::PoolHandle child_pool(const std::string& name, std::size_t limit) {
     return memory::current_pool().child(name, memory::PoolKind::Scratch,
                                         memory::Limits{limit});
@@ -199,23 +194,19 @@ bool is_busy(const dstd::Error& error) {
     return error.is_code(WriterErrc::Busy);
 }
 
-/// Waits for a submitted task and fails the test instead of hanging it.
 template <class Handle>
 void await_handle(Handle& handle, std::chrono::seconds limit) {
     REQUIRE(handle.future.wait_for(limit) == std::future_status::ready);
     handle.wait();
 }
 
-/// Awaits space() between the commits of the test thread itself.
 void await_space(Writer& writer) {
     TaskHandle handle = store_runtime().submit(writer.space(), "writer-space");
     await_handle(handle, WAIT_LIMIT);
 }
 
-/// The commit of one batch with the retry the writer documents: the bytes of
-/// earlier commits are written, then the same batch commits again (a Busy
-/// commit left it whole). The attempts are bounded so a writer that never
-/// makes progress fails the test instead of hanging it.
+/// The commit of one batch with the retry the writer documents. The attempts
+/// are bounded so a writer that never makes progress fails the test.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
     Writer& writer, Batch batch, int attempts) {
     for (int attempt = 0; attempt < attempts; ++attempt) {
@@ -229,7 +220,6 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
         dstd::Error(WriterErrc::Busy, "the writer made no progress"));
 }
 
-/// One raw batch of `keys` entries whose values are `value_bytes` long.
 template <class KeyFn, class ValueFn>
 Batch raw_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
                 std::size_t keys, std::size_t value_bytes, KeyFn key_of,
@@ -242,7 +232,6 @@ Batch raw_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
     return batch;
 }
 
-/// One fold batch of `keys` entries whose values are 8 bytes.
 Batch fold_batch(Writer& writer, NamespaceId space, const ScopeKey& scope,
                  std::int64_t value, std::size_t keys) {
     Batch batch = writer.batch(space, scope, 0);
@@ -305,7 +294,6 @@ struct CopyRow {
     std::uint64_t generation = 0;
 };
 
-/// The copies the file announces, in the order its records carry them.
 std::vector<CopyRow> read_copies(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     REQUIRE(reader.has_value());
@@ -420,9 +408,7 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
 
     const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
     CHECK(counters.quota == QUOTA);
-    // The quota bound the bytes in flight, so a commit had to wait for a write.
     CHECK(counters.busy > 0);
-    // A segment here is smaller than an extent, so no take ran past the quota.
     CHECK(counters.over_quota == 0);
     CHECK(counters.peak_held <= counters.quota + EXTENT_BYTES);
     CHECK(counters.held == 0);
@@ -499,7 +485,6 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
 
     const WriterExtentsCounters before = WriterTestHook::extents(*writer);
     CHECK(before.quota == EXTENT_BYTES);
-    // One batch is held and the next does not fit it, so a commit waited.
     CHECK(before.busy > 0);
     CHECK(before.over_quota == 0);
     CHECK(before.peak_held <= before.quota);
@@ -517,7 +502,6 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     CHECK(got.size() == expected.size());
     CHECK(got == expected);
 
-    // A zero quota is a mistake, not a request for no bound.
     dftu_utils_test::ScopedTestDir other("store_backpressure_zero_quota");
     auto refused = Writer::create(other.str(), *store_runtime().executor(),
                                   manual_options(0));
@@ -551,15 +535,11 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
 
     REQUIRE(writer->commit(one(first_scope, "first")).has_value());
 
-    // One batch, about three quarters of the quota, is held; the next does not
-    // fit, and nothing has sealed the open extent yet.
     Batch refused = one(refused_scope, "refused");
     auto blocked = writer->commit(std::move(refused));
     REQUIRE_FALSE(blocked.has_value());
     REQUIRE(is_busy(blocked.error()));
 
-    // A third commit that fits the extent the first one left open, so the
-    // extent holds the copies of both and the refused scope is still unknown.
     REQUIRE(writer
                 ->commit(raw_batch(
                     *writer, space, third_scope, 1, 64,
@@ -569,8 +549,6 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
 
     await_space(*writer);
 
-    // The refused batch is whole, so the retry commits what the Busy commit
-    // left untouched.
     auto retried = writer->commit(std::move(refused));
     REQUIRE(retried.has_value());
 
@@ -578,8 +556,6 @@ TEST_CASE("back pressure: a Busy commit assigns no copy id or generation") {
 
     const std::vector<CopyRow> copies = read_copies(to_std(writer->path()));
     REQUIRE(copies.size() == 3);
-    // The ids follow the commits that succeeded: the commit that was Busy
-    // consumed none, so the copy of its retry is the last.
     CHECK(copy_id_of(copies, scope_path(1)) == 1);
     CHECK(copy_id_of(copies, scope_path(2)) == 2);
     CHECK(copy_id_of(copies, scope_path(0)) == 3);
@@ -688,8 +664,6 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
 
     std::unique_ptr<Writer> writer;
     {
-        // The writer's own pool is a child of this one, so its charges are
-        // counted here.
         memory::Scope pool_scope(*budget_pool.get());
         auto created = Writer::create(dir.str(), *store_runtime().executor(),
                                       manual_options(QUOTA));
@@ -743,8 +717,6 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
                                 }),
                             RETRY_ATTEMPTS);
                         if (!done.has_value()) errors.fetch_add(1);
-                        // A commit leaves its segment in an open extent, so the
-                        // bytes it charged are held at this point.
                         const WriterExtentsCounters counters =
                             WriterTestHook::extents(*writer);
                         if (counters.held == 0) continue;
@@ -760,8 +732,6 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
         });
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
-    // Every byte held is a byte the writer's pool holds for it, and nothing
-    // ran past the quota, so the pool admitted every charge.
     CHECK(charged_while_held.load() > 0);
     CHECK(uncharged_while_held.load() == 0);
 
@@ -843,8 +813,6 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
-    // The pool refused every charge, so every batch either waited for the one
-    // before it or was taken past the quota, and each of them completed.
     const WriterExtentsCounters counters = WriterTestHook::extents(*writer);
     CHECK(counters.over_quota == BATCHES);
     CHECK(counters.busy > 0);
@@ -881,8 +849,6 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     const WriterExtentsCounters before = WriterTestHook::extents(*writer);
     CHECK(before.held > 0);
 
-    // Every extent write fails from here on, so the batch above is discarded:
-    // its bytes go back and the count latches.
     store::DataFileWriterTestHook::reopen_read_only(
         WriterTestHook::file(*writer), to_std(writer->path()));
 
@@ -901,7 +867,6 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     CHECK_FALSE(is_busy(refused.error()));
     CHECK(refused.error().is(Condition::Io));
 
-    // The latch ends every later wait at once.
     await_space(*writer);
     await_space(*writer);
 
@@ -928,7 +893,7 @@ TEST_CASE(
                 .has_value());
     CHECK(WriterTestHook::extents(*writer).held > 0);
 
-    // space() seals the open extent and parks before its write fails; nothing
+    // space() seals the open extent and parks before its write fails. Nothing
     // else touches the writer, so only the failed write can end the wait.
     store::DataFileWriterTestHook::reopen_read_only(
         WriterTestHook::file(*writer), to_std(writer->path()));
@@ -1005,7 +970,6 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     CHECK(at_refusal.held <= LIMIT_BYTES);
     CHECK(at_refusal.reservation == at_refusal.held);
 
-    // Every batch still commits once space() lets the held bytes go.
     std::atomic<int> errors{0};
     TaskHandle handle = store_runtime().scope(
         "limit", [&](CoroScope& runner) -> coro::CoroTask<void> {
@@ -1064,7 +1028,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     auto busy = writer->commit(std::move(big));
     REQUIRE_FALSE(busy.has_value());
     CHECK(is_busy(busy.error()));
-    // The big value goes to the file as the segment is sealed; a Busy commit
+    // The big value goes to the file as the segment is sealed. A Busy commit
     // sealed nothing, so the file did not grow by it.
     CHECK(std::filesystem::file_size(path) < size_before + big_value.size());
 
@@ -1103,7 +1067,7 @@ TEST_CASE(
     appended = false;
 
     // Nothing is held when space() seals, so its seal writes nothing. The hook
-    // then commits a batch that stays in an open extent; only the commit's own
+    // then commits a batch that stays in an open extent. Only the commit's own
     // seal, done because a wait is announced, writes it and wakes the waiter.
     WriterTestHook::set_space_sealed([](Writer& w) {
         if (&w != hooked || appended) return;
@@ -1127,7 +1091,7 @@ TEST_CASE(
 TEST_CASE("back pressure keeps extents full under steady load") {
     // Many coroutines on one writer keep a waiter announced most of the time.
     // Sealing on every Busy or every announced wait writes extents that are
-    // mostly empty; sealing only when no write is in flight keeps them full.
+    // mostly empty. Sealing only when no write is in flight keeps them full.
     constexpr int COROS = SANITIZED ? 4 : 16;
     constexpr int ROUNDS = SANITIZED ? 10 : 40;
     dftu_utils_test::ScopedTestDir dir("store_backpressure_full_extents");
@@ -1171,9 +1135,8 @@ TEST_CASE("back pressure keeps extents full under steady load") {
     const std::uint64_t busy = WriterTestHook::extents(*writer).busy;
     INFO("extents " << extents << " bytes " << bytes << " busy " << busy);
     REQUIRE(extents > 0);
-    // The quota refused commits, so the rule was under test.
     if (!SANITIZED) CHECK(busy > 0);
-    // Extents hold at least half an extent of raw segment bytes on average; the
+    // Extents hold at least half an extent of raw segment bytes on average. The
     // stored extents are smaller, since they are compressed.
     auto reader = store::DataFileReader::open(
         std::string(writer->path().data(), writer->path().size()));

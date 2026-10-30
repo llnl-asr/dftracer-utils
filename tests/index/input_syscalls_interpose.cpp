@@ -1,8 +1,7 @@
-// Test-only library that counts the path-based stat-family and open-family
-// calls of the process it is injected into (DYLD_INSERT_LIBRARIES on macOS,
-// LD_PRELOAD on Linux). At exit it writes "<class>\t<count>\t<path>" lines to
-// the file named by DFTRACER_UTILS_TEST_SYSCALL_LOG. fd-based fstat is not
-// counted. Paths are recorded as the caller gave them.
+// Counts the path-based stat and open calls of the process it is injected into
+// (DYLD_INSERT_LIBRARIES on macOS, LD_PRELOAD on Linux). At exit it writes
+// "<class>\t<count>\t<path>" lines to DFTRACER_UTILS_TEST_SYSCALL_LOG. fd-based
+// fstat is not counted.
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>

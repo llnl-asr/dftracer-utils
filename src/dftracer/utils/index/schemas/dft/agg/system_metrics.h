@@ -13,11 +13,9 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-/// The number of shards the counters of a typed collect are split into.
 static constexpr std::uint16_t AGG_KEY_NUM_SHARDS = 4096;
 
-/// The shard of the counter group of host `hhash` and metric `name`: a
-/// function of their texts alone, so the buckets of one group share a shard.
+/// Depends on the texts alone, so the buckets of one group share a shard.
 inline std::uint16_t system_shard(std::string_view hhash,
                                   std::string_view name) {
     utilities::hash::Fnv1aHashBuilder h;
@@ -30,12 +28,9 @@ inline std::uint16_t system_shard(std::string_view hhash,
 /// metrics; they differ only in carrying fractional values.
 using SystemMetricsMap = dstd::HashMap<dstd::String, MetricStats>;
 
-/// The counters of one (host, name, time bucket) of a typed collect: the
-/// count, the timestamp range and one MetricStats per numeric arg.
 struct SystemAggregationMetrics {
     std::uint64_t count = 0;
 
-    /// The timestamp range of the events of the group.
     std::uint64_t ts = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t te = 0;
 

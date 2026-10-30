@@ -22,8 +22,7 @@ namespace rdb = index::store;
 namespace {
 
 constexpr std::string_view VALUE_KEY = "\x01";
-// The signature that prefixed the key when entries shared one key space; the
-// size of an entry still counts it.
+// The size of an entry counts the signature that names it.
 constexpr std::uint64_t SIG_BYTES = 8;
 
 }  // namespace

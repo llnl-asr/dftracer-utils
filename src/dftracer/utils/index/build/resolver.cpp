@@ -175,9 +175,8 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                     same_interval.params_hash() == stored->params_hash;
             }
         } else {
-            // Partials with no config record are of a build that kept it in
-            // another place, and their keys may be in another layout: they
-            // are never read, and the tier is built again.
+            // Partials with no config record may have keys in another layout,
+            // so they are never read and the tier is built again.
             for (const auto& [path, reg] : registry)
                 if (db.extension_state(reg.file_id,
                                        index::store::IndexExtension::Agg)) {
@@ -247,9 +246,9 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
             if (find_schema(schema)) {
                 const auto agg_state = db.extension_state(
                     reg.file_id, index::store::IndexExtension::Agg);
-                // Rows stored by another version of the tier are of another
-                // layout, and the index-wide records cannot hold two layouts
-                // at once: the tier is cleared and rebuilt, never merged onto.
+                // Another tier version has another layout and the index-wide
+                // records cannot hold two, so the tier is rebuilt, never
+                // merged.
                 if (agg_state && agg_state->version !=
                                      index::store::layout::ext_version(
                                          index::store::IndexExtension::Agg))
@@ -291,8 +290,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         DFTRACER_UTILS_LOG_WARN(
             "Index resolve failed (%s); falling back to full rebuild",
             e.what());
-        // The tier may be what failed to read, so it is cleared and built
-        // again with the files.
+        // The tier may be what failed to read, so it is cleared.
         result.aggregation_stale = true;
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(

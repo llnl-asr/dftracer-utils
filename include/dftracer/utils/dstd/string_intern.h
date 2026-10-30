@@ -21,8 +21,6 @@ class StringIntern {
     using IndexSlot = std::atomic<std::uint64_t>;
 
    public:
-    /// id -> string lives in lazily allocated blocks behind a two-level
-    /// directory, so a small table costs a few KB rather than the id space.
     static constexpr std::size_t BLOCK_BITS = 10;
     static constexpr std::size_t BLOCK_SIZE = 1u << BLOCK_BITS;
     static constexpr std::size_t DIRECTORY_SIZE = 1u << 18;
@@ -30,14 +28,14 @@ class StringIntern {
 
     static constexpr std::uint32_t NO_ID = UINT32_MAX;
 
-    /// Chunks start at FIRST_CHUNK_BYTES and double up to CHUNK_BYTES, so a
-    /// small table stays small; a record larger than CHUNK_BYTES gets a chunk
-    /// of its own size. Records are `{u32 len, u32 chunk, bytes}` padded to 4.
+    /// Chunks start at FIRST_CHUNK_BYTES and double up to CHUNK_BYTES. A record
+    /// larger than CHUNK_BYTES gets a chunk of its own. Records are
+    /// `{u32 len, u32 chunk, bytes}` padded to 4.
     static constexpr std::size_t FIRST_CHUNK_BYTES = std::size_t{1} << 7;
     static constexpr std::size_t CHUNK_BYTES = std::size_t{1} << 20;
 
-    /// Owned bytes that a column can hold by `shared_ptr`. `size()` is the
-    /// capacity; take views only inside records that `locate` returned.
+    /// Owned bytes that a column can hold by `shared_ptr`. Take views only
+    /// inside records that `locate` returned.
     class Chunk {
        public:
         Chunk(std::size_t size, memory::Pool& pool);
@@ -53,7 +51,7 @@ class StringIntern {
         std::size_t size_;
     };
 
-    /// `data` is null when the id has no string; `offset` is where `data`
+    /// `data` is null when the id has no string. `offset` is where `data`
     /// starts inside chunk `chunk`.
     struct Location {
         const char* data;
@@ -70,9 +68,9 @@ class StringIntern {
         OutOfRange,
     };
 
-    /// Every directory, block, index and chunk is charged to @p pool, or to the
-    /// general pool when it is null, whatever thread allocates. The pool must
-    /// stay open until the table and every chunk it handed out are gone.
+    /// Memory is charged to @p pool, or to the general pool when it is null,
+    /// whatever thread allocates. The pool must stay open until the table and
+    /// every chunk it handed out are gone.
     explicit StringIntern(memory::Pool* pool = nullptr);
     ~StringIntern();
 
@@ -89,27 +87,24 @@ class StringIntern {
     /// lock.
     std::uint32_t find(std::string_view sv) const;
 
-    /// Insert at a specific id, for loading a persisted dictionary. Ids are
-    /// index-local, so a conflicting id is reported rather than rebound to
-    /// another index's string; `resolve(id)` then names the string it holds.
-    /// Must precede any `resolve(id)` at that id.
+    /// Insert at a specific id, for loading a persisted dictionary. A
+    /// conflicting id is reported, not rebound, and `resolve(id)` names the
+    /// string it holds. Must precede any `resolve(id)` at that id.
     [[nodiscard]] InsertStatus insert_at_id(std::uint32_t id,
                                             std::string_view sv);
 
-    /// Empty means "no string at this id"; an id past the table's reach is a
-    /// corrupt or foreign key, not an absent string, and throws
+    /// Empty means no string at this id. An id past the table's reach throws
     /// std::out_of_range.
     std::string_view resolve(std::uint32_t id) const;
 
     Location locate(std::uint32_t id) const;
 
-    /// Valid for any chunk index that `locate` returned; the chunk outlives
-    /// the intern while the returned pointer is held.
+    /// Valid for any chunk index that `locate` returned. The chunk outlives the
+    /// intern while the returned pointer is held.
     std::shared_ptr<Chunk> chunk(std::uint32_t i) const;
 
     /// Number of strings interned, and the id of the n-th in insertion order.
-    /// Content-derived ids are sparse, so enumerating the dictionary walks
-    /// these rather than the id range.
+    /// Content-derived ids are sparse, so walk these rather than the id range.
     std::size_t entry_count() const;
 
     std::uint32_t entry_id(std::size_t n) const;
@@ -120,10 +115,9 @@ class StringIntern {
         return num_strings_.load(std::memory_order_acquire);
     }
 
-    /// Derive ids from string content instead of a counter, so keys embedding
-    /// them match across MPI ranks. The id space is finite, so this only holds
-    /// for dictionaries small enough to avoid a birthday collision; a collision
-    /// throws. Must precede any `get_or_insert`.
+    /// Derive ids from string content instead of a counter, so ids match across
+    /// MPI ranks. A hash collision throws, so use it for small dictionaries.
+    /// Must precede any `get_or_insert`.
     void enable_deterministic_ids() noexcept {
         deterministic_ids_.store(true, std::memory_order_release);
     }
@@ -140,9 +134,9 @@ class StringIntern {
     static_assert((SHARDS & (SHARDS - 1)) == 0);
     static constexpr std::size_t INITIAL_INDEX_SLOTS = 1u << 4;
 
-    /// Open-addressed string -> id lookup; slots hold `(low 32 hash bits <<
-    /// 32) | (id + 1)`, so 0 is free and growth never rehashes a string.
-    /// Growth publishes a replacement and never writes the old one again.
+    /// Open-addressed string -> id lookup. Slots hold `(low 32 hash bits << 32)
+    /// | (id + 1)`, so 0 is free. Growth publishes a replacement and never
+    /// writes the old one again.
     struct Index {
         std::size_t mask;
         IndexSlot* slots;
@@ -162,9 +156,8 @@ class StringIntern {
 
     static void release_bytes(void* p, std::size_t bytes) noexcept;
 
-    /// N entries in two levels: a small top array and leaves of LEAF entries
-    /// made on first use, so a table that holds few strings costs a few KB
-    /// rather than the whole directory. Entries never move once made.
+    /// N entries in two levels, with leaves made on first use. Entries never
+    /// move once made.
     template <class Block, std::size_t N>
     struct Directory {
         static constexpr std::size_t LEAF_BITS = 10;

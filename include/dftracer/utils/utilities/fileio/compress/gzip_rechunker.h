@@ -22,8 +22,8 @@
 
 namespace dftracer::utils::utilities::fileio::compress {
 
-/// A member larger than this is worth rewriting as smaller members: the
-/// readers stream it, but a multi-member file is read faster and in parallel.
+/// A member larger than this is worth rewriting as smaller members, since a
+/// multi-member file reads faster and in parallel.
 inline constexpr std::size_t RECHUNK_MEMBER_CAP = std::size_t{1} << 31;
 
 /// What decoding the start of a file shows. `compressed` and `uncompressed`
@@ -34,12 +34,10 @@ struct FirstMember {
     std::uint64_t uncompressed = 0;
 };
 
-/// Decodes the first gzip member of the file, discarding the output, and stops
-/// once the output passes `cap`. Bounded memory: one member at most, never
-/// held. With `sample_bytes` the decode goes on through the next members until
-/// it has read that many compressed bytes, so a tiny first member (a "[" line
-/// of its own) does not decide the ratio. `exceeds_cap` is about the first
-/// member only.
+/// Decodes the first gzip member, discarding the output, and stops once the
+/// output passes `cap`, so memory stays bounded. With `sample_bytes` it goes on
+/// through the next members until it has read that many compressed bytes.
+/// `exceeds_cap` covers the first member only.
 inline coro::CoroTask<FirstMember> gzip_first_member(
     int fd, std::uint64_t file_size, std::size_t cap,
     std::uint64_t sample_bytes = 0) {
@@ -94,9 +92,7 @@ inline coro::CoroTask<FirstMember> gzip_first_member(
             member_produced = 0;
             continue;
         }
-        // The first member ended within the cap (or is corrupt): the fast path
-        // is safe. A corrupt or truncated stream is left for the normal path
-        // to report, since rechunking would not help.
+        // Corrupt or truncated data is left for the normal path to report.
         if (rc != InflateStatus::Ok) break;
     }
 

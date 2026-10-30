@@ -19,15 +19,10 @@
 namespace dftracer::utils::utilities::fileio::compress {
 
 /// Yields each gzip member's decompressed bytes in order, as a string_view into
-/// a reused buffer valid until the next step. Boundaries come from libdeflate's
-/// consumed-byte count, so no header scanning is needed. A member is decoded
-/// whole when it fits `stream_above` bytes (dftracer writes ~16MB members), so
-/// peak memory is one decoded member. A member that does not fit is read again
-/// from its header with a zlib stream and yielded in steps of whole lines, so
-/// memory stays bounded for a member of any size; the libdeflate buffer stops
-/// at `stream_above`, so at most that much work is lost per such member. A
-/// last member cut short at end of file yields its complete lines when
-/// `recover_truncated` is set, and throws like corrupt data when it is not.
+/// a reused buffer valid until the next step. A member over `stream_above`
+/// bytes is streamed in steps of whole lines, losing at most that much work. A
+/// last member cut short yields its complete lines when `recover_truncated` is
+/// set, else it throws.
 inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
     int fd, std::uint64_t file_size,
     std::size_t stream_above = std::size_t{32} << 20,
@@ -152,8 +147,8 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
         }
 
         if (too_big) {
-            // Read the member again from its header, a step at a time. A step
-            // ends at its last newline; the rest is kept for the next one.
+            // A step ends at its last newline. The rest is kept for the next
+            // one.
             GzipStreamInflater zs;
             if (!zs.init(31)) {
                 throw DFTUtilsException(ErrorCode::Compression,
@@ -161,7 +156,6 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
             }
             auto in =
                 std::make_unique_for_overwrite<unsigned char[]>(READ_CHUNK);
-            // The input read so far comes first.
             zs.set_input(comp.get() + head, tail - head);
             std::uint64_t stream_read = next_read;
             std::size_t filled = 0;
@@ -226,7 +220,6 @@ inline coro::AsyncGenerator<std::string_view> decode_gzip_members(
                 co_return;
             }
             comp_off += zs.total_in();
-            // The next member is read again from the file.
             head = tail = 0;
             next_read = comp_off;
             continue;

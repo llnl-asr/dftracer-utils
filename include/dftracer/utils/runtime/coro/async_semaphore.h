@@ -35,7 +35,7 @@ class CoroSemaphore {
     CoroSemaphore& operator=(const CoroSemaphore&) = delete;
 
     /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while it waits; no permits are taken then.
+    /// executor shuts down while it waits. No permits are taken then.
     class AcquireOperation {
        public:
         AcquireOperation(CoroSemaphore& sem, std::uint64_t n) noexcept

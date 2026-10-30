@@ -167,7 +167,7 @@ TEST_CASE("line_format - run-time parse errors") {
 
 TEST_CASE("line_format - writer output equals hand-built lines") {
     namespace fs = std::filesystem;
-    // A unique folder: two test processes must not share and remove it.
+    // A unique folder, as two test processes must not share and remove it.
     dftu_utils_test::ScopedTestDir scoped("dftu_line_format_test");
     const fs::path& dir = scoped.path();
     const std::string p1 = (dir / "ordered.gz").string();

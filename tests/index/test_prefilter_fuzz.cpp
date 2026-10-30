@@ -170,15 +170,13 @@ std::string random_query(std::mt19937& rng, int depth) {
     }
 }
 
-// A few gzip members per file: each member is a scan unit, and every unit
-// costs a fixed stream setup per scan, so the line counts stop a little past
-// four members.
+// Each member is a scan unit with a fixed stream setup per scan, so the line
+// counts stop a little past four members.
 constexpr std::size_t MEMBER_BYTES = 16 * 1024;
 constexpr int EVENT_LINES = 300;
 constexpr int GENERIC_LINES = 450;
 
-// A read buffer of one member, so each scan crosses several buffers; the 4 MB
-// default would zero-fill per scan for no gain.
+// The 4 MB default buffer would zero-fill per scan for no gain.
 constexpr std::size_t READ_BUFFER_BYTES = MEMBER_BYTES;
 
 struct ViewCounts {
@@ -186,7 +184,6 @@ struct ViewCounts {
     std::uint64_t plain = 0;
 };
 
-// Plans once and scans the planned units with and without the pre-filter.
 ViewCounts view_counts(const std::string& gz, const Query& q) {
     views::detail::ViewPlan vp;
     vp.files.push_back(

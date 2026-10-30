@@ -115,9 +115,9 @@ inline dstd::Unexpected<dstd::Error> make_error(ErrorCode code,
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
 
-/// Build an error from a domain enum; the enum type selects its error_info via
-/// ADL, so a code cannot be paired with the wrong domain and a typo does not
-/// compile. Returning dstd::Unexpected makes it convertible to any Result<T>.
+/// Build an error from a domain enum. The enum type selects its error_info via
+/// ADL, so a code cannot be paired with the wrong domain. The result converts
+/// to any Result<T>.
 template <dstd::ErrorEnum E>
 dstd::Unexpected<dstd::Error> make_error(E code, std::string_view message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});

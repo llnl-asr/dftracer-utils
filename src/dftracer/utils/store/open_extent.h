@@ -34,11 +34,9 @@ namespace dftracer::utils::store {
 inline std::atomic<std::size_t> g_dict_sample_bytes{std::size_t{8} << 20};
 
 /// One written block of a data file: an extent of segments, or the run of a
-/// segment that does not fit in an extent, in its stored form (extent_codec.h).
-/// `length` is the stored length rounded up to 4096 and is what the file holds
-/// at `offset`; `crc` covers all `length` bytes, and segment offsets count from
-/// the raw bytes. `contexts` runs parallel to `segments` and holds the context
-/// the appender gave for each.
+/// segment too big for an extent, in its stored form. `length` is the stored
+/// length rounded up to 4096. `crc` covers all `length` bytes. Segment offsets
+/// count from the raw bytes. `contexts` runs parallel to `segments`.
 struct WrittenExtent {
     std::uint64_t offset = 0;
     std::uint32_t length = 0;
@@ -63,20 +61,11 @@ using DiscardedContextFn = void (*)(void* context);
 /// the ExtentWriter.
 using IdleFn = void (*)(void* context);
 
-/// Fills the open extent of each namespace with sealed segments and writes a
-/// extent through the runtime I/O backend once it is sealed and its last writer
-/// has left.
-///
-/// append() and seal_all() are safe from many threads at once: appending
-/// reserves its bytes with one compare-and-swap on the extent state and holds a
-/// per-extent spin lock only to record the segment, and sealing takes the
-/// writer's mutexes. wait_idle() blocks the calling thread and must not run on
-/// a thread of the executor that owns the backend; wait_idle_async() is the
-/// same wait for a coroutine of that executor.
-///
-/// Destroy the writer only after the in-flight writes reached zero, through
-/// one of the two waits: a completion in flight still calls back into it. The
-/// contexts of the extents that no write took then go to the discard callback.
+/// Fills the open extent of each namespace with sealed segments and writes it
+/// through the runtime I/O backend once sealed. append() and seal_all() are
+/// safe from many threads. wait_idle() must not run on the backend's executor.
+/// Destroy only after in-flight writes reached zero. Unwritten contexts are
+/// discarded.
 class ExtentWriter {
    public:
     ExtentWriter(DataFileWriter& file, io::IoBackend& backend,
@@ -90,22 +79,16 @@ class ExtentWriter {
     ExtentWriter& operator=(ExtentWriter&&) = delete;
     ~ExtentWriter();
 
-    /// Copies a sealed segment into the open extent of `namespace_id` at the
-    /// next free offset there, or into a run of its own when the segment is a
-    /// extent long or longer. `info.offset_in_extent` and `info.length` are set
-    /// from the reservation and the rest of `info` is kept. The bytes are
-    /// copied before this returns, so the caller's buffer may go away, and
-    /// `context` comes back with the segment in WrittenExtent::contexts. An
-    /// empty segment is InvalidArgument, and every call returns the first
-    /// write error once an extent write failed. The extents of a namespace
-    /// store their pages with the `codec` of its first append.
+    /// Copies a sealed segment into the open extent of `namespace_id`, or into
+    /// a run of its own when it is an extent long or longer. The bytes are
+    /// copied before this returns, and `context` comes back in
+    /// WrittenExtent::contexts. An empty segment is InvalidArgument. Once a
+    /// write failed, returns its error.
     dstd::Expected<void, dstd::Error> append(std::uint32_t namespace_id,
                                              ByteView segment_bytes,
                                              ExtentSegment info, void* context,
                                              PageCodec codec = PageCodec::Zstd);
 
-    /// Writes `length` bytes of a sealed segment into its place, with no copy
-    /// of their own.
     using SegmentWriteFn = void (*)(void* context, std::uint8_t* out);
 
     /// append() for a segment that `write` writes straight into the open
@@ -133,7 +116,7 @@ class ExtentWriter {
 
     std::uint32_t extent_size() const noexcept { return extent_size_; }
 
-    /// True while an extent write is in flight. Its completion will release
+    /// True while an extent write is in flight, whose completion releases
     /// bytes, so a caller under back pressure need not seal a partial extent.
     bool writing();
 
@@ -148,13 +131,11 @@ class ExtentWriter {
 
     NamespaceSlot* find_slot(std::uint32_t namespace_id, PageCodec codec);
     OpenExtent* publish_extent(NamespaceSlot& slot, OpenExtent* expected);
-    /// The dictionary an extent of `slot` with the raw pages `starts` cut
-    /// from `raw` compresses with, or null. Adds the pages to the sample of
-    /// the namespace and starts the training of the next dictionary as a task
-    /// of the executor once it is full; a later seal writes the trained
-    /// dictionary and uses it, and once the namespace sealed DICT_WAIT_BYTES
-    /// while it trained, the seal finishes the training itself. A failed
-    /// training or dictionary write ends the training for the namespace.
+    /// The dictionary an extent of `slot` compresses with, or null. Adds the
+    /// pages to the namespace sample and starts training as an executor task
+    /// once it is full. After DICT_WAIT_BYTES sealed while it trained, the seal
+    /// finishes it. A failed training or dictionary write ends it for the
+    /// namespace.
     dstd::SharedPtr<const PageDict> page_dict(
         NamespaceSlot& slot, const std::uint8_t* raw, std::uint32_t used,
         dstd::Span<const std::uint32_t> starts);
@@ -162,9 +143,8 @@ class ExtentWriter {
     void leave_extent(OpenExtent* extent);
     bool seal_extent(OpenExtent* extent);
     void start_extent_write(OpenExtent* extent);
-    /// Retires a sealed extent whose writers have all left. Its buffer and
-    /// segment list are already moved out; the extent is deleted with the
-    /// writer.
+    /// Retires a sealed extent whose writers have all left. The extent is
+    /// deleted with the writer.
     void retire(OpenExtent* extent);
     dstd::Expected<void, dstd::Error> append_run(std::uint32_t namespace_id,
                                                  ByteView segment_bytes,
@@ -206,18 +186,14 @@ class ExtentWriter {
     std::uint64_t in_flight_ = 0;
 };
 
-/// Test-only access to the writer's open and retired extents. Defined in
-/// open_extent.cpp, where the open extent layout is complete.
+/// Test-only access to the writer's open and retired extents.
 struct ExtentWriterTestHook {
-    /// Seals the open extent of a namespace and leaves it while the slot still
-    /// points at it, which is the state an appender meets when another thread
-    /// sealed the extent and has not installed the next one yet.
+    /// Seals the open extent of a namespace and leaves it in the slot, as an
+    /// appender meets it when another thread has not installed the next yet.
     static bool seal_in_place(ExtentWriter& writer, std::uint32_t namespace_id);
 
-    /// Bytes still held by the extents the writer retired and has not deleted.
     static std::size_t retired_bytes(ExtentWriter& writer);
 
-    /// Extents retired so far, which stay at one per extent written.
     static std::size_t retired_extents(ExtentWriter& writer);
 };
 

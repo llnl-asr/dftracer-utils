@@ -53,7 +53,7 @@ constexpr bool HAVE_IO_URING =
 }
 
 // Auto when the variable is unset, empty or "auto". Otherwise the backend it
-// names; one the platform lacks or an unknown name throws.
+// names. One the platform lacks or an unknown name throws.
 IoBackendType backend_from_env(bool& forced) {
     forced = false;
     auto raw = Env::get<std::string_view>(constants::io_settings::BACKEND_ENV);

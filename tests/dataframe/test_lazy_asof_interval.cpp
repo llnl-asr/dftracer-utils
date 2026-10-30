@@ -366,7 +366,7 @@ TEST_CASE("long intervals stay active across many right morsels") {
                                     .interval(budgeted(right, budget), "point",
                                               "lo", "hi", {}, outer)),
                         eager);
-        // Small morsels with no budget: the right side moves several morsels
+        // Small morsels with no budget, so the right side moves several morsels
         // between two flushes.
         expect_same(morsels(left.lazy().interval(right.lazy(), "point", "lo",
                                                  "hi", {}, outer),

@@ -17,9 +17,8 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-/// What the events of a partial are: events, profiles (counters of a category
-/// other than sys), sys counters and aggregated records. A name used as more
-/// than one has one partial of each.
+/// What the events of a partial are. A name used as more than one kind has one
+/// partial of each. Profile is a counter of a category other than sys.
 enum class PartialKind : std::uint8_t {
     Event = 0,
     Profile = 1,
@@ -27,20 +26,11 @@ enum class PartialKind : std::uint8_t {
     Aggregated = 3
 };
 
-/// A set of ids kept exactly up to this many ids.
 inline constexpr std::size_t DISTINCT_EXACT_CAPACITY = 256;
 
 /// The distinct count of one id kind (pid, tid, file). Up to
-/// DISTINCT_EXACT_CAPACITY ids it is a sorted list and the count is exact; the
-/// id after that turns it into a sparse DistinctSketch and the count is an
-/// estimate from then on (is_exact() says which). Merging two lists stays a
-/// list while the union fits. Ids enter the sketch through splitmix64, so
-/// small ids spread over the registers.
-///
-/// Layout: a union of the list (24 B) and the sketch pointer (8 B) with a
-/// tag, 32 B in all. An empty set holds no heap bytes; the list grows
-/// geometrically (at most 9 allocations up to 256 ids) and the sketch is one
-/// allocation plus its own storage.
+/// DISTINCT_EXACT_CAPACITY ids the count is exact. Past it the set becomes a
+/// DistinctSketch and the count is an estimate (is_exact() says which).
 class DistinctIds {
    public:
     using Sketch = utilities::common::statistics::DistinctSketch;
@@ -69,8 +59,6 @@ class DistinctIds {
                             : dstd::Span<const std::uint64_t>(list_);
     }
 
-    /// Appends the set: a tag, then delta varint ids (list), delta varint
-    /// sorted hashes (sparse sketch) or the registers (dense sketch).
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
     bool read_from(LeReader& r);
 
@@ -88,29 +76,25 @@ class DistinctIds {
     bool sketch_mode_ = false;
 };
 
-/// The id of a (pid, tid) pair in a DistinctIds set.
 inline std::uint64_t pid_tid_id(std::uint64_t pid, std::uint64_t tid) noexcept {
     return (pid << 32) | (tid & 0xFFFFFFFFu);
 }
 
-/// The id of a (pid, file) pair in a DistinctIds set.
 inline std::uint64_t pid_file_id(std::uint64_t pid,
                                  std::uint64_t file) noexcept {
     return file ^ (pid * hash::GOLDEN_RATIO);
 }
 
-/// First and last time one pid was seen in the partial: the smallest ts and
-/// the largest ts + duration of its events.
+/// The smallest ts and the largest ts + duration of the events of one pid.
 struct PidSpan {
     std::uint64_t pid = 0;
     std::uint64_t first = 0;
     std::uint64_t last = 0;
 };
 
-/// The sums of the events of one thread that start in one time bin of the
-/// build's interval: bin `bin` spans [bin * interval, (bin + 1) * interval)
-/// of the bucketed time (see compute_time_bucket). Durations and sizes are
-/// whole numbers, so the sums are exact.
+/// The sums of the events of one thread that start in one time bin. Bin `bin`
+/// spans [bin * interval, (bin + 1) * interval) of the bucketed time (see
+/// compute_time_bucket).
 struct TimeBin {
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
@@ -122,25 +106,16 @@ struct TimeBin {
     std::uint64_t size_sum = 0;
 };
 
-/// Everything the index keeps of the events of one (chunk, category, name),
-/// as a value that merges in place. The category and name are the key of the
-/// caller and are not stored. Merging the partials of the chunks of a file
-/// gives the metrics the per-event aggregator gives for that file: counts,
-/// sums, minima, maxima and times are exact, the central moments agree to
-/// rounding, and the distinct ids are exact up to DISTINCT_EXACT_CAPACITY.
-///
-/// A metric is absent while its FieldStat has n == 0 (size and offset are
-/// absent for most names); the serialized form omits it. The quantile stores
-/// are filled only when the caller asks for percentiles.
-///
-/// Only the metrics of the events are held: no boundary associations and no
-/// process tree.
+/// What the index keeps of the events of one (chunk, category, name), as a
+/// value that merges in place. The key is the caller's and is not stored. A
+/// merge is exact except central moments (to rounding). A metric is absent
+/// while its FieldStat has n == 0. Quantile stores fill only when percentiles
+/// are asked.
 struct AggPartial {
     std::uint64_t count = 0;
     std::uint64_t ts = UINT64_MAX;  ///< smallest ts; UINT64_MAX when empty
     std::uint64_t te = 0;           ///< largest ts + duration
-    /// Largest ts of an event, counters included. Every event of the partial
-    /// starts in [ts, ts_last_start].
+    /// Largest ts of an event, counters included.
     std::uint64_t ts_last_start = 0;
 
     dataframe::FieldStat duration;
@@ -149,9 +124,8 @@ struct AggPartial {
     QuantileStore duration_q;
     QuantileStore size_q;
     QuantileStore offset_q;
-    /// Values added one event at a time to duration, size and offset, which
-    /// the quantile stores hold when they are filled. A pre-aggregated
-    /// counter adds to the stats and to none of these.
+    /// Values added one event at a time to duration, size and offset, which the
+    /// quantile stores hold when filled. A pre-aggregated counter adds to none.
     std::uint64_t duration_values = 0;
     std::uint64_t size_values = 0;
     std::uint64_t offset_values = 0;
@@ -160,54 +134,44 @@ struct AggPartial {
     DistinctIds tids;
     DistinctIds files;
     /// Distinct (pid, tid) and (pid, file) pairs, by pid_tid_id and
-    /// pid_file_id. They count threads and per-process file accesses, which
-    /// the sets above cannot: a thread id repeats across processes.
+    /// pid_file_id. A thread id repeats across processes, so the sets above
+    /// cannot count them.
     DistinctIds pid_tids;
     DistinctIds pid_files;
 
     dstd::Vector<PidSpan> pid_spans;  ///< sorted by pid
-    /// The count, duration and size sums per thread and time bin, sorted by
-    /// (pid, tid, bin) with no key twice once normalize_bins ran. Empty when
-    /// the build had no interval. A merge drops them: they answer a split
-    /// of one stored partial, not of a merged row.
+    /// Sums per thread and time bin, sorted by (pid, tid, bin) once
+    /// normalize_bins ran. Empty when the build had no interval. A merge drops
+    /// them.
     dstd::Vector<TimeBin> bins;
-    /// The bin length in microseconds; 0 when the partial has no bins.
+    /// Microseconds. 0 when the partial has no bins.
     std::uint64_t bin_interval = 0;
     double accuracy;
 
     explicit AggPartial(
         double relative_accuracy = QuantileStore::DEFAULT_ACCURACY);
 
-    /// Back to the state of a new partial, keeping the capacity of the pid
-    /// spans.
     void clear();
 
-    /// Counts the event under pid/tid/file (file_id 0 means no file).
+    /// file_id 0 means no file.
     void observe(std::uint64_t pid, std::uint64_t tid, std::uint64_t file_id);
 
-    /// Widens ts, te and the span of `pid` to [ts, end].
     void add_span(std::uint64_t pid, std::uint64_t ts_in, std::uint64_t end);
 
     /// Merges `other` in place; `other` must not be `*this`. Both must use
     /// one quantile accuracy. Drops the bins of both.
     void merge(const AggPartial& other);
-    /// Sorts the bins by (pid, tid, bin) and adds up those with one key.
     void normalize_bins();
 
-    /// True when a distinct count is an estimate.
     bool has_estimate() const noexcept {
         return !pids.is_exact() || !tids.is_exact() || !files.is_exact() ||
                !pid_tids.is_exact() || !pid_files.is_exact();
     }
 
-    /// Appends the partial to `buf`. Integers are varints (ids, pid spans and
-    /// bins delta coded), doubles are IEEE bit patterns, the FieldStat keeps
-    /// its domain and exact sums with their carry. The bins must be
-    /// normalized.
+    /// Appends the partial to `buf`. The bins must be normalized.
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
 
-    /// What deserialize keeps of the stored partial. A part left out is
-    /// skipped in the bytes, not built, and reads as absent.
+    /// What deserialize keeps. A part left out is skipped and reads as absent.
     struct Fields {
         bool quantiles = true;  ///< the duration, size and offset stores
         bool bins = true;       ///< the time bins

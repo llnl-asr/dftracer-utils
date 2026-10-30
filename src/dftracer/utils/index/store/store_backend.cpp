@@ -26,8 +26,8 @@ namespace dftracer::utils::index::store {
 
 namespace {
 
-/// A copy with no entries announces none, so a Ready copy that holds no key
-/// carries this one entry instead: the inner key [0xFF], an empty value.
+/// A copy with no entries announces none, so a Ready copy with no key carries
+/// this entry (inner key [0xFF], empty value).
 constexpr std::string_view EMPTY_COPY_MARKER = "\xFF";
 
 std::string error_text(const dstd::Error& error) {
@@ -45,8 +45,8 @@ void check(std::string_view what,
     if (!result) throw_store_error(what, result.error());
 }
 
-/// The bound inside a copy of the full key `key`, which a copy names by its
-/// kind byte and then the tail of the key: empty for a bound at the prefix.
+/// A copy names a key by its kind byte and then the tail of the key. Empty for
+/// a bound at the prefix.
 std::string inner_bound_of(std::string_view key) {
     if (key.size() <= layout::KEY_PREFIX_BYTES) return {};
     std::string inner(1, key[2]);
@@ -54,8 +54,7 @@ std::string inner_bound_of(std::string_view key) {
     return inner;
 }
 
-/// Commits one batch, waiting for extent bytes and retrying while the writer
-/// reports Busy.
+/// Retries while the writer reports Busy.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_with_space(
     kv::Writer& writer, kv::Batch batch) {
     auto result = writer.commit(std::move(batch));
@@ -67,7 +66,6 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_with_space(
 }
 
 /// Runs `task` to its end on the process runtime and rethrows what it threw.
-/// From a worker of that runtime the wait hands off the worker's slot.
 void wait_for(coro::CoroTask<void> task) {
     default_runtime().run_blocking("store index write",
                                    [&task](CoroScope&) -> coro::CoroTask<void> {
@@ -83,8 +81,7 @@ kv::NamespaceSpec make_spec(const std::string& name,
     return spec;
 }
 
-/// The namespace of the extension every file has data in, which lists the
-/// files the store holds.
+/// Every file has data in this extension, so it lists the files of the store.
 kv::NamespaceSpec members_spec() {
     return make_spec(store_layout::namespace_name(layout::Ext::Members),
                      store_layout::namespace_version(layout::Ext::Members));
@@ -113,8 +110,8 @@ std::map<std::string, std::weak_ptr<StoreRoot>>& root_registry() {
     return value;
 }
 
-/// The key of one index root: absolute, without a trailing separator, so two
-/// spellings of one directory share one StoreRoot.
+/// Absolute and without a trailing separator, so two spellings of one directory
+/// share one StoreRoot.
 std::string root_key(const std::string& index_root) {
     std::error_code error;
     std::filesystem::path path = std::filesystem::absolute(index_root, error);
@@ -126,7 +123,6 @@ std::string root_key(const std::string& index_root) {
     return path.string();
 }
 
-/// The full key of a buffered inner key of (ext, kind, file_id).
 std::string full_key_of(layout::Ext ext, std::uint32_t file_id,
                         std::string_view inner_key) {
     std::string key = layout::file_prefix(
@@ -156,8 +152,8 @@ std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
     if (found != roots.end()) {
         if (auto live = found->second.lock()) return live;
     }
-    // A root outlives the query that opened it, so neither it nor its entry
-    // here is charged to that query's pool.
+    // A root outlives the query that opened it, so it is not charged to that
+    // query's pool.
     memory::Scope general(memory::Manager::get().general());
     auto created = std::shared_ptr<StoreRoot>(new StoreRoot(key));
     roots.insert_or_assign(key, created);
@@ -186,7 +182,6 @@ std::optional<std::string> StoreRoot::close_all() {
 
 StoreRoot::~StoreRoot() {
     memory::Scope in_pool(*pool_);
-    // A destructor cannot report the store error close() throws.
     try {
         close();
     } catch (const std::exception&) {
@@ -212,7 +207,7 @@ void StoreRoot::ensure_writer_locked() {
     if (!created)
         throw_store_error("store index: open the writer", created.error());
     writer_ = std::move(*created);
-    // The view a read took before this writer holds none of its copies.
+    // A snapshot taken before this writer holds none of its copies.
     snapshot_taken_ = false;
 }
 
@@ -225,16 +220,15 @@ dstd::Expected<void, dstd::Error> StoreRoot::run(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
     if (!runtime_)
         throw std::runtime_error("store index: no runtime to wait on");
-    // A commit can come from a worker of the runtime the writer runs on, so
-    // the wait hands off that worker's slot, as Runtime::run_blocking does.
+    // A commit can come from a worker of this runtime, so the wait hands off
+    // that worker's slot.
     const bool reentrant = Executor::current() == runtime_->executor();
     BlockingRegion block(reentrant ? runtime_->executor() : nullptr);
     return runtime_->submit(std::move(task)).get();
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::open_snapshot_locked() {
-    // A read-only root that was never written has no store directory; only a
-    // write creates it, so such a root reads as an empty store.
+    // A root that was never written has no store directory and reads as empty.
     if (writer_) {
         ensure_dir_locked();
     } else {
@@ -256,8 +250,6 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot() {
-    // Every read of the index asks, from every worker: the snapshot it can
-    // share needs no look and no reopen.
     if (std::chrono::steady_clock::now().time_since_epoch().count() <
         next_look_.load(std::memory_order_acquire)) {
         std::shared_lock<std::shared_mutex> shared(published_mutex_);
@@ -370,7 +362,6 @@ void StoreRoot::refresh() {
 void StoreRoot::refresh_locked() {
     ++version_;
     refreshed_version_ = version_;
-    // A table never seeded binds every path on its first use anyway.
     if (seeded_) {
         seeded_ = false;
         seed_file_ids_locked();
@@ -503,9 +494,6 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
                            dstd::Vector<kv::SourceStat>& sources) {
     memory::Scope in_pool(*pool_);
     if (scope.kind != kv::ScopeKind::File) return false;
-    // The write's own records and the Members copies this root committed
-    // answer most paths; a snapshot, which a commit makes stale, only the
-    // rest.
     const std::string members =
         store_layout::namespace_name(layout::Ext::Members);
     std::shared_ptr<const kv::Snapshot> held;
@@ -657,7 +645,6 @@ void StoreRoot::close_locked() {
     if (!writer_) return;
     const auto closed = run(writer_->close());
     writer_.reset();
-    // Namespace ids and committed copies belong to the closed writer.
     namespaces_.clear();
     committed_names_.clear();
     file_copies_.clear();
@@ -753,7 +740,7 @@ std::vector<StoreIndexWrite::PendingKey> StoreIndexWrite::resolved_keys(
     for (std::size_t i = 0; i < order.size(); ++i) {
         order[i] = static_cast<std::uint32_t>(i);
     }
-    // Stable, so the writes of one key stay in the order they were made.
+    // Stable, so the writes of one key keep their order.
     std::stable_sort(order.begin(), order.end(),
                      [&](std::uint32_t a, std::uint32_t b) {
                          return key_of(copy.keys[a]) < key_of(copy.keys[b]);
@@ -836,8 +823,6 @@ void StoreIndexWrite::clear_copy(layout::Ext ext, std::uint32_t file_id,
                                  std::string_view meta) {
     PendingCopy& copy = pending_copy(ext, file_id, plugin, meta);
     clear_pending(copy);
-    // The keys earlier stages of this write hold go too: a whole-copy erase of
-    // the building copy.
     if (staged_ && building(copy.name, copy.scope)) {
         erases_.push_back(
             PendingErase{copy.name, copy.version, copy.scope, {}, {}});
@@ -879,8 +864,7 @@ void StoreIndexWrite::host_put(const store_layout::HostTarget& target,
                 target.path,
                 kv::SourceStat{record->mtime, record->size, record->hash});
             root_->bind_file_id(target.path, static_cast<int>(record->file_id));
-            // A staged write publishes whole copies, so it never holds a
-            // Members copy for a record alone.
+            // A staged write publishes whole copies.
             if (!staged_)
                 pending_copy(layout::Ext::Members, record->file_id, {}, {})
                     .file_record = true;
@@ -958,8 +942,6 @@ void StoreIndexWrite::erase_keys(const store_layout::KeyTarget& target,
                                  std::string_view begin, std::string_view end) {
     const std::string name = namespace_of(target);
     const kv::ScopeKey scope = scope_of(target.file_id);
-    // A copy a stage of this write already holds keys of hides them through
-    // the same erase as a copy committed before.
     const bool staged_keys = staged_ && building(name, scope);
     auto at = pending_.find({name, scope});
     if (!staged_keys) {
@@ -1022,15 +1004,14 @@ void StoreIndexWrite::delete_range(std::string_view begin,
     }
     const std::string name = namespace_of(*target);
     const kv::ScopeKey scope = scope_of(target->file_id);
-    // A key of the copy is longer than its prefix, so a range that ends at or
-    // below the prefix holds none.
+    // A key is longer than its prefix, so a range ending at or below it holds
+    // none.
     if (end.size() <= layout::KEY_PREFIX_BYTES) return;
     erase_keys(*target, inner_bound_of(begin), inner_bound_of(end));
     auto at = pending_.find({name, scope});
     if (at == pending_.end()) return;
     PendingCopy& copy = at->second;
-    // Every key written so far that falls in the range is deleted; a later
-    // put of it wins again.
+    // A later put of a deleted key wins again.
     const std::size_t written = copy.keys.size();
     for (std::size_t i = 0; i < written; ++i) {
         const PendingKey entry = copy.keys[i];
@@ -1064,7 +1045,6 @@ void StoreIndexWrite::del(std::string_view key) {
     }
     const std::string name = namespace_of(*target);
     const kv::ScopeKey scope = scope_of(target->file_id);
-    // A single key is the range that holds it alone.
     erase_keys(*target, target->inner_key, target->inner_key + '\0');
     auto at = pending_.find({name, scope});
     if (at == pending_.end()) return;
@@ -1168,12 +1148,10 @@ void StoreIndexWrite::commit() {
 }
 
 coro::CoroTask<void> StoreIndexWrite::commit_async() {
-    // The writer finishes its writes on the process runtime. Off a worker of
-    // it, as on a private loop that only runs what parks on it, the awaiting
-    // chain would see nothing to wait for, so the commit there blocks.
+    // The writer finishes on the process runtime. Off a worker of it the
+    // awaiting chain would see nothing to wait for, so the commit blocks.
     if (Executor::current() != default_runtime().executor())
         return IndexDatabaseWrite::commit_async();
-    // The coroutine keeps the pool current at its creation.
     memory::Scope in_pool(root_->pool());
     return commit_body();
 }
@@ -1235,8 +1213,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         const std::vector<PendingKey> keys = resolved_keys(copy);
         const auto previous = root_->committed_copy(copy.name, copy.scope);
         // A write to part of a copy another writer holds rewrites that copy
-        // with the keys it leaves alone, as a write to a copy of this root
-        // adds to it.
+        // with the keys it leaves alone.
         std::optional<StoreRoot::ForeignCopy> foreign;
         if (!copy.cleared && !copy.failed && !previous)
             foreign = root_->foreign_copy(copy.name, version, copy.scope);
@@ -1260,16 +1237,15 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         const bool carry = has_body && foreign &&
                            foreign->info.params_hash == copy.params_hash &&
                            same_sources(foreign->info.sources, sources);
-        // A file record the copy already holds changes nothing.
         if (keys.empty() && !copy.has_manifest && copy.skips.empty() &&
             !copy.cleared &&
             (carry || (previous && previous->params_hash == copy.params_hash &&
                        same_sources(previous->sources, sources)))) {
             continue;
         }
-        // The writer keeps one copy of a scope and the params hash and sources
-        // it announced for it, so a copy this root already holds with another
-        // of either, and a copy this write clears, is replaced by a drop first.
+        // The writer keeps one copy per scope with its announced params hash
+        // and sources, so a copy with another of either, or one this write
+        // clears, is dropped first.
         bool dropped = false;
         if (copy.cleared &&
             (!has_body || root_->was_committed(copy.name, copy.scope))) {
@@ -1300,8 +1276,8 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         }
         kv::Batch batch = writer.batch(id, copy.scope, copy.params_hash,
                                        have_sources ? &sources : nullptr);
-        // The arena of this write holds the bytes until the commit returns,
-        // so the batch takes them in place.
+        // The arena holds the bytes until the commit returns, so the batch
+        // takes them in place.
         for (const PendingKey& key : keys) {
             batch.put_ref(
                 ByteView(key.bytes, key.key_length),

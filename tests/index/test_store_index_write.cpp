@@ -57,7 +57,6 @@ store::NamespaceSpec spec_of(const std::string& name,
     return spec;
 }
 
-/// The namespace of one extension, at its own version.
 store::NamespaceSpec spec_of(layout::Ext ext) {
     return spec_of(store_layout::namespace_name(ext),
                    store_layout::namespace_version(ext));
@@ -67,14 +66,12 @@ store::ScopeKey file_scope(std::string_view path) {
     return store::ScopeKey::file(path);
 }
 
-/// The key inside a copy of `key`.
 std::string inner_of(const std::string& key) {
     std::string inner(1, key[2]);
     inner.append(key, layout::KEY_PREFIX_BYTES, std::string::npos);
     return inner;
 }
 
-/// Every row of the current copy of one scope of a namespace.
 std::map<std::string, std::string> rows_of(StoreRoot& root,
                                            const store::NamespaceSpec& spec,
                                            const store::ScopeKey& scope) {
@@ -95,7 +92,6 @@ std::map<std::string, std::string> rows_of(StoreRoot& root, layout::Ext ext,
     return rows_of(root, spec_of(ext), scope);
 }
 
-/// One write through the seam that keeps every key and value it receives.
 class RecordingWrite final : public IndexWrite {
    public:
     explicit RecordingWrite(IndexWrite& inner) : inner_(inner) {}
@@ -133,8 +129,7 @@ std::string granule_key_of(layout::Ext ext, std::uint8_t kind, int file_id,
     return key;
 }
 
-/// A Zonemap copy of TRACE with the paths args.name and args.dur, one granule
-/// each, written by a writer that is closed afterward.
+/// The writer is closed afterward.
 int write_closed_zonemap(const std::string& dir) {
     auto root = StoreRoot::get_or_open(dir);
     const int file_id = root->file_id_for(std::string(TRACE));
@@ -153,7 +148,6 @@ int write_closed_zonemap(const std::string& dir) {
     return file_id;
 }
 
-/// The args.name and args.dur keys, and the old and new args.name values.
 struct ZonemapCounts {
     std::size_t name = 0;
     std::size_t dur = 0;
@@ -647,8 +641,6 @@ TEST_CASE("clearing a path of a committed copy hides only its keys") {
     }
     REQUIRE(rows_of(*root, layout::Ext::Zonemap, scope).size() == 4);
 
-    // A second commit of the same copy clears one path and writes a granule of
-    // it again, in the range the clear hides.
     auto later = root->begin_write();
     records::clear_path(*later, layout::Ext::Zonemap, file_id, "args.name");
     records::put_manifest(*later, file_id, layout::Ext::Zonemap, 1);
@@ -668,12 +660,9 @@ TEST_CASE("clearing a path of a committed copy hides only its keys") {
         if (value.find("name-new") != std::string::npos) ++name_new;
     }
     CHECK(after.size() == 4);
-    // The path list of args.name stays, its granule of the first commit is
-    // hidden, and the granule of the second is visible.
     CHECK(name_keys == 2);
     CHECK(name_old == 0);
     CHECK(name_new == 1);
-    // The other path of the copy is untouched.
     CHECK(dur_keys == 2);
 
     const store::CopyInfo info =
@@ -689,8 +678,8 @@ TEST_CASE("file ids are stable and a new store root seeds them in path order") {
         "/traces/a.pfw.gz", "/traces/b.pfw.gz", "/traces/c.pfw.gz"};
     {
         auto root = StoreRoot::get_or_open(dir.str());
-        // Written in reverse, so the ids of this root differ from the path
-        // order a new root seeds.
+        // Written in reverse, so the ids differ from the path order a new root
+        // seeds.
         for (auto at = paths.rbegin(); at != paths.rend(); ++at) {
             const std::string& path = *at;
             const int file_id = root->file_id_for(path);

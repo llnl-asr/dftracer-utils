@@ -19,13 +19,10 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
 /**
  * @brief Async generator that yields lines from .gz files without an index.
  *
- * Decodes the file a gzip member at a time with libdeflate (peak memory one
- * member) and splits the decompressed bytes into lines. A member too large to
- * hold whole is read with a zlib stream a step of whole lines at a time. A
- * last member cut short yields its complete lines unless
- * `recover_truncated` is false, when it throws instead. A caller that holds
- * the file open passes it as `open_file`, which is then read instead of
- * opening `file_path` again and is closed with its last owner.
+ * Decodes the file a gzip member at a time (peak memory one member). A member
+ * too large to hold whole is streamed by lines. A last member cut short yields
+ * its complete lines, or throws when `recover_truncated` is false. `open_file`,
+ * when given, replaces `file_path` and closes with its last owner.
  */
 inline coro::AsyncGenerator<Line> async_streaming_gz_lines(
     std::string file_path, std::size_t start_line = 0, std::size_t end_line = 0,

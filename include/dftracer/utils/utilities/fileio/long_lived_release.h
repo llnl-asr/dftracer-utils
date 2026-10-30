@@ -26,17 +26,10 @@ coro::CoroTask<void> join_and_delete(Impl* impl) {
 
 }  // namespace detail
 
-/// Releases the heap state of a writer that owns a long-lived CoroScope.
-/// `Impl` provides `settled()` (closed or already cleaned), `abandon()`
-/// (records that the owner went away without close) and
-/// `join_and_clean()` (a CoroTask<void> that joins the scope and removes what
-/// the owner created).
-///
-/// A settled Impl is destroyed. Off an executor thread the call joins by
-/// blocking. On an executor thread, or when that throws, one joiner task on
-/// the executor takes the Impl, joins and destroys it. With no runtime left
-/// the Impl is leaked with a warning: its frames can never run again and
-/// destroying them would terminate.
+/// Releases a writer's long-lived CoroScope state. `Impl` provides settled(),
+/// abandon() and join_and_clean(). A settled Impl is destroyed. Off an executor
+/// thread the call blocks to join, else (or if that throws) a joiner task takes
+/// the Impl. With no runtime left it leaks, as destroying frames terminates.
 template <typename Impl>
 void release_long_lived(std::unique_ptr<Impl> impl, const char* name) {
     if (!impl || impl->settled()) return;

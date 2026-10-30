@@ -21,11 +21,7 @@ namespace {
 
 constexpr int FILES = 8;
 constexpr int EVENTS = 4000;
-// 14.1 per event before; 6.6 once the parse kept no args map it never read
-// and every file's fold driver shared one pool of event buffers.
 constexpr double MAX_PER_EVENT = 8.0;
-// 4,250 per file of 500 events before; 3,527 once a fresh file id skipped
-// its tier clears.
 constexpr double MAX_PER_FILE = 3900.0;
 
 std::string write_trace(const std::string& dir, int n, int events = EVENTS) {
@@ -77,9 +73,8 @@ TEST_SUITE("IndexParseAllocations") {
     TEST_CASE(
         "a fresh build of many small files makes few allocations "
         "per file") {
-        // Small files make the per-file work count: each new file's tier
-        // clears were range deletes, each a memtable allocation, though a
-        // fresh file id has nothing to clear.
+        // Small files make the per-file work count. A fresh file id has
+        // nothing to clear, so it must allocate nothing for clears.
         constexpr int SMALL_FILES = 64;
         constexpr int SMALL_EVENTS = 500;
         dftu_utils_test::TestEnvironment env(10);

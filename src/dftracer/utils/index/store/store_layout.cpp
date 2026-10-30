@@ -7,9 +7,7 @@ namespace dftracer::utils::index::store::store_layout {
 namespace {
 
 constexpr std::string_view NAMESPACE_PREFIX = "dftu.idx.";
-/// [ext u16][kind u8]
 constexpr std::size_t KIND_PREFIX_BYTES = 3;
-/// The ext u16 that follows the file id of a manifest key.
 constexpr std::size_t MANIFEST_EXT_OFFSET = 4;
 constexpr std::size_t MANIFEST_EXT_BYTES = 2;
 
@@ -20,8 +18,8 @@ bool is_data_kind(layout::Ext ext, std::uint8_t kind) {
     return false;
 }
 
-/// The plugin of a plugin key: the whole tail for a path list or a path's file
-/// key, and the text up to the terminator for a granule key.
+/// A granule key carries the plugin up to a terminator. Other plugin keys carry
+/// the whole tail.
 std::string plugin_of(std::uint8_t kind, std::string_view tail) {
     if (kind != layout::path_kind::DATA) return std::string(tail);
     return std::string(tail.substr(0, tail.find('\0')));

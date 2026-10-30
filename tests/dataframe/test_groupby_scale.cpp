@@ -26,22 +26,19 @@ namespace df = dftracer::utils::dataframe;
 namespace {
 
 // The library folds a frame in morsels of this many rows (AGG_GRAIN in
-// agg/group.cpp). The by-key driver and the batched driver take a frame of
-// more than four morsels; the partitioned driver (order-free aggregates on a
-// short string key) takes more than sixteen, so the cases that reach it use
+// agg/group.cpp). The by-key and batched drivers take more than four morsels,
+// the partitioned driver more than sixteen. The cases that reach it use
 // PACKED_ROWS and the rest stop a sixteenth of a morsel past four.
 constexpr std::int64_t MORSEL = std::int64_t{1} << 16;
-// Not scaled down under Valgrind: each is the smallest size that crosses its
+// Not scaled down under Valgrind. Each is the smallest size that crosses its
 // driver's threshold, so a smaller input would test another path.
 constexpr std::int64_t ROWS = 4 * MORSEL + MORSEL / 16;
 constexpr std::int64_t PACKED_ROWS = 17 * MORSEL;
-// Eight rows per group: nearly every row opens or extends a small group.
+// Eight rows per group, so nearly every row opens or extends a small group.
 constexpr std::int64_t ROWS_PER_GROUP = 8;
-// Repeats of one group-by that must give the same bits. The point is the
-// scheduling, which Valgrind does not check, so it runs only two. A coverage
-// build counts lines and branches, which two repeats reach as well as twenty,
-// and runs the kernels many times slower; the plain test build keeps the
-// twenty that look for a race.
+// Repeats of one group-by that must give the same bits, to look for a race.
+// Valgrind does not check scheduling, so it runs two. A coverage build reaches
+// the same lines with two and runs the kernels many times slower.
 #if defined(DFTRACER_UTILS_COVERAGE_BUILD)
 const int REPEATS =
     static_cast<int>(DFTRACER_UTILS_VALGRIND_SCALE_MIN(2, 10, 2));
@@ -123,7 +120,7 @@ struct Input {
     std::vector<const Series*> values() const { return {&xs, &ys, &ss, &us}; }
 };
 
-// Built once for the binary: a case reads them and changes nothing.
+// Built once for the binary. A case reads them and changes nothing.
 const Input& input() {
     static const Input in(ROWS);
     return in;

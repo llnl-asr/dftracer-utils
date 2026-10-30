@@ -150,11 +150,9 @@ class PluginFold : public trace::views::detail::Fold {
     /// `memory_budget` is the scan's out-of-core aggregation budget in bytes,
     /// the same knob as View::memory_budget: 0 means auto (~1/3 of available
     /// memory) and memory::NO_SPILL_BUDGET disables spilling. Past it, an
-    /// accumulator's live group map spills to a sorted temp run instead of
-    /// growing. `states` are the state types the plugin's factory registered;
-    /// the fold makes one instance of each per slice and drives it like an
-    /// accumulator. It must outlive the fold; null means the plugin registered
-    /// none.
+    /// accumulator's live group map spills to a sorted temp run. `states` are
+    /// the state types the plugin's factory registered, one instance per slice.
+    /// It must outlive the fold. Null means none.
     PluginFold(const dftu_plugin* plugin,
                dftracer::utils::dstd::StringIntern& intern,
                SharedResultRegistry* results = nullptr,

@@ -33,11 +33,9 @@ namespace {
 // matched (it is recomputed instead).
 constexpr std::string_view ROLLUP_FORMAT = "3";
 
-// Inside the entry of one rollup: its descriptor, then a row per group.
 constexpr std::string_view DESC_KEY = std::string_view("\x00", 1);
 constexpr std::string_view ROW_TAG = "\x01";
-// The signature that prefixed each key of a rollup when entries shared one
-// key space; the size of an entry still counts it.
+// The size of an entry counts the signature that names it.
 constexpr std::uint64_t SIG_BYTES = 8;
 
 // Everything that decides a group key's values: a transform coarsens them, so
@@ -240,11 +238,9 @@ std::optional<dataframe::DataFrame> find_subsuming_rollup(
             if (br.be64() != q_rest) return true;
             const std::uint64_t r_bucket = br.be64();
 
-            // Bucket compatibility: a query with a time bucket can only be
-            // served by a rollup whose bucket evenly divides it (coarsen finer
-            // -> coarser). A query without a bucket collapses any rollup's
-            // buckets, so it always matches. The reverse (finer query, coarser
-            // rollup) is unserviceable.
+            // A query with a time bucket is served only by a rollup whose
+            // bucket evenly divides it. A query without a bucket matches any
+            // rollup. A finer query than the rollup is unserviceable.
             if (plan.time_bucket_us > 0 &&
                 (r_bucket == 0 || plan.time_bucket_us % r_bucket != 0))
                 return true;

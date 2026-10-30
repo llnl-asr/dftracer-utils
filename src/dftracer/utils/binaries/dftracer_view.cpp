@@ -1004,9 +1004,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {
-                    // Build each rank's index with its aggregation tier, so a
-                    // partial and any later read of the auto-written shard
-                    // set are answered from the index.
+                    // Build each rank's index with its aggregation tier.
                     dftracer::utils::index::build::ResolveAndBuildInput bin;
                     bin.files = shard;
                     bin.index_dir = rank_idx;

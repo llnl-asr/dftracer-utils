@@ -52,11 +52,10 @@ struct PipelineConfig {
     std::string name = "";
     std::size_t executor_threads =
         0;  ///< 0 = hardware_concurrency (compute threads)
-    /// The mode the pipeline sets on the process runtime: 0 = eager (full
-    /// pool up front), any other value = elastic (one worker, growing toward
-    /// executor_threads on backlog and idle-retiring back down). Unset keeps
-    /// the runtime's mode, which DFTRACER_UTILS_ELASTIC picks when the
-    /// runtime is made.
+    /// The mode the pipeline sets on the process runtime: 0 = eager (full pool
+    /// up front), any other value = elastic (one worker, growing toward
+    /// executor_threads). Unset keeps the runtime's mode, which
+    /// DFTRACER_UTILS_ELASTIC picks when the runtime is made.
     std::optional<std::size_t> min_workers;
     std::chrono::milliseconds elastic_keepalive{250};
     ErrorPolicy error_policy = ErrorPolicy::FailFast;
@@ -93,8 +92,8 @@ struct PipelineConfig {
     }
 
     /**
-     * 0 sets an eager pool; any other value an elastic one, which starts at
-     * one worker and grows to executor_threads on demand.
+     * 0 sets an eager pool. Any other value sets an elastic one, which starts
+     * at one worker and grows to executor_threads on demand.
      */
     PipelineConfig& with_min_workers(std::size_t workers) {
         min_workers = workers;

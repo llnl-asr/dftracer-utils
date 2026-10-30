@@ -86,18 +86,16 @@ namespace compress = dftracer::utils::utilities::fileio::compress;
 
 using Bytes = dftracer::utils::dstd::RawBuffer<unsigned char>;
 
-// Drop the first `n` bytes, keeping the capacity.
 static void drop_front(Bytes& b, std::size_t n) noexcept {
     if (n == 0) return;
     std::memmove(b.data(), b.data() + n, b.size() - n);
     b.resize(b.size() - n);
 }
 
-// Decode the gzip member starting at compressed offset `c_off` into `out`
-// (grown as needed), reading it through `comp`, which the caller reuses.
-// Neither buffer is zeroed: the read and the decode write every byte used.
-// Returns the number of compressed bytes the member consumed, or nullopt on
-// read/decode failure. Peak memory is one member.
+// Decode the gzip member at compressed offset `c_off` into `out`, reading it
+// through `comp`, which the caller reuses. Neither buffer is zeroed. Returns
+// the compressed bytes the member consumed, or nullopt on read/decode failure.
+// Peak memory is one member.
 static dftracer::utils::coro::CoroTask<std::optional<std::uint64_t>>
 decode_member_at(int fd, std::uint64_t c_off, std::uint64_t file_size,
                  const compress::GzipMemberDecompressor& dec, Bytes& out,
@@ -407,7 +405,7 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
                                       : range_c_end) -
             c_off;
         // A member larger than a piece is streamed. The header scan gives its
-        // size (ISIZE) when the trailer can be trusted; otherwise the decode
+        // size (ISIZE) when the trailer can be trusted. Otherwise the decode
         // below stops at the bound and the member is streamed from its start.
         const std::size_t bound = static_cast<std::size_t>(
             std::max<std::uint64_t>(ckpt_size, RESTART_WINDOW));
@@ -426,10 +424,9 @@ static dftracer::utils::coro::CoroTask<bool> parallel_worker(
         Bytes& out = *buf;
         std::optional<std::uint64_t> in_bytes;
         if (!stream_it) {
-            // A buffer comes back as long as its last message; one shorter
-            // than the member, by its ISIZE, would make the decode start over.
-            // ISIZE is the four bytes before the next header, so the last
-            // member, which a cut can end anywhere, has none to trust.
+            // A buffer shorter than the member's ISIZE would make the decode
+            // start over. The last member has no ISIZE to trust, since a cut
+            // can end it anywhere.
             if (size_known && out.size() <= known->isize)
                 out.resize(std::size_t{known->isize} + 1);
             bool too_big = false;

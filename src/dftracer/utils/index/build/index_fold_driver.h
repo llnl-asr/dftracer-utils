@@ -36,41 +36,31 @@
 
 namespace dftracer::utils::index::build {
 
-/// Idle fold event buffers freed so far because a reservation over the budget
-/// asked for bytes. For tests.
+/// Idle fold event buffers freed to cover a reservation. For tests.
 inline std::atomic<std::uint64_t> g_fold_buffers_freed{0};
 
-/// RecordParsers created by index builds so far, and the most capacity bytes
-/// the live ones held at once. For tests.
+/// RecordParsers created so far and the peak capacity bytes they held. For
+/// tests.
 inline std::atomic<std::uint64_t> g_parsers_created{0};
 inline std::atomic<std::uint64_t> g_parser_peak_capacity{0};
 inline std::atomic<std::uint64_t> g_parser_live_capacity{0};
 
-/// While set, every parsed piece reads the memory manager's live bytes and
-/// keeps the largest in g_parse_peak_live. For tests.
+/// While set, every parsed piece records the peak of live bytes. For tests.
 inline std::atomic<bool> g_probe_parse{false};
 inline std::atomic<std::uint64_t> g_parse_peak_live{0};
 
-/// The most pieces of one file parsed at the same time by any file so far. For
-/// tests.
+/// The most pieces of one file parsed at once. For tests.
 inline std::atomic<std::uint64_t> g_max_parse_in_flight{0};
 
-/// While set, seal() folds the ids and strings of the file's intern, in id
-/// order, into g_intern_order_digest by xor. For tests.
+/// While set, seal() xors a digest of the file's intern into
+/// g_intern_order_digest. For tests.
 inline std::atomic<bool> g_probe_intern_order{false};
 inline std::atomic<std::uint64_t> g_intern_order_digest{0};
 
-/// Event buffers parsed chunks decode into. A buffer goes back once the last
-/// step of its chunk lets go, on whichever thread that is, and keeps its
-/// slots' capacity, so a steady-state parse allocates no event vectors. At
-/// most the chunks in flight hold one each.
-///
-/// The idle buffers are what the build can give back: the pool reports them
-/// on a ReclaimSlot of its own "fold buffers" pool, below the pool current at
-/// construction, and frees idle buffers to cover a posted request at the next
-/// take() or give(). A new buffer is made under that pool's scope; what it
-/// grows to while a chunk decodes is charged to the decoding thread's scope,
-/// since the decode also interns strings that outlive the buffers.
+/// Event buffers parsed chunks decode into. A buffer goes back from whichever
+/// thread ends its chunk and keeps its capacity. Idle buffers are reclaimable
+/// and are freed at the next take() or give() to cover a posted request. Growth
+/// while a chunk decodes is charged to the decoding thread's scope.
 class FoldBufferPool final : public memory::Reclaimer {
    public:
     using EventBuffer = trace::views::detail::FoldEventBuffer;
@@ -101,8 +91,6 @@ class FoldBufferPool final : public memory::Reclaimer {
 
     void give(std::unique_ptr<EventBuffer> b) {
         if (!b) return;
-        // What the buffer keeps for its next use: its slots and the chunks
-        // of their lists.
         b->clear();
         const std::uint64_t bytes = b->bytes();
         std::lock_guard<std::mutex> lock(mu_);
@@ -116,7 +104,6 @@ class FoldBufferPool final : public memory::Reclaimer {
         return free_.size();
     }
 
-    // The slot carries the idle bytes; the pool frees on its own thread.
     std::size_t reclaimable() const override { return 0; }
     std::size_t reclaim(std::size_t) override { return 0; }
 
@@ -126,7 +113,6 @@ class FoldBufferPool final : public memory::Reclaimer {
         std::uint64_t bytes = 0;
     };
 
-    // Holds mu_.
     void answer_request() {
         std::uint64_t want = slot_.take_request();
         while (want > 0 && !free_.empty()) {
@@ -139,7 +125,7 @@ class FoldBufferPool final : public memory::Reclaimer {
         slot_.set_reclaimable(idle_bytes_);
     }
 
-    // Declared first: the pool closes after the slot detaches and the idle
+    // Declared first, so the pool closes after the slot detaches and the idle
     // buffers free.
     memory::PoolHandle pool_;
     dstd::PoolVector<Idle> free_;
@@ -186,9 +172,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         record_schema_ = schema.fields.empty() ? nullptr : &schema;
     }
 
-    /// Take event buffers from `pool`, shared with other drivers, instead of
-    /// a pool of this driver's own. `pool` must outlive the driver and every
-    /// batch it hands out; call before the first chunk.
+    /// Shares `pool` with other drivers instead of using one of its own. `pool`
+    /// must outlive the driver and every batch it hands out. Call before the
+    /// first chunk.
     void share_buffers(FoldBufferPool& pool) {
         buffers_ = &pool;
         own_buffers_.reset();
@@ -200,21 +186,17 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         builders_ = builders;
     }
 
-    /// Parse pieces ahead of the folds, in parallel on the scope the indexer
-    /// binds, as many as `gate` has free workers and memory for at the time.
-    /// Without a gate each chunk is parsed in on_chunk. A piece in flight
-    /// holds its plaintext and its events. `gate` must outlive the driver and
-    /// every batch it hands out.
+    /// Parses pieces ahead of the folds in parallel, as many as `gate` has
+    /// workers and memory for. Without a gate each chunk is parsed in
+    /// on_chunk. `gate` must outlive the driver and every batch it hands out.
     void set_parse_gate(ParseGate& gate) { gate_ = &gate; }
 
-    /// A chunk is parsed in pieces of whole lines, each up to this many bytes
-    /// and up to PARSE_PIECE_LINES lines, so a worker holds one piece and its
-    /// events, not a chunk, and the parse ahead holds `n` pieces.
+    /// A chunk is parsed in pieces of whole lines, so a worker holds a piece
+    /// and its events, not a chunk.
     static constexpr std::size_t PARSE_PIECE_BYTES = 4u << 20;
     static constexpr std::size_t PARSE_PIECE_LINES = 8192;
 
-    /// A worker's parser keeps its buffers between pieces unless a long line
-    /// grew them past this many bytes of document capacity.
+    /// A parser grown past this by a long line drops its buffers.
     static constexpr std::size_t PARSER_RETAIN_BYTES =
         2 * trace::PARSE_BATCH_BYTES;
 
@@ -336,7 +318,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
         std::shared_ptr<std::string> buf;
         std::size_t checkpoint_idx = 0;
-        // The plaintext byte range of the piece's chunk in its file.
         std::size_t chunk_begin = 0;
         std::size_t chunk_end = 0;
         std::unique_ptr<EventBuffer> batch;
@@ -344,21 +325,20 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         // The strings of a piece parsed ahead, interned here with ids of their
         // own, and given the file's ids in piece order when the folds see it.
         std::unique_ptr<dftracer::utils::dstd::StringIntern> local;
-        // Bytes of the pool this piece holds beyond the file's own.
         memory::Reservation held;
         ParseGate* extra = nullptr;
         std::atomic<std::size_t>* alive = nullptr;
     };
 
-    // What a piece admitted by the gate may do: its extra bytes, and whether to
-    // parse it here, on the thread that cut it, since no worker is free.
+    // `inline_` parses on the thread that cut the piece, since no worker is
+    // free.
     struct Admit {
         memory::Reservation mem;
         bool extra = false;
         bool inline_ = true;
     };
 
-    // Holds a gate slot until released, so a throwing parse gives it back.
+    // A throwing parse gives the slot back.
     struct SlotGuard {
         ParseGate* gate;
         void release() noexcept {
@@ -368,8 +348,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         ~SlotGuard() { release(); }
     };
 
-    // The end of the piece that starts at `off`: whole lines up to
-    // PARSE_PIECE_BYTES or PARSE_PIECE_LINES, and at least one line.
     static std::size_t piece_end(const char* data, std::size_t off,
                                  std::size_t whole) {
         const std::size_t limit = std::min(whole, off + PARSE_PIECE_BYTES);
@@ -402,9 +380,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         LocalParser(const LocalParser&) = delete;
         LocalParser& operator=(const LocalParser&) = delete;
 
-        // Sizes the parser once for a piece of `bytes`, up to one parse
-        // batch, rounded up to a power of two so pieces of similar sizes do not
-        // each regrow it.
+        // Rounded up to a power of two so pieces of similar sizes do not each
+        // regrow it.
         void reserve(std::size_t bytes) {
             bytes = std::min(bytes, trace::PARSE_BATCH_BYTES);
             if (parser.capacity() >= bytes) return;
@@ -447,8 +424,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         local.release();
     }
 
-    // Counts a parse in flight for the tests; the count drops again when the
-    // parse throws.
     struct ProbedParse {
         explicit ProbedParse(const ParseConfig& cfg) : cfg_(cfg) {
             const std::uint64_t now =
@@ -545,7 +520,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 
     bool ahead() const { return scope_ && gate_; }
 
-    // Pieces the chains hold at most, whatever the parse window.
     static constexpr std::size_t MAX_PIECES_HELD = 64;
 
     void step(Parsed& c) {
@@ -555,7 +529,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         if (builders_) builders_->step(c.checkpoint_idx, c.lines);
     }
 
-    // Returns a piece's permit once its last step lets go of it.
     struct PieceRelease {
         coro::CoroSemaphore* permits;
         FoldBufferPool* buffers;
@@ -567,8 +540,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     };
 
     // Each fold steps on its own chain of tasks, so it sees every batch in
-    // order while the folds and this thread run at once. At most
-    // MAX_PIECES_HELD pieces are held by the chains.
+    // order while the folds and this thread run at once.
     coro::CoroTask<void> step_ahead(std::unique_ptr<Parsed> done) {
         if (builders_) builders_->step(done->checkpoint_idx, done->lines);
         if (!permits_) {
@@ -718,8 +690,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
     }
 
-    // Gives the piece the ids of the file's intern. Pieces come here in order,
-    // so a string gets the id of its first piece however the parses ran.
+    // Pieces come here in order, so a string gets the id of its first piece
+    // however the parses ran.
     void commit_ids(Parsed& c) {
         auto& local = *c.local;
         remap_.assign(local.size(), 0);
@@ -737,10 +709,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         co_await await_tails();
     }
 
-    // Waits for the room to parse a piece of `plaintext` bytes. A file with no
-    // piece parsing takes a slot by force, and its first piece is covered by
-    // the file's own reservation; another piece waits for a free worker and
-    // the bytes of its own, and steps the oldest parse while it has neither.
+    // A file with no piece parsing takes a slot by force. Another piece waits
+    // for a free worker and its own bytes, and steps the oldest parse while it
+    // has neither.
     coro::CoroTask<Admit> admit_piece(std::size_t plaintext) {
         const std::uint64_t bytes = ParseGate::piece_bytes(plaintext);
         for (;;) {
@@ -804,8 +775,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     std::shared_ptr<const ParseConfig> config_;
     CoroScope* scope_ = nullptr;
     ParseGate* gate_ = nullptr;
-    // Set once a piece goes to the fold chains; every later piece follows it
-    // there, so a fold still sees its pieces one at a time and in order.
+    // Once a piece goes to the fold chains every later piece follows it, so a
+    // fold sees its pieces one at a time and in order.
     bool chained_ = false;
     std::atomic<std::size_t> alive_{0};
     std::vector<std::uint32_t> remap_;
@@ -818,9 +789,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     index::extensions::BloomFold* bloom_ = nullptr;
     std::unique_ptr<coro::CoroSemaphore> permits_;
     std::vector<std::optional<coro::SpawnFuture<void>>> tails_;
-    // Event buffers come from `buffers_`: a pool of the driver's own, or one
-    // shared by every file of a build so a slot keeps its vectors' capacity
-    // from file to file.
+    // Shared by every file of a build, so a slot keeps its capacity from file
+    // to file.
     std::optional<FoldBufferPool> own_buffers_{std::in_place};
     FoldBufferPool* buffers_ = &*own_buffers_;
     dftracer::utils::dstd::StringIntern* intern_;

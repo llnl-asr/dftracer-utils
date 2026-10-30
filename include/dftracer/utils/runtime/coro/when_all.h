@@ -29,8 +29,6 @@ namespace dftracer::utils::coro {
 /// Coroutine that destroys its own frame on completion.
 struct FireAndForget {
     struct promise_type : FrameAllocation {
-        /// The pool and intern table current when the wrapper was created; it
-        /// enters them again each time it resumes.
         detail::RunContext context;
 
         template <typename U>
@@ -59,7 +57,7 @@ template <typename Awaitable>
 struct WhenAllVectorState : WhenAllCompletionState {
     std::vector<Awaitable> awaitables_;
     /// std::vector<bool> packs neighbours into one byte, so two wrappers
-    /// writing them would race; bool results take one byte each.
+    /// writing them would race. Bool results take one byte each.
     using Stored = std::conditional_t<
         std::is_same_v<typename Awaitable::result_type, bool>, unsigned char,
         typename Awaitable::result_type>;
@@ -151,7 +149,6 @@ class WhenAllVectorAwaitable {
     }
 
    private:
-    /// Runs children until none is left to take or one suspends the wrapper.
     void launch_wrapper() {
         [](std::shared_ptr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
             for (;;) {
@@ -289,7 +286,6 @@ class WhenAllVectorAwaitable<Awaitable> {
     }
 
    private:
-    /// Runs children until none is left to take or one suspends the wrapper.
     void launch_wrapper() {
         [](std::shared_ptr<WhenAllVectorState<Awaitable>> s) -> FireAndForget {
             for (;;) {

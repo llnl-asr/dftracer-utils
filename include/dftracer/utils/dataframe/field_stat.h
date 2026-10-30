@@ -105,8 +105,8 @@ struct FieldStat {
 
     /// The exact integer sum fits its domain (int64 or uint64).
     bool esum_fits() const { return ecarry == 0; }
-    /// The sum, from the exact integer sum when it fits, so it does not depend
-    /// on the order of adds and merges; else `sum`.
+    /// The exact integer sum when it fits, so it does not depend on the order
+    /// of adds and merges. Otherwise `sum`.
     double exact_sum() const {
         if (n == 0 || !esum_fits() || domain == FieldStatDomain::F64)
             return sum;

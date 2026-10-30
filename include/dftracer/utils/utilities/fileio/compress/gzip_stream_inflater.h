@@ -21,16 +21,9 @@ enum class InflateStatus : std::uint8_t {
 };
 
 /// Streaming inflate of one gzip member, with the CRC32 computed by libdeflate
-/// instead of zlib. zlib-ng inflates the raw deflate data; this class parses
-/// the header (including the FHCRC field), checksums the output and checks the
-/// trailer CRC32 and ISIZE. inflate() reports a bad header, CRC or size as
-/// DataError and returns StreamEnd only once the trailer has been verified.
-///
-/// A negative `window_bits` opens a raw deflate stream (a piece read from a
-/// restart point), which carries no CRC.
-///
-/// Set the input and output with set_input() and set_output() as for zlib.
-/// Not thread-safe; one per stream.
+/// instead of zlib. inflate() reports a bad header, CRC or size as DataError
+/// and returns StreamEnd once the trailer is verified. Negative `window_bits`
+/// is raw deflate (no CRC). One per stream, not thread-safe.
 class GzipStreamInflater {
    public:
     GzipStreamInflater();
@@ -56,7 +49,7 @@ class GzipStreamInflater {
     /// Compressed bytes consumed so far: header, deflate data and trailer.
     std::uint64_t total_in() const;
 
-    /// zlib's data_type of the stream: bit 7 is set at a block boundary, bit 6
+    /// zlib's data_type of the stream. Bit 7 is set at a block boundary, bit 6
     /// at the last block, and the low three bits count unused bits of the last
     /// input byte.
     int data_type() const;

@@ -30,11 +30,10 @@ namespace dftracer::utils::store {
 
 class WriterExtents;
 
-/// What one batch adds to the group commit that records it: the namespace,
-/// scope and copy items it is the first to name, and whether its data must be
-/// on disk before its commit returns. The writer fills it, ExtentWriter::append
-/// carries it as the segment context, and the committer deletes it once the
-/// record naming it is written.
+/// What one batch adds to the group commit that records it, and whether its
+/// data must be on disk before its commit returns. The writer fills it,
+/// ExtentWriter::append carries it as the segment context, and the committer
+/// deletes it once the record naming it is written.
 struct PendingBatch {
     PendingBatch();
     ~PendingBatch();
@@ -47,7 +46,7 @@ struct PendingBatch {
     std::uint32_t scope_id = 0;
     CopyItem copy_item;
     /// The count that charged this batch's segment bytes, and how many. A
-    /// discarded batch gives them back there; a written extent releases them
+    /// discarded batch gives them back there. A written extent releases them
     /// by its segments instead.
     WriterExtents* extents = nullptr;
     std::uint64_t charged_bytes = 0;
@@ -56,18 +55,14 @@ struct PendingBatch {
     /// lost run makes that commit read as bad.
     dstd::Vector<ExtentRef> big_runs;
     bool durable = false;
-    /// The batch publishes its copy: its CopyItem is recorded again, as the
-    /// state that replaces the one announced first.
+    /// The CopyItem is recorded again as the state that replaces the first.
     bool publish = false;
 };
 
 /// Writes one record per group commit for the extents and copy state changes
-/// the writer produces, from one task of the writer's executor.
-///
-/// on_extent(), on_drop(), on_erase() and on_fail() take their item from any
-/// thread, and commit_pending() is called by the writer's flush and close; only
-/// the task and those callers write records, one at a time. A record error
-/// latches, and every later commit reports it.
+/// the writer produces, from one task of the writer's executor. The on_*()
+/// methods take their item from any thread. Records are written one at a time.
+/// A record error latches, and every later commit reports it.
 class Committer {
    public:
     /// A group commit starts as soon as `commit_bytes` of segment bytes, raw,
@@ -80,7 +75,7 @@ class Committer {
     Committer& operator=(const Committer&) = delete;
     Committer(Committer&&) = delete;
     Committer& operator=(Committer&&) = delete;
-    /// Stops the task if it still runs, and frees every batch whose record was
+    /// Stops the task if it still runs and frees every batch whose record was
     /// never written.
     ~Committer();
 
@@ -89,7 +84,7 @@ class Committer {
 
     /// Queues a written extent. Runs on an I/O backend thread.
     void on_extent(WrittenExtent&& extent);
-    /// Queues a drop of [begin, end) of a copy; an empty `end` means to the
+    /// Queues a drop of [begin, end) of a copy. An empty `end` means to the
     /// last key and both empty a whole-scope drop. Takes ownership of `batch`.
     void on_drop(PendingBatch* batch, dstd::Vector<std::uint8_t>&& begin,
                  dstd::Vector<std::uint8_t>&& end);
@@ -106,14 +101,12 @@ class Committer {
     /// with the task's own group commit.
     dstd::Expected<void, dstd::Error> commit_pending();
 
-    /// True once a record write failed, so every later commit must fail too.
+    /// True once a record write failed. error() is meaningful only then.
     bool failed() const noexcept {
         return failed_.load(std::memory_order_acquire);
     }
-    /// The first record error. Only meaningful once failed() is true.
     dstd::Error error() const;
 
-    /// Latches `error` as a record error without writing one.
     void latch(const dstd::Error& error);
 
     /// Stops the task and returns once it has left, so nothing calls back into
@@ -123,8 +116,6 @@ class Committer {
    private:
     friend struct CommitterTestHook;
 
-    /// One queued item: a written extent, or a copy that was dropped, failed or
-    /// partly erased.
     struct PendingEntry {
         WrittenExtent extent;
         PendingBatch* batch = nullptr;
@@ -154,7 +145,6 @@ class Committer {
     std::uint64_t commit_bytes_ = 0;
     std::chrono::milliseconds commit_interval_{0};
 
-    /// Guards the queue, the wake state and the loop's lifecycle.
     mutable std::mutex queue_mutex_;
     dftracer::utils::dstd::Vector<PendingEntry> entries_;
     std::uint64_t pending_bytes_ = 0;
@@ -180,7 +170,6 @@ class Committer {
 struct CommitterTestHook {
     static void reset();
     static std::uint64_t syncs();
-    /// Makes the next group commit fail at its record write.
     static void fail_next_record(bool fail);
     /// PendingBatch objects alive now, which is zero once every batch was
     /// either recorded or discarded.

@@ -219,8 +219,6 @@ int main(int argc, char** argv) {
         "and aggregates the input directory automatically; no separate "
         "aggregation step is required.",
         [](GenDlioConfigArgParse& cli) -> int {
-            // --- Index phase: build or reuse the index with its aggregation
-            // partials ---------------
             agg::AggregationConfig agg_config;
             agg_config.time_interval_us =
                 static_cast<std::uint64_t>(cli.time_interval * 1000.0);

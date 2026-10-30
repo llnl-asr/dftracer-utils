@@ -7,11 +7,10 @@
 
 namespace dftracer::utils::duql {
 
-/// The query library's error domain.
 inline constexpr dstd::ErrorDomain ERROR_DOMAIN =
     dstd::make_error_domain("dftracer.utils.duql");
 
-/// duql error codes; portable conditions come from error_info.
+/// duql error codes. Portable conditions come from error_info.
 enum class DuqlErrc : std::int32_t {
     Parse,        ///< syntax / tokenize failure
     Pattern,      ///< invalid match pattern (like / regex)

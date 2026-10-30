@@ -22,8 +22,6 @@ std::atomic<bool>& record_failure_armed() {
     return armed;
 }
 
-/// Live PendingBatch objects, so a test can prove that an extent write failure
-/// and a teardown leave none behind.
 std::atomic<std::uint64_t>& batch_count() {
     static std::atomic<std::uint64_t> count{0};
     return count;
@@ -124,7 +122,6 @@ struct Committer::WaitForWork {
     }
 };
 
-/// Waits for the task to leave `run()`.
 struct Committer::StopWait {
     Committer& committer;
 

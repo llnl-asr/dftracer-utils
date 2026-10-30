@@ -264,9 +264,7 @@ static std::optional<ComparisonConfig> build_comparison_config(
     return config;
 }
 
-// Precompute the per-node aggregation plans and the filters of their visitors,
-// in plan order (needed by both the baseline and variant Agg tasks). Returns
-// false on an invalid or unsupported node query (already logged).
+// Returns false on an invalid or unsupported node query (already logged).
 static bool build_agg_plans(const ComparisonConfig& config,
                             std::vector<NodeAggPlan>& agg_plans,
                             dstd::Vector<ComparisonFilter>& filters) {
@@ -326,8 +324,6 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (!config_opt) return 1;
     ComparisonConfig config = std::move(*config_opt);
 
-    // Precompute aggregation plans and filters from config (needed by both
-    // Agg tasks)
     std::vector<NodeAggPlan> agg_plans;
     dstd::Vector<ComparisonFilter> filters;
     if (!build_agg_plans(config, agg_plans, filters)) return 1;
@@ -336,8 +332,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
         cli::build_pipeline_config("DFTracer Comparator", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
-    // Indexes the traces under `path` with their aggregation tier and lists
-    // the trace files. The aggregation config is the one the queries use.
+    // Indexes the traces under `path` with the aggregation config the queries
+    // use and lists the trace files.
     auto resolve_and_build =
         [&config](CoroScope& scope, const std::string& path,
                   const std::string& index_dir,
@@ -496,9 +492,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 same_files ? baseline_side : variant_side;
             output.baseline_file_count = baseline_files.size();
             output.variant_file_count = variant_files.size();
-            // Metadata comes from the first node's first visitor so
-            // process_count, thread_count, and makespan reflect the full
-            // trace rather than whichever node happens to be last.
+            // Metadata comes from the first node's first visitor so the counts
+            // and makespan reflect the full trace, not the last node.
             output.baseline_meta = baseline_side.meta;
             output.variant_meta = variant_ref.meta;
 

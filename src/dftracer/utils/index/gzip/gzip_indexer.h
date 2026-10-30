@@ -65,7 +65,7 @@ coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
     const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
 
-/// The same over an open file. `fd` stays open and owned by the caller;
+/// The same over an open file. `fd` stays open and owned by the caller.
 /// `gz_path` only names the file in messages.
 coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     int fd, const std::string &gz_path, std::uint64_t ckpt_size,

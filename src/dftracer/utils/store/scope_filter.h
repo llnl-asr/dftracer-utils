@@ -15,7 +15,6 @@ namespace dftracer::utils::store {
 /// The filter bits per scope of a file: about 1% of the scopes a file does not
 /// hold pass it.
 inline constexpr std::size_t SCOPE_FILTER_BITS_PER_SCOPE = 10;
-/// The bits one scope sets and a lookup tests.
 inline constexpr std::size_t SCOPE_FILTER_PROBES = 7;
 /// The most bytes one filter takes, so the tail of a file stays one read: a
 /// file of more scopes than this fits lets more absent scopes pass.

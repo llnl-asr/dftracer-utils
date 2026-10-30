@@ -18,11 +18,11 @@ namespace dftracer::utils {
 class TaskResult {
    public:
     enum class State : std::uint8_t {
-        Pending,    ///< Not started
-        Running,    ///< Execution in progress
-        Value,      ///< Completed with value
-        Exception,  ///< Completed with exception
-        Cancelled,  ///< Cancelled before completion
+        Pending,
+        Running,
+        Value,
+        Exception,
+        Cancelled,
     };
 
     TaskResult() = default;

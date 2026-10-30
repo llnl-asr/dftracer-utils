@@ -86,11 +86,9 @@ class BloomCore {
         ChunkState();
     };
 
-    /// What observe_data learns about the keys of the events it sees, so a
-    /// key already seen needs no hashing, string compare or bloom probe. The
-    /// keys of a slot are interned ids and pid and tid. It belongs to one
-    /// chunk's state: call clear() before using it on another, or after the
-    /// state moves.
+    /// Remembers the keys observe_data has seen, so a repeat needs no hashing,
+    /// string compare or bloom probe. It belongs to one chunk's state. Call
+    /// clear() before using it on another, or after the state moves.
     class EventCache {
        public:
         static constexpr std::size_t SLOTS = 256;
@@ -107,7 +105,6 @@ class BloomCore {
        private:
         friend class BloomCore;
 
-        // One (name, category) pair.
         struct NameSlot {
             std::uint64_t key = 0;
             std::uint32_t epoch = 0;
@@ -117,7 +114,6 @@ class BloomCore {
             bool cat_in_bloom = false;
             ChunkStatistics::NameSlots stats;
         };
-        // One (pid, tid) pair, with their decimal texts.
         struct PidSlot {
             std::uint64_t pid = 0;
             std::uint64_t tid = 0;

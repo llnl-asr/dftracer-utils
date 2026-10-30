@@ -32,7 +32,7 @@ struct IndexerObject {
     std::uint64_t memory_budget;
     PyObject* schema;  // str or nullptr (detect)
 
-    // The aggregation tier's settings; every build makes the tier
+    // The aggregation tier's settings. Every build makes the tier.
     double time_interval_ms;
     PyObject* group_keys;  // Python list or None
     int compute_percentiles;

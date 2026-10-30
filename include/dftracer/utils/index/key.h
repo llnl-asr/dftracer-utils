@@ -59,9 +59,9 @@ class KeyBuilder {
         return *this;
     }
 
-    // Negative values have every IEEE bit flipped; non-negative values have
-    // only the sign bit flipped. -0.0 is written as +0.0, and NaN is
-    // canonicalized and sorts last.
+    // Negative values have every IEEE bit flipped and non-negative values only
+    // the sign bit. -0.0 is written as +0.0, and NaN is canonicalized and sorts
+    // last.
     KeyBuilder& f32(float v);
     KeyBuilder& f64(double v);
 

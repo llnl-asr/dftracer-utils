@@ -8,10 +8,9 @@
 
 namespace dftracer::utils::memory {
 
-// The heap keeps the free-list link in the first bytes of a free block, which
-// ASan has poisoned and Valgrind has made unaddressable. These two functions
-// are the only code that reads or writes it, so they are the only ones that
-// step around the checks.
+// The free-list link sits in the first bytes of a free block, which ASan and
+// Valgrind mark unaddressable. Only these two functions step around the
+// checks.
 #ifdef DFTRACER_UTILS_MEMORY_ASAN
 #define DFTRACER_UTILS_MEMORY_LINK_ATTRS \
     [[gnu::noinline, gnu::no_sanitize("address")]]

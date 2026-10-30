@@ -33,7 +33,7 @@ inline std::string self_path() {
 struct Result {
     int status = 0;
     bool announced = false;
-    /// What the process wrote to standard error; run() also copies it to this
+    /// What the process wrote to standard error. run() also copies it to this
     /// process's standard error.
     std::string output;
 

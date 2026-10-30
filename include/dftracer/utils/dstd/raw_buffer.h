@@ -14,12 +14,10 @@ namespace dftracer::utils::dstd {
 
 /**
  * @brief A growable buffer of trivially copyable T that leaves new elements
- * uninitialized, for buffers the caller fills.
+ * uninitialized.
  *
- * Storage is 64-byte aligned and comes from memory::allocate and
- * memory::reallocate. Growth doubles the capacity, starting at 64 bytes. A
- * moved-from RawBuffer is empty. Not copyable: a copy of a large buffer should
- * be written out where it happens.
+ * Storage is 64-byte aligned. Growth doubles the capacity from 64 bytes. A
+ * moved-from RawBuffer is empty. Not copyable.
  */
 template <class T>
 class RawBuffer {
@@ -72,8 +70,8 @@ class RawBuffer {
     const T* begin() const noexcept { return data_; }
     const T* end() const noexcept { return data_ + size_; }
 
-    /// Make room for @p n elements without changing the size. Exact: no
-    /// rounding up. Throws std::bad_alloc and keeps the buffer on failure.
+    /// Make room for @p n elements without changing the size. The capacity is
+    /// exact. Throws std::bad_alloc and keeps the buffer on failure.
     void reserve(std::size_t n) {
         if (n > capacity_) set_capacity(n);
     }
@@ -94,10 +92,10 @@ class RawBuffer {
         data_[size_++] = value;
     }
 
-    /// Size zero; the capacity stays.
+    /// Size zero. The capacity stays.
     void clear() noexcept { size_ = 0; }
 
-    /// Free the storage; size and capacity become zero.
+    /// Free the storage. Size and capacity become zero.
     void release() noexcept {
         memory::deallocate(data_, capacity_ * sizeof(T));
         data_ = nullptr;

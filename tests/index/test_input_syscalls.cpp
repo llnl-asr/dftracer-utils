@@ -12,10 +12,9 @@
 #include <string>
 #include <vector>
 
-// Every CLI tool walks the input directory once, stats each input at most
-// once per run and opens it at most once per pass over its bytes (2 on a cold
-// run, 1 for dftracer_index and on a warm run). A test-only library injected
-// into the tool counts its path-based stat and open calls.
+// Every CLI tool stats each input at most once per run and opens it at most
+// once per pass over its bytes (2 on a cold run, 1 for dftracer_index and on a
+// warm run). A test-only library injected into the tool counts the calls.
 
 namespace {
 
@@ -27,8 +26,8 @@ constexpr const char* PRELOAD_VAR = "LD_PRELOAD";
 
 constexpr std::size_t MAX_STATS_PER_INPUT = 1;
 constexpr std::size_t MAX_STATS_PER_ROOT = 2;
-// Looks for an index root's schemas folder: a few per run, never one per input
-// file, since one such lookup can block for minutes on a parallel file system.
+// The schemas folder lookup of an index root is a few per run, never one per
+// input file, since one lookup can block for minutes on a parallel file system.
 constexpr std::size_t MAX_SCHEMA_LOOKUPS = 8;
 
 struct Counts {
@@ -50,8 +49,7 @@ std::string make_trace(int pid, int events) {
 
 struct Tool {
     std::string name;
-    // Arguments for one run. in, idx and out are the input directory, the
-    // index directory and the output directory of that run.
+    // in, idx and out are the input, index and output directories of the run.
     std::vector<std::string> (*args)(const std::string& in,
                                      const std::string& idx,
                                      const std::string& out);
@@ -225,8 +223,8 @@ void run_tool(const Tool& tool) {
 
     dftu_utils_test::ScopedTestDir dir("input_syscalls_" + tool.name);
     const std::string in = dir.file("in");
-    // The comparator reads two directories, one per side; each side gets its
-    // own copy of the files so every input file is read for one side only.
+    // The comparator reads one directory per side. Each side gets its own copy
+    // of the files, so every input file is read for one side only.
     std::vector<std::string> roots{in};
     if (tool.name == "comparator") roots.push_back(in + "_variant");
     std::vector<std::string> inputs;

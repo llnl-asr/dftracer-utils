@@ -52,8 +52,8 @@ constexpr std::size_t SMALL_BYTES = std::size_t{8} << 20;
 constexpr std::size_t BIG_BYTES = SMALL_BYTES * 8;
 constexpr std::size_t PREFIX_LINES = 1000;
 constexpr std::size_t MEMBER_BYTES = std::size_t{256} << 10;
-// Memory a read of any member size may hold: a member above the bound is
-// streamed, and the bound plus its input is what a member below it costs.
+// A member above the bound is streamed. A member below it costs the bound plus
+// its input.
 constexpr std::size_t BOUND_BYTES = std::size_t{4} << 20;
 constexpr std::size_t BUDGET_BYTES = std::size_t{24} << 20;
 constexpr std::size_t DEFAULT_BOUND_BUDGET_BYTES = std::size_t{72} << 20;
@@ -64,8 +64,6 @@ struct Trace {
     std::size_t reads = 0;
 };
 
-// Event lines of about 140 bytes: `bytes` of them after PREFIX_LINES more, so a
-// file can hold a small member before the big one.
 Trace make_trace(std::size_t bytes, std::uint32_t seed) {
     static const char HEX[] = "0123456789abcdef";
     std::mt19937 rng(seed);
@@ -88,8 +86,8 @@ Trace make_trace(std::size_t bytes, std::uint32_t seed) {
     return t;
 }
 
-// Lines of 1 to 6 letters, so a restart piece starts after a newline about
-// one time in four.
+// Short lines, so a restart piece starts after a newline about one time in
+// four.
 Trace short_lines(std::size_t bytes, std::uint32_t seed) {
     std::mt19937 rng(seed);
     Trace t;
@@ -124,7 +122,6 @@ void write_file(const std::string& path,
                static_cast<std::streamsize>(bytes.size()));
 }
 
-// The first PREFIX_LINES lines in one member, the rest in one member.
 std::vector<std::uint8_t> one_big_member(const Trace& t) {
     std::size_t at = 0;
     for (std::size_t i = 0; i < PREFIX_LINES; ++i)
@@ -135,7 +132,6 @@ std::vector<std::uint8_t> one_big_member(const Trace& t) {
     return bytes;
 }
 
-// The same lines in members of about MEMBER_BYTES.
 std::vector<std::uint8_t> many_members(const Trace& t) {
     std::vector<std::uint8_t> bytes;
     std::size_t from = 0;
@@ -148,7 +144,6 @@ std::vector<std::uint8_t> many_members(const Trace& t) {
     return bytes;
 }
 
-// Largest live byte count above the start while `body` runs.
 std::size_t peak_above_start(const std::function<void()>& body) {
     std::atomic<bool> done{false};
     std::atomic<std::size_t> peak{0};
@@ -187,8 +182,6 @@ struct Files {
     ~Files() { std::filesystem::remove_all(dir); }
 };
 
-// Inflates the file with a bound of BOUND_BYTES and counts the buffers that do
-// not equal `expected` there.
 std::size_t inflate_mismatches(
     const std::string& path, const std::string& expected,
     utilities::reader::internal::MemberDecodeCache* cache = nullptr,
@@ -237,7 +230,6 @@ std::size_t members_lines(const std::string& path) {
     return lines;
 }
 
-// A GzipIndexer over `path` and the reads the reader serves from it.
 struct Indexed {
     std::shared_ptr<GzipIndexer> indexer;
     Indexed(const std::string& path, const std::string& index_path) {
@@ -256,7 +248,7 @@ struct Indexed {
     }
 };
 
-// Bytes the process has read, from /proc/self/io; 0 where there is none.
+// 0 where /proc/self/io is absent.
 std::uint64_t bytes_read_by_process() {
     std::ifstream io("/proc/self/io");
     std::string key;
@@ -268,7 +260,6 @@ std::uint64_t bytes_read_by_process() {
 
 std::size_t newlines_before(const std::string& text, std::size_t at);
 
-// What the line-aligned byte stream returns for [from, end of file).
 std::string read_line_bytes(const std::shared_ptr<GzipIndexer>& indexer,
                             std::size_t from) {
     GzipReader reader(indexer);
@@ -373,7 +364,6 @@ TEST_SUITE("BigMemberReads") {
         std::mt19937 rng(11);
         std::size_t compared = 0;
         const auto before = peak_above_start([&] {
-            // Starts inside every kind of piece, found by line number.
             for (const auto& p : pieces) {
                 const std::size_t first = std::min<std::size_t>(
                     static_cast<std::size_t>(p.first_line_num) + 3, total - 4);
@@ -398,9 +388,8 @@ TEST_SUITE("BigMemberReads") {
 
     TEST_CASE(
         "the lines the reader reports for a piece match the stored counts") {
-        // A piece starts where the inflater stopped at a block end, so it
-        // starts mid-line almost always. Search seeds for a file with a piece
-        // that starts right after a newline too.
+        // A piece almost always starts mid-line, so search seeds for a file
+        // with a piece that starts right after a newline too.
         bool after_newline = false, mid_line = false;
         for (std::uint32_t seed = 1; seed <= 80 && !(after_newline && mid_line);
              ++seed) {
@@ -419,7 +408,6 @@ TEST_SUITE("BigMemberReads") {
                 const bool newline_before = t.text[at - 1] == '\n';
                 // The folds count a line in the piece where it ends.
                 CHECK(p.first_line_num == newlines_before(t.text, at) + 1);
-                // The first line the piece owns whole.
                 const std::size_t first = static_cast<std::size_t>(
                     p.first_line_num + (newline_before ? 0 : 1));
                 if (first + 2 > t.lines) continue;
@@ -475,9 +463,8 @@ TEST_SUITE("BigMemberReads") {
 
     TEST_CASE(
         "cached members before a big one leave the stream at its offset") {
-        // Small members, a big one, small ones again: the cache serves the
-        // small members and advances the reader without reading their input,
-        // so the stream of the big member must start from the member's offset.
+        // The cache serves the small members without reading their input, so
+        // the stream of the big member must start from the member's offset.
         const std::size_t small_bytes = std::size_t{300} << 10;
         std::string dir = "/tmp/dftu_bigmember_cache_XXXXXX";
         REQUIRE(::mkdtemp(dir.data()) != nullptr);
@@ -503,7 +490,6 @@ TEST_SUITE("BigMemberReads") {
             CAPTURE(hinted);
             CHECK(inflate_mismatches(path, text, &cache,
                                      hinted ? &heads : nullptr) == 0);
-            // The same walk again is served by the cache for what it kept.
             CHECK(inflate_mismatches(path, text, &cache,
                                      hinted ? &heads : nullptr) == 0);
         }
@@ -531,8 +517,8 @@ TEST_SUITE("BigMemberReads") {
                 CAPTURE(seed);
                 CAPTURE(p.member_idx);
                 const bool newline_before = t.text[at - 1] == '\n';
-                // The target is inside the first line the piece holds; that
-                // line is ours when it starts at the piece, else the next one.
+                // The first line the piece holds is ours when it starts at the
+                // piece, else the next one is.
                 const std::size_t expect_from = newline_before ? at : nl + 1;
                 CHECK(read_line_bytes(ix.indexer, at + 1) ==
                       t.text.substr(expect_from));
@@ -565,7 +551,6 @@ TEST_SUITE("BigMemberReads") {
         CHECK(got == lines_of(fx.trace.text, first, first + 2));
         const std::uint64_t file_bytes = std::filesystem::file_size(fx.big);
         MESSAGE("bytes read: " << used << " of a " << file_bytes << " file");
-        // From the head the reader would read the whole member's input.
         CHECK(used < file_bytes / 8);
     }
 
@@ -590,8 +575,7 @@ TEST_SUITE("BigMemberReads") {
         const bool newline_before = t.text[at - 1] == '\n';
         const std::size_t from =
             newline_before ? at : t.text.find('\n', at) + 1;
-        // The line-aligned stream returns whole lines only: the last line,
-        // which has no newline, is not among them.
+        // The last line has no newline, so the line-aligned stream omits it.
         const std::size_t last_newline = t.text.rfind('\n');
         CHECK(read_line_bytes(ix.indexer, at) ==
               t.text.substr(from, last_newline + 1 - from));

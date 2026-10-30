@@ -299,7 +299,7 @@ void Runtime::stop_at_exit() {
         rt = g_default_runtime;
     }
     // The memory exit check runs from atexit, which can come before this
-    // global is destroyed; stopping first lets the workers free their last
+    // global is destroyed. Stopping first lets the workers free their last
     // frames before the check reads.
     if (rt) rt->stop();
 }

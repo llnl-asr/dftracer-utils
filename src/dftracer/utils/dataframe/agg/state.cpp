@@ -245,7 +245,7 @@ std::uint64_t kmv_hash(std::string_view v) {
 void AggStateDeleter::operator()(AggState* p) const noexcept { delete p; }
 
 AggStatePtr agg_new(std::vector<AggSpec> specs, std::vector<AggDynSpec> dyn) {
-    // The dyn finalize computes only these ops; any other would come out as a
+    // The dyn finalize computes only these ops. Any other would come out as a
     // silent 0.0 in every group.
     for (const AggDynSpec& d : dyn) {
         switch (d.op) {
@@ -1184,16 +1184,15 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                     std::int64_t end) {
     std::string sketch_bytes;
     if (st.has_dyn) {
-        // Resolve every dyn input once, before the row loop: the loop keys a
-        // group's cells by id and never touches a name.
+        // Resolve every dyn input once, before the row loop.
         bool light = st.dyn_light_ok;
         st.dyn_slots.resize(dyn_in.size());
         for (std::size_t s = 0; s < dyn_in.size(); ++s) {
             const AggDynInput& di = dyn_in[s];
             const FieldStatDomain dom = col_domain(di.col->type());
             const std::uint32_t id = st.dyn_intern(di.name, dom);
-            // The light words are read in the name's first domain; a call
-            // that brings another one keeps the full cells.
+            // The light words are read in the name's first domain. A call that
+            // brings another one keeps the full cells.
             if (st.dyn_domain[static_cast<std::size_t>(id)] != dom)
                 light = false;
             st.dyn_slots[s] = DynSlot{id, dom};
@@ -1854,7 +1853,7 @@ AggStatePtr agg_merge_many(std::vector<AggStatePtr>& partials) {
     std::vector<dstd::Vector<std::uint32_t>> dyn_map(others.size());
     for (std::size_t p = 0; p < others.size(); ++p)
         if (others[p]->has_dyn) dyn_map[p] = base->dyn_remap(*others[p]);
-    // Before the parallel merge: taking or dropping the light dyn form
+    // Before the parallel merge, as taking or dropping the light dyn form
     // rewrites the whole state.
     if (base->has_dyn)
         for (std::size_t p = 0; p < others.size(); ++p)

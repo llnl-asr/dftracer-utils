@@ -41,9 +41,8 @@ WriterExtents::Take WriterExtents::take(std::uint64_t bytes) {
         ++busy_count_;
         return Take::Busy;
     }
-    // Nothing is held, so no write can free room before this take returns:
-    // charge it past the quota, and ask the pool for the bytes anyway so a
-    // manager under pressure sees the request.
+    // Nothing is held, so no write can free room: charge past the quota and ask
+    // the pool anyway so a manager under pressure sees the request.
     grow_forced(bytes);
     charge(bytes);
     ++over_quota_count_;

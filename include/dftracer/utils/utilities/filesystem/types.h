@@ -22,7 +22,6 @@ struct FileEntry {
 
     FileEntry() = default;
 
-    /// One stat, however many fields are filled.
     explicit FileEntry(const fs::path& p, bool populate_size = true)
         : path(p), size(0), is_directory(false), is_regular_file(false) {
         dftracer::utils::InputFileStat st;

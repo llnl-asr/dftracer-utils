@@ -17,7 +17,7 @@ namespace dftracer::utils::index::cache {
 
 /// Open (or reuse) the rollup store at `path` (see rollup_cache_path). A
 /// ReadWrite open creates the folder. Null when the store cannot be opened, or
-/// for a ReadOnly open of a folder with no store; never throws.
+/// for a ReadOnly open of a folder with no store. Never throws.
 std::shared_ptr<CacheStore> open_rollup_db(const std::string& path,
                                            CacheStore::Mode mode);
 

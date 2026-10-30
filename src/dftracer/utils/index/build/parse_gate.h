@@ -10,11 +10,10 @@
 
 namespace dftracer::utils::index::build {
 
-/// Lets the fold drivers of a build parse pieces of their files at once while
-/// workers are free and memory is. Every parse takes a slot, one per worker;
-/// a file takes one slot at least by force, so it always makes progress, and
-/// more only while one is free. A piece beyond the first of a file also
-/// reserves its bytes from the build's pool. Thread safe.
+/// Lets fold drivers parse pieces of their files at once while workers and
+/// memory are free. There is one slot per worker. A file always gets one slot,
+/// by force, so it makes progress, and more only while one is free. A piece
+/// past the first also reserves its bytes from the build's pool. Thread safe.
 class ParseGate {
    public:
     /// With a null @p pool a piece needs no reservation.
@@ -41,8 +40,7 @@ class ParseGate {
     void file_in() noexcept { files_.fetch_add(1, std::memory_order_relaxed); }
     void file_out() noexcept { files_.fetch_sub(1, std::memory_order_relaxed); }
 
-    /// Whether enough workers have no file for a file to parse more than one
-    /// piece at a time.
+    /// Whether enough workers have no file for a file to parse several pieces.
     bool spare_workers() const noexcept {
         return (workers_ - files_.load(std::memory_order_relaxed)) *
                    static_cast<std::int64_t>(
@@ -57,7 +55,7 @@ class ParseGate {
 
     /// Reserves @p bytes for a piece beyond the first of a file without
     /// waiting. False when the pool is full or as many extra pieces as workers
-    /// are held already. The caller calls drop_piece() when it lets go.
+    /// are held. Call drop_piece() when done.
     bool try_piece(std::uint64_t bytes, memory::Reservation& out) noexcept {
         std::int64_t n = extra_.load(std::memory_order_relaxed);
         do {

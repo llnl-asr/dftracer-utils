@@ -12,13 +12,10 @@
 
 namespace dftracer::utils::dataframe {
 
-// A stateful cursor's place in the memory governor: a Scratch pool below the
-// pool that is current when the cursor is made (the query run's pool), one
-// Reservation that follows the cursor's resident state and a ReclaimSlot that
-// other reservations post requests to. The cursor calls check() at each
-// morsel boundary and spills on its own thread when it returns true; the
-// manager never calls the cursor. Inactive (every call a no-op) when the pool
-// table is full.
+// Governor state of a stateful cursor. It holds a Scratch pool below the
+// query run's pool, a Reservation following the resident state and a
+// ReclaimSlot for requests. The cursor spills on its own thread when check()
+// returns true. Inactive (every call a no-op) when the pool table is full.
 class Governor final : public memory::Reclaimer {
    public:
     explicit Governor(std::string_view name) {
@@ -30,18 +27,16 @@ class Governor final : public memory::Reclaimer {
     Governor(const Governor&) = delete;
     Governor& operator=(const Governor&) = delete;
 
-    // `resident` is what the cursor holds now and what a spill would free.
-    // Returns the bytes the cursor should free now, zero for none: what a
-    // holder over the budget asked for, or all of `resident` when the
-    // reservation could not grow to it.
+    // `resident` is what the cursor holds and a spill would free. Returns the
+    // bytes to free now, zero for none. That is what another holder asked for,
+    // or all of `resident` when the reservation could not grow.
     std::uint64_t check(std::uint64_t resident) noexcept {
         return check(resident, resident);
     }
 
-    // As check(resident), when a spill would free only `spillable` of it: the
-    // slot reports that much, and a request is answered from it alone. With
-    // zero, state that cannot leave memory is reserved, never offered, and
-    // the call returns nonzero only when the grow is refused.
+    // As check(resident), when a spill would free only `spillable` of it. With
+    // zero, the state is reserved but never offered, and the call returns
+    // nonzero only when the grow is refused.
     std::uint64_t check(std::uint64_t resident,
                         std::uint64_t spillable) noexcept {
         if (!slot_) return 0;
@@ -59,7 +54,7 @@ class Governor final : public memory::Reclaimer {
                 reservation_.grow(resident - held) != memory::Status::Ok) {
                 denied_at_ = resident;
                 // The failed grows posted part of their shortfall to this
-                // slot; the spill the caller makes now answers it.
+                // slot. The spill the caller makes now answers it.
                 slot_.take_request();
                 return resident;
             }
@@ -79,13 +74,12 @@ class Governor final : public memory::Reclaimer {
     }
 
     std::uint64_t reserved() const noexcept { return reservation_.bytes(); }
-    /// The Scratch pool, for state that never leaves the cursor; null when
+    /// The Scratch pool, for state that never leaves the cursor. Null when
     /// the pool table was full.
     memory::Pool* pool() const noexcept { return pool_.get(); }
 
-    // The slot starts at zero; check() reports what the cursor holds. The
-    // cursor spills from check() on its own thread, so nothing calls
-    // reclaim().
+    // Nothing calls reclaim(), as the cursor spills from check() on its own
+    // thread.
     std::size_t reclaimable() const override { return 0; }
     std::size_t reclaim(std::size_t) override { return 0; }
 
@@ -93,7 +87,7 @@ class Governor final : public memory::Reclaimer {
     memory::PoolHandle pool_;
     memory::Reservation reservation_;
     memory::ReclaimSlot slot_;
-    // The resident size whose grow was refused; zero when none was.
+    // The resident size whose grow was refused, zero when none was.
     std::uint64_t denied_at_ = 0;
 };
 

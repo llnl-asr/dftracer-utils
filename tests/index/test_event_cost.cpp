@@ -1,7 +1,4 @@
-// Per-event cost of the index fold: schema leaves are interned once per record
-// shape, chunk statistics are found by interned id, a bloom insert hashes its
-// value once, and the stored index does not change. The cases count work, not
-// time.
+// The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/event_cost.h>
@@ -35,11 +32,8 @@ namespace {
 constexpr int EVENTS = 6000;
 constexpr int SHAPES = 3;
 constexpr std::time_t FIXED_MTIME = 1700000000;
-// Distinct leaf paths over the three record shapes of write_trace.
 constexpr std::uint64_t LEAF_PATHS = 24;
 constexpr std::uint64_t MIN_REDUCTION = 20;
-// Three record shapes in rotation: flat args, no args and nested args with a
-// null and an array. Names, categories and pids repeat, as in a real trace.
 std::string write_trace(const std::string& dir) {
     std::ostringstream out;
     out << "[\n";
@@ -73,7 +67,6 @@ std::string write_trace(const std::string& dir) {
     out << "]\n";
     const std::string path = dftu_utils_test::write_stored_gz_trace(
         dir + "/trace.pfw.gz", out.str());
-    // The index stores the trace's modification time.
     const timespec fixed[2] = {{FIXED_MTIME, 0}, {FIXED_MTIME, 0}};
     REQUIRE(::utimensat(AT_FDCWD, path.c_str(), fixed, 0) == 0);
     return path;

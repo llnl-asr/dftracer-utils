@@ -71,7 +71,7 @@ class Ring {
 
     // Batched submission: count of SQEs prepared but not yet
     // submitted to the kernel via io_uring_enter. Written under the
-    // backend's submit lock; atomic so flush() can skip the lock when empty.
+    // backend's submit lock. Atomic so flush() can skip the lock when empty.
     std::atomic<unsigned> pending_count_{0};
 
    public:
@@ -162,7 +162,7 @@ inline void prep_nop(struct io_uring_sqe* sqe) {
     sqe->opcode = IORING_OP_NOP;
 }
 
-// Cancels every request in flight. Needs a 5.19 kernel; an older one
+// Cancels every request in flight. Needs a 5.19 kernel. An older one
 // completes the cancel with -EINVAL.
 inline void prep_cancel_all(struct io_uring_sqe* sqe) {
     constexpr __u32 CANCEL_ALL = 1U << 0;

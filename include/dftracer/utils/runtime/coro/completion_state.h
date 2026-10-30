@@ -17,9 +17,8 @@ namespace coro {
 
 /// Common suspension/completion coordination shared by when_all / when_any
 /// shared-state structs. Holds the awaiting coroutine, its executor, and the
-/// CompletionLatch that guards the suspend-vs-complete race. While the awaiter
-/// is suspended it is registered with the executor, so shutdown resumes it
-/// with a cancelled error even when a child never completes.
+/// CompletionLatch that guards the suspend-vs-complete race. Shutdown resumes a
+/// suspended awaiter with a cancelled error.
 struct CompletionState {
     std::coroutine_handle<> awaiting_coroutine_{};
     Executor* executor_{nullptr};
@@ -71,12 +70,11 @@ struct CompletionState {
 };
 
 /// Hands the children of a vector when_all / when_any to its wrapper
-/// coroutines. A wrapper takes the next free child when it is free, so the
-/// children that are done at once run one after another in one wrapper frame,
-/// and the launcher starts one more wrapper each time a wrapper suspends.
+/// coroutines. A wrapper takes the next free child, and the launcher starts one
+/// more wrapper each time a wrapper suspends.
 class ChildClaims {
    public:
-    /// The index of the next child; at or past the child count when none is
+    /// The index of the next child. At or past the child count when none is
     /// left. Relaxed: the read-modify-write makes each index unique, and the
     /// children were written before any wrapper started.
     std::size_t claim() noexcept {
@@ -122,9 +120,8 @@ struct WhenAllCompletionState : CompletionState {
 };
 
 /// First-of accounting: the awaiter resumes once a winner is decided and every
-/// child wrapper has finished, so no loser runs after the awaiter resumes.
-/// One atomic holds both facts, so the one update that completes the condition
-/// sees the other half and releases the awaiter, once, with no extra handshake.
+/// child wrapper has finished, so no loser runs after it. One atomic holds both
+/// facts, so the update that completes the condition releases the awaiter once.
 struct WhenAnyCompletionState : CompletionState {
     std::size_t wrappers_total_{0};
 
@@ -143,7 +140,6 @@ struct WhenAnyCompletionState : CompletionState {
         }
     }
 
-    /// True once a winner is decided and every wrapper is done.
     bool released() const {
         const std::size_t now = progress_.load(std::memory_order_acquire);
         return (now & WINNER) != 0 && (now & FINISHED_MASK) == wrappers_total_;

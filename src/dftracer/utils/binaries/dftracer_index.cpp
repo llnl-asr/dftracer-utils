@@ -183,11 +183,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
     const auto executor_threads = cli->pipeline.executor_threads;
-    // When --index-dir is not provided, place the index next to the input
-    // data so it lines up with each file's per-file index_path
-    // (which determine_index_path(file, "") resolves to
-    // <file_parent>/.dftindex). The top-level scanner is non-recursive, so all
-    // input files share log_dir.
+    // Without --index-dir the index goes next to the input data, where
+    // determine_index_path(file, "") puts each file's index. The top-level
+    // scanner is non-recursive, so all input files share log_dir.
     const auto index_dir =
         cli->indexing.index_dir.empty() ? log_dir : cli->indexing.index_dir;
     const auto expected_entries = cli->expected_entries;
@@ -265,7 +263,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         stage_start = now;
     };
 
-    // Discover input files
     auto matched_entries =
         cli::scan_trace_files_on_pool(cli->pipeline, log_dir);
 
@@ -278,8 +275,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     DFTRACER_UTILS_LOG_INFO("Found %zu input files", matched_entries.size());
     log_stage("scan");
 
-    // A file whose index is current is skipped: the freshness decision is the
-    // resolver's, from the size and mtime the scan read.
     std::size_t skipped_fresh = 0;
     std::set<std::string> stale_tiers;
     if (!force_rebuild) {
@@ -321,8 +316,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         scanned_sizes.push_back(entry.size);
     }
 
-    // Files in logical path order get file ids in that order, so a run of ids
-    // is a run of paths.
+    // File ids follow logical path order, so a run of ids is a run of paths.
     {
         std::vector<std::string> logical(input_files.size());
         for (std::size_t i = 0; i < input_files.size(); ++i)
@@ -356,17 +350,15 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     Pipeline pipeline(pipeline_config);
 
-    // A forced rebuild rebuilds every file whole, so its tier is stale too.
     const std::string agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
     if (force_rebuild && fs::exists(agg_index)) stale_tiers.insert(agg_index);
     for (const auto& root : stale_tiers) clear_aggregation(root);
 
-    // The build's writes commit as they come: one handle is held from the id
-    // assignment to the close.
+    // One handle is held from the id assignment to the close.
     IndexDatabase store_db(index_dir);
-    // Ids come from a counter that only grows, so one at or past it before the
-    // assignment was never used in this index.
+    // Ids come from a counter that only grows, so one at or past it was never
+    // used in this index.
     const int first_fresh_file_id = store_db.reserve_file_id_range(0);
     std::vector<int> preassigned_file_ids =
         store_db.assign_file_ids(input_files);
@@ -386,7 +378,6 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     batch_config->memory_budget = cli->memory_budget;
     batch_config->schema = cli->record_schema;
 
-    // The build folds every file into the aggregation tier of its index.
     AggRun agg_run = start_aggregation(
         agg_index, index::schemas::dft::agg::standard_aggregation_config());
     batch_config->agg_fold_factory = agg_run.factory;

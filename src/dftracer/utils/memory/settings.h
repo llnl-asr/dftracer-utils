@@ -18,12 +18,12 @@ bool debug_enabled() noexcept;
 /// The constants::EXIT_CHECK_ENV value, read once.
 bool exit_check_env() noexcept;
 
-/// The hard cap in bytes; zero is no cap. One relaxed load.
+/// The hard cap in bytes. Zero is no cap.
 std::size_t hard_cap() noexcept;
 void set_hard_cap(std::size_t bytes) noexcept;
 
-/// The budget the page heap keeps its backed bytes under when it maps; zero
-/// until the manager has resolved its budget. One relaxed load.
+/// The budget the page heap keeps its backed bytes under when it maps. Zero
+/// until the manager has resolved its budget.
 std::size_t map_budget() noexcept;
 void set_map_budget(std::size_t bytes) noexcept;
 

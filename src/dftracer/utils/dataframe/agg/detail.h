@@ -214,39 +214,33 @@ inline void space_saving_offer(SpaceSavingMap& m, std::size_t k,
     m.emplace(value, inherited + count);
 }
 
-/// One dyn cell of a group: a name's running statistic, under that name's id.
-/// A group keeps its cells sorted by id, so a lookup is a binary search and the
-/// whole group's dyn storage is one block with no name in it.
+/// A group keeps its dyn cells sorted by id, so a lookup is a binary search.
 struct DynCell {
     FieldStat stat;
     std::uint32_t id = 0;
 };
 
-/// The Pct reduction's per-name sketch, beside its cell.
 struct DynSketchCell {
     DDSketch sketch{};
     std::uint32_t id = 0;
 };
 
-/// One dyn input of an accumulate call: the name's id and the domain of this
-/// call's column for it (a batch may hold the same name in another domain).
+/// The domain is this call's column's, which can differ between batches.
 struct DynSlot {
     std::uint32_t id = 0;
     FieldStatDomain domain = FieldStatDomain::F64;
 };
 
-/// One group's dyn cells in the light form: `dyn_light_stride` words a cell -
-/// the id word (bit `DYN_LIGHT_PRESENT` when the name has a value and the mask
-/// keeps no count word) then the cells its mask keeps, in the static light
-/// row's order - and, beside them, an {id, net wrap} pair per cell whose
-/// integer sum overflowed (a light word holds only the wrapped sum).
+/// A group's dyn cells in the light form. A cell is `dyn_light_stride` words,
+/// the id word (with DYN_LIGHT_PRESENT set when the name has a value and the
+/// mask keeps no count word) then the cells the mask keeps. `carry` holds the
+/// net wrap of each cell whose integer sum overflowed.
 struct DynLightCells {
     dstd::Vector<std::uint64_t> words;
     dstd::Vector<std::pair<std::uint32_t, std::int64_t>> carry;
 };
 
-/// The id word's "this cell has a value" bit, where the static light row keeps
-/// a field's presence bit. Ids stay below it.
+/// The id word's presence bit. Ids stay below it.
 constexpr std::uint64_t DYN_LIGHT_PRESENT = std::uint64_t{1} << 31;
 constexpr std::uint64_t DYN_LIGHT_ID = DYN_LIGHT_PRESENT - 1;
 constexpr std::uint8_t DYN_LIGHT_PRESENT_BIT = 31;
@@ -616,12 +610,9 @@ class AggState {
     // reduction is configured, one DDSketch) per auto-discovered argument name.
     // The name set is data-dependent (grows during accumulate) and merges by
     // name-union, so a single streaming pass builds per-argument aggregates
-    // without a name pre-scan. A name is interned once and named by id from
-    // then on: `dyn_names` is id -> name, `dyn_ids` the reverse lookup
-    // (transparent, so a string_view finds its id without a copy) and
-    // `dyn_domain` the domain a name's finalized column keeps (the domain of
-    // the first input column seen for it, so a group missing a name still lands
-    // in that name's stable column type).
+    // without a name pre-scan. A name is interned once and then named by id.
+    // `dyn_domain` is the domain of the first input column seen for the name,
+    // which fixes its column type.
     bool has_dyn = false;
     bool dyn_has_sketch = false;
     std::vector<AggDynSpec> dyn_specs;
@@ -632,17 +623,15 @@ class AggState {
     dstd::Vector<FieldStatDomain> dyn_domain;
     dstd::Vector<dstd::Vector<DynCell>> dyn_fs;            // ngroups
     dstd::Vector<dstd::Vector<DynSketchCell>> dyn_sketch;  // ngroups
-    // The cells the light form holds instead, when `dyn_light_on` (the two
-    // are never both populated). One mask for every name - a dyn spec applies
-    // to every name - so a group's cells are fixed-size word records and no
-    // cell holds a FieldStat.
+    // The cells the light form holds instead, when `dyn_light_on`, never both.
+    // One mask serves every name, so a group's cells are fixed-size word
+    // records.
     dstd::Vector<DynLightCells> dyn_light;  // ngroups
     std::size_t dyn_light_stride = 0;  // words a cell, the id word included
     bool dyn_light_ok = false;  // every dyn spec reads what the light row keeps
     bool dyn_light_on = false;
     std::uint8_t dyn_light_mask = 0;
-    // The current accumulate call's dyn inputs, resolved once before its row
-    // loop so no row touches a name.
+    // The accumulate call's dyn inputs, resolved before its row loop.
     dstd::Vector<DynSlot> dyn_slots;
 
     /// The id no dyn name has.
@@ -679,9 +668,8 @@ class AggState {
         return out;
     }
 
-    /// The light cells a dyn spec reads out of a name's cell, by the same rules
-    /// init_light uses for a field. `fits` is false for an op the light row
-    /// cannot hold (the higher moments, the raw value, the collections).
+    /// The light cells a dyn spec reads out of a name's cell. `fits` is false
+    /// for an op the light row cannot hold.
     static std::uint8_t dyn_light_bits(AggOp op, bool& fits) {
         fits = true;
         switch (op) {
@@ -707,7 +695,6 @@ class AggState {
         }
     }
 
-    /// The cells a light field of `mask` keeps, the presence word aside.
     static std::size_t light_words(std::uint8_t mask) {
         return static_cast<std::size_t>((mask & LIGHT_N) != 0) +
                static_cast<std::size_t>((mask & LIGHT_SUM) != 0) +
@@ -756,7 +743,7 @@ class AggState {
     }
 
     /// The word index of `id`'s cell in a group's `words`, or its size when the
-    /// cell is absent: the cells sit at a fixed stride in id order.
+    /// cell is absent.
     std::size_t dyn_light_lower(const dstd::Vector<std::uint64_t>& w,
                                 std::uint32_t id) const {
         std::size_t lo = 0, hi = w.size() / dyn_light_stride;
@@ -786,7 +773,6 @@ class AggState {
         return it != c.end() && it->first == id ? it->second : 0;
     }
 
-    /// Note `wrap` more on `id`'s sum in group `g`.
     void dyn_light_carry_add(std::int64_t g, std::uint32_t id,
                              std::int64_t wrap) {
         dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
@@ -820,7 +806,6 @@ class AggState {
         }
     }
 
-    /// The running stat `id`'s light cell holds, its exact sum included.
     FieldStat dyn_light_stat_of(std::int64_t g, std::uint32_t id,
                                 const std::uint64_t* cell) const {
         FieldStat f =
@@ -847,7 +832,7 @@ class AggState {
     }
 
     /// Visit a group's dyn cells in id order. The stat is only valid for the
-    /// call: the light form builds it from the cell's words.
+    /// call, as the light form builds it from the cell's words.
     template <class F>
     void dyn_each_cell(std::int64_t g, F&& f) const {
         if (dyn_light_on) {
@@ -868,9 +853,8 @@ class AggState {
             f(c.id, c.stat);
     }
 
-    /// Merge `o` into `id`'s light cell in group `g`: the cell's own stat is
-    /// unpacked, so the moments combine exactly as FieldStat::merge does.
-    /// `o`'s domain must be the one the name keeps.
+    /// Merge `o` into `id`'s light cell in group `g`, combining moments as
+    /// FieldStat::merge does. `o`'s domain must be the one the name keeps.
     void dyn_light_merge(std::int64_t g, std::uint32_t id, const FieldStat& o) {
         if (o.n == 0) return;
         std::uint64_t* cell = dyn_light_cell(g, id);
@@ -882,7 +866,7 @@ class AggState {
         dyn_light_store(g, id, cell, dst);
     }
 
-    /// Whether this state's light form can hold every cell `other` brings: a
+    /// Whether this state's light form can hold every cell `other` brings. A
     /// cell's words are read in its name's domain, so a cell of another domain
     /// needs the full form.
     bool dyn_light_holds(const AggState& other,
@@ -925,13 +909,11 @@ class AggState {
         return true;
     }
 
-    /// The light cells as full DynCells (a representation change only).
     void dyn_settle() {
         if (!dyn_light_on) return;
         dyn_fs.resize(static_cast<std::size_t>(ngroups()));
         for (std::int64_t g = 0; g < ngroups(); ++g) {
             dstd::Vector<DynCell>& cells = dyn_fs[static_cast<std::size_t>(g)];
-            // Read the light cells before dropping them.
             dyn_each_cell(g, [&](std::uint32_t id, const FieldStat& f) {
                 cells.push_back(DynCell{f, id});
             });
@@ -941,7 +923,6 @@ class AggState {
         dyn_light.shrink_to_fit();
     }
 
-    /// `f`'s cells into a light cell's words, its net wrap beside them.
     void dyn_light_store(std::int64_t g, std::uint32_t id, std::uint64_t* cell,
                          const FieldStat& f) {
         const std::uint8_t mask = dyn_light_mask;
@@ -1348,9 +1329,8 @@ class AggState {
         return f;
     }
 
-    // The stat a light row's cell holds: `row` is the group's row, `off` the
-    // cell's word offset in it, `bit` the presence bit (the field's index, or
-    // the id word's bit for a dyn cell) and `domain` the accumulation domain.
+    // The stat a light row's cell holds. `bit` is the presence bit, the field's
+    // index or the id word's bit for a dyn cell.
     static FieldStat light_words_stat(const std::uint64_t* row,
                                       std::uint32_t off, std::uint8_t mask,
                                       std::uint8_t bit,
@@ -1579,7 +1559,7 @@ class AggState {
     // Merge group `j` of `other` into this state's group `g` (already located).
     // Shared by agg_merge (1:1 keys) and agg_regroup (projected keys); assumes
     // this state adopted `other`'s spec/field layout.
-    /// `dyn_map` maps other's dyn ids to this state's; null when the two
+    /// `dyn_map` maps other's dyn ids to this state's. Null when the two
     /// states share one name table.
     void merge_group(std::int64_t g, const AggState& other, std::int64_t j,
                      const dstd::Vector<std::uint32_t>* dyn_map = nullptr) {

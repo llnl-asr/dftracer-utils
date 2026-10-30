@@ -11,8 +11,6 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-/// The sink that folds one event into an AggPartial, and its counts and sums
-/// into `bin` when it is not null.
 class PartialSink {
    public:
     PartialSink(AggPartial& partial, std::uint64_t pid,
@@ -78,16 +76,14 @@ class PartialSink {
     bool percentiles_;
 };
 
-/// Whether the per-name partial holds the event: any record with a phase the
-/// View reads, but a metadata record. A record whose phase the View drops (an
-/// unknown letter, such as an instant) is left out, so the index answers as a
-/// scan does.
+/// Whether the per-name partial holds the event. A record whose phase the View
+/// drops (an unknown letter, such as an instant) is left out, so the index
+/// answers as a scan does.
 template <class Acc>
 bool partial_holds(const Acc& acc) {
     return acc.has_phase() && !acc.is_metadata();
 }
 
-/// The kind of the partial an event that partial_holds belongs to.
 template <class Acc>
 PartialKind partial_kind(const Acc& acc) {
     return acc.is_profile()      ? PartialKind::Profile
@@ -96,8 +92,8 @@ PartialKind partial_kind(const Acc& acc) {
                                  : PartialKind::Event;
 }
 
-/// The values of the extra group keys of `cfg` on an event, joined by 0x1F in
-/// the order of the keys; empty when the event has none of them.
+/// The extra group key values of `cfg`, joined by 0x1F in key order. Empty when
+/// the event has none of them.
 template <class Acc>
 void extra_values(const Acc& acc, const AggregationConfig& cfg,
                   std::string& out) {
@@ -114,8 +110,7 @@ void extra_values(const Acc& acc, const AggregationConfig& cfg,
     if (!any) out.clear();
 }
 
-/// Folds an event that partial_holds into `partial` by the rules of
-/// aggregate_event, and its counts and sums into `bin` when it is not null.
+/// Folds an event that partial_holds into `partial` and, when not null, `bin`.
 template <class Acc>
 void fold_into_partial(AggPartial& partial, const Acc& acc,
                        const AggregationConfig& cfg, TimeBin* bin = nullptr) {
@@ -126,10 +121,8 @@ void fold_into_partial(AggPartial& partial, const Acc& acc,
     accumulate_event_metrics(acc, cfg, sink);
 }
 
-/// Folds one event into `partial` by the rules of aggregate_event. Returns
-/// false, and leaves `partial` alone, for an event the per-name partial does
-/// not hold (see partial_holds). The caller picks the partial by the
-/// lower-cased category and the name.
+/// Returns false, leaving `partial` alone, for an event partial_holds rejects.
+/// The caller picks the partial by the lower-cased category and the name.
 template <class Acc>
 bool update_partial(AggPartial& partial, const Acc& acc,
                     const AggregationConfig& cfg) {

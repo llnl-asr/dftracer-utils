@@ -31,28 +31,25 @@ constexpr std::uint64_t OPEN_EXTENT_SEALED = 1ULL << 63U;
 /// After the first dictionary, one page in this many goes to the sample of the
 /// second, so it learns from a wider stretch of the data at the same cost.
 constexpr std::uint64_t DICT_RETRAIN_STRIDE = 8;
-/// Dictionaries trained per namespace per data file.
 constexpr std::uint8_t DICT_STAGES = 2;
 /// The page bytes a namespace seals while its dictionary trains before a seal
 /// waits for the training, so a dictionary is never later than this.
 constexpr std::uint64_t DICT_WAIT_BYTES = std::uint64_t{16} << 20;
 
-/// One dictionary training, shared by the namespace that started it and the
-/// executor task that runs it. Whoever claims it first trains: the task, or a
-/// seal that cannot wait longer. The task holds this alone (not the writer),
-/// so the writer never waits for a task that has not started.
+/// One dictionary training, shared by the namespace and the executor task that
+/// runs it. Whoever claims it first trains: the task, or a seal that cannot
+/// wait. The task holds this alone, so the writer never waits for a task that
+/// has not started.
 struct DictTraining {
     std::mutex mutex;
     std::condition_variable done_cv;
     dstd::Vector<std::uint8_t> sample;
     dstd::Vector<std::size_t> sizes;
-    /// The dictionary, empty when training failed.
     dstd::Vector<std::uint8_t> result;
     bool claimed = false;
     bool done = false;
 };
 
-/// Trains `job` unless another thread claimed it; returns at once then.
 void run_training(DictTraining& job) {
     dstd::Vector<std::uint8_t> sample;
     dstd::Vector<std::size_t> sizes;
@@ -120,17 +117,13 @@ struct ExtentWriter::NamespaceSlot {
     std::atomic<OpenExtent*> extent{nullptr};
     NamespaceSlot* next = nullptr;
 
-    /// The dictionary the extents of the namespace compress with, and the
-    /// sample of raw pages the next one trains on.
     std::mutex dict_mutex;
     dstd::SharedPtr<const PageDict> dict;
     dstd::Vector<std::uint8_t> sample;
     dstd::Vector<std::size_t> sample_sizes;
     std::uint64_t pages_seen = 0;
     std::uint8_t dict_stage = 0;
-    /// The training started for the next dictionary; null when none.
     dstd::SharedPtr<DictTraining> training;
-    /// Page bytes sealed since that training started.
     std::uint64_t sealed_while_training = 0;
 };
 
@@ -218,9 +211,8 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
                                   slot.pages_seen % DICT_RETRAIN_STRIDE == 0;
                 ++slot.pages_seen;
                 if (!keep) continue;
-                // The sample grows with what the namespace wrote, doubling up
-                // to its full size and never past it, so a namespace that never
-                // fills it holds no more than twice what it wrote.
+                // The sample doubles up to its full size, so a namespace that
+                // never fills it holds no more than twice what it wrote.
                 const std::size_t need = slot.sample.size() + (end - begin);
                 if (need > slot.sample.capacity()) {
                     slot.sample.reserve(
@@ -231,10 +223,9 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
                 slot.sample_sizes.push_back(end - begin);
             }
             if (slot.sample.size() < sample_bytes) return slot.dict;
-            // Training takes a fraction of a second, so it runs as a task of
-            // the writer's executor and the extents sealed meanwhile keep the
-            // dictionary they had. It only trains: the seal that finds it done
-            // writes the dictionary, while the data file is open.
+            // Training runs as an executor task, and extents sealed meanwhile
+            // keep the dictionary they had. The seal that finds it done writes
+            // the dictionary, while the data file is open.
             job = dstd::make_shared<DictTraining>();
             job->sample = std::move(slot.sample);
             job->sizes = std::move(slot.sample_sizes);
@@ -254,8 +245,7 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
     }
     if (must_finish) {
         // The namespace outran its training: finish it here. A job no thread
-        // claimed is trained on this one; a claimed one runs on another thread
-        // and ends.
+        // claimed is trained on this one, and a claimed one runs elsewhere.
         run_training(*job);
         BlockingRegion blocking;
         std::unique_lock<std::mutex> lock(job->mutex);
@@ -344,9 +334,8 @@ void ExtentWriter::retire(OpenExtent* extent) {
 bool ExtentWriter::seal_extent(OpenExtent* extent) {
     std::uint64_t state = extent->state.load(std::memory_order_acquire);
     if ((state & OPEN_EXTENT_SEALED) != 0) return false;
-    // Counted before the seal is visible, so that a wait which observes the
-    // sealed extent also observes this write: the crc and the range of that
-    // write are still to be computed.
+    // Counted before the seal is visible, so a wait that observes the sealed
+    // extent also observes this write.
     begin_write();
     for (;;) {
         if ((state & OPEN_EXTENT_SEALED) != 0) {
@@ -503,7 +492,6 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
         reject();
         return;
     }
-    // The raw bytes go with the extent: only the stored form stays in flight.
     extent->buffer = dstd::Vector<std::uint8_t>();
     const std::uint32_t length = static_cast<std::uint32_t>(stored->size());
     auto* pending = new PendingWrite;
@@ -580,7 +568,6 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
         segment_length > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
     }
-    // An extent's raw bytes keep room for the fixed header of its stored form.
     const std::size_t capacity = extent_size_ - EXTENT_HEADER_BYTES;
     if (segment_length >= capacity) {
         dstd::Vector<std::uint8_t> run(segment_length);
@@ -623,8 +610,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
             }
         }
 
-        // Sealing counts as a writer, so whoever leaves last writes the extent,
-        // and that is this thread when no appender is inside.
+        // Sealing counts as a writer, so whoever leaves last writes the extent.
         if (seal_extent(extent)) leave_extent(extent);
         publish_extent(*slot, extent);
     }
@@ -637,8 +623,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::seal_all() {
          slot != nullptr; slot = slot->next) {
         OpenExtent* extent = slot->extent.load(std::memory_order_acquire);
         if (extent == nullptr) continue;
-        // An empty extent has nothing to write, and sealing it would install a
-        // fresh buffer while retaining this one for no gain.
+        // Sealing an empty extent would only install a fresh buffer.
         if ((extent->state.load(std::memory_order_acquire) &
              OPEN_EXTENT_BUMP_MASK) == 0) {
             continue;

@@ -52,7 +52,7 @@ class ScalableBloomFilter {
 
     void add(std::string_view value);
     bool possibly_contains(std::string_view value) const;
-    /// Hashes add() has computed: one per call, whatever the chain's length.
+    /// One per add() call, whatever the chain's length.
     std::size_t hash_computations() const { return hashed_; }
     void merge_from(const ScalableBloomFilter& other);
 

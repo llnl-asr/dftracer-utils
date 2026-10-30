@@ -35,8 +35,7 @@ std::string dict_prefix() {
     return layout::kind_prefix(layout::Ext::Agg, layout::agg_kind::DICT);
 }
 
-// The payload of the index-wide record `name`; nullopt when it is absent or
-// in another format.
+// nullopt when the record is absent or in another format.
 std::optional<std::string> get_meta(const IndexDatabase& db,
                                     std::string_view name) {
     return AggRowReader::get_row(db, layout::agg_kind::META, meta_key(name));
@@ -59,7 +58,6 @@ void put_meta(IndexDatabase& db, std::string_view name,
             "' (dictionaries from two indexes in one table?)");
 }
 
-/// The id of one dictionary record, whose key is the file prefix and the id.
 std::uint32_t entry_id(std::string_view prefix, std::string_view key) {
     if (key.size() != prefix.size() + 2 * sizeof(std::uint32_t))
         throw DFTUtilsException(ErrorCode::Parse,
@@ -67,7 +65,6 @@ std::uint32_t entry_id(std::string_view prefix, std::string_view key) {
     return layout::read_u32(key.substr(prefix.size() + sizeof(std::uint32_t)));
 }
 
-/// The dictionary entries of `file_id`, keyed by id.
 void load_file_texts(const IndexDatabase& db, int file_id,
                      dstd::HashMap<std::uint32_t, dstd::String>& texts) {
     const auto entries = dict_prefix();
@@ -82,8 +79,7 @@ void load_file_texts(const IndexDatabase& db, int file_id,
         });
 }
 
-/// Fills the text of each id of `block`, empty for an id the file holds none
-/// for.
+/// An id the file holds no entry for gets the empty text.
 void resolve_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
                    ChunkColumns& block) {
     block.texts.resize(block.ids.size());

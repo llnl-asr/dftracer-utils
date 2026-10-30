@@ -111,8 +111,6 @@ std::size_t agg_approx_bytes(const AggState& st) {
             total += d.size() * (sizeof(std::uint64_t) + sizeof(std::int64_t));
     }
     if (st.has_dyn) {
-        // The name table, then a vector header and a capacity of cells a
-        // group.
         total += st.dyn_names.capacity() * sizeof(dstd::String) +
                  st.dyn_domain.capacity() * sizeof(FieldStatDomain) +
                  st.dyn_ids.values().capacity() *

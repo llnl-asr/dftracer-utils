@@ -176,7 +176,7 @@ TEST_CASE("a frame blocked on each awaitable completes at shutdown") {
         };
         rt.submit(frame(), "BlockedOnLatch");
         expect_cancelled_at_shutdown(rt, probe);
-        // The children never saw the shutdown; finish them so nothing leaks.
+        // The children never saw the shutdown. Finish them so nothing leaks.
         std::vector<std::coroutine_handle<>> parked;
         {
             std::lock_guard<std::mutex> lock(gate.mutex);
@@ -436,7 +436,7 @@ TEST_CASE("when_any cancels a CoroTask loser that never ends") {
                  "when_any with a never-ending CoroTask loser");
 
     CHECK(winner_index.load() == 0);
-    // A loser that began is gone; one that the winner beat to the start never
+    // A loser that began is gone. One that the winner beat to the start never
     // ran.
     CHECK(loser_started.load() == loser_gone.load());
     shutdown_or_fail(rt);

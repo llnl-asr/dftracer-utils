@@ -43,7 +43,7 @@ template <typename T>
 struct SharedState {
     static constexpr std::uintptr_t EMPTY = 0;
     static constexpr std::uintptr_t DONE = 1;
-    /// A waiter that shutdown woke early; not an address, so no frame matches.
+    /// A waiter that shutdown woke early. Not an address, so no frame matches.
     static constexpr std::uintptr_t CANCELLED = 2;
 
     std::atomic<std::uintptr_t> flag{EMPTY};
@@ -51,7 +51,6 @@ struct SharedState {
                                              std::optional<T>> result;
     std::exception_ptr exception;
     Executor* executor{nullptr};
-    /// Cancellation token of the spawned child, set by SpawnFuture::cancel().
     std::shared_ptr<std::atomic<bool>> cancel_token;
 
     /// Called by the spawned coroutine on completion (non-void result).
@@ -134,7 +133,7 @@ class SpawnFuture {
     bool await_ready() const noexcept { return state_->is_done(); }
 
     /// co_await throws a cancelled error (see coro::is_cancelled) when the
-    /// executor shuts down while the spawn is still running; the spawn is not
+    /// executor shuts down while the spawn is still running. The spawn is not
     /// stopped by that, and its scope still joins it.
     bool await_suspend(std::coroutine_handle<> awaiting) noexcept {
         handle_ = awaiting;
@@ -188,8 +187,8 @@ class SpawnFuture {
     /// Check if the spawned coroutine has completed.
     bool is_done() const { return state_->is_done(); }
 
-    /// Ask the spawned coroutine to stop. Cooperative: the child sees it
-    /// through CoroScope::is_cancellation_requested(). Thread-safe, idempotent.
+    /// Asks the spawned coroutine to stop. The child sees it through
+    /// CoroScope::is_cancellation_requested(). Thread-safe, idempotent.
     void cancel() noexcept {
         if (state_ && state_->cancel_token) {
             state_->cancel_token->store(true, std::memory_order_release);

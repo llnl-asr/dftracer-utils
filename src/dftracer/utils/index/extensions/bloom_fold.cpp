@@ -462,9 +462,8 @@ std::unique_ptr<index::store::IndexDatabaseWrite> BloomFold::finish_staged(
     ankerl::unordered_dense::set<std::uint32_t> full;
     for (const AutoKey& key : keys)
         if (!key.absence_only) full.insert(key.id);
-    // The keys staged so far hold every candidate path's evidence; the ones
-    // the selection did not keep are erased from them, and the chunks below
-    // write only the kept ones.
+    // The staged keys hold every candidate path's evidence. The paths the
+    // selection did not keep are erased from them.
     if (!staged_any && !spill_fresh_)
         for (auto ext : BV::tier_extensions(config_))
             index::store::records::clear_file(*staged_, ext, file_id);

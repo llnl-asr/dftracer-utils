@@ -17,8 +17,8 @@ constexpr double POW10[MAX_EXPONENT + 1] = {
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
 
-/// Zigzag of the two's complement bit pattern of a signed value, so a
-/// difference that wrapped still round-trips exactly.
+/// Zigzag of the two's complement bits, so a difference that wrapped still
+/// round-trips.
 std::uint64_t zigzag_bits(std::uint64_t bits) {
     return (bits << 1U) ^ (0U - (bits >> 63U));
 }
@@ -27,15 +27,14 @@ std::uint64_t unzigzag_bits(std::uint64_t z) {
     return (z >> 1U) ^ (0U - (z & 1U));
 }
 
-/// v * 10^e when that is inside the encoder's range; false for a value that
-/// scaling cannot bring into it, NaN and the infinities included.
+/// False when v * 10^e is outside the encoder's range, NaN and infinities
+/// included.
 bool scale(double v, std::uint8_t e, double& scaled) {
     scaled = v * POW10[e];
     return scaled > -MAX_SCALED && scaled < MAX_SCALED;
 }
 
-/// Whether v encodes at exponent e as an integer i that decodes back to the
-/// very same double.
+/// Whether v at exponent e decodes back to the very same double.
 bool encodes_as(double v, std::uint8_t e, std::int64_t& i) {
     double scaled = 0;
     if (!scale(v, e, scaled)) return false;
@@ -43,8 +42,6 @@ bool encodes_as(double v, std::uint8_t e, std::int64_t& i) {
     return double_bits(static_cast<double>(i) / POW10[e]) == double_bits(v);
 }
 
-/// The exponent with the fewest exceptions over a sample of the column, ties
-/// to the smaller exponent.
 std::uint8_t best_exponent(const dstd::Vector<std::uint64_t>& bits) {
     const std::size_t sample = std::min(bits.size(), SAMPLE_VALUES);
     std::array<std::uint32_t, MAX_EXPONENT + 1> encoded{};
@@ -193,13 +190,12 @@ bool get_varint(LeReader& r, std::uint64_t& out) {
     return true;
 }
 
-/// A count whose elements take at least one byte each, so a count above the
-/// bytes left is malformed and never reserves a large buffer.
+/// Every element takes at least one byte, so a count above the bytes left is
+/// malformed and never reserves a large buffer.
 bool get_count(LeReader& r, std::uint64_t limit, std::uint64_t& n) {
     return get_varint(r, n) && n <= limit && n <= r.remaining();
 }
 
-/// `n` strictly ascending row ordinals below `rows`, stored as gaps.
 bool get_gaps(LeReader& r, std::uint64_t rows, std::size_t n,
               dstd::Vector<std::uint64_t>& out) {
     out.resize(n);

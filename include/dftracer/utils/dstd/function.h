@@ -15,13 +15,11 @@ template <class Signature>
 class Function;
 
 /**
- * @brief A move-only std::function: 32 bytes, with a 24-byte inline buffer.
+ * @brief A move-only std::function of 32 bytes with a 24-byte inline buffer.
  *
- * A callable that fits the buffer with its alignment and is nothrow move
- * constructible stays inline; any other is placed by memory::allocate and
- * freed with the sized memory::deallocate. A moved-from Function is empty.
- * Calling an empty Function throws std::bad_function_call. operator() is
- * const and calls the target as non-const, as std::function does.
+ * A nothrow move constructible callable that fits stays inline, else it is
+ * placed by memory::allocate. A moved-from Function is empty and calling it
+ * throws std::bad_function_call. operator() calls the target as non-const.
  */
 template <class R, class... Args>
 class Function<R(Args...)> {

@@ -400,8 +400,6 @@ bool read_block_handle(ByteView bytes, std::size_t& at, BlockHandle& out) {
 
 namespace {
 
-/// The checks an item must pass to encode, kept apart from the encoder so
-/// encode_items has none.
 bool item_is_valid(const RecordItem& item) {
     if (const auto* extent = std::get_if<ExtentRefItem>(&item)) {
         return extent->sequence != 0;

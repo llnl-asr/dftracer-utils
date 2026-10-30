@@ -31,8 +31,6 @@ struct RunContext {
     void enter() const noexcept { memory::enter_task(tag); }
 };
 
-/// initial_suspend awaiter: the coroutine enters its context when it first
-/// runs.
 struct EnterPoolOnStart {
     const RunContext* context;
 
@@ -42,9 +40,8 @@ struct EnterPoolOnStart {
 };
 
 /// Ends the task of `h` as cancelled at its current await, in place of
-/// suspending on the awaitable, and returns what an await_suspend of type R
-/// returns to stay suspended. The frame is not resumed again: its owner
-/// destroys it. See PromiseBase::finish_cancelled.
+/// suspending, and returns what an await_suspend of type R returns to stay
+/// suspended. The owner destroys the frame.
 template <typename R, typename Handle>
 R end_cancelled(Handle h) noexcept {
     h.promise().finish_cancelled();

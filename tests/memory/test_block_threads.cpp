@@ -24,7 +24,7 @@ std::uint8_t pattern(std::size_t i) {
 }
 
 // Each thread writes its own slot without synchronization and then drops its
-// reference; release reads every slot, which is a race unless the last drop
+// reference. Release reads every slot, which is a race unless the last drop
 // orders the writes before it.
 struct Shared {
     std::uint64_t slots[THREADS] = {};

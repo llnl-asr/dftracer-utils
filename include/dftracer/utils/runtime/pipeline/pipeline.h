@@ -33,9 +33,7 @@ class Pipeline {
 
     std::vector<std::shared_ptr<Task>> all_tasks_;
 
-    /// The process runtime, configured from the pipeline's settings.
     std::shared_ptr<Runtime> runtime_;
-    /// This pipeline's own hang detection, when enabled.
     std::unique_ptr<Watchdog> watchdog_;
     std::unique_ptr<Scheduler> scheduler_;
 

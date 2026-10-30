@@ -10,9 +10,6 @@
 #include <string>
 #include <string_view>
 
-// Length-prefixed framing and a throwing reader on top of the dstd codec in
-// dstd/big_endian.h. The integers, doubles and varints are written with
-// append_u*_be, append_f64_be and append_varint from there.
 namespace dftracer::utils::utilities::common::serialization {
 
 /// u16 length, then the bytes.

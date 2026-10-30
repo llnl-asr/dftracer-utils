@@ -13,27 +13,17 @@
 
 namespace dftracer::utils::coro {
 
-/// Limit a gate starts at. One, so the first unit measures the time per
-/// operation without contention from this gate.
+/// The first unit runs alone, to measure the time per operation.
 inline constexpr std::size_t ADAPTIVE_INITIAL_LIMIT = 1;
 /// A unit whose time per operation is above this many times the fastest seen
 /// counts as slowed by contention.
 inline constexpr std::uint64_t ADAPTIVE_LATENCY_TOLERANCE = 2;
 
 /**
- * @brief Concurrency limit that follows the latency of the units it admits.
- *
- * For blocking calls whose cost grows with how many run at once, such as stat
- * on a parallel file system's metadata server. The limit grows by one when a
- * unit that started with the gate full ran within ADAPTIVE_LATENCY_TOLERANCE
- * times the fastest time per operation seen, and drops by a quarter when a
- * unit ran slower. It drops at most once per window of `limit` units, so the
- * slow units that were already running do not each cut it again. A slow unit
- * at a limit of one is not slowed by this gate's own contention, so it sets
- * the fastest time instead: a file system that is loaded by other clients for
- * the whole run is not held at one.
- *
- * Not thread safe; AdaptiveGate serializes it.
+ * Concurrency limit that grows by one when a unit that started with the gate
+ * full ran within ADAPTIVE_LATENCY_TOLERANCE times the fastest time seen, and
+ * drops by a quarter, at most once per `limit` units, when one ran slower. A
+ * slow unit at a limit of one sets the fastest time. Not thread safe.
  */
 class AdaptiveLimit {
    public:
@@ -72,11 +62,9 @@ class AdaptiveLimit {
 };
 
 /**
- * @brief Admits blocking units of work at the concurrency an AdaptiveLimit
- * sets, up to `cap` at once.
- *
- * A waiting unit suspends its coroutine and does not hold a worker, so an
- * elastic pool does not grow for it. Thread safe.
+ * Admits blocking units of work at the concurrency an AdaptiveLimit sets, up to
+ * `cap` at once. A waiting unit suspends its coroutine and holds no worker, so
+ * an elastic pool does not grow for it. Thread safe.
  */
 class AdaptiveGate {
    public:
@@ -93,8 +81,8 @@ class AdaptiveGate {
         return limit_.limit();
     }
 
-    /// One admitted unit. It times the unit from its admission and reports
-    /// the time per operation to the gate when it is destroyed.
+    /// One admitted unit. It reports its time per operation to the gate when
+    /// destroyed.
     class Ticket {
        public:
         Ticket() = default;

@@ -10,7 +10,7 @@ namespace dftracer::utils::store::io_fault {
 
 /// Which write of a data file an event is. An Extent goes through the I/O
 /// backend, so only the range it reserved is recorded and its bytes come from
-/// the finished file; every other write goes through pwrite_all and carries its
+/// the finished file. Every other write goes through pwrite_all and carries its
 /// bytes, because the header is rewritten in place.
 enum class WriteKind : std::uint8_t {
     Header,
@@ -21,7 +21,6 @@ enum class WriteKind : std::uint8_t {
     Extent
 };
 
-/// The number of WriteKind values, the length of a Counts array.
 inline constexpr std::size_t KINDS = 6;
 
 /// What every descriptor wrote and synced since start_counting(), indexed by
@@ -34,7 +33,6 @@ struct Counts {
     std::uint64_t syncs = 0;
 };
 
-/// One write or one sync a writer issued, in issue order.
 struct Event {
     enum class Type : std::uint8_t { Write, Sync };
 
@@ -49,15 +47,13 @@ struct Event {
 /// until start() and off for every other descriptor, so on_write and on_sync
 /// cost one relaxed load and nothing else while neither it nor counting is on.
 void start(int fd);
-/// Ends recording and returns the log in issue order.
 dstd::Vector<Event> stop();
 
 /// Turns counting on for every descriptor and clears the counts. Counting and
-/// recording are independent; a call adds to the counts with one relaxed
+/// recording are independent. A call adds to the counts with one relaxed
 /// atomic per field while counting, and returns after one relaxed load while
 /// neither mode is on.
 void start_counting();
-/// Ends counting and returns the counts it took.
 Counts stop_counting();
 
 void on_write(int fd, WriteKind kind, std::uint64_t offset,

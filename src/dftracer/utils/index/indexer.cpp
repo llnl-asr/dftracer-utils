@@ -26,9 +26,8 @@ namespace dftracer::utils::index {
 
 struct Indexer::Impl {
     std::vector<std::string> paths;
-    /// The scan a caller handed to open_scanned(), until the first call that
-    /// needs the files' sizes and mtimes uses it instead of stat'ing them.
-    /// Empty for open(), whose calls stat the files when they run.
+    /// The scan from open_scanned(), used by the first call that needs sizes
+    /// and mtimes. Empty for open(), whose calls stat the files.
     mutable std::mutex opened_mutex;
     mutable std::vector<utilities::filesystem::FileEntry> opened;
     IndexerOptions options;
@@ -64,7 +63,6 @@ struct Indexer::Impl {
         return out;
     }
 
-    /// One stat per path, or the scan open_scanned() was given.
     std::vector<utilities::filesystem::FileEntry> take_entries() const {
         {
             std::lock_guard<std::mutex> lock(opened_mutex);
@@ -270,7 +268,6 @@ coro::CoroTask<IndexStatus> Indexer::status_of(
 }
 
 coro::CoroTask<IndexStatus> Indexer::build(CoroScope& scope) {
-    // One stat of each file serves the checks before and after the build.
     auto entries = impl_->take_entries();
     auto before = co_await status_of(scope, entries);
     if (before.needs_work.empty() && !before.aggregation_needs_rebuild)
@@ -334,7 +331,6 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        // dftracer.agg is current at the requested config.
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
         for (const auto* p : traces) {

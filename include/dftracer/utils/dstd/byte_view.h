@@ -12,8 +12,7 @@ namespace dftracer::utils {
 /**
  * @brief Non-owning view over a contiguous byte range.
  *
- * 16 bytes (pointer + size). All methods are trivial reinterpret_casts
- * inlined by the compiler -- zero overhead over raw pointer + length.
+ * 16 bytes (pointer + size).
  */
 class ByteView {
    public:

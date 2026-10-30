@@ -20,15 +20,9 @@ inline constexpr std::size_t ARENA_MAX_CHUNK = std::size_t{4} << 20;
 /**
  * @brief A bump allocator over chunks charged to its own Scratch child pool.
  *
- * Chunks are 64 KiB, doubling to 4 MiB, then 4 MiB each. A request that does
- * not fit the next chunk gets a chunk of its own, which reset() frees like
- * every chunk but the first. Blocks are never freed one
- * by one: reset() and release() free them all. A new chunk is charged to the
- * pool and counts against the standing reservation that reserve() tops up; a
- * chunk past that reservation is still taken and only adds to the pressure.
- *
- * Single owner: no call is thread safe. Neither copyable nor movable, so an
- * ArenaAllocator can hold its address.
+ * Chunks are 64 KiB, doubling to 4 MiB. Blocks are freed only all at once. A
+ * chunk past the reservation that reserve() tops up is still taken. Single
+ * owner, no call is thread safe. Not movable, so an ArenaAllocator can hold it.
  */
 class Arena {
    public:
@@ -45,10 +39,9 @@ class Arena {
     /**
      * @brief @p n bytes aligned to @p align, valid until reset() or release().
      *
-     * @p align must be a power of two; any other value is undefined, and the
-     * abort when a new chunk is needed is not a guarantee. A zero @p n returns
-     * a pointer that must not be read. Throws std::bad_alloc when a new chunk
-     * is not available.
+     * @p align must be a power of two, else the behavior is undefined. A zero
+     * @p n returns a pointer that must not be read. Throws std::bad_alloc when
+     * a new chunk is not available.
      */
     void* allocate(std::size_t n,
                    std::size_t align = alignof(std::max_align_t)) {
@@ -61,8 +54,8 @@ class Arena {
         return allocate_chunk(n, align);
     }
 
-    /// Like allocate() and null instead of throwing, which happens only when
-    /// the hard cap or the operating system refuses a new chunk.
+    /// Like allocate() but null when the hard cap or the operating system
+    /// refuses a new chunk.
     void* try_allocate(std::size_t n,
                        std::size_t align = alignof(std::max_align_t)) noexcept;
 
@@ -95,12 +88,11 @@ class Arena {
     /**
      * @brief Run the destructor list and free every chunk but the first.
      *
-     * Chunk growth starts again after the first chunk. Every block becomes
-     * invalid; ASan builds poison the kept chunk.
+     * Every block becomes invalid. ASan builds poison the kept chunk.
      */
     void reset() noexcept;
 
-    /// Like reset(), frees the first chunk too and drops the standing
+    /// Like reset() but frees the first chunk too and drops the standing
     /// reservation.
     void release() noexcept;
 
@@ -108,26 +100,24 @@ class Arena {
      * @brief Top up the standing reservation to the bytes the chunks hold
      * plus @p bytes.
      *
-     * Returns the Pool::reserve status; on failure the reservation keeps what
+     * Returns the Pool::reserve status. On failure the reservation keeps what
      * it had.
      */
     Status reserve(std::size_t bytes) noexcept;
 
     Pool& pool() const noexcept { return *pool_; }
-    /// Bytes of every chunk the arena holds. The pool can show more: the page
-    /// heap rounds a chunk of its own above 1 MiB to a power of two.
+    /// Bytes of every chunk the arena holds. The pool can show more because the
+    /// page heap rounds a chunk above 1 MiB to a power of two.
     std::size_t chunk_bytes() const noexcept { return chunk_bytes_; }
     std::size_t reserved() const noexcept { return reservation_.bytes(); }
     /// Bytes left in the current chunk before any alignment padding.
     std::size_t room() const noexcept { return cur_ <= end_ ? end_ - cur_ : 0; }
-    /// The size of the next chunk the arena takes, unless a request too big
-    /// for it gets a chunk of its own. The one after doubles, up to
-    /// ARENA_MAX_CHUNK.
+    /// The size of the next chunk, unless a request too big for it gets a chunk
+    /// of its own.
     std::size_t next_chunk() const noexcept {
         return grown_ >= CHUNK_DOUBLINGS ? ARENA_MAX_CHUNK
                                          : ARENA_FIRST_CHUNK << grown_;
     }
-    /// The bytes a chunk of each size spends on its header.
     static constexpr std::size_t CHUNK_HEADER = 64;
 
    private:
@@ -149,8 +139,8 @@ class Arena {
     Chunk* new_chunk(std::size_t size);
     void run_destructors() noexcept;
 
-    // An empty arena has the start past the end, so the fast path always
-    // misses, even for a zero size.
+    // An empty arena has the start past the end, so the fast path misses even
+    // for a zero size.
     std::uintptr_t cur_ = 1;
     std::uintptr_t end_ = 0;
     Chunk* chunks_ = nullptr;
@@ -163,7 +153,7 @@ class Arena {
 };
 
 /**
- * @brief A standard allocator over an Arena; deallocate() does nothing.
+ * @brief A standard allocator over an Arena. deallocate() does nothing.
  *
  * Two compare equal when they use the same arena, and the allocator follows
  * the container on copy, move and swap. The arena must outlive every

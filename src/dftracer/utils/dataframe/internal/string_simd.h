@@ -54,9 +54,8 @@ PredStrategy pred_strategy();
 void set_pred_strategy(PredStrategy s);
 
 /// The mean string length (bytes per row) from which Auto scans row by row.
-/// Measured (change string-expression-speed): at a mean of 8 and 16 bytes the
-/// bit mask is about 2x faster, from 32 up the row scan is 1.2x to 4x faster,
-/// on random and on all-good strings alike.
+/// The threshold is the measured crossover. Below it the bit mask is faster
+/// and above it the row scan is, on random and on all-good strings alike.
 constexpr std::int64_t PRED_ROWS_MIN_AVG = 24;
 
 /// Rows [r0, r1) of a flat String (int32 offsets) or LargeString (int64

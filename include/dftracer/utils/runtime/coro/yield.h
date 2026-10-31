@@ -108,7 +108,7 @@ struct YieldAwaitable {
 inline YieldAwaitable yield() noexcept { return {true}; }
 
 /// Conditional yield -- only suspends if the current thread's timeslice
-/// has been exceeded.  No-op (~25ns clock read) in the common case.
+/// has been exceeded.  No-op (one clock read) in the common case.
 ///
 /// Usage:
 ///   for (auto& item : large_dataset) {

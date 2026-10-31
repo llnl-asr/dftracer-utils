@@ -1954,7 +1954,7 @@ class IsDupCursor : public Cursor {
                        0);
         // The aggregate's tables live on the C library and glibc keeps the
         // pages their rehashes freed. The map comes from the cursor's pool and
-        // cannot reuse them, so give them back first (32 MiB at 2M keys).
+        // cannot reuse them, so give them back first.
 #if defined(__GLIBC__)
         ::malloc_trim(0);
 #endif

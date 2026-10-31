@@ -146,7 +146,7 @@ TEST_SUITE("BootstrapPeak") {
     }
 
     // Run by the case below in a new process, as what an earlier run leaves
-    // behind moves the next run's peak by about 10 MB.
+    // behind moves the next run's peak.
     TEST_CASE("one bootstrap of big files" * doctest::skip()) {
         fresh_process::announce();
         const auto n = Env::get<int>(FILES_ENV);

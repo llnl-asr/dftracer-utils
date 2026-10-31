@@ -428,21 +428,20 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 
   # Builds a dozen indexes. Each commit ends in a full fsync (F_FULLFSYNC on
-  # macOS), so it waits on the disk and takes 10x longer when the rest of the
-  # suite writes at the same time.
-  # index/test_indexer and reader/test_reader build indexes too: 11 to 16 s
-  # alone, past their 120 s limit under the full suite.
+  # macOS), so it waits on the disk and slows down when the rest of the suite
+  # writes at the same time.
+  # index/test_indexer and reader/test_reader build indexes too and can pass
+  # their limit under the full suite.
   if(bin_exec STREQUAL "index/test_build_memory"
      OR bin_exec STREQUAL "index/test_indexer"
      OR bin_exec STREQUAL "reader/test_reader")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
-  # The crash test writes a few thousand file images of about 2.4 MB each, the
-  # concurrency test commits durable batches that fsync, and the file test
-  # rewrites a damaged copy of a data file a few hundred times: 8 s, 3 s and
-  # under 1 s alone on macOS, past 120 s, 14 s and 120 s when the suite starts
-  # them beside the rest.
+  # The crash test writes a few thousand file images, the concurrency test
+  # commits durable batches that fsync, and the file test rewrites a damaged
+  # copy of a data file a few hundred times. Each can pass its limit when the
+  # suite starts them beside the rest.
   if(bin_exec STREQUAL "store/test_crash"
      OR bin_exec STREQUAL "store/test_concurrent"
      OR bin_exec STREQUAL "store/test_file")
@@ -455,10 +454,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
-  # test_big_member_reads inflates several large gzip members: 13 s alone on
-  # macOS, 41 s on Corona under the full suite, past 120 s on a 4-core CI
-  # runner. test_catalog takes 82 to past 120 s on the same runners, and
-  # test_build_memory past 120 s under coverage.
+  # test_big_member_reads inflates several large gzip members and can pass the
+  # default limit on a small CI runner under the full suite. test_catalog and
+  # test_build_memory can too, and more so under coverage.
   if(bin_exec STREQUAL "index/test_big_member_reads"
      OR bin_exec STREQUAL "index/test_catalog"
      OR bin_exec STREQUAL "index/test_build_memory")
@@ -499,12 +497,10 @@ foreach(test_file ${TEST_CPP_SOURCES})
       DFTRACER_UTILS_TEST_INDEX_BINARY="$<TARGET_FILE:dftracer_index>")
   endif()
 
-  # Robustness test generates large (128 MB) gzip files; coverage
-  # instrumentation on macOS CI runners makes it significantly slower, and
-  # TSan more so (about 1200 s on an M4 Pro). The prune oracle reads its corpus
-  # once per query and time range (about 95 s alone under ASan).
-  # The prefilter fuzz scans 300 random queries four ways (about 170 s
-  # alone on a laptop, over 900 s on the macOS coverage runner).
+  # Robustness test generates large (128 MB) gzip files. Coverage
+  # instrumentation makes it significantly slower, and TSan more so. The prune
+  # oracle reads its corpus once per query and time range.
+  # The prefilter fuzz scans 300 random queries four ways.
   if(bin_exec STREQUAL "reader/test_reader_robustness"
      OR bin_exec STREQUAL "index/test_prune_oracle"
      OR bin_exec STREQUAL "index/test_prefilter_fuzz")
@@ -679,7 +675,7 @@ foreach(test_file ${TEST_BINARY_SOURCES})
     set(integration_test_timeout 1800)
   endif()
   # MPI tests spawn mpiexec several times per test case and each child runs
-  # under ASan, which is ~10x slower than release. The default 120s is not
+  # under ASan, which is much slower than release. The default 120s is not
   # enough.
   if(bin_exec STREQUAL "binaries/test_dftracer_view_mpi"
      OR bin_exec STREQUAL "binaries/test_dftracer_genesis_gen_dist_mpi")

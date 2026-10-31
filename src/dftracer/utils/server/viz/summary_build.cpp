@@ -791,7 +791,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                     VizSummary::MAX_BUCKETS_PER_LANE);
     // The finest level is 4^EXTRA_LEVELS times nb. Buckets under 1 us hold
     // nothing more, and each level keeps dense counter vectors, so a short
-    // trace would otherwise cost ~130 MB of memory and cache file.
+    // trace would otherwise cost a lot of memory and cache file.
     nb = std::min<std::size_t>(
         nb,
         std::max<std::size_t>(VizSummary::MIN_BUCKETS_PER_LANE,

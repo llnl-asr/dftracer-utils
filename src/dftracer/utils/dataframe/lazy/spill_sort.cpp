@@ -325,7 +325,7 @@ class SortMergeCursor : public Cursor {
    public:
     // Sorting a run holds its concatenated rows, its sorted copy and the sort
     // permutation at once, and the allocator does not hand the freed morsels
-    // back to the sort (measured: one run peaks at about 3.5 times its data),
+    // back to the sort (one run peaks at several times its data),
     // so a run is cut at this fraction of the budget.
     static constexpr std::uint64_t RUN_MORSEL_BYTES = 128 * 1024;
 
@@ -408,8 +408,8 @@ class SortMergeCursor : public Cursor {
         w.close();
     }
 
-    // A merge holds one morsel per run it reads (measured: about three and a
-    // half times the morsel with its keys and read buffers), so when there are
+    // A merge holds one morsel per run it reads (several times
+    // the morsel with its keys and read buffers), so when there are
     // more runs than fit the budget, consecutive groups of runs are merged
     // into longer ones first. Consecutive groups keep ties in input order.
     std::size_t merge_fan_in() const {

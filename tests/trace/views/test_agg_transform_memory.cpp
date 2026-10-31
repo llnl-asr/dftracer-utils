@@ -34,7 +34,7 @@ constexpr int RUNS = 3;
 
 // The bound on the extra peak depends on the scale: only a transform that held
 // a million scanned rows would exceed it. Coverage counters make each scan
-// about 100 times slower, so that build scans fewer rows with keys padded to
+// much slower, so that build scans fewer rows with keys padded to
 // KEY_PAD bytes, which catches a larger regression only.
 #ifdef DFTRACER_UTILS_UNDER_COVERAGE
 constexpr std::size_t KEY_PAD = 320;
@@ -130,7 +130,7 @@ TEST_CASE("a group-key transform holds no more than one morsel" *
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
     const std::string gz = write_trace(env.get_dir());
-    // One run's peak swings by about 20 MiB, so each side is the lowest of a
+    // One run's peak swings, so each side is the lowest of a
     // few runs. The first run builds the index; the rest start together, since
     // each child's peak is its own.
     peak_rss(start_child("plain", gz));

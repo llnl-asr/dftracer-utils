@@ -79,7 +79,7 @@ void add_new_bytes(const dftu_series* c, std::unordered_set<const void*>& seen,
     add(c->validity);
     // A view column's data buffers are not counted: for a scan they are the
     // string table's blocks, shared by every part and freed by no spill, and
-    // walking their list per part cost a collect 37 ms.
+    // walking their list per part slows a collect.
     for (const auto& n : c->nested)
         if (n.series) add_new_bytes(n.series.get(), seen, total);
 }

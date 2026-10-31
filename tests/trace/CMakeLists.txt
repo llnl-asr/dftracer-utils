@@ -139,8 +139,8 @@ foreach(test_file ${TRACE_TEST_SOURCES})
   add_test(NAME trace/${bin_exec} COMMAND ${target_name})
   set_tests_properties(trace/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
-  # Hundreds of queries over several traces: about 75 s alone on a laptop,
-  # several times that on the macOS coverage runner.
+  # Hundreds of queries over several traces, which is slower still under
+  # coverage.
   if(bin_exec STREQUAL "views/test_view_duql")
     set(duql_timeout 600)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN

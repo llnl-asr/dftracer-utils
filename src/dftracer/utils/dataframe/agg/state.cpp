@@ -954,7 +954,7 @@ bool accumulate_plain(AggState& st, const std::vector<const Series*>& keys,
                                                    std::int64_t m) {
         for (std::int64_t r = 0; r < m; ++r) {
             // No prefetch of an empty stats array: a prefetch of address
-            // zero walks the page tables for nothing, 25 ns a row.
+            // zero walks the page tables for nothing.
             if (r + AHEAD < m) {
                 const auto ga = static_cast<std::size_t>(
                     groups[static_cast<std::size_t>(r + AHEAD)]);

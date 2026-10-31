@@ -326,8 +326,8 @@ struct ServerProcess {
             ::_exit(127);
         }
 
-        // The server indexes its trace directory before binding, which has
-        // taken ~17s on a loaded arm64 runner.
+        // The server indexes its trace directory before binding, which can
+        // take long on a loaded runner.
         return wait_for_port(port, 60) && wait_for_http(port, 30);
     }
 
@@ -820,8 +820,7 @@ TEST_CASE("DFTracer Server - graceful shutdown via SIGTERM") {
     bool exited = false;
     // A generous exit budget: the graceful teardown (close listen fd, drain the
     // async runtime + index store) can be CPU-starved when the full suite runs
-    // many process-spawning tests unbounded-parallel, so 15s occasionally
-    // flaked.
+    // many process-spawning tests unbounded-parallel.
     for (int i = 0; i < 600; ++i) {
         if (::waitpid(server.pid, &status, WNOHANG) > 0) {
             exited = true;

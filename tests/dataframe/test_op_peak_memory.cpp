@@ -52,9 +52,9 @@ using namespace dftracer::utils::dataframe;
 namespace {
 
 // 1M rows against an 8 MiB budget keeps the input several times the budget and
-// runs in under 10 s. At 4M rows and 16 MiB it took 30 s alone, and the macOS
-// coverage job on three cores ran past its 300 s timeout. The coverage build
-// asserts no peak, only that every op finishes and spills, on a tenth of rows.
+// runs fast. A larger input would be too slow, most of all under coverage.
+// The coverage build asserts no peak, only that every op finishes and spills,
+// on a tenth of rows.
 #if defined(DFTRACER_UTILS_COVERAGE_BUILD)
 constexpr std::int64_t DEFAULT_ROWS = 100'000;
 constexpr std::uint64_t DEFAULT_BUDGET_MB = 1;

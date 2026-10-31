@@ -112,8 +112,7 @@ class HashArena {
     using Head = dstd::PoolHashMap<std::uint64_t, const char*>;
     // The table grows four times at a time, as Arrow's BinaryMemoTable and
     // ClickHouse's HashTable do, so the tables a rehash frees add up to a third
-    // of the new one. Below GROWTH_FROM the reserve ahead costs more than that
-    // (57 thousand keys held 7.1 MiB grown four times, 3.9 MiB doubled).
+    // of the new one. Below GROWTH_FROM the reserve ahead costs more than that.
     static constexpr std::size_t GROWTH = 4;
 
     // The entries a table of `buckets` holds before it rehashes, as in ankerl.

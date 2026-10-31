@@ -678,15 +678,14 @@ TEST_SUITE("DFTracerComparator") {
                 << large.cold << " warm " << large.warm);
         if (under_instrumentation()) return;
 
-        // Measured on Corona (Linux, release): warm 58 MB at 100 files and
-        // 92 MB at 400; the comparator before the index queries took 78 MB
-        // and 220 MB. The budget and the margin sit between the two.
+        // The warm peak grows slowly with the file count. The comparator
+        // before the index queries grew much faster. The budget and the
+        // margin sit between the two.
         CHECK(large.warm < small.warm + WARM_GROWTH_BYTES);
         if (fixed_cost_build()) return;
         CHECK(large.warm < WARM_BUDGET_BYTES);
         // The cold run also builds the indexes, and the allocator keeps up to
-        // IDLE_BACKED_CAP (1 GiB) of freed pages for reuse; measured 460 MB
-        // and 866 MB.
+        // IDLE_BACKED_CAP (1 GiB) of freed pages for reuse.
         CHECK(large.cold < COLD_BUDGET_BYTES);
     }
 

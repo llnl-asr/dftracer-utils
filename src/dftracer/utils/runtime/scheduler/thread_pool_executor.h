@@ -285,7 +285,7 @@ class ThreadPoolExecutor : public TaskExecutor {
     void schedule_coroutine_resumption(std::coroutine_handle<> handle) override;
 
     /// Primary submission path; all lightweight work funnels through here.
-    /// Cost: ~20ns (lock-free queue push + atomic signal). task_id is a
+    /// Work: a lock-free queue push and an atomic signal. task_id is a
     /// tracked-task id for registry progress, or -1 if untracked.
     void enqueue(std::coroutine_handle<> handle,
                  TaskIndex task_id = -1) override;

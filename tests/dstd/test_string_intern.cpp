@@ -21,7 +21,7 @@ using Status = StringIntern::InsertStatus;
 TEST_SUITE("StringIntern") {
     TEST_CASE("StringIntern - a table of a few strings costs a few KB") {
         // A build makes one table per file, so a fixed cost per table grows
-        // with the file count: 8,404 tables of about 1 MB each held 9 GB.
+        // with the file count.
         namespace memory = dftracer::utils::memory;
         memory::PoolHandle pool =
             memory::Manager::get().general().child("intern size");

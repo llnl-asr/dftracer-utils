@@ -85,8 +85,8 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
   add_test(NAME dataframe/${bin_exec} COMMAND ${target_name})
   set_tests_properties(dataframe/${bin_exec} PROPERTIES
                        WORKING_DIRECTORY "${test_working_directory}")
-  # 1.2M rows folded per case on every thread count: about 200 s alone on a
-  # laptop, twice that on a 4-core runner and more under coverage.
+  # 1.2M rows folded per case on every thread count, which is slower still
+  # under coverage.
   if(bin_exec STREQUAL "test_groupby_scale")
     set(scale_timeout 900)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN
@@ -95,9 +95,9 @@ foreach(test_file ${DATAFRAME_TEST_SOURCES})
     endif()
     set_tests_properties(dataframe/${bin_exec} PROPERTIES TIMEOUT ${scale_timeout})
   endif()
-  # Runs every op in a child process at several budgets: about 30 s alone, 65 s
-  # under coverage. It is CPU-bound and reads peak memory, so it runs serially.
-  # Under the full suite it took 260 to 300 s and timed out.
+  # Runs every op in a child process at several budgets.
+  # It is CPU-bound and reads peak memory, so it runs serially.
+  # Under the full suite it can time out.
   if(bin_exec STREQUAL "test_op_peak_memory")
     set(peak_timeout 300)
     if(DFTRACER_UTILS_COVERAGE OR DFTRACER_UTILS_ENABLE_TSAN

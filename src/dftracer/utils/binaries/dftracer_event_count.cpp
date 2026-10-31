@@ -53,8 +53,8 @@ static int run_event_count(const EventCountArgParse* cli);
 namespace {
 
 constexpr std::size_t PLAIN_READ_BYTES = std::size_t{4} << 20;
-// Each in-flight file holds this much inflated text plus its copy. At 96
-// threads 1 MiB beat the decoder's 32 MiB default in time and peak memory.
+// Each in-flight file holds this much inflated text plus its copy. With many
+// threads 1 MiB beats the decoder's 32 MiB default in time and peak memory.
 constexpr std::size_t INFLATE_STEP_BYTES = std::size_t{1} << 20;
 
 struct IndexedCounts {

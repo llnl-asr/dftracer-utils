@@ -5,7 +5,6 @@
 #include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -74,12 +73,10 @@ IndexedCounts count_from_index(const std::string& index_path,
 
         dftracer::utils::index::store::IndexDatabase db(
             index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        auto merged_stats =
-            dftracer::utils::index::schemas::dft::merged_statistics(db,
-                                                                    file_ids);
+        auto file_stats = db.query_file_scalar_stats_batch(file_ids);
         for (const auto& entry : entries) {
-            auto it = merged_stats.find(entry.file_id);
-            if (it != merged_stats.end() && it->second.num_chunks > 0) {
+            auto it = file_stats.find(entry.file_id);
+            if (it != file_stats.end() && it->second.num_chunks > 0) {
                 counts.total_events +=
                     static_cast<std::size_t>(it->second.stats.total_events);
                 counts.files_counted++;

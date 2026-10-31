@@ -4,6 +4,20 @@
 
 namespace dftracer::utils::index::schemas::dft {
 
+void add_path_counts(const index::store::IndexDatabase& db, int file_id,
+                     std::string_view path,
+                     StringViewMap<std::uint64_t>& into) {
+    for (const auto& [granule, bytes] : db.path_granules(
+             file_id, index::store::IndexExtension::Counts, path)) {
+        auto counts = index::extensions::kinds::decode_counts(bytes);
+        if (!counts || !counts->compressed) continue;
+        const auto values =
+            index::extensions::ChunkDimensionStats::decompress_value_counts(
+                counts->compressed->data(), counts->compressed->size());
+        for (const auto& [k, v] : values) into[k] += v;
+    }
+}
+
 ankerl::unordered_dense::map<int, MergedStatisticsResult> merged_statistics(
     const index::store::IndexDatabase& db, const std::vector<int>& file_ids) {
     ankerl::unordered_dense::map<int, MergedStatisticsResult> results;
@@ -20,21 +34,9 @@ ankerl::unordered_dense::map<int, MergedStatisticsResult> merged_statistics(
         }
         if (!db.extension_current(fid, index::store::IndexExtension::Counts))
             continue;
-        const std::pair<const char*, StringViewMap<std::uint64_t>*> targets[] =
-            {{"cat", &merged.stats.category_counts},
-             {"name", &merged.stats.name_counts},
-             {"pid_tid", &merged.stats.pid_tid_counts}};
-        for (const auto& [path, into] : targets) {
-            for (const auto& [granule, bytes] : db.path_granules(
-                     fid, index::store::IndexExtension::Counts, path)) {
-                auto counts = index::extensions::kinds::decode_counts(bytes);
-                if (!counts || !counts->compressed) continue;
-                const auto values = index::extensions::ChunkDimensionStats::
-                    decompress_value_counts(counts->compressed->data(),
-                                            counts->compressed->size());
-                for (const auto& [k, v] : values) (*into)[k] += v;
-            }
-        }
+        add_path_counts(db, fid, "cat", merged.stats.category_counts);
+        add_path_counts(db, fid, "name", merged.stats.name_counts);
+        add_path_counts(db, fid, "pid_tid", merged.stats.pid_tid_counts);
     }
     return results;
 }

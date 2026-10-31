@@ -11,6 +11,7 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
+#include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -33,6 +34,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <memory>
@@ -300,7 +302,8 @@ static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
     std::vector<CountPair> sorted(counts.begin(), counts.end());
     std::sort(sorted.begin(), sorted.end(),
               [](const CountPair& a, const CountPair& b) {
-                  return a.second > b.second;
+                  if (a.second != b.second) return a.second > b.second;
+                  return a.first < b.first;
               });
     return sorted;
 }
@@ -1149,6 +1152,45 @@ static coro::CoroTask<int> run_detailed_stats(
     co_return 0;
 }
 
+// One file's statistics from the per-file rows the index build wrote. The
+// duration sketch and histogram stay empty, as on the View path. Nullopt when
+// a row the report needs is missing or not current.
+static std::optional<ChunkStatistics> file_rows_to_statistics(
+    const IndexDatabase& db, int file_id, const MergedStatisticsResult* scalar,
+    StringViewMap<std::uint64_t>* pid_tids, bool cats, bool names) {
+    if (!scalar || scalar->num_chunks == 0) return std::nullopt;
+    if ((cats || names) &&
+        !db.extension_current(file_id, IndexExtension::Counts))
+        return std::nullopt;
+
+    ChunkStatistics cs;
+    const auto& row = scalar->stats;
+    cs.total_events = row.total_events;
+    cs.min_timestamp_us = row.min_timestamp_us;
+    cs.min_nonzero_timestamp_us = row.min_nonzero_timestamp_us;
+    cs.max_timestamp_us = row.max_timestamp_us;
+    cs.duration_count = row.duration_count;
+    cs.duration_sum_us = row.duration_sum_us;
+    cs.duration_min_us = row.duration_min_us;
+    cs.duration_max_us = row.duration_max_us;
+    cs.duration_m2 = row.duration_m2;
+    if (cats) {
+        // Categories are reported in lower case, as the View path groups them.
+        StringViewMap<std::uint64_t> raw;
+        add_path_counts(db, file_id, "cat", raw);
+        for (const auto& [cat, count] : raw) {
+            std::string lower(cat);
+            for (auto& ch : lower)
+                ch = static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(ch)));
+            cs.category_counts[lower] += count;
+        }
+    }
+    if (names) add_path_counts(db, file_id, "name", cs.name_counts);
+    if (pid_tids) cs.pid_tid_counts = std::move(*pid_tids);
+    return cs;
+}
+
 static coro::CoroTask<void> process_index_group(
     const std::string* index_path_ptr,
     const std::vector<ResolvedFile>* group_ptr,
@@ -1161,11 +1203,26 @@ static coro::CoroTask<void> process_index_group(
     try {
         namespace stats_ns = dftracer::utils::trace::statistics;
 
-        // num_chunks is an index-structure detail View does not track; read it
-        // from the per-file scalar tier while StatsView provides the event
-        // statistics via aggregation. Release the ReadOnly index handle before
-        // materialize() below, which opens the same index ReadWrite to persist.
+        stats_ns::StatNeeds needs;
+        needs.names = report_type_for_reader == StatisticsQueryType::Names ||
+                      report_type_for_reader == StatisticsQueryType::TopNNames;
+        needs.pid_tids =
+            report_type_for_reader == StatisticsQueryType::Summary ||
+            report_type_for_reader == StatisticsQueryType::PidTids;
+        const bool needs_cats =
+            report_type_for_reader == StatisticsQueryType::Summary ||
+            report_type_for_reader == StatisticsQueryType::Categories ||
+            report_type_for_reader == StatisticsQueryType::TopNCategories;
+
+        // Files whose per-file rows answer the report are read here with no
+        // fold and no write. The rest go through the View path below.
+        // Release the ReadOnly index handle before materialize(), which opens
+        // the same index ReadWrite to persist.
         std::unordered_map<int, std::uint64_t> num_chunks_map;
+        ChunkStatistics fast_total;
+        std::uint64_t fast_chunks = 0;
+        std::size_t fast_files = 0;
+        std::vector<const ResolvedFile*> slow_files;
         {
             IndexDatabase idx_db(
                 *index_path_ptr,
@@ -1173,31 +1230,72 @@ static coro::CoroTask<void> process_index_group(
             std::vector<int> file_ids;
             file_ids.reserve(group_ptr->size());
             for (const auto& rf : *group_ptr) file_ids.push_back(rf.file_id);
-            for (auto& [fid, row] :
-                 idx_db.query_file_scalar_stats_batch(file_ids))
-                num_chunks_map[fid] = row.num_chunks;
+            auto scalars = idx_db.query_file_scalar_stats_batch(file_ids);
+            ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>>
+                pid_tid_rows;
+            if (needs.pid_tids)
+                pid_tid_rows = idx_db.query_file_pid_tid_counts_batch(file_ids);
+
+            for (const auto& rf : *group_ptr) {
+                const auto scalar_it = scalars.find(rf.file_id);
+                const MergedStatisticsResult* scalar =
+                    scalar_it != scalars.end() ? &scalar_it->second : nullptr;
+                if (scalar) num_chunks_map[rf.file_id] = scalar->num_chunks;
+                StringViewMap<std::uint64_t>* pid_tids = nullptr;
+                if (needs.pid_tids) {
+                    const auto it = pid_tid_rows.find(rf.file_id);
+                    if (it == pid_tid_rows.end()) {
+                        slow_files.push_back(&rf);
+                        continue;
+                    }
+                    pid_tids = &it->second;
+                }
+                auto cs =
+                    file_rows_to_statistics(idx_db, rf.file_id, scalar,
+                                            pid_tids, needs_cats, needs.names);
+                if (!cs) {
+                    slow_files.push_back(&rf);
+                    continue;
+                }
+                if (needs_per_file_results) {
+                    TraceStatistics stats;
+                    stats.file_path = rf.file_path;
+                    stats.index_path = *index_path_ptr;
+                    stats.num_chunks = scalar->num_chunks;
+                    stats.merged = std::move(*cs);
+                    stats.success = true;
+                    std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
+                    indexed_stats_ptr->emplace_back(rf.file_index,
+                                                    std::move(stats));
+                } else {
+                    fast_total.merge_from(*cs);
+                    fast_chunks += scalar->num_chunks;
+                }
+                ++fast_files;
+            }
         }
         auto num_chunks_of = [&](int file_id) -> std::uint64_t {
             auto it = num_chunks_map.find(file_id);
             return (it != num_chunks_map.end()) ? it->second : 0;
         };
 
-        stats_ns::StatNeeds needs;
-        needs.names = report_type_for_reader == StatisticsQueryType::Names ||
-                      report_type_for_reader == StatisticsQueryType::TopNNames;
-        needs.pid_tids =
-            report_type_for_reader == StatisticsQueryType::Summary ||
-            report_type_for_reader == StatisticsQueryType::PidTids;
+        if (!needs_per_file_results && fast_files > 0) {
+            std::lock_guard<std::mutex> lock(*total_mutex_ptr);
+            total_ptr->merged.merge_from(fast_total);
+            total_ptr->num_chunks += fast_chunks;
+            successful_ptr->fetch_add(fast_files, std::memory_order_relaxed);
+        }
+        if (slow_files.empty()) co_return;
 
         if (!needs_per_file_results) {
             // Whole-group total: one View aggregation over every file at once.
             std::vector<views::ViewFile> view_files;
-            view_files.reserve(group_ptr->size());
+            view_files.reserve(slow_files.size());
             std::uint64_t total_chunks = 0;
-            for (const auto& rf : *group_ptr) {
+            for (const auto* rf : slow_files) {
                 view_files.push_back(
-                    views::ViewFile{rf.file_path, *index_path_ptr});
-                total_chunks += num_chunks_of(rf.file_id);
+                    views::ViewFile{rf->file_path, *index_path_ptr});
+                total_chunks += num_chunks_of(rf->file_id);
             }
             auto sv = stats_ns::StatsView::from_files(std::move(view_files));
             // Persist the rollups once so later runs read them instead of
@@ -1211,24 +1309,24 @@ static coro::CoroTask<void> process_index_group(
             std::lock_guard<std::mutex> lock(*total_mutex_ptr);
             total_ptr->merged.merge_from(stats.merged);
             total_ptr->num_chunks += stats.num_chunks;
-            successful_ptr->fetch_add(group_ptr->size(),
+            successful_ptr->fetch_add(slow_files.size(),
                                       std::memory_order_relaxed);
             co_return;
         }
 
-        for (const auto& rf : *group_ptr) {
+        for (const auto* rf : slow_files) {
             TraceStatistics stats;
-            stats.file_path = rf.file_path;
+            stats.file_path = rf->file_path;
             stats.index_path = *index_path_ptr;
-            stats.num_chunks = num_chunks_of(rf.file_id);
+            stats.num_chunks = num_chunks_of(rf->file_id);
             auto sv =
-                stats_ns::StatsView::from_file(rf.file_path, *index_path_ptr);
+                stats_ns::StatsView::from_file(rf->file_path, *index_path_ptr);
             co_await sv.materialize(needs);
             stats_ns::ViewStats vs = co_await sv.collect(needs);
             stats_ns::fill_chunk_statistics(stats.merged, vs);
             stats.success = true;
             std::lock_guard<std::mutex> lock(*stats_mutex_ptr);
-            indexed_stats_ptr->emplace_back(rf.file_index, std::move(stats));
+            indexed_stats_ptr->emplace_back(rf->file_index, std::move(stats));
         }
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_ERROR("Indexed stats batch failed for %s: %s",

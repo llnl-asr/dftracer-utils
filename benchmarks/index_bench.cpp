@@ -22,12 +22,14 @@
 // group_by or flamegraph; a query with an arrow is not pruned, which only
 // reads one file's own columns.
 
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -398,15 +400,19 @@ Result measure(const Options& opt, const std::string& input,
         opt.warmups, opt.runs);
 
     {
-        dftracer::utils::index::store::IndexDatabase db(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        const auto snapshot =
+            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
         std::unordered_set<std::string> paths;
         for (const auto& f : files) {
-            const int fid = db.get_file_info_id(
+            const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(f));
-            if (fid < 0) continue;
-            r.lines += db.get_num_lines(fid);
-            for (const auto& [p, stat] : db.catalog(fid)) paths.insert(p);
+            if (!file) continue;
+            if (auto meta = unwrap(
+                    dftracer::utils::index::file_metadata(snapshot, *file)))
+                r.lines += meta->num_lines;
+            for (const auto& [p, stat] :
+                 unwrap(dftracer::utils::index::catalog(snapshot, *file)))
+                paths.insert(std::string(p));
         }
         r.distinct_paths = paths.size();
     }

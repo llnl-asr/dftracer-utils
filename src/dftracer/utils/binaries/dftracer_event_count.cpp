@@ -4,8 +4,10 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -67,18 +69,19 @@ IndexedCounts count_from_index(const std::string& index_path,
                                const std::vector<ResolvedFile>& entries) {
     IndexedCounts counts;
     try {
-        std::vector<int> file_ids;
-        file_ids.reserve(entries.size());
-        for (const auto& entry : entries) file_ids.push_back(entry.file_id);
-
-        dftracer::utils::index::store::IndexDatabase db(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        auto file_stats = db.query_file_scalar_stats_batch(file_ids);
+        const auto snapshot =
+            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
         for (const auto& entry : entries) {
-            auto it = file_stats.find(entry.file_id);
-            if (it != file_stats.end() && it->second.num_chunks > 0) {
+            const auto file = snapshot.file(
+                dftracer::utils::index::store::internal::get_logical_path(
+                    entry.file_path));
+            const auto stats =
+                file ? unwrap(dftracer::utils::index::scalar_stats(snapshot,
+                                                                   *file))
+                     : std::nullopt;
+            if (stats && stats->num_chunks > 0) {
                 counts.total_events +=
-                    static_cast<std::size_t>(it->second.stats.total_events);
+                    static_cast<std::size_t>(stats->stats.total_events);
                 counts.files_counted++;
             } else {
                 counts.to_stream.push_back(entry.file_path);

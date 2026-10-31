@@ -2,13 +2,17 @@
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 
+#include <utility>
+
 namespace dftracer::utils::index::schemas::dft {
 
-void add_path_counts(const index::store::IndexDatabase& db, int file_id,
-                     std::string_view path,
-                     dstd::StringViewMap<std::uint64_t>& into) {
-    for (const auto& [granule, bytes] : db.path_granules(
-             file_id, index::store::IndexExtension::Counts, path)) {
+Result<void> add_path_counts(const Snapshot& snapshot, const FileRef& file,
+                             dstd::StringView path,
+                             dstd::StringViewMap<std::uint64_t>& into) {
+    auto found =
+        granules(snapshot, file, index::store::IndexExtension::Counts, path);
+    if (!found) return dstd::Unexpected<dstd::Error>(found.error());
+    for (const auto& [granule, bytes] : *found) {
         auto counts = index::extensions::kinds::decode_counts(bytes);
         if (!counts || !counts->compressed) continue;
         const auto values =
@@ -16,29 +20,35 @@ void add_path_counts(const index::store::IndexDatabase& db, int file_id,
                 counts->compressed->data(), counts->compressed->size());
         for (const auto& [k, v] : values) into[k] += v;
     }
+    return {};
 }
 
-ankerl::unordered_dense::map<int, MergedStatisticsResult> merged_statistics(
-    const index::store::IndexDatabase& db, const std::vector<int>& file_ids) {
-    ankerl::unordered_dense::map<int, MergedStatisticsResult> results;
-    for (const int fid : file_ids) {
-        auto rows = db.query_chunk_statistics(fid);
-        if (rows.empty()) continue;
-        auto& merged = results[fid];
-        for (auto& row : rows) {
-            if (merged.num_chunks == 0)
-                merged.stats = std::move(row.stats);
-            else
-                merged.stats.merge_from(row.stats);
-            ++merged.num_chunks;
-        }
-        if (!db.extension_current(fid, index::store::IndexExtension::Counts))
-            continue;
-        add_path_counts(db, fid, "cat", merged.stats.category_counts);
-        add_path_counts(db, fid, "name", merged.stats.name_counts);
-        add_path_counts(db, fid, "pid_tid", merged.stats.pid_tid_counts);
+Result<dstd::Optional<MergedStatisticsResult>> merged_statistics(
+    const Snapshot& snapshot, const FileRef& file) {
+    auto rows = chunk_stats(snapshot, file);
+    if (!rows) return dstd::Unexpected<dstd::Error>(rows.error());
+    if (rows->empty()) return dstd::Optional<MergedStatisticsResult>{};
+    MergedStatisticsResult merged;
+    for (auto& row : *rows) {
+        if (merged.num_chunks == 0)
+            merged.stats = std::move(row.stats);
+        else
+            merged.stats.merge_from(row.stats);
+        ++merged.num_chunks;
     }
-    return results;
+    if (extension_current(snapshot, file,
+                          index::store::IndexExtension::Counts)) {
+        auto cats = add_path_counts(snapshot, file, "cat",
+                                    merged.stats.category_counts);
+        if (!cats) return dstd::Unexpected<dstd::Error>(cats.error());
+        auto names =
+            add_path_counts(snapshot, file, "name", merged.stats.name_counts);
+        if (!names) return dstd::Unexpected<dstd::Error>(names.error());
+        auto pid_tids = add_path_counts(snapshot, file, "pid_tid",
+                                        merged.stats.pid_tid_counts);
+        if (!pid_tids) return dstd::Unexpected<dstd::Error>(pid_tids.error());
+    }
+    return dstd::Optional<MergedStatisticsResult>(std::move(merged));
 }
 
 }  // namespace dftracer::utils::index::schemas::dft

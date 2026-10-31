@@ -1,6 +1,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
@@ -10,10 +11,13 @@
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -31,8 +35,7 @@ using namespace dftracer::utils::index::build;
 using dftracer::utils::index::build::BatchBuilder;
 using dftracer::utils::index::build::IndexBuildBatchConfig;
 using dftracer::utils::index::gzip::CheckpointIndexerFactory;
-using dftracer::utils::index::store::FileRegistryEntry;
-using dftracer::utils::index::store::IndexDatabase;
+using dftracer::utils::index::store::IndexExtension;
 
 class InfoArgParse : public cli::ArgParse {
    public:
@@ -76,8 +79,6 @@ static std::string format_size(std::uint64_t bytes) {
     return human_bytes(static_cast<double>(bytes), "", 2);
 }
 
-using FileRegistry = dstd::StringViewMap<FileRegistryEntry>;
-
 struct RootInfoSummary {
     std::size_t file_count = 0;
     std::uint64_t total_events = 0;
@@ -89,42 +90,42 @@ static coro::CoroTask<std::shared_ptr<RootInfoSummary>> load_root_info_summary(
     std::string index_path) {
     auto result = std::make_shared<RootInfoSummary>();
 
-    IndexDatabase db(index_path,
-                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-    std::vector<int> ids;
-    for (const auto& [path, file_id] : db.query_all_file_info_ids())
-        ids.push_back(file_id);
-    result->file_count = ids.size();
-    for (const auto& [file_id, summary] : db.query_file_scalar_stats_batch(ids))
-        result->total_events += summary.stats.total_events;
-    for (const auto& [file_id, meta] : db.query_file_metadata_batch(ids)) {
-        result->total_lines += meta.num_lines;
-        result->total_uncompressed += meta.max_bytes;
+    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
+    const auto listed = unwrap(snapshot.files());
+    result->file_count = listed.size();
+    for (const auto& file : listed) {
+        if (auto summary = unwrap(index::scalar_stats(snapshot, file)))
+            result->total_events += summary->stats.total_events;
+        if (auto meta = unwrap(index::file_metadata(snapshot, file))) {
+            result->total_lines += meta->num_lines;
+            result->total_uncompressed += meta->max_bytes;
+        }
     }
     co_return result;
 }
 
-static coro::CoroTask<std::shared_ptr<FileRegistry>> load_file_registry(
-    std::string index_path) {
-    IndexDatabase db(index_path,
-                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-    co_return std::make_shared<FileRegistry>(db.query_all_file_registry());
+// Files of `index_path` in path order, with the ones whose pruning tier is
+// current added to `group`.
+static void load_cached_files(const std::string& index_path,
+                              std::vector<std::string>& files,
+                              std::vector<ResolvedFile>& group) {
+    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
+    const auto listed = unwrap(snapshot.files());
+    files.reserve(listed.size());
+    group.reserve(listed.size());
+    std::size_t fi = 0;
+    for (const auto& file : listed) {
+        files.emplace_back(file.path());
+        if (index::extension_current(snapshot, file, IndexExtension::Stats))
+            group.push_back(ResolvedFile{fi, files.back(), -1, {}});
+        ++fi;
+    }
 }
 
 static std::vector<MetadataCollectorUtilityOutput>
 process_index_group_info_sync(std::string index_path,
                               std::vector<ResolvedFile> entries) {
-    std::vector<int> file_ids;
-    file_ids.reserve(entries.size());
-    for (const auto& entry : entries) {
-        file_ids.push_back(entry.file_id);
-    }
-
-    IndexDatabase db(index_path,
-                     dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-    auto metadata_rows = db.query_file_metadata_batch(file_ids);
-    auto merged_stats =
-        dftracer::utils::index::schemas::dft::merged_statistics(db, file_ids);
+    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
 
     std::vector<MetadataCollectorUtilityOutput> results;
     results.reserve(entries.size());
@@ -136,8 +137,11 @@ process_index_group_info_sync(std::string index_path,
         meta.has_index = true;
         meta.index_valid = true;
 
-        auto metadata_it = metadata_rows.find(entry.file_id);
-        if (metadata_it == metadata_rows.end()) {
+        const auto file = snapshot.file(
+            index::store::internal::get_logical_path(entry.file_path));
+        const auto metadata =
+            file ? unwrap(index::file_metadata(snapshot, *file)) : std::nullopt;
+        if (!metadata) {
             meta.success = false;
             meta.error_message = "No file metadata found in shared index";
             results.push_back(std::move(meta));
@@ -146,9 +150,9 @@ process_index_group_info_sync(std::string index_path,
 
         meta.format = CheckpointIndexerFactory::detect_format(entry.file_path);
         meta.compressed_size = 0;
-        meta.checkpoint_size = metadata_it->second.checkpoint_size;
-        meta.num_lines = metadata_it->second.num_lines;
-        meta.uncompressed_size = metadata_it->second.max_bytes;
+        meta.checkpoint_size = metadata->checkpoint_size;
+        meta.num_lines = metadata->num_lines;
+        meta.uncompressed_size = metadata->max_bytes;
         meta.size_mb =
             static_cast<double>(meta.uncompressed_size) / (1024.0 * 1024.0);
         meta.start_line = 1;
@@ -160,11 +164,12 @@ process_index_group_info_sync(std::string index_path,
                 meta.checkpoint_size;
         }
 
-        auto stats_it = merged_stats.find(entry.file_id);
-        if (stats_it != merged_stats.end()) {
-            meta.valid_events = stats_it->second.stats.total_events;
-            if (stats_it->second.num_chunks > 0) {
-                meta.num_checkpoints = stats_it->second.num_chunks;
+        const auto merged =
+            unwrap(index::schemas::dft::merged_statistics(snapshot, *file));
+        if (merged) {
+            meta.valid_events = merged->stats.total_events;
+            if (merged->num_chunks > 0) {
+                meta.num_checkpoints = merged->num_chunks;
             }
         } else {
             meta.valid_events = meta.num_lines;
@@ -189,35 +194,38 @@ process_index_group_info(std::shared_ptr<std::string> index_path,
 }
 
 // The file's manifest: each extension built for it, and whether it is usable.
-static void print_extensions(const MetadataCollectorUtilityOutput& info) {
+static void print_extensions(const MetadataCollectorUtilityOutput& info,
+                             const index::Snapshot& snapshot) {
     using dftracer::utils::index::store::ALL_EXTENSIONS;
     using dftracer::utils::index::store::extension_name;
     try {
-        IndexDatabase db(
-            info.index_path,
-            dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        const int fid = db.get_file_info_id(
+        const auto file = snapshot.file(
             dftracer::utils::index::store::internal::get_logical_path(
                 info.file_path));
-        if (fid < 0) return;
-        if (auto schema = db.file_schema(fid))
+        if (!file) return;
+        if (auto schema = unwrap(index::schema(snapshot, *file)))
             std::printf("  Schema: %s\n", schema->c_str());
         std::printf("  Extensions:");
         for (auto ext : ALL_EXTENSIONS) {
-            auto state = db.extension_state(fid, ext);
-            if (!state) continue;
             const auto name = extension_name(ext);
-            const char* note = !state->ready                    ? " (failed)"
-                               : db.extension_current(fid, ext) ? ""
-                                                                : " (outdated)";
+            if (index::extension_current(snapshot, *file, ext)) {
+                std::printf(" %.*s", static_cast<int>(name.size()),
+                            name.data());
+                continue;
+            }
+            // An extension built at another format version reads as absent.
+            const auto state = snapshot.extension(*file, ext, 0);
+            if (state == index::Freshness::Missing) continue;
+            const char* note =
+                state == index::Freshness::Failed ? " (failed)" : " (outdated)";
             std::printf(" %.*s%s", static_cast<int>(name.size()), name.data(),
                         note);
         }
         // No plugin is loaded here, so a plugin extension's currency is
         // unknown.
-        for (const auto& [name, state] : db.plugin_extension_states(fid))
-            std::printf(" %s (plugin%s)", name.c_str(),
-                        state.ready ? "" : ", failed");
+        for (const auto& plugin : unwrap(index::plugins(snapshot, *file)))
+            std::printf(" %s (plugin%s)", plugin.name.c_str(),
+                        plugin.ready ? "" : ", failed");
         std::printf("\n");
     } catch (const std::exception& e) {
         std::printf("  Extensions: unreadable (%s)\n", e.what());
@@ -225,7 +233,7 @@ static void print_extensions(const MetadataCollectorUtilityOutput& info) {
 }
 
 static void print_file_info(const MetadataCollectorUtilityOutput& info,
-                            bool detailed) {
+                            const index::Snapshot& snapshot, bool detailed) {
     std::printf("========================================\n");
     std::printf("File: %s\n", info.file_path.c_str());
     std::printf("========================================\n");
@@ -268,7 +276,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
         std::printf("  Checkpoint Size: %s\n",
                     format_size(info.checkpoint_size).c_str());
         std::printf("  Checkpoints: %zu\n", info.num_checkpoints);
-        print_extensions(info);
+        print_extensions(info, snapshot);
     }
 
     if (detailed) {
@@ -414,23 +422,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 
                 {
                     ScopedTimer _lr(stages, "load_registry");
-                    auto registry_ptr =
-                        co_await load_file_registry(trusted_index_path);
-
-                    files.reserve(registry_ptr->size());
-                    auto& group = indexed_groups[trusted_index_path];
-                    group.reserve(registry_ptr->size());
-                    IndexDatabase db(
-                        trusted_index_path,
-                        dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-                    std::size_t fi = 0;
-                    for (auto& [logical_path, reg] : *registry_ptr) {
-                        files.push_back(logical_path);
-                        if (db.pruning_tier_current(reg.file_id))
-                            group.push_back(ResolvedFile{
-                                fi, logical_path, reg.file_id, {}});
-                        ++fi;
-                    }
+                    load_cached_files(trusted_index_path, files,
+                                      indexed_groups[trusted_index_path]);
                 }
             } else {
                 ScopedTimer _ds(stages, "scan_and_resolve");
@@ -574,8 +567,15 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
         co_return (bad == 0) ? 0 : 1;
     }
 
+    std::unordered_map<std::string, index::Snapshot> snapshots;
     for (const auto& r : all_results) {
-        print_file_info(r, !summary_mode);
+        auto it = snapshots.find(r.index_path);
+        if (it == snapshots.end())
+            it = snapshots
+                     .emplace(r.index_path,
+                              unwrap(index::plan::open_snapshot(r.index_path)))
+                     .first;
+        print_file_info(r, it->second, !summary_mode);
     }
 
     if (files.size() > 1) {

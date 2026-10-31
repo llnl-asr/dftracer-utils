@@ -160,6 +160,11 @@ class ThreadPoolExecutor : public TaskExecutor {
     moodycamel::ConcurrentQueue<RunQueueEntry> run_queue_;
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::uint64_t> work_signal_{0};
+    // Enqueues from threads outside this pool still running. The handle they
+    // queue can finish and let the owner destroy the executor before the
+    // enqueue returns, so the destructor waits for this to reach zero.
+    alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
+        std::atomic<std::size_t> foreign_enqueues_{0};
 
     // Idle park. run_queue_ is a moodycamel::ConcurrentQueue whose try_dequeue
     // can report empty while another producer's item is still in flight, even

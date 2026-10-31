@@ -61,6 +61,8 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
 ThreadPoolExecutor::~ThreadPoolExecutor() {
     shutdown();
     drain_destroy_queue();
+    while (foreign_enqueues_.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
 }
 
 void ThreadPoolExecutor::start() {
@@ -769,9 +771,12 @@ void ThreadPoolExecutor::enqueue(std::coroutine_handle<> handle,
             handle.address(), task_id >= 0 ? utilities::CoroKind::Task
                                            : utilities::CoroKind::Spawn);
     }
+    const bool foreign = Executor::current() != this;
+    if (foreign) foreign_enqueues_.fetch_add(1, std::memory_order_acq_rel);
     DFTRACER_UTILS_TSAN_RELEASE(handle.address());
     run_queue_.enqueue(RunQueueEntry{handle, task_id, monitor_id});
     signal_global_work();
+    if (foreign) foreign_enqueues_.fetch_sub(1, std::memory_order_release);
 }
 
 bool ThreadPoolExecutor::is_responsive() const {

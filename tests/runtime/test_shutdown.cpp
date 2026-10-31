@@ -6,6 +6,7 @@
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/cancelled.h>
 #include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/completion_latch.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/join_handle.h>
 #include <dftracer/utils/runtime/coro/reserve_async.h>
@@ -13,6 +14,7 @@
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/coro/when_any.h>
 #include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -440,4 +442,66 @@ TEST_CASE("when_any cancels a CoroTask loser that never ends") {
     // ran.
     CHECK(loser_started.load() == loser_gone.load());
     shutdown_or_fail(rt);
+}
+
+namespace {
+
+struct ForeignHandoff {
+    std::atomic<void*> handle{nullptr};
+    Executor* executor = nullptr;
+};
+
+struct ParkForForeign {
+    ForeignHandoff* handoff;
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> handle) noexcept {
+        handoff->executor = Executor::current();
+        handoff->handle.store(handle.address(), std::memory_order_release);
+    }
+    void await_resume() const noexcept {}
+};
+
+}  // namespace
+
+TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
+    // The frame finishes while the foreign thread may still be inside the
+    // executor's enqueue, which must not touch the executor after it is gone.
+    // The thread outlives the runtime, as a store's I/O thread does.
+    constexpr int ROUNDS = 50;
+    int ended = 0;
+    for (int round = 0; round < ROUNDS; ++round) {
+        auto rt =
+            std::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
+        ForeignHandoff handoff;
+        std::atomic<bool> finished{false};
+        std::atomic<bool> released{false};
+        auto frame = [&]() -> coro::CoroTask<void> {
+            ParkForForeign park{&handoff};
+            co_await park;
+            finished.store(true, std::memory_order_release);
+        };
+        rt->submit(frame(), "ResumedByForeignThread");
+        std::thread foreign([&] {
+            void* handle = nullptr;
+            while ((handle = handoff.handle.load(std::memory_order_acquire)) ==
+                   nullptr)
+                std::this_thread::yield();
+            coro::resume_continuation(
+                handoff.executor,
+                std::coroutine_handle<>::from_address(handle));
+            while (!released.load(std::memory_order_acquire))
+                std::this_thread::yield();
+        });
+        const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+        while (!finished.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() > deadline)
+                fail_hung("foreign resume");
+            std::this_thread::yield();
+        }
+        rt.reset();
+        released.store(true, std::memory_order_release);
+        foreign.join();
+        ++ended;
+    }
+    CHECK(ended == ROUNDS);
 }

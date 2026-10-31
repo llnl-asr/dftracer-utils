@@ -1,5 +1,6 @@
 #include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/store_backend.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 
@@ -88,10 +89,47 @@ Snapshot IndexAccess::make_snapshot(dstd::Optional<kv::Snapshot> snap) {
     return Snapshot(std::move(state));
 }
 
-FileBuild IndexAccess::make_build(kv::Store store, kv::ScopeKey scope,
-                                  const SourceStat& stat) {
+FileBuild IndexAccess::make_build(std::string root, kv::Store store,
+                                  kv::ScopeKey scope, const SourceStat& stat) {
     return FileBuild(dstd::make_shared<FileBuild::Impl>(
-        std::move(store), std::move(scope), stat));
+        std::move(root), std::move(store), std::move(scope), stat));
+}
+
+const std::string& IndexAccess::root(const Index& index) {
+    return index.impl_->root;
+}
+
+dstd::Expected<kv::Store, dstd::Error> IndexAccess::open_store(
+    const Index& index) {
+    return index.impl_->open_store();
+}
+
+dstd::Expected<dstd::Optional<kv::Store>, dstd::Error> IndexAccess::find_store(
+    const Index& index) {
+    return index.impl_->find_store();
+}
+
+void note_applied(const std::string& root,
+                  dstd::Span<const kv::Publish> applied) {
+    const auto held = store::StoreRoot::find(root);
+    if (!held) return;
+    for (const kv::Publish& change : applied) {
+        const std::string name(change.ns->spec.name.data(),
+                               change.ns->spec.name.size());
+        switch (change.change) {
+            case kv::Publish::Change::Ready:
+                held->note_published(name, *change.scope, change.params_hash,
+                                     change.sources);
+                break;
+            case kv::Publish::Change::Failed:
+                held->note_published(name, *change.scope, change.params_hash,
+                                     nullptr);
+                break;
+            case kv::Publish::Change::Dropped:
+                held->note_dropped(name, *change.scope);
+                break;
+        }
+    }
 }
 
 const kv::Snapshot* IndexAccess::store_snapshot(const Snapshot& snapshot) {
@@ -140,12 +178,41 @@ void IndexAccess::fail(FileBuild& build, const kv::NamespaceSpec& spec,
     copy->finished = false;
 }
 
-FileBuild::Impl::Impl(kv::Store s, kv::ScopeKey key, const SourceStat& stat)
-    : store(std::move(s)), scope(std::move(key)) {
+void IndexAccess::clear(FileBuild& build, const kv::NamespaceSpec& spec) {
+    FileBuild::Impl& impl = *build.impl_;
+    if (impl.error) return;
+    for (const FileBuild::Impl::Copy& known : impl.copies) {
+        if (known.ns.spec.name == spec.name) {
+            impl.error = dstd::Error(dstd::Condition::InvalidArgument,
+                                     "index: an extension is written and "
+                                     "cleared");
+            return;
+        }
+    }
+    for (const kv::Namespace& known : impl.cleared) {
+        if (known.spec.name == spec.name) return;
+    }
+    auto registered = impl.store.ns(spec);
+    if (!registered) {
+        impl.error = registered.error();
+        return;
+    }
+    impl.cleared.push_back(*registered);
+}
+
+FileBuild::Impl::Impl(std::string index_root, kv::Store s, kv::ScopeKey key,
+                      const SourceStat& stat)
+    : root(std::move(index_root)), store(std::move(s)), scope(std::move(key)) {
     sources.push_back(stat);
 }
 
 FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
+    for (const kv::Namespace& known : cleared) {
+        if (known.spec.name != spec.name) continue;
+        error = dstd::Error(dstd::Condition::InvalidArgument,
+                            "index: an extension is written and cleared");
+        return nullptr;
+    }
     for (Copy& known : copies) {
         if (known.ns.spec.name != spec.name) continue;
         if (known.ns.spec != spec) {
@@ -161,8 +228,28 @@ FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
         return nullptr;
     }
     kv::Batch batch = store.building_batch(*registered, scope);
-    copies.push_back(Copy{*registered, std::move(batch), 0, 0, false, false});
+    copies.push_back(
+        Copy{*registered, std::move(batch), 0, 0, 0, false, false});
     return &copies.back();
+}
+
+coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::stage(
+    FileBuild& build) {
+    FileBuild::Impl& impl = *build.impl_;
+    if (impl.error) co_return dstd::Unexpected<dstd::Error>(*impl.error);
+    if (impl.committed) co_return invalid("index: the build is committed");
+    for (FileBuild::Impl::Copy& copy : impl.copies) {
+        if (copy.puts == 0 || copy.failed) continue;
+        auto written = co_await impl.store.commit(std::move(copy.batch));
+        if (!written) {
+            impl.error = written.error();
+            co_return dstd::Unexpected<dstd::Error>(written.error());
+        }
+        copy.batch = impl.store.building_batch(copy.ns, impl.scope);
+        copy.staged_puts += copy.puts;
+        copy.puts = 0;
+    }
+    co_return dstd::Expected<void, dstd::Error>{};
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
@@ -176,34 +263,55 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
             co_return invalid("index: an extension is not finished");
     }
     dstd::Vector<kv::Publish> targets;
-    targets.reserve(build.copies.size());
+    targets.reserve(build.copies.size() + build.cleared.size());
     for (Copy& copy : build.copies) {
-        if (copy.failed) continue;
-        if (copy.puts == 0)
+        if (copy.failed) {
+            targets.push_back(kv::Publish{&copy.ns, &build.scope,
+                                          copy.params_hash, nullptr,
+                                          kv::Publish::Change::Failed});
+            continue;
+        }
+        const bool empty = copy.puts == 0 && copy.staged_puts == 0;
+        if (empty)
             copy.batch.put(dstd::ByteView(EMPTY_COPY_KEY), dstd::ByteView());
-        auto written = co_await build.store.commit(std::move(copy.batch));
-        if (!written) co_return dstd::Unexpected<dstd::Error>(written.error());
+        if (empty || copy.puts != 0) {
+            auto written = co_await build.store.commit(std::move(copy.batch));
+            if (!written)
+                co_return dstd::Unexpected<dstd::Error>(written.error());
+        }
         targets.push_back(kv::Publish{&copy.ns, &build.scope, copy.params_hash,
                                       &build.sources});
+    }
+    if (!build.cleared.empty()) {
+        auto taken = build.store.snapshot();
+        if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
+        for (const kv::Namespace& ns : build.cleared) {
+            if (taken->copy_info(ns, build.scope).state ==
+                kv::ScopeState::Absent)
+                continue;
+            targets.push_back(kv::Publish{&ns, &build.scope, 0, nullptr,
+                                          kv::Publish::Change::Dropped});
+        }
     }
     if (!targets.empty()) {
         auto published = co_await build.store.publish(
             dstd::Span<const kv::Publish>(targets.data(), targets.size()));
         if (!published)
             co_return dstd::Unexpected<dstd::Error>(published.error());
-    }
-    bool failed_any = false;
-    for (const Copy& copy : build.copies) {
-        if (!copy.failed) continue;
-        auto failed = build.store.fail(copy.ns, build.scope, copy.params_hash);
-        if (!failed) co_return dstd::Unexpected<dstd::Error>(failed.error());
-        failed_any = true;
-    }
-    if (failed_any) {
-        auto flushed = co_await build.store.flush();
-        if (!flushed) co_return dstd::Unexpected<dstd::Error>(flushed.error());
+        note_applied(build.root, dstd::Span<const kv::Publish>(targets.data(),
+                                                               targets.size()));
     }
     co_return dstd::Expected<void, dstd::Error>{};
+}
+
+void FileBuild::clear(store::IndexExtension ext) {
+    if (!builtin(ext)) {
+        IndexAccess::record_error(
+            *this, dstd::Error(dstd::Condition::InvalidArgument,
+                               "index: not a built-in extension"));
+        return;
+    }
+    IndexAccess::clear(*this, ext_spec(ext));
 }
 
 void FileBuild::finish(store::IndexExtension ext, std::uint64_t params_hash) {
@@ -289,8 +397,8 @@ Freshness Snapshot::extension(const FileRef& file, store::IndexExtension ext,
 dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     if (root.empty()) return invalid("index: the root is empty");
     auto impl = dstd::make_shared<Impl>();
-    impl->store_dir =
-        (std::filesystem::path(std::string(root)) / "store").string();
+    impl->root = std::string(root);
+    impl->store_dir = (std::filesystem::path(impl->root) / "store").string();
     return Index(std::move(impl));
 }
 
@@ -308,8 +416,8 @@ dstd::Expected<FileBuild, dstd::Error> Index::build(
     if (path.empty()) return invalid("index: the path is empty");
     auto opened = impl_->open_store();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
-    return IndexAccess::make_build(std::move(*opened), kv::ScopeKey::file(path),
-                                   stat);
+    return IndexAccess::make_build(impl_->root, std::move(*opened),
+                                   kv::ScopeKey::file(path), stat);
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Index::remove(
@@ -342,6 +450,9 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::remove_task(
             known.format_version = decl.format_version;
         }
     }
+    dstd::Vector<kv::Publish> targets;
+    dstd::Vector<kv::Namespace> namespaces;
+    namespaces.reserve(latest.size());
     for (const auto& [name, spec] : latest) {
         kv::Namespace ns;
         ns.spec = spec;
@@ -350,11 +461,18 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::remove_task(
         auto registered = store.ns(spec);
         if (!registered)
             co_return dstd::Unexpected<dstd::Error>(registered.error());
-        auto dropped = store.drop(*registered, scope);
-        if (!dropped) co_return dstd::Unexpected<dstd::Error>(dropped.error());
+        namespaces.push_back(*registered);
     }
-    auto flushed = co_await store.flush();
-    if (!flushed) co_return dstd::Unexpected<dstd::Error>(flushed.error());
+    for (const kv::Namespace& ns : namespaces) {
+        targets.push_back(
+            kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
+    }
+    if (targets.empty()) co_return dstd::Expected<void, dstd::Error>{};
+    auto applied = co_await store.publish(
+        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+    if (!applied) co_return dstd::Unexpected<dstd::Error>(applied.error());
+    note_applied(impl->root,
+                 dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     co_return dstd::Expected<void, dstd::Error>{};
 }
 

@@ -160,6 +160,26 @@ std::shared_ptr<StoreRoot> StoreRoot::get_or_open(
     return created;
 }
 
+std::shared_ptr<StoreRoot> StoreRoot::find(const std::string& index_root) {
+    const std::string key = root_key(index_root);
+    std::lock_guard<std::mutex> lock(root_registry_mutex());
+    const auto& roots = root_registry();
+    const auto found = roots.find(key);
+    return found == roots.end() ? nullptr : found->second.lock();
+}
+
+void StoreRoot::note_published(const std::string& name,
+                               const kv::ScopeKey& scope,
+                               std::uint64_t params_hash,
+                               const dstd::Vector<kv::SourceStat>* sources) {
+    mark_committed(name, scope, params_hash, sources);
+}
+
+void StoreRoot::note_dropped(const std::string& name,
+                             const kv::ScopeKey& scope) {
+    forget_committed(name, scope);
+}
+
 std::optional<std::string> StoreRoot::close_all() {
     std::vector<std::shared_ptr<StoreRoot>> live;
     {
@@ -1106,7 +1126,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         // Every building copy goes in one publish, so a reader sees the
         // whole staged write or none of it.
         dstd::Deque<dstd::Vector<kv::SourceStat>> sources_of;
-        dstd::Vector<kv::engine::PublishTarget> targets;
+        dstd::Vector<kv::engine::CopyChange> targets;
         dstd::Vector<StagedCopy*> building;
         for (auto& entry : staged_copies_) {
             StagedCopy& copy = entry.second;
@@ -1114,13 +1134,12 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
             dstd::Vector<kv::SourceStat>& sources = sources_of.emplace_back();
             const bool have_sources =
                 root_->sources_of(copy.scope, file_stats_, sources);
-            targets.push_back(kv::engine::PublishTarget{
+            targets.push_back(kv::engine::CopyChange{
                 root_->namespace_id(copy.name, copy.version), &copy.scope,
                 copy.params_hash, have_sources ? &sources : nullptr});
             building.push_back(&copy);
         }
-        check("store index: publish the staged copies",
-              writer.publish(targets));
+        check("store index: publish the staged copies", writer.apply(targets));
         for (std::size_t i = 0; i < building.size(); ++i) {
             const StagedCopy& copy = *building[i];
             root_->mark_committed(copy.name, copy.scope, copy.params_hash,

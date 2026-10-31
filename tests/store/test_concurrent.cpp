@@ -53,10 +53,11 @@ using store::FoldKind;
 using store::NamespaceSpec;
 using store::ScopeKey;
 using store::ScopeState;
+using store::engine::ChangeKind;
 using store::engine::CommitterTestHook;
+using store::engine::CopyChange;
 using store::engine::DataFileReader;
 using store::engine::NamespaceId;
-using store::engine::PublishTarget;
 using store::engine::Snapshot;
 using store::engine::Writer;
 using store::engine::WriterErrc;
@@ -864,10 +865,10 @@ TEST_CASE("one publish of several building copies writes one record") {
     REQUIRE(flush_writer(*writer).has_value());
     const std::uint64_t before = CommitterTestHook::syncs();
 
-    const PublishTarget targets[] = {{*first, &scope, 1, nullptr},
-                                     {*second, &scope, 2, nullptr},
-                                     {*first, &other, 3, nullptr}};
-    REQUIRE(writer->publish(targets).has_value());
+    const CopyChange targets[] = {{*first, &scope, 1, nullptr},
+                                  {*second, &scope, 2, nullptr},
+                                  {*first, &other, 3, nullptr}};
+    REQUIRE(writer->apply(targets).has_value());
     REQUIRE(flush_writer(*writer).has_value());
     CHECK(CommitterTestHook::syncs() - before == 2);
 
@@ -880,6 +881,109 @@ TEST_CASE("one publish of several building copies writes one record") {
         2);
     CHECK(snapshot->copy_info(durable_spec("first", true), other).state ==
           ScopeState::Ready);
+    REQUIRE(close_writer(*writer).has_value());
+}
+
+TEST_CASE("one apply of a drop, a fail and a publish writes one record") {
+    dftu_utils_test::ScopedTestDir dir("store_concurrent_apply_mixed");
+    CommitterTestHook::reset();
+
+    auto writer = make_writer(dir, manual_options(EXTENT));
+    auto dropped = writer->add_namespace(durable_spec("dropped", true));
+    auto failed = writer->add_namespace(durable_spec("failed", true));
+    auto built = writer->add_namespace(durable_spec("built", true));
+    REQUIRE(dropped.has_value());
+    REQUIRE(failed.has_value());
+    REQUIRE(built.has_value());
+    const ScopeKey scope = file_scope("/data/apply.dft");
+
+    for (const NamespaceId space : {*dropped, *failed}) {
+        Batch entries = writer->batch(space, scope, 1);
+        entries.put(view_of(std::string("k")), view_of(std::string("old")));
+        REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
+    }
+    Batch entries = writer->building_batch(*built, scope);
+    entries.put(view_of(std::string("k")), view_of(std::string("new")));
+    REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+
+    auto before = Snapshot::open(dir.str());
+    REQUIRE(before.has_value());
+    const std::uint64_t syncs = CommitterTestHook::syncs();
+
+    const CopyChange changes[] = {
+        {*dropped, &scope, 0, nullptr, ChangeKind::Dropped},
+        {*failed, &scope, 4, nullptr, ChangeKind::Failed},
+        {*built, &scope, 6, nullptr, ChangeKind::Ready}};
+    REQUIRE(writer->apply(changes).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+    CHECK(CommitterTestHook::syncs() - syncs == 2);
+
+    auto after = Snapshot::open(dir.str());
+    REQUIRE(after.has_value());
+    CHECK(after->copy_info(durable_spec("dropped", true), scope).state ==
+          ScopeState::Absent);
+    const auto failed_info =
+        after->copy_info(durable_spec("failed", true), scope);
+    CHECK(failed_info.state == ScopeState::Failed);
+    CHECK(failed_info.params_hash == 4);
+    const auto built_info =
+        after->copy_info(durable_spec("built", true), scope);
+    CHECK(built_info.state == ScopeState::Ready);
+    CHECK(built_info.params_hash == 6);
+
+    CHECK(before->copy_info(durable_spec("dropped", true), scope).state ==
+          ScopeState::Ready);
+    CHECK(before->copy_info(durable_spec("failed", true), scope).state ==
+          ScopeState::Ready);
+    CHECK(before->copy_info(durable_spec("built", true), scope).state !=
+          ScopeState::Ready);
+    REQUIRE(close_writer(*writer).has_value());
+}
+
+TEST_CASE("an apply with one bad change applies nothing") {
+    dftu_utils_test::ScopedTestDir dir("store_concurrent_apply_bad");
+    auto writer = make_writer(dir, manual_options(EXTENT));
+    auto space = writer->add_namespace(durable_spec("space", true));
+    auto other = writer->add_namespace(durable_spec("other", true));
+    REQUIRE(space.has_value());
+    REQUIRE(other.has_value());
+    const ScopeKey scope = file_scope("/data/ready.dft");
+    const ScopeKey unbuilt = file_scope("/data/unbuilt.dft");
+
+    Batch plain = writer->batch(*space, scope, 0);
+    plain.put(view_of(std::string("k")), view_of(std::string("v")));
+    REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+
+    const CopyChange no_building[] = {
+        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
+        {*other, &unbuilt, 0, nullptr, ChangeKind::Ready}};
+    CHECK_FALSE(writer->apply(no_building).has_value());
+    const CopyChange twice[] = {
+        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
+        {*space, &scope, 3, nullptr, ChangeKind::Failed}};
+    CHECK_FALSE(writer->apply(twice).has_value());
+    const CopyChange no_scope[] = {
+        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
+        {*other, nullptr, 0, nullptr, ChangeKind::Failed}};
+    CHECK_FALSE(writer->apply(no_scope).has_value());
+    const CopyChange unknown[] = {
+        {*space, &scope, 0, nullptr, ChangeKind::Dropped},
+        {NamespaceId{99}, &scope, 0, nullptr, ChangeKind::Failed}};
+    CHECK_FALSE(writer->apply(unknown).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+
+    auto snapshot = Snapshot::open(dir.str());
+    REQUIRE(snapshot.has_value());
+    CHECK(snapshot->copy_info(durable_spec("space", true), scope).state ==
+          ScopeState::Ready);
+    CHECK(snapshot->copy_info(durable_spec("other", true), unbuilt).state ==
+          ScopeState::Absent);
+
+    const CopyChange fine[] = {
+        {*space, &scope, 0, nullptr, ChangeKind::Dropped}};
+    REQUIRE(writer->apply(fine).has_value());
     REQUIRE(close_writer(*writer).has_value());
 }
 
@@ -899,19 +1003,19 @@ TEST_CASE("a publish with one bad target publishes nothing") {
     REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
-    const PublishTarget targets[] = {{*space, &building, 1, nullptr},
-                                     {*space, &ready, 1, nullptr}};
-    CHECK_FALSE(writer->publish(targets).has_value());
-    const PublishTarget twice[] = {{*space, &building, 1, nullptr},
-                                   {*space, &building, 1, nullptr}};
-    CHECK_FALSE(writer->publish(twice).has_value());
+    const CopyChange targets[] = {{*space, &building, 1, nullptr},
+                                  {*space, &ready, 1, nullptr}};
+    CHECK_FALSE(writer->apply(targets).has_value());
+    const CopyChange twice[] = {{*space, &building, 1, nullptr},
+                                {*space, &building, 1, nullptr}};
+    CHECK_FALSE(writer->apply(twice).has_value());
     REQUIRE(flush_writer(*writer).has_value());
 
     auto snapshot = Snapshot::open(dir.str());
     REQUIRE(snapshot.has_value());
     CHECK(snapshot->copy_info(durable_spec("space", true), building).state !=
           ScopeState::Ready);
-    REQUIRE(writer->publish({targets, 1}).has_value());
+    REQUIRE(writer->apply({targets, 1}).has_value());
     REQUIRE(close_writer(*writer).has_value());
 }
 

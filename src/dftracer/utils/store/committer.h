@@ -60,6 +60,13 @@ struct PendingBatch {
     bool publish = false;
 };
 
+/// One copy state change for Committer::on_changes. A drop hides the whole
+/// scope. Any other change is a copy state with no entries.
+struct QueuedChange {
+    PendingBatch* batch = nullptr;
+    bool drop = false;
+};
+
 /// Writes one record per group commit for the extents and copy state changes
 /// the writer produces, from one task of the writer's executor. The on_*()
 /// methods take their item from any thread. Records are written one at a time.
@@ -91,13 +98,10 @@ class Committer {
                  dstd::Vector<std::uint8_t>&& end);
     /// Queues a range erase of one copy. Takes ownership of `batch`.
     void on_erase(PendingBatch* batch, EraseItem&& item);
-    /// Queues a copy state with no entries: a copy in state Failed, or a
-    /// building copy published (PendingBatch::publish). Takes ownership of
-    /// `batch`.
-    void on_fail(PendingBatch* batch);
-    /// Queues published building copies under one lock, so one record holds
-    /// all of them. Takes ownership of every batch.
-    void on_publish(dstd::Span<PendingBatch* const> batches);
+    /// Queues copy state changes under one lock, so one record holds all of
+    /// them: published building copies, failed copies and whole-scope drops.
+    /// Takes ownership of every batch.
+    void on_changes(dstd::Span<const QueuedChange> changes);
 
     /// Records everything queued now as one record and rewrites the header
     /// tail, syncing before and after it when any of those batches is durable.

@@ -245,13 +245,18 @@ class Snapshot {
     dstd::SharedPtr<const engine::Snapshot> impl_;
 };
 
-/// One building copy for Store::publish.
+/// One copy state change for Store::publish. Ready makes the building copy of
+/// `scope` the copy readers see. Failed records a Failed copy with
+/// `params_hash` and needs no building copy. Dropped hides the whole scope.
 struct Publish {
+    enum class Change : std::uint8_t { Ready, Failed, Dropped };
+
     const Namespace* ns = nullptr;
     const ScopeKey* scope = nullptr;
     std::uint64_t params_hash = 0;
-    /// Null, or one per path of the scope in its path order.
+    /// Ready only. Null, or one per path of the scope in its path order.
     const dstd::Vector<SourceStat>* sources = nullptr;
+    Change change = Change::Ready;
 };
 
 /// One store directory, shared by every handle to it in this process, with one
@@ -277,8 +282,8 @@ class Store {
     /// Waits for writer space when the writer is busy. Readers see the batch
     /// after flush(), publish() or close(), or once its extent fills.
     coro::CoroTask<dstd::Expected<void, dstd::Error>> commit(Batch batch);
-    /// Flushes, then makes every building copy of `targets` visible in one
-    /// record: a reader sees all of them or none.
+    /// Flushes, then applies every change of `targets` in one record: a reader
+    /// sees all of them or none. A bad target changes nothing.
     coro::CoroTask<dstd::Expected<void, dstd::Error>> publish(
         dstd::Span<const Publish> targets);
 

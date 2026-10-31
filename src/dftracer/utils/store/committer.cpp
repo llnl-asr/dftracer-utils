@@ -283,21 +283,19 @@ void Committer::on_erase(PendingBatch* batch, EraseItem&& item) {
     add_entry(std::move(entry));
 }
 
-void Committer::on_fail(PendingBatch* batch) {
-    PendingEntry entry;
-    entry.batch = batch;
-    add_entry(std::move(entry));
-}
-
-void Committer::on_publish(dstd::Span<PendingBatch* const> batches) {
+void Committer::on_changes(dstd::Span<const QueuedChange> changes) {
+    bool wake_now = false;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        for (PendingBatch* batch : batches) {
+        for (const QueuedChange& change : changes) {
             PendingEntry entry;
-            entry.batch = batch;
+            entry.batch = change.batch;
+            entry.emit_drop = change.drop;
             entries_.push_back(std::move(entry));
         }
+        wake_now = pending_bytes_ >= commit_bytes_;
     }
+    if (wake_now) wake();
 }
 
 void Committer::drain(dstd::Vector<PendingEntry>& out) {

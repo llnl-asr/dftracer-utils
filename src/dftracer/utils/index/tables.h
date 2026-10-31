@@ -5,6 +5,7 @@
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/schemas/dft/statistics.h>
 #include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/store.h>
 
 #include <cstdint>
@@ -171,6 +173,29 @@ void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
 /// publish of the finished extensions, not in the same record.
 void fail_extension(FileBuild& build, store::IndexExtension ext,
                     std::uint64_t params_hash);
+
+/// Commits the building batches the build holds so far, so their memory is
+/// released, and publishes nothing. Later puts join the same building copies,
+/// and commit() publishes all of them. The build must stay alive until the task
+/// ends.
+coro::CoroTask<Result<void>> stage(FileBuild& build);
+
+// Writes that are not about one file. Each commits in one record, and its
+// arguments must stay alive until the task ends.
+
+/// Replaces the index-wide aggregation record `name` with `payload`.
+coro::CoroTask<Result<void>> put_agg_meta(const Index& index,
+                                          dstd::StringView name,
+                                          dstd::StringView payload);
+/// Deletes the index-wide aggregation record `name`. A missing record is not an
+/// error.
+coro::CoroTask<Result<void>> delete_agg_meta(const Index& index,
+                                             dstd::StringView name);
+/// Drops the copy of one built-in extension of every file in `paths`. A file
+/// without a copy is skipped.
+coro::CoroTask<Result<void>> remove_extension(
+    const Index& index, store::IndexExtension ext,
+    dstd::Span<const dstd::StringView> paths);
 
 }  // namespace dftracer::utils::index
 

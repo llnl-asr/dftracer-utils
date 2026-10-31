@@ -327,8 +327,7 @@ struct Store::State {
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_task(
         dstd::SharedPtr<State> self, Batch batch);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> publish_task(
-        dstd::SharedPtr<State> self,
-        dstd::Vector<engine::PublishTarget> targets);
+        dstd::SharedPtr<State> self, dstd::Vector<engine::CopyChange> changes);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> failed_task(
         dstd::Error error);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> flush_task(
@@ -550,15 +549,15 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::commit_task(
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::publish_task(
-    dstd::SharedPtr<State> self, dstd::Vector<engine::PublishTarget> targets) {
+    dstd::SharedPtr<State> self, dstd::Vector<engine::CopyChange> changes) {
     auto opened = self->writer_for_use();
     if (!opened) co_return dstd::Unexpected<dstd::Error>(opened.error());
     const dstd::SharedPtr<engine::Writer> writer = *opened;
     auto before = co_await writer->flush();
     self->bump_version();
     if (!before) co_return before;
-    auto published = writer->publish(dstd::Span<const engine::PublishTarget>(
-        targets.data(), targets.size()));
+    auto published = writer->apply(
+        dstd::Span<const engine::CopyChange>(changes.data(), changes.size()));
     if (!published) co_return published;
     auto after = co_await writer->flush();
     self->bump_version();
@@ -653,16 +652,27 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::commit(Batch batch) {
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::publish(
     dstd::Span<const Publish> targets) {
-    dstd::Vector<engine::PublishTarget> converted;
+    dstd::Vector<engine::CopyChange> converted;
     converted.reserve(targets.size());
     for (const Publish& target : targets) {
         if (target.ns == nullptr || target.scope == nullptr) {
             return State::failed_task(
                 dstd::Error(dstd::Condition::InvalidArgument));
         }
-        converted.push_back(engine::PublishTarget{
-            engine::NamespaceId{target.ns->id}, target.scope,
-            target.params_hash, target.sources});
+        engine::ChangeKind kind = engine::ChangeKind::Ready;
+        switch (target.change) {
+            case Publish::Change::Ready:
+                break;
+            case Publish::Change::Failed:
+                kind = engine::ChangeKind::Failed;
+                break;
+            case Publish::Change::Dropped:
+                kind = engine::ChangeKind::Dropped;
+                break;
+        }
+        converted.push_back(
+            engine::CopyChange{engine::NamespaceId{target.ns->id}, target.scope,
+                               target.params_hash, target.sources, kind});
     }
     return State::publish_task(state_, std::move(converted));
 }

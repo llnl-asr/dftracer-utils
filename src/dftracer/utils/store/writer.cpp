@@ -447,74 +447,172 @@ Batch Writer::building_batch(NamespaceId namespace_id, const ScopeKey& scope) {
     return batch;
 }
 
-dstd::Expected<void, dstd::Error> Writer::publish(
-    dstd::Span<const PublishTarget> targets) {
+dstd::Expected<void, dstd::Error> Writer::apply(
+    dstd::Span<const CopyChange> changes) {
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    for (const PublishTarget& target : targets) {
-        if (target.scope == nullptr ||
-            (target.sources != nullptr &&
-             target.sources->size() != target.scope->paths.size())) {
+    for (const CopyChange& change : changes) {
+        if (change.scope == nullptr ||
+            (change.kind == ChangeKind::Ready && change.sources != nullptr &&
+             change.sources->size() != change.scope->paths.size())) {
             return invalid_error();
         }
     }
-    dstd::Vector<PendingBatch*> pending;
-    pending.reserve(targets.size());
+    dstd::Vector<QueuedChange> queued;
+    queued.reserve(changes.size());
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (latched_error_) {
             return dstd::Unexpected<dstd::Error>(*latched_error_);
         }
+        dstd::Vector<NamespaceEntry*> namespaces;
+        dstd::Vector<ScopeEntry*> scopes;
         dstd::Vector<CopyEntry*> copies;
-        copies.reserve(targets.size());
-        for (const PublishTarget& target : targets) {
+        namespaces.reserve(changes.size());
+        scopes.reserve(changes.size());
+        copies.reserve(changes.size());
+        dstd::HashSet<std::uint64_t> seen;
+        for (const CopyChange& change : changes) {
             NamespaceEntry* namespace_entry =
-                find_namespace(target.namespace_id.value);
-            ScopeEntry* scope_entry = find_scope(*target.scope);
-            CopyEntry* copy_entry =
-                namespace_entry == nullptr || scope_entry == nullptr
-                    ? nullptr
-                    : find_copy(target.namespace_id.value, scope_entry->id);
-            if (copy_entry == nullptr || !copy_entry->building ||
-                std::find(copies.begin(), copies.end(), copy_entry) !=
-                    copies.end()) {
+                find_namespace(change.namespace_id.value);
+            if (namespace_entry == nullptr) return invalid_error();
+            ScopeEntry* scope_entry = find_scope(*change.scope);
+            CopyEntry* copy_entry = nullptr;
+            if (change.kind == ChangeKind::Ready) {
+                if (scope_entry != nullptr) {
+                    copy_entry =
+                        find_copy(change.namespace_id.value, scope_entry->id);
+                }
+                if (copy_entry == nullptr || !copy_entry->building) {
+                    return invalid_error();
+                }
+            } else if (scope_entry == nullptr) {
+                scope_entry = add_scope(*change.scope);
+            }
+            if (!seen.insert(
+                         copy_key(change.namespace_id.value, scope_entry->id))
+                     .second) {
                 return invalid_error();
             }
+            namespaces.push_back(namespace_entry);
+            scopes.push_back(scope_entry);
             copies.push_back(copy_entry);
         }
-        for (std::size_t i = 0; i < targets.size(); ++i) {
-            const PublishTarget& target = targets[i];
-            CopyEntry* copy_entry = copies[i];
-            NamespaceEntry* namespace_entry =
-                find_namespace(target.namespace_id.value);
-            ScopeEntry* scope_entry = find_scope(*target.scope);
-            copy_entry->building = false;
-            copy_entry->params_hash = target.params_hash;
-            copy_entry->sources.clear();
-            if (target.sources != nullptr) {
-                copy_entry->sources = *target.sources;
+        for (std::size_t i = 0; i < changes.size(); ++i) {
+            const CopyChange& change = changes[i];
+            PendingBatch* batch = nullptr;
+            switch (change.kind) {
+                case ChangeKind::Ready:
+                    batch = publish_locked(*namespaces[i], *scopes[i],
+                                           *copies[i], *change.scope, change);
+                    break;
+                case ChangeKind::Failed:
+                    batch = fail_locked(*namespaces[i], *scopes[i],
+                                        *change.scope, change.params_hash);
+                    break;
+                case ChangeKind::Dropped:
+                    batch =
+                        drop_locked(*namespaces[i], *scopes[i], *change.scope);
+                    break;
             }
-
-            auto* batch = new PendingBatch;
-            batch->namespace_id = namespace_entry->id.value;
-            batch->namespace_item =
-                namespace_item(namespace_entry->spec, namespace_entry->id);
-            batch->scope_id = scope_entry->id;
-            batch->scope_item = scope_item(*target.scope, scope_entry->id);
-            batch->copy_item = copy_item(
-                copy_entry->copy_id, namespace_entry->id.value, scope_entry->id,
-                copy_entry->params_hash, copy_entry->generation,
-                CopyState::Ready, copy_entry->sources);
-            batch->publish = true;
-            batch->durable = namespace_entry->spec.durable;
-            pending.push_back(batch);
+            queued.push_back(
+                QueuedChange{batch, change.kind == ChangeKind::Dropped});
         }
     }
-    committer_.on_publish(
-        dstd::Span<PendingBatch* const>(pending.data(), pending.size()));
+    committer_.on_changes(
+        dstd::Span<const QueuedChange>(queued.data(), queued.size()));
     return {};
+}
+
+PendingBatch* Writer::publish_locked(const NamespaceEntry& namespace_entry,
+                                     const ScopeEntry& scope_entry,
+                                     CopyEntry& copy_entry,
+                                     const ScopeKey& scope,
+                                     const CopyChange& change) {
+    copy_entry.building = false;
+    copy_entry.params_hash = change.params_hash;
+    copy_entry.sources.clear();
+    if (change.sources != nullptr) copy_entry.sources = *change.sources;
+
+    auto* batch = new PendingBatch;
+    batch->namespace_id = namespace_entry.id.value;
+    batch->namespace_item =
+        namespace_item(namespace_entry.spec, namespace_entry.id);
+    batch->scope_id = scope_entry.id;
+    batch->scope_item = scope_item(scope, scope_entry.id);
+    batch->copy_item =
+        copy_item(copy_entry.copy_id, namespace_entry.id.value, scope_entry.id,
+                  copy_entry.params_hash, copy_entry.generation,
+                  CopyState::Ready, copy_entry.sources);
+    batch->publish = true;
+    batch->durable = namespace_entry.spec.durable;
+    return batch;
+}
+
+PendingBatch* Writer::fail_locked(const NamespaceEntry& namespace_entry,
+                                  const ScopeEntry& scope_entry,
+                                  const ScopeKey& scope,
+                                  std::uint64_t params_hash) {
+    CopyEntry* existing = find_copy(namespace_entry.id.value, scope_entry.id);
+    const std::uint64_t highest =
+        existing != nullptr ? existing->highest_generation
+                            : generation_of(namespace_entry.spec, scope);
+    const std::uint64_t generation = highest + 1U;
+    if (existing == nullptr) {
+        existing =
+            add_copy(namespace_entry.id, scope_entry.id, generation, false);
+    } else {
+        existing->live = false;
+        existing->building = false;
+        existing->generation = generation;
+        existing->highest_generation = generation;
+    }
+
+    auto* pending = new PendingBatch;
+    pending->namespace_id = namespace_entry.id.value;
+    pending->namespace_item =
+        namespace_item(namespace_entry.spec, namespace_entry.id);
+    pending->scope_id = scope_entry.id;
+    pending->scope_item = scope_item(scope, scope_entry.id);
+    // A failed copy is a new copy id, so it is announced on its own.
+    pending->copy_item =
+        copy_item(next_copy_id_++, namespace_entry.id.value, scope_entry.id,
+                  params_hash, generation, CopyState::Failed, {});
+    pending->durable = namespace_entry.spec.durable;
+    return pending;
+}
+
+PendingBatch* Writer::drop_locked(const NamespaceEntry& namespace_entry,
+                                  const ScopeEntry& scope_entry,
+                                  const ScopeKey& scope) {
+    CopyEntry* existing = find_copy(namespace_entry.id.value, scope_entry.id);
+    const std::uint64_t highest =
+        existing != nullptr ? existing->highest_generation
+                            : generation_of(namespace_entry.spec, scope);
+    const std::uint64_t generation = highest + 1U;
+    if (existing == nullptr) {
+        existing =
+            add_copy(namespace_entry.id, scope_entry.id, generation, false);
+    } else {
+        existing->live = false;
+        existing->building = false;
+        existing->generation = generation;
+        existing->highest_generation = generation;
+    }
+
+    auto* pending = new PendingBatch;
+    pending->namespace_id = namespace_entry.id.value;
+    pending->namespace_item =
+        namespace_item(namespace_entry.spec, namespace_entry.id);
+    pending->scope_id = scope_entry.id;
+    pending->scope_item = scope_item(scope, scope_entry.id);
+    // A drop announces no copy: its generation is all the committer needs.
+    pending->copy_item.local_id = 0;
+    pending->copy_item.generation = generation;
+    pending->durable = namespace_entry.spec.durable;
+    return pending;
 }
 
 BigRef Writer::place_big(void* context, ByteView value) {
@@ -814,52 +912,9 @@ coro::CoroTask<void> Writer::space() {
 dstd::Expected<void, dstd::Error> Writer::fail(NamespaceId namespace_id,
                                                const ScopeKey& scope,
                                                std::uint64_t params_hash) {
-    if (closed_.load(std::memory_order_acquire)) return invalid_error();
-    if (committer_.failed()) {
-        return dstd::Unexpected<dstd::Error>(committer_.error());
-    }
-    auto* pending = new PendingBatch;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (latched_error_) {
-            delete pending;
-            return dstd::Unexpected<dstd::Error>(*latched_error_);
-        }
-        NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
-        if (namespace_entry == nullptr) {
-            delete pending;
-            return invalid_error();
-        }
-        ScopeEntry* scope_entry = find_scope(scope);
-        if (scope_entry == nullptr) scope_entry = add_scope(scope);
-
-        CopyEntry* existing = find_copy(namespace_id.value, scope_entry->id);
-        const std::uint64_t highest =
-            existing != nullptr ? existing->highest_generation
-                                : generation_of(namespace_entry->spec, scope);
-        const std::uint64_t generation = highest + 1U;
-        if (existing == nullptr) {
-            existing =
-                add_copy(namespace_id, scope_entry->id, generation, false);
-        } else {
-            existing->live = false;
-            existing->generation = generation;
-            existing->highest_generation = generation;
-        }
-
-        pending->namespace_id = namespace_entry->id.value;
-        pending->namespace_item =
-            namespace_item(namespace_entry->spec, namespace_entry->id);
-        pending->scope_id = scope_entry->id;
-        pending->scope_item = scope_item(scope, scope_entry->id);
-        // A failed copy is a new copy id, so it is announced on its own.
-        pending->copy_item = copy_item(
-            next_copy_id_++, namespace_entry->id.value, scope_entry->id,
-            params_hash, generation, CopyState::Failed, {});
-        pending->durable = namespace_entry->spec.durable;
-    }
-    committer_.on_fail(pending);
-    return {};
+    const CopyChange change{namespace_id, &scope, params_hash, nullptr,
+                            ChangeKind::Failed};
+    return apply(dstd::Span<const CopyChange>(&change, 1));
 }
 
 dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
@@ -874,44 +929,17 @@ dstd::Expected<void, dstd::Error> Writer::drop(NamespaceId namespace_id,
     if (committer_.failed()) {
         return dstd::Unexpected<dstd::Error>(committer_.error());
     }
-    auto* pending = new PendingBatch;
+    PendingBatch* pending = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (latched_error_) {
-            delete pending;
             return dstd::Unexpected<dstd::Error>(*latched_error_);
         }
         NamespaceEntry* namespace_entry = find_namespace(namespace_id.value);
-        if (namespace_entry == nullptr) {
-            delete pending;
-            return invalid_error();
-        }
+        if (namespace_entry == nullptr) return invalid_error();
         ScopeEntry* scope_entry = find_scope(scope);
         if (scope_entry == nullptr) scope_entry = add_scope(scope);
-
-        CopyEntry* existing = find_copy(namespace_id.value, scope_entry->id);
-        const std::uint64_t highest =
-            existing != nullptr ? existing->highest_generation
-                                : generation_of(namespace_entry->spec, scope);
-        const std::uint64_t generation = highest + 1U;
-        if (existing == nullptr) {
-            existing =
-                add_copy(namespace_id, scope_entry->id, generation, false);
-        } else {
-            existing->live = false;
-            existing->generation = generation;
-            existing->highest_generation = generation;
-        }
-
-        pending->namespace_id = namespace_entry->id.value;
-        pending->namespace_item =
-            namespace_item(namespace_entry->spec, namespace_entry->id);
-        pending->scope_id = scope_entry->id;
-        pending->scope_item = scope_item(scope, scope_entry->id);
-        // A drop announces no copy: its generation is all the committer needs.
-        pending->copy_item.local_id = 0;
-        pending->copy_item.generation = generation;
-        pending->durable = namespace_entry->spec.durable;
+        pending = drop_locked(*namespace_entry, *scope_entry, scope);
     }
     committer_.on_drop(pending, copy_bytes(begin), copy_bytes(end));
     return {};

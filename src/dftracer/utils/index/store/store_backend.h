@@ -55,6 +55,9 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     static std::shared_ptr<StoreRoot> get_or_open(
         const std::string& index_root);
 
+    /// The root of `index_root` when this process holds one, else null.
+    static std::shared_ptr<StoreRoot> find(const std::string& index_root);
+
     /// Closes the writer of every root this process holds. Call it while the
     /// runtime the writers wait on still runs. Returns the first error. Every
     /// root is closed either way.
@@ -69,6 +72,15 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// only grows within a process. The table is seeded on first use from the
     /// file scopes the store holds.
     int file_id_for(std::string_view logical_path);
+    /// A copy published by a writer other than this root's, so a later write
+    /// through this root compares with it and not with an older copy.
+    /// `sources` may be null.
+    void note_published(const std::string& name, const kv::ScopeKey& scope,
+                        std::uint64_t params_hash,
+                        const dstd::Vector<kv::SourceStat>* sources);
+    /// A copy dropped by a writer other than this root's.
+    void note_dropped(const std::string& name, const kv::ScopeKey& scope);
+
     /// Does not assign an id.
     std::optional<int> find_file_id(std::string_view logical_path);
     /// A run of `count` unused ids for a caller that numbers its files itself.

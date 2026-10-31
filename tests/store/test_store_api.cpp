@@ -327,6 +327,72 @@ TEST_SUITE("store api") {
               std::optional<std::string>("r"));
     }
 
+    TEST_CASE("a publish applies a drop, a fail and a new copy together") {
+        dftu_utils_test::ScopedTestDir dir("store_api_changes");
+        Store store = open_store(dir);
+        const Namespace gone = register_ns(store, spec_of("dftu.test.gone"));
+        const Namespace bad = register_ns(store, spec_of("dftu.test.bad"));
+        const Namespace fresh = register_ns(store, spec_of("dftu.test.fresh"));
+        const ScopeKey scope = scope_of("/traces/a.pfw");
+        const ScopeKey unbuilt = scope_of("/traces/never.pfw");
+
+        put_all(store, gone, scope, {{"k", "old"}});
+        put_all(store, bad, scope, {{"k", "old"}});
+        put_all(store, fresh, scope, {{"k", "new"}}, true);
+        REQUIRE(run(store.flush()).has_value());
+        auto before = store.snapshot();
+        REQUIRE(before.has_value());
+
+        const Publish refused[] = {
+            {&gone, &scope, 0, nullptr, Publish::Change::Dropped},
+            {&fresh, &unbuilt, 0, nullptr, Publish::Change::Ready}};
+        CHECK_FALSE(run(store.publish(refused)).has_value());
+        CHECK(get_value(store, gone, scope, "k") ==
+              std::optional<std::string>("old"));
+
+        const Publish changes[] = {
+            {&gone, &scope, 0, nullptr, Publish::Change::Dropped},
+            {&bad, &scope, 5, nullptr, Publish::Change::Failed},
+            {&fresh, &scope, 9, nullptr, Publish::Change::Ready}};
+        REQUIRE(run(store.publish(changes)).has_value());
+
+        auto after = store.snapshot();
+        REQUIRE(after.has_value());
+        CHECK(after->copy_info(gone, scope).state == ScopeState::Absent);
+        CHECK(after->copy_info(bad, scope).state == ScopeState::Failed);
+        CHECK(after->copy_info(bad, scope).params_hash == 5);
+        CHECK(after->copy_info(fresh, scope).state == ScopeState::Ready);
+        CHECK(after->copy_info(fresh, scope).params_hash == 9);
+        CHECK(get_value(store, fresh, scope, "k") ==
+              std::optional<std::string>("new"));
+        CHECK_FALSE(get_value(store, gone, scope, "k").has_value());
+
+        CHECK(before->copy_info(gone, scope).state == ScopeState::Ready);
+        CHECK(before->copy_info(bad, scope).state == ScopeState::Ready);
+        CHECK(before->copy_info(fresh, scope).state != ScopeState::Ready);
+    }
+
+    TEST_CASE("a copy failed while building takes plain batches again") {
+        dftu_utils_test::ScopedTestDir dir("store_api_fail_building");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.fb"));
+        const ScopeKey scope = scope_of("/traces/a.pfw");
+
+        put_all(store, ns, scope, {{"k", "half"}}, true);
+        const Publish failed[] = {
+            {&ns, &scope, 3, nullptr, Publish::Change::Failed}};
+        REQUIRE(run(store.publish(failed)).has_value());
+        auto snapshot = store.snapshot();
+        REQUIRE(snapshot.has_value());
+        CHECK(snapshot->copy_info(ns, scope).state == ScopeState::Failed);
+        CHECK_FALSE(get_value(store, ns, scope, "k").has_value());
+
+        put_all(store, ns, scope, {{"k", "whole"}});
+        REQUIRE(run(store.flush()).has_value());
+        CHECK(get_value(store, ns, scope, "k") ==
+              std::optional<std::string>("whole"));
+    }
+
     TEST_CASE("fold namespaces fold, and a plain put on one is refused") {
         dftu_utils_test::ScopedTestDir dir("store_api_fold");
         Store store = open_store(dir);

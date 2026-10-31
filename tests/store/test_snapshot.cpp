@@ -51,8 +51,8 @@ using store::NamespaceSpec;
 using store::ScopeKey;
 using store::ScopeState;
 using store::SourceStat;
+using store::engine::CopyChange;
 using store::engine::DataFileReader;
-using store::engine::PublishTarget;
 using store::engine::SegmentView;
 using store::engine::Snapshot;
 using store::engine::Writer;
@@ -838,8 +838,8 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(flush_writer(*writer).has_value());
 
         const dstd::Vector<SourceStat> new_sources{SourceStat{4, 5, 6}};
-        const PublishTarget target{*id, &scope, 9, &new_sources};
-        REQUIRE(writer->publish({&target, 1}).has_value());
+        const CopyChange target{*id, &scope, 9, &new_sources};
+        REQUIRE(writer->apply({&target, 1}).has_value());
         REQUIRE(flush_writer(*writer).has_value());
         const auto check_published = [&](const Snapshot& snapshot) {
             CHECK(get(snapshot, "k1") == std::optional<std::string>("new1"));
@@ -857,7 +857,7 @@ TEST_SUITE("index store snapshot") {
             REQUIRE(snapshot.has_value());
             check_published(*snapshot);
         }
-        CHECK_FALSE(writer->publish({&target, 1}).has_value());
+        CHECK_FALSE(writer->apply({&target, 1}).has_value());
 
         REQUIRE(close_writer(*writer).has_value());
         auto closed = Snapshot::open(dir.str());

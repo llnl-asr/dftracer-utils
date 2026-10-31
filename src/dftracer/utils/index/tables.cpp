@@ -221,6 +221,24 @@ bool builtin(FileBuild& build, store::IndexExtension ext) {
     return false;
 }
 
+constexpr std::uint32_t AGG_META_VERSION = 0;
+
+bool builtin_ext(Ext ext) { return ext != Ext::Plugin && ext != Ext::Host; }
+
+kv::NamespaceSpec agg_meta_spec(dstd::StringView name) {
+    kv::NamespaceSpec spec;
+    const std::string full = store_layout::agg_meta_namespace_name(
+        std::string_view(name.data(), name.size()));
+    spec.name.assign(full.data(), full.size());
+    spec.format_version = AGG_META_VERSION;
+    return spec;
+}
+
+Result<void> invalid_result(std::string_view message) {
+    return dstd::Unexpected<dstd::Error>(
+        dstd::Error(dstd::Condition::InvalidArgument, message));
+}
+
 }  // namespace
 
 dftracer::utils::store::NamespaceSpec ext_spec(store::IndexExtension ext) {
@@ -665,6 +683,103 @@ void fail_extension(FileBuild& build, store::IndexExtension ext,
                     std::uint64_t params_hash) {
     if (!builtin(build, ext)) return;
     IndexAccess::fail(build, ext_spec(ext), params_hash);
+}
+
+coro::CoroTask<Result<void>> stage(FileBuild& build) {
+    return IndexAccess::stage(build);
+}
+
+coro::CoroTask<Result<void>> put_agg_meta(const Index& index,
+                                          dstd::StringView name,
+                                          dstd::StringView payload) {
+    auto opened = IndexAccess::open_store(index);
+    if (!opened) co_return dstd::Unexpected<dstd::Error>(opened.error());
+    kv::Store store = std::move(*opened);
+    auto registered = store.ns(agg_meta_spec(name));
+    if (!registered)
+        co_return dstd::Unexpected<dstd::Error>(registered.error());
+    const kv::Namespace ns = *registered;
+    const kv::ScopeKey scope = kv::ScopeKey::root();
+    const std::string key =
+        file_key(Ext::Agg, layout::agg_kind::META,
+                 std::string_view(name.data(), name.size()));
+    const std::string value =
+        layout::with_header(Ext::Agg, layout::agg_kind::META,
+                            std::string_view(payload.data(), payload.size()));
+    kv::Batch batch = store.building_batch(ns, scope);
+    batch.put(dstd::ByteView(key), dstd::ByteView(value));
+    auto written = co_await store.commit(std::move(batch));
+    if (!written) co_return dstd::Unexpected<dstd::Error>(written.error());
+    const kv::Publish target{&ns, &scope, 0, nullptr};
+    auto published =
+        co_await store.publish(dstd::Span<const kv::Publish>(&target, 1));
+    if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
+    note_applied(IndexAccess::root(index),
+                 dstd::Span<const kv::Publish>(&target, 1));
+    co_return Result<void>{};
+}
+
+coro::CoroTask<Result<void>> delete_agg_meta(const Index& index,
+                                             dstd::StringView name) {
+    auto found = IndexAccess::find_store(index);
+    if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
+    if (!*found) co_return Result<void>{};
+    kv::Store store = **found;
+    auto registered = store.ns(agg_meta_spec(name));
+    if (!registered)
+        co_return dstd::Unexpected<dstd::Error>(registered.error());
+    const kv::Namespace ns = *registered;
+    const kv::ScopeKey scope = kv::ScopeKey::root();
+    auto taken = store.snapshot();
+    if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
+    if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
+        co_return Result<void>{};
+    const kv::Publish target{&ns, &scope, 0, nullptr,
+                             kv::Publish::Change::Dropped};
+    auto published =
+        co_await store.publish(dstd::Span<const kv::Publish>(&target, 1));
+    if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
+    note_applied(IndexAccess::root(index),
+                 dstd::Span<const kv::Publish>(&target, 1));
+    co_return Result<void>{};
+}
+
+coro::CoroTask<Result<void>> remove_extension(
+    const Index& index, store::IndexExtension ext,
+    dstd::Span<const dstd::StringView> paths) {
+    if (!builtin_ext(ext))
+        co_return invalid_result("index: not a built-in extension");
+    auto found = IndexAccess::find_store(index);
+    if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
+    if (!*found) co_return Result<void>{};
+    kv::Store store = **found;
+    auto registered = store.ns(ext_spec(ext));
+    if (!registered)
+        co_return dstd::Unexpected<dstd::Error>(registered.error());
+    const kv::Namespace ns = *registered;
+    auto taken = store.snapshot();
+    if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
+    dstd::Vector<kv::ScopeKey> scopes;
+    scopes.reserve(paths.size());
+    for (const dstd::StringView path : paths) {
+        kv::ScopeKey scope = kv::ScopeKey::file(path);
+        if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
+            continue;
+        scopes.push_back(std::move(scope));
+    }
+    if (scopes.empty()) co_return Result<void>{};
+    dstd::Vector<kv::Publish> targets;
+    targets.reserve(scopes.size());
+    for (const kv::ScopeKey& scope : scopes) {
+        targets.push_back(
+            kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
+    }
+    auto published = co_await store.publish(
+        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+    if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
+    note_applied(IndexAccess::root(index),
+                 dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+    co_return Result<void>{};
 }
 
 }  // namespace dftracer::utils::index

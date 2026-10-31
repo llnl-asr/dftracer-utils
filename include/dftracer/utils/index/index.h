@@ -77,8 +77,14 @@ class FileBuild {
     /// written must be finished before commit().
     void finish(store::IndexExtension ext, std::uint64_t params_hash);
 
-    /// Publishes every extension of the build in one record, so a reader sees
-    /// all of them or none. The build must stay alive until the task ends.
+    /// Drops the file's copy of the extension in the same record as the
+    /// commit. An extension the build neither writes nor clears keeps its
+    /// copy. Writing and clearing one extension is an error.
+    void clear(store::IndexExtension ext);
+
+    /// Publishes every extension of the build, the failed ones and the cleared
+    /// ones in one record, so a reader sees all of them or none. The build must
+    /// stay alive until the task ends.
     coro::CoroTask<dstd::Expected<void, dstd::Error>> commit();
 
    private:

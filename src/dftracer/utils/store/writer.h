@@ -81,12 +81,18 @@ struct NamespaceId {
     }
 };
 
-/// One building copy for Writer::publish.
-struct PublishTarget {
+enum class ChangeKind : std::uint8_t { Ready, Failed, Dropped };
+
+/// One copy state change for Writer::apply. Ready publishes the building copy
+/// of `scope` with `params_hash` and `sources`. Failed records a Failed copy
+/// with `params_hash`. Dropped hides the whole scope. Only Ready reads
+/// `sources`.
+struct CopyChange {
     NamespaceId namespace_id;
     const ScopeKey* scope = nullptr;
     std::uint64_t params_hash = 0;
     const dstd::Vector<SourceStat>* sources = nullptr;
+    ChangeKind kind = ChangeKind::Ready;
 };
 
 class Writer;
@@ -126,14 +132,15 @@ class Writer {
     /// it, until publish() makes it the copy readers see. A plain batch of a
     /// scope whose copy is building is InvalidArgument at commit.
     Batch building_batch(NamespaceId namespace_id, const ScopeKey& scope);
-    /// Makes the building copy of each target the copy readers see, with its
-    /// `params_hash` and `sources` (one per path, or none). All targets go in
-    /// one record, so a reader sees all of them or none. Call flush() first,
-    /// so that record never comes before one of their segments.
-    /// InvalidArgument, and nothing published, when a target has no building
-    /// copy or names a copy twice.
-    dstd::Expected<void, dstd::Error> publish(
-        dstd::Span<const PublishTarget> targets);
+    /// Applies every change in one record, so a reader sees all of them or
+    /// none. A Ready change makes the building copy of its scope the copy
+    /// readers see, with its `params_hash` and `sources` (one per path, or
+    /// none). Call flush() first, so that record never comes before one of
+    /// their segments. InvalidArgument, and nothing applied, when a change has
+    /// a null scope, an unknown namespace or wrong sources, when a Ready change
+    /// has no building copy, or when two changes name one copy.
+    dstd::Expected<void, dstd::Error> apply(
+        dstd::Span<const CopyChange> changes);
 
     /// InvalidArgument on a closed writer, an unknown namespace, an invalid
     /// batch, or a copy with other params hash or sources than its first. The
@@ -265,6 +272,19 @@ class Writer {
     dstd::Unexpected<dstd::Error> busy_error();
     void latch(const dstd::Error& error);
     dstd::Optional<dstd::Error> latched() const;
+
+    /// The three below create the PendingBatch for one change and update the
+    /// copy bookkeeping. They hold the writer lock and cannot fail.
+    PendingBatch* publish_locked(const NamespaceEntry& namespace_entry,
+                                 const ScopeEntry& scope_entry,
+                                 CopyEntry& copy_entry, const ScopeKey& scope,
+                                 const CopyChange& change);
+    PendingBatch* fail_locked(const NamespaceEntry& namespace_entry,
+                              const ScopeEntry& scope_entry,
+                              const ScopeKey& scope, std::uint64_t params_hash);
+    PendingBatch* drop_locked(const NamespaceEntry& namespace_entry,
+                              const ScopeEntry& scope_entry,
+                              const ScopeKey& scope);
 
     friend struct WriterTestHook;
 

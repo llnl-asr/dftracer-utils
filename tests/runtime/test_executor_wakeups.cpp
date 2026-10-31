@@ -45,10 +45,12 @@ std::chrono::microseconds cpu_time() {
 TEST_SUITE("ExecutorWakeups") {
     TEST_CASE("idle workers between bursts do not poll on the short timer") {
         // With every worker on the backoff ladder a gap costs about 8 switches
-        // per worker (about 255 here), and with one poller about 80.
+        // per worker (about 255 here), and with one poller about 80. A loaded
+        // 224-thread node measured up to 143 with one poller, so the bound
+        // sits between that and the ladder.
         constexpr std::size_t THREADS = 32;
         constexpr int BURSTS = 20;
-        [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES_PER_GAP = 120;
+        [[maybe_unused]] constexpr std::int64_t MAX_SWITCHES_PER_GAP = 190;
 
         Runtime rt(THREADS);
         auto tiny = []() -> coro::CoroTask<void> { co_return; };

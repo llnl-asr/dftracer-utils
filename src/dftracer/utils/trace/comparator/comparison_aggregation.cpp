@@ -444,7 +444,7 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
     dstd::HashMap<WindowKey, WindowMax, WindowKeyHash> per_window;
     {
         GroupCache groups(windows, filter, &dst);
-        for (const auto& [key, p] : windows.rows) {
+        for (const auto& [key, p] : windows.sums) {
             const RowGroup& g = groups.of(key.cat, key.name);
             if (!g.kept) continue;
             auto& w = per_window[WindowKey{g.key, key.window}];

@@ -131,20 +131,26 @@ class Runner {
     struct Stripe {
         std::mutex mu;
         AggQueryResult::Rows rows;
+        AggQueryResult::SumRows sums;
         /// One list per file, so an append under the lock moves no moments.
         dstd::Vector<dstd::Vector<Moments>> moments;
         void add(const dstd::Vector<Row*>& part);
+        void add_sums(const dstd::Vector<Row*>& part);
         void drain(bool offset);
     };
     static std::size_t stripe_of(const AggKey& key) {
         return (AggKeyHash{}(key) >> 32U) % MERGE_STRIPES;
     }
-    using Values = AggQueryResult::Rows::value_container_type;
     /// Stripes moved into the result at once. Each wave grows the result by
     /// its rows only and frees its stripes, so the peak stays near one copy.
     static constexpr std::size_t JOIN_WAVE = 8;
+    bool sums_rows() const { return rules.q.sums_only && !rules.q.quantiles; }
     coro::CoroTask<void> collect();
-    coro::CoroTask<void> move_task(std::size_t at, Values* values,
+    template <class Map>
+    coro::CoroTask<void> join(Map Stripe::* member, Map& into);
+    template <class Map>
+    coro::CoroTask<void> move_task(Map Stripe::* member, std::size_t at,
+                                   typename Map::value_container_type* values,
                                    std::size_t offset);
     coro::CoroTask<void> drain_task(std::size_t at);
 
@@ -307,6 +313,18 @@ void Runner::Stripe::add(const dstd::Vector<Row*>& part) {
     }
 }
 
+void Runner::Stripe::add_sums(const dstd::Vector<Row*>& part) {
+    for (Row* row : part) {
+        const agg::AggPartial& p = row->second;
+        AggSums one{p.count, p.duration, p.size};
+        auto it = sums.find(row->first);
+        if (it == sums.end())
+            sums.emplace(row->first, one);
+        else
+            it->second.merge(one);
+    }
+}
+
 void Runner::Stripe::drain(bool offset) {
     dstd::Vector<std::pair<std::size_t, const Moments*>> order;
     for (const auto& file : moments) {
@@ -372,7 +390,10 @@ void Runner::submit(std::size_t seq, std::size_t sub,
         std::lock_guard<std::mutex> lock(stripe.mu);
         if (!moments[at].empty())
             stripe.moments.push_back(std::move(moments[at]));
-        stripe.add(parts[at]);
+        if (sums_rows())
+            stripe.add_sums(parts[at]);
+        else
+            stripe.add(parts[at]);
     }
 }
 
@@ -424,13 +445,21 @@ coro::CoroTask<void> Runner::run() {
         });
     }
     co_await collect();
-    out.stats.groups = out.rows.size();
+    out.stats.groups = out.rows.size() + out.sums.size();
 }
 
 // A key lives in one stripe, so the stripes join without a lookup.
 coro::CoroTask<void> Runner::collect() {
+    co_await join(&Stripe::rows, out.rows);
+    co_await join(&Stripe::sums, out.sums);
+}
+
+template <class Map>
+coro::CoroTask<void> Runner::join(Map Stripe::* member, Map& into) {
+    using Values = typename Map::value_container_type;
     std::size_t total = 0;
-    for (const Stripe& stripe : stripes) total += stripe.rows.size();
+    for (const Stripe& stripe : stripes) total += (stripe.*member).size();
+    if (total == 0) co_return;
     Values values;
     values.reserve(total);
     for (std::size_t first = 0; first < MERGE_STRIPES; first += JOIN_WAVE) {
@@ -439,25 +468,28 @@ coro::CoroTask<void> Runner::collect() {
         std::size_t end = values.size();
         for (std::size_t at = first; at < last; ++at) {
             offsets[at - first] = end;
-            end += stripes[at].rows.size();
+            end += (stripes[at].*member).size();
         }
         values.resize(end);
         co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
             for (std::size_t at = first; at < last; ++at)
-                scope.spawn([this, at, values = &values,
+                scope.spawn([this, member, at, values = &values,
                              offset = offsets[at - first]](CoroScope&) {
-                    return move_task(at, values, offset);
+                    return move_task(member, at, values, offset);
                 });
             co_return;
         });
     }
-    out.rows.replace(std::move(values));
+    into.replace(std::move(values));
 }
 
-coro::CoroTask<void> Runner::move_task(std::size_t at, Values* values,
-                                       std::size_t offset) {
-    Values part = std::move(stripes[at].rows).extract();
-    stripes[at].rows = AggQueryResult::Rows();
+template <class Map>
+coro::CoroTask<void> Runner::move_task(
+    Map Stripe::* member, std::size_t at,
+    typename Map::value_container_type* values, std::size_t offset) {
+    Map& rows = stripes[at].*member;
+    auto part = std::move(rows).extract();
+    rows = Map();
     std::move(part.begin(), part.end(),
               values->begin() + static_cast<std::ptrdiff_t>(offset));
     co_return;

@@ -838,8 +838,9 @@ TEST_SUITE("AggQuery") {
             AggQueryResult r = run(q);
             const auto truth =
                 reference(fx.events, ask, make_config(interval_us));
-            REQUIRE(r.rows.size() == truth.size());
-            for (const auto& [k, p] : r.rows) {
+            CHECK(r.rows.empty());
+            REQUIRE(r.sums.size() == truth.size());
+            for (const auto& [k, p] : r.sums) {
                 const Key key = row_key(r, k);
                 const auto t = truth.find(key);
                 REQUIRE(t != truth.end());

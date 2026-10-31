@@ -15,6 +15,7 @@ using dftracer::utils::dataframe::FieldStat;
 using dftracer::utils::index::schemas::dft::agg::AggPartial;
 using dftracer::utils::trace::AggKey;
 using dftracer::utils::trace::AggQueryResult;
+using dftracer::utils::trace::AggSums;
 
 // `m2` holds the central second moment, sum((x - mean)^2), about the running
 // mean (held as `shift`, with `cmean` the remainder); the caller passes both.
@@ -50,13 +51,13 @@ static void add_row(AggQueryResult& result, std::string_view cat,
     key.name = result.strings().get_or_insert(name);
     key.pid = pid;
     key.window = window;
-    AggPartial p;
+    AggSums p;
     p.count = count;
     for (uint64_t i = 0; i < count; ++i) {
         p.duration.add(dur_total / count);
         if (size_total > 0) p.size.add(size_total / count);
     }
-    result.rows.emplace(key, std::move(p));
+    result.sums.emplace(key, p);
 }
 
 static CollapsedMap collapse(const AggQueryResult& windows) {

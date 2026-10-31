@@ -111,7 +111,8 @@ struct AggQuery {
     /// The rows need only the count and the n and sum of duration and size.
     /// A partial a split would re-read is split by its time bins instead, so
     /// its rows have no times, minima, maxima, moments or distinct ids.
-    /// Takes effect only without quantiles.
+    /// Takes effect only without quantiles, and then the rows are in
+    /// AggQueryResult::sums.
     bool sums_only = false;
 
     /// False reads no chunk: a partial or a file that only a re-read could
@@ -191,14 +192,31 @@ struct AggQueryStats {
     std::size_t groups = 0;
 };
 
+/// The row of a sums_only query: the count and the n and sum of duration and
+/// size, a third of the size of a full partial.
+struct AggSums {
+    std::uint64_t count = 0;
+    dataframe::FieldStat duration;
+    dataframe::FieldStat size;
+
+    void merge(const AggSums& o) {
+        count += o.count;
+        duration.merge(o.duration);
+        size.merge(o.size);
+    }
+};
+
 class AggQueryResult {
    public:
     using Rows =
         dstd::HashMap<AggKey, index::schemas::dft::agg::AggPartial, AggKeyHash>;
+    using SumRows = dstd::HashMap<AggKey, AggSums, AggKeyHash>;
 
     AggQueryResult() : strings_(dstd::make_unique<dstd::StringIntern>()) {}
 
+    /// Empty for a sums_only query, which fills `sums`.
     Rows rows;
+    SumRows sums;
     AggQueryStats stats;
 
     /// The text of a cat, name or extra id, and of an arg id in a row.

@@ -8,6 +8,25 @@
 
 namespace dftracer::utils {
 
+/// Nanoseconds on the steady clock. Only differences are meaningful.
+inline std::int64_t steady_now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+/// Milliseconds on the steady clock. Only differences are meaningful.
+inline std::int64_t steady_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+/// Milliseconds since `t0_ms`, a value from steady_now_ms().
+inline std::int64_t elapsed_ms(std::int64_t t0_ms) {
+    return steady_now_ms() - t0_ms;
+}
+
 class Timer {
    public:
     Timer(bool autostart = false, bool verbose = false);

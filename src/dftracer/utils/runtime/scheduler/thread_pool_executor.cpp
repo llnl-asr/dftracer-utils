@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/monitor.h>
@@ -20,8 +21,7 @@
 namespace dftracer::utils {
 
 ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
-    : last_progress_ns_(
-          std::chrono::steady_clock::now().time_since_epoch().count()),
+    : last_progress_ns_(steady_now_ns()),
       idle_timeout_(config.idle_timeout),
       deadlock_timeout_s_(config.deadlock_timeout.count()),
       keepalive_(config.elastic_keepalive),
@@ -335,9 +335,7 @@ void ThreadPoolExecutor::ensure_running_worker() {
 void ThreadPoolExecutor::enter_blocking() {
     auto* ctx = static_cast<WorkerContext*>(get_current_worker_context());
     if (!ctx || !ctx->holds_permit) return;
-    ctx->blocking_since_ns.store(
-        std::chrono::steady_clock::now().time_since_epoch().count(),
-        std::memory_order_relaxed);
+    ctx->blocking_since_ns.store(steady_now_ns(), std::memory_order_relaxed);
     ctx->blk_state.store(BLK_SYSCALL, std::memory_order_release);
     // Only the 0->1 transition can find the sysmon parked; skip the wake else.
     // Notify under sysmon_mutex_ so the wake cannot slip between the sysmon's
@@ -382,8 +380,7 @@ void ThreadPoolExecutor::sysmon_loop() {
         if (!running_.load(std::memory_order_acquire)) break;
         if (blocked_workers_.load(std::memory_order_acquire) == 0) continue;
 
-        const std::int64_t now =
-            std::chrono::steady_clock::now().time_since_epoch().count();
+        const std::int64_t now = steady_now_ns();
         int handed = 0;
         {
             std::unique_lock<std::mutex> wl(workers_mutex_, std::try_to_lock);

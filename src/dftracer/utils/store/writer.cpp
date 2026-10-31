@@ -1,4 +1,6 @@
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/varint.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/store/extent_size.h>
@@ -55,10 +57,6 @@ int compare_bytes(ByteView a, ByteView b) {
     return 0;
 }
 
-std::size_t align_up(std::size_t value, std::size_t alignment) {
-    return (value + alignment - 1U) & ~(alignment - 1U);
-}
-
 std::size_t encoded_entry_size(std::size_t key_length,
                                std::uint64_t value_length) {
     const bool big = value_length > BIG_VALUE_BYTES;
@@ -103,14 +101,13 @@ struct SegmentSizer {
     }
 
     std::size_t size() const {
-        return align_up(index_bytes + body_bytes, SEGMENT_ALIGN);
+        return bits::align_up(index_bytes + body_bytes, SEGMENT_ALIGN);
     }
 };
 
 std::uint64_t random_bits() {
     static std::atomic<std::uint64_t> counter{0};
-    const auto now =
-        std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto now = steady_now_ns();
     std::uint64_t seed = static_cast<std::uint64_t>(now) ^
                          (static_cast<std::uint64_t>(::getpid()) << 32U) ^
                          reinterpret_cast<std::uintptr_t>(&seed) ^

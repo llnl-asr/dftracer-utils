@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/symbolize.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <unistd.h>
 
@@ -95,12 +96,6 @@ void make_timestamp(char* out, std::size_t n) {
     std::snprintf(out, n, "%04d-%02d-%02d %02d:%02d:%02d.%03d",
                   tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
                   tm.tm_min, tm.tm_sec, static_cast<int>(ms));
-}
-
-long long steady_now_ns() {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
 }
 
 // Per-scope state, heap-allocated so it follows a coroutine across threads.

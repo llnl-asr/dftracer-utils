@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -250,8 +251,7 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
 }
 
 std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot() {
-    if (std::chrono::steady_clock::now().time_since_epoch().count() <
-        next_look_.load(std::memory_order_acquire)) {
+    if (steady_now_ns() < next_look_.load(std::memory_order_acquire)) {
         std::shared_lock<std::shared_mutex> shared(published_mutex_);
         if (published_ != nullptr &&
             published_version_ == version_.load(std::memory_order_acquire))

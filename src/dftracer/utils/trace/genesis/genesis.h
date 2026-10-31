@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_GENESIS_GENESIS_H
 #define DFTRACER_UTILS_TRACE_GENESIS_GENESIS_H
 
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
@@ -126,9 +127,7 @@ struct GroupProgress {
     std::function<void()> on_update;
 
     void enter(Phase p) noexcept {
-        phase_since_ns.store(
-            std::chrono::steady_clock::now().time_since_epoch().count(),
-            std::memory_order_relaxed);
+        phase_since_ns.store(steady_now_ns(), std::memory_order_relaxed);
         phase.store(p, std::memory_order_relaxed);
     }
 

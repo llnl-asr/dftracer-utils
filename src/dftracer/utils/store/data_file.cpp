@@ -1,3 +1,5 @@
+#include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
@@ -77,11 +79,6 @@ std::string path_string(dstd::StringView path) {
     return std::string(path.data(), path.size());
 }
 
-std::uint64_t align_up(std::uint64_t value, std::uint64_t alignment) {
-    const std::uint64_t remainder = value % alignment;
-    return remainder == 0 ? value : value + (alignment - remainder);
-}
-
 dstd::Expected<void, dstd::Error> pwrite_all(int fd, const std::uint8_t* data,
                                              std::size_t size,
                                              std::uint64_t offset) {
@@ -125,8 +122,7 @@ ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
 }
 
 std::uint64_t random_writer_id() {
-    const auto now =
-        std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto now = steady_now_ns();
     std::uint64_t seed = static_cast<std::uint64_t>(now) ^
                          (static_cast<std::uint64_t>(::getpid()) << 32U) ^
                          reinterpret_cast<std::uintptr_t>(&seed);
@@ -221,7 +217,8 @@ dstd::Expected<std::uint64_t, dstd::Error> read_record_length(
     if (kind < 1 || kind > 3) return parse_error();
     const std::uint32_t body_length = read_u32_le(data + 12);
     const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
-    const std::uint64_t padded_size = align_up(crc_end, FILE_HEADER_BYTES);
+    const std::uint64_t padded_size =
+        bits::align_up(crc_end, FILE_HEADER_BYTES);
     if (padded_size < crc_end || padded_size > file_size - offset) {
         return parse_error();
     }
@@ -686,7 +683,7 @@ dstd::Expected<DictRef, dstd::Error> DataFileWriter::append_dict(
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() || bytes.size() > PAGE_DICT_BYTES) return invalid_error();
     dstd::Vector<std::uint8_t> padded(
-        align_up(bytes.size(), EXTENT_ALIGN_BYTES), std::uint8_t{0});
+        bits::align_up(bytes.size(), EXTENT_ALIGN_BYTES), std::uint8_t{0});
     std::memcpy(padded.data(), bytes.data(), bytes.size());
     DictRef ref;
     ref.offset = reserve_range(padded.size(), EXTENT_ALIGN_BYTES,
@@ -746,7 +743,7 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
                                             io_fault::WriteKind kind) {
     std::uint64_t current = next_offset_.load(std::memory_order_relaxed);
     for (;;) {
-        const std::uint64_t start = align_up(current, align);
+        const std::uint64_t start = bits::align_up(current, align);
         if (next_offset_.compare_exchange_weak(current, start + length,
                                                std::memory_order_acq_rel,
                                                std::memory_order_relaxed)) {
@@ -1846,7 +1843,7 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
     for (std::size_t at = 0; at < dicts.size(); ++at) {
         if (at > 0 && dicts[at - 1].offset == dicts[at].offset) continue;
         const std::uint64_t length =
-            align_up(dicts[at].length, EXTENT_ALIGN_BYTES);
+            bits::align_up(dicts[at].length, EXTENT_ALIGN_BYTES);
         if (dicts[at].offset > scan.report.file_bytes ||
             length > scan.report.file_bytes - dicts[at].offset) {
             return parse_error();
@@ -1956,7 +1953,7 @@ dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
         const std::uint64_t covered = space_range_end_at(
             dstd::Span<const SpaceRange>(scan.ranges), offset);
         if (covered != 0) {
-            offset = align_up(covered, FILE_HEADER_BYTES);
+            offset = bits::align_up(covered, FILE_HEADER_BYTES);
             continue;
         }
         auto read =
@@ -1970,7 +1967,7 @@ dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
         const std::uint32_t kind = read_u32_le(data + 8);
         const std::uint32_t body_length = read_u32_le(data + 12);
         const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
-        const std::uint64_t padded = align_up(crc_end, FILE_HEADER_BYTES);
+        const std::uint64_t padded = bits::align_up(crc_end, FILE_HEADER_BYTES);
         if (kind < 1 || kind > 3 || padded < crc_end ||
             padded > file_bytes - offset) {
             offset += FILE_HEADER_BYTES;

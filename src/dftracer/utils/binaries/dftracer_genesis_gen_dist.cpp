@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -334,9 +335,7 @@ class Progress {
     }
 
     std::int64_t elapsed_ms() const {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::steady_clock::now() - start_)
-            .count();
+        return dftracer::utils::elapsed_ms(start_ms_);
     }
 
     std::string prefix(std::int64_t now_ms) const {
@@ -411,8 +410,7 @@ class Progress {
                               std::chrono::milliseconds(GROUP_INTERVAL).count())
             return;
         last_groups_ms_ = now_ms;
-        const std::int64_t now_ns =
-            std::chrono::steady_clock::now().time_since_epoch().count();
+        const std::int64_t now_ns = steady_now_ns();
         for (std::size_t w = 0; w < workers_; ++w) {
             const Slot& s = slots_[w];
             const genesis::RunGroup* g = s.group.load();
@@ -443,8 +441,7 @@ class Progress {
     }
 
     const std::string tag_;
-    const std::chrono::steady_clock::time_point start_ =
-        std::chrono::steady_clock::now();
+    const std::int64_t start_ms_ = steady_now_ms();
     const std::size_t total_groups_;
     const std::uint64_t total_bytes_;
     const std::uint64_t budget_;

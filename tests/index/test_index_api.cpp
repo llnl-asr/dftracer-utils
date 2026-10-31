@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -980,5 +981,74 @@ TEST_CASE("an old-API write after a FileBuild commit is not skipped") {
         old_write("c", 5, false);
         CHECK(db.extension_paths(file_id, IndexExtension::Zonemap) ==
               std::vector<std::string>{"c"});
+    }
+}
+
+TEST_CASE("many FileBuild commits mixed with old writes and closes") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    namespace records = dftu_utils_test::index_records;
+    const std::string root = env.get_dir() + "/.dftindex";
+    for (int round = 0; round < 12; ++round) {
+        auto opened = Index::open(root);
+        REQUIRE(opened.has_value());
+        const std::string path =
+            "/traces/many_" + std::to_string(round) + ".pfw.gz";
+        const SourceStat stat =
+            stat_of(1000 + static_cast<std::uint64_t>(round), 4000, 9);
+        auto build = take(opened->build(path, stat));
+        put_members(build, 2);
+        put_stats(build, 2);
+        REQUIRE(run(build.commit()).has_value());
+
+        IndexDatabase db(root);
+        const int file_id = db.get_file_info_id(path);
+        CHECK(file_id >= 0);
+        {
+            auto write = db.begin_write();
+            const int other = dftu_utils_test::register_test_file(
+                *write, path + ".old", stat.hash, stat.mtime, stat.size);
+            records::put_path(*write, IndexExtension::Zonemap, other, "a");
+            records::put_manifest(*write, other, IndexExtension::Zonemap, 5);
+            write->commit();
+        }
+        if (round % 3 == 2) {
+            index_store::close_index_writers();
+        }
+    }
+}
+
+TEST_CASE("FileBuild commits from concurrent tasks and an open reader") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const std::string root = env.get_dir() + "/.dftindex";
+    IndexDatabase db(root);
+    CHECK(db.get_file_info_id("/traces/none.pfw.gz") < 0);
+    auto opened = Index::open(root);
+    REQUIRE(opened.has_value());
+    constexpr int FILES = 24;
+    const auto one = [](Index index, int i) -> coro::CoroTask<bool> {
+        const std::string path =
+            "/traces/conc_" + std::to_string(i) + ".pfw.gz";
+        auto build = index.build(path, stat_of(1000, 4000, 9));
+        if (!build) co_return false;
+        put_members(*build, 2);
+        auto committed = co_await build->commit();
+        co_return committed.has_value();
+    };
+    const auto all = [&]() -> coro::CoroTask<int> {
+        std::vector<coro::CoroTask<bool>> tasks;
+        for (int i = 0; i < FILES; ++i) tasks.push_back(one(*opened, i));
+        auto results = co_await coro::when_all(std::move(tasks));
+        int ok = 0;
+        for (bool r : results) ok += r ? 1 : 0;
+        co_return ok;
+    };
+    for (int round = 0; round < 4; ++round) {
+        CHECK(dftracer::utils::default_runtime().submit(all()).get() == FILES);
+    }
+    for (int i = 0; i < FILES; ++i) {
+        CHECK(db.get_file_info_id("/traces/conc_" + std::to_string(i) +
+                                  ".pfw.gz") >= 0);
     }
 }

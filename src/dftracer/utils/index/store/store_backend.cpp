@@ -173,6 +173,13 @@ void StoreRoot::note_published(const std::string& name,
                                std::uint64_t params_hash,
                                const dstd::Vector<kv::SourceStat>* sources) {
     mark_committed(name, scope, params_hash, sources);
+    // The id table is seeded from the Members scopes, so a file a FileBuild
+    // adds needs its id now for readers that opened before the commit.
+    if (scope.kind == kv::ScopeKind::File && scope.paths.size() == 1 &&
+        name == store_layout::namespace_name(layout::Ext::Members)) {
+        file_id_for(
+            std::string_view(scope.paths[0].data(), scope.paths[0].size()));
+    }
 }
 
 void StoreRoot::note_dropped(const std::string& name,

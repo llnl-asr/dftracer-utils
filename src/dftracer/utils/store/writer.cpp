@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/varint.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <dftracer/utils/store/writer.h>
@@ -52,15 +53,6 @@ int compare_bytes(ByteView a, ByteView b) {
     if (a.size() < b.size()) return -1;
     if (a.size() > b.size()) return 1;
     return 0;
-}
-
-std::size_t varint_size(std::uint64_t value) {
-    std::size_t size = 1;
-    while (value >= 0x80U) {
-        value >>= 7U;
-        ++size;
-    }
-    return size;
 }
 
 std::size_t align_up(std::size_t value, std::size_t alignment) {

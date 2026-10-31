@@ -34,9 +34,11 @@ class Cursor {
     explicit Cursor(ByteView bytes) : bytes_(bytes) {}
 
     bool varint(std::uint64_t& out) {
-        auto value = decode_varint(bytes_, at_);
-        if (!value) return false;
-        out = *value;
+        if (at_ >= bytes_.size()) return false;
+        const auto* begin = data_of(bytes_);
+        const std::uint8_t* p = begin + at_;
+        if (!read_varint(p, begin + bytes_.size(), out)) return false;
+        at_ = static_cast<std::size_t>(p - begin);
         return true;
     }
 

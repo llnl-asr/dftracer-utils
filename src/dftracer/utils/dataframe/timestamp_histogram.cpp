@@ -106,20 +106,6 @@ std::vector<double> TimestampHistogram::expansion_weights(
     return weights;
 }
 
-// Varint encoding helpers
-namespace {
-
-std::uint64_t decode_varint(const std::uint8_t*& ptr, const std::uint8_t* end) {
-    std::uint64_t result = 0;
-    if (!read_varint(ptr, end, result)) {
-        ptr = end;
-        return 0;
-    }
-    return result;
-}
-
-}  // namespace
-
 std::vector<std::uint8_t> TimestampHistogram::serialize() const {
     std::vector<std::uint8_t> out;
     out.reserve(bins_.size() * 6 + 16);
@@ -145,14 +131,18 @@ TimestampHistogram TimestampHistogram::deserialize(const std::uint8_t* data,
     const auto* ptr = data;
     const auto* end = data + len;
 
-    hist.total_count_ = decode_varint(ptr, end);
-    std::uint64_t num_bins = decode_varint(ptr, end);
+    std::uint64_t num_bins = 0;
+    if (!read_varint(ptr, end, hist.total_count_)) return hist;
+    if (!read_varint(ptr, end, num_bins)) return hist;
 
     hist.bins_.reserve(static_cast<std::size_t>(num_bins));
     std::uint64_t prev_idx = 0;
-    for (std::uint64_t i = 0; i < num_bins && ptr < end; ++i) {
-        std::uint64_t delta = decode_varint(ptr, end);
-        std::uint64_t count = decode_varint(ptr, end);
+    for (std::uint64_t i = 0; i < num_bins; ++i) {
+        std::uint64_t delta = 0;
+        std::uint64_t count = 0;
+        if (!read_varint(ptr, end, delta) || !read_varint(ptr, end, count)) {
+            break;
+        }
         prev_idx += delta;
         hist.bins_.push_back({prev_idx, count});
     }

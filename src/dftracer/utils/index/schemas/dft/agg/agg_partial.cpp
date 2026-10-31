@@ -30,17 +30,10 @@ constexpr std::uint8_t KNOWN_FLAGS = 31;
 constexpr std::uint8_t STAT_DOMAIN_MASK = 3;
 constexpr std::uint8_t STAT_MOMENTS = 4;
 
-bool get_varint(LeReader& r, std::uint64_t& out) {
-    const std::uint8_t* p = r.position();
-    if (!read_varint(p, p + r.remaining(), out)) return false;
-    r.take(static_cast<std::size_t>(p - r.position()));
-    return true;
-}
-
 // Every element takes at least one byte, so a count above the bytes left is
 // malformed. Checking it first keeps a reserve small.
 bool get_count(LeReader& r, std::uint64_t limit, std::uint64_t& n) {
-    return get_varint(r, n) && n <= limit && n <= r.remaining();
+    return read_varint(r, n) && n <= limit && n <= r.remaining();
 }
 
 std::uint64_t mix(std::uint64_t id) {
@@ -82,13 +75,13 @@ bool get_stat(LeReader& r, FieldStat& s) {
     if (domain > static_cast<std::uint8_t>(FieldStatDomain::F64)) return false;
     s = FieldStat{};
     s.domain = static_cast<FieldStatDomain>(domain);
-    if (!get_varint(r, s.n) || !r.f64(s.sum)) return false;
+    if (!read_varint(r, s.n) || !r.f64(s.sum)) return false;
     if (s.domain == FieldStatDomain::F64) {
         if (!r.f64(s.min) || !r.f64(s.max)) return false;
     } else {
         std::uint64_t es = 0, emin = 0, emax = 0, carry = 0;
-        if (!get_varint(r, es) || !get_varint(r, emin) ||
-            !get_varint(r, emax) || !get_varint(r, carry)) {
+        if (!read_varint(r, es) || !read_varint(r, emin) ||
+            !read_varint(r, emax) || !read_varint(r, carry)) {
             return false;
         }
         s.esum = std::bit_cast<std::int64_t>(es);
@@ -286,7 +279,7 @@ bool DistinctIds::read_from(LeReader& r) {
         std::uint64_t prev = 0;
         for (std::uint64_t i = 0; i < n; ++i) {
             std::uint64_t d = 0;
-            if (!get_varint(r, d)) return false;
+            if (!read_varint(r, d)) return false;
             if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return false;
             prev += d;
             ids.push_back(prev);
@@ -303,7 +296,7 @@ bool DistinctIds::read_from(LeReader& r) {
         std::uint64_t prev = 0;
         for (std::uint64_t i = 0; i < n; ++i) {
             std::uint64_t d = 0;
-            if (!get_varint(r, d)) return false;
+            if (!read_varint(r, d)) return false;
             if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return false;
             prev += d;
             hashes.push_back(prev);
@@ -334,7 +327,7 @@ bool DistinctIds::skip(LeReader& r) {
     if (!get_count(r, limit, n)) return false;
     std::uint64_t d = 0;
     for (std::uint64_t i = 0; i < n; ++i)
-        if (!get_varint(r, d)) return false;
+        if (!read_varint(r, d)) return false;
     return true;
 }
 
@@ -561,11 +554,11 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
 
     std::uint8_t flags = 0;
     if (!r.u8(flags) || (flags & ~KNOWN_FLAGS) != 0) return bad();
-    if (!get_varint(r, p.count)) return bad();
+    if (!read_varint(r, p.count)) return bad();
     if ((flags & HAS_TIMES) != 0) {
         std::uint64_t span = 0, last = 0;
-        if (!get_varint(r, p.ts) || !get_varint(r, span) ||
-            !get_varint(r, last) || span > UINT64_MAX - p.ts ||
+        if (!read_varint(r, p.ts) || !read_varint(r, span) ||
+            !read_varint(r, last) || span > UINT64_MAX - p.ts ||
             last > UINT64_MAX - p.ts) {
             return bad();
         }
@@ -575,18 +568,18 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     if ((flags & HAS_DURATION) != 0 &&
         (!get_stat(r, p.duration) ||
          !get_quantiles(r, p.duration_q, keep.quantiles) ||
-         !get_varint(r, p.duration_values))) {
+         !read_varint(r, p.duration_values))) {
         return bad();
     }
     if ((flags & HAS_SIZE) != 0 &&
         (!get_stat(r, p.size) || !get_quantiles(r, p.size_q, keep.quantiles) ||
-         !get_varint(r, p.size_values))) {
+         !read_varint(r, p.size_values))) {
         return bad();
     }
     if ((flags & HAS_OFFSET) != 0) {
         if (!get_stat(r, p.offset) ||
             !get_quantiles(r, p.offset_q, keep.quantiles && keep.offset) ||
-            !get_varint(r, p.offset_values)) {
+            !read_varint(r, p.offset_values)) {
             return bad();
         }
         if (!keep.offset) {
@@ -610,7 +603,8 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     std::uint64_t prev = 0;
     for (std::uint64_t i = 0; i < n; ++i) {
         std::uint64_t d = 0, first = 0, len = 0;
-        if (!get_varint(r, d) || !get_varint(r, first) || !get_varint(r, len)) {
+        if (!read_varint(r, d) || !read_varint(r, first) ||
+            !read_varint(r, len)) {
             return bad();
         }
         if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return bad();
@@ -622,7 +616,7 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
 
     if ((flags & HAS_BINS) != 0) {
         std::uint64_t interval = 0;
-        if (!get_varint(r, interval) || interval == 0 ||
+        if (!read_varint(r, interval) || interval == 0 ||
             !get_count(r, UINT64_MAX, n) || n == 0) {
             return bad();
         }
@@ -634,10 +628,10 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
         for (std::uint64_t i = 0; i < n; ++i) {
             std::uint64_t dp = 0, t = 0, b = 0, missing = 0;
             TimeBin bin;
-            if (!get_varint(r, dp) || !get_varint(r, t) || !get_varint(r, b) ||
-                !get_varint(r, bin.count) || !get_varint(r, missing) ||
-                !get_varint(r, bin.duration_sum) ||
-                !get_varint(r, bin.size_n) || !get_varint(r, bin.size_sum) ||
+            if (!read_varint(r, dp) || !read_varint(r, t) ||
+                !read_varint(r, b) || !read_varint(r, bin.count) ||
+                !read_varint(r, missing) || !read_varint(r, bin.duration_sum) ||
+                !read_varint(r, bin.size_n) || !read_varint(r, bin.size_sum) ||
                 missing > bin.count) {
                 return bad();
             }

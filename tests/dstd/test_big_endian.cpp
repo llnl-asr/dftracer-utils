@@ -140,4 +140,57 @@ TEST_SUITE("big_endian") {
         CHECK(a == 5);
         CHECK_FALSE(r.varint(a));
     }
+
+    TEST_CASE("varint - size at the group boundaries") {
+        struct Case {
+            std::uint64_t value;
+            std::size_t bytes;
+        };
+        const Case cases[] = {{0, 1},
+                              {127, 1},
+                              {128, 2},
+                              {std::uint64_t{1} << 63, 10},
+                              {std::numeric_limits<std::uint64_t>::max(), 10}};
+        for (const auto& c : cases) {
+            CHECK(varint_size(c.value) == c.bytes);
+            std::string s;
+            append_varint(s, c.value);
+            CHECK(s.size() == c.bytes);
+        }
+    }
+
+    TEST_CASE("varint - zigzag round trip") {
+        const std::int64_t values[] = {
+            0, -1, 1, std::numeric_limits<std::int64_t>::min(),
+            std::numeric_limits<std::int64_t>::max()};
+        for (const std::int64_t v : values) {
+            CHECK(zigzag_decode(zigzag_encode(v)) == v);
+        }
+        CHECK(zigzag_encode(0) == 0);
+        CHECK(zigzag_encode(-1) == 1);
+        CHECK(zigzag_encode(1) == 2);
+        CHECK(zigzag_encode(std::numeric_limits<std::int64_t>::min()) ==
+              std::numeric_limits<std::uint64_t>::max());
+        CHECK(zigzag_encode(std::numeric_limits<std::int64_t>::max()) ==
+              std::numeric_limits<std::uint64_t>::max() - 1);
+    }
+
+    TEST_CASE("varint - LeReader overload refuses a truncated buffer") {
+        const std::uint8_t cut[] = {0x80, 0x80};
+        LeReader bad(cut, sizeof cut);
+        std::uint64_t value = 5;
+        CHECK_FALSE(read_varint(bad, value));
+        CHECK(value == 5);
+        CHECK(bad.remaining() == sizeof cut);
+        CHECK(bad.position() == cut);
+
+        const std::uint8_t two[] = {0x80, 0x01, 0x05};
+        LeReader r(two, sizeof two);
+        REQUIRE(read_varint(r, value));
+        CHECK(value == 128);
+        REQUIRE(read_varint(r, value));
+        CHECK(value == 5);
+        CHECK(r.remaining() == 0);
+        CHECK_FALSE(read_varint(r, value));
+    }
 }

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
@@ -16,16 +17,6 @@ constexpr double MAX_SCALED = 9007199254740992.0;
 constexpr double POW10[MAX_EXPONENT + 1] = {
     1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
-
-/// Zigzag of the two's complement bits, so a difference that wrapped still
-/// round-trips.
-std::uint64_t zigzag_bits(std::uint64_t bits) {
-    return (bits << 1U) ^ (0U - (bits >> 63U));
-}
-
-std::uint64_t unzigzag_bits(std::uint64_t z) {
-    return (z >> 1U) ^ (0U - (z & 1U));
-}
 
 /// False when v * 10^e is outside the encoder's range, NaN and infinities
 /// included.
@@ -84,7 +75,7 @@ void put_deltas(dstd::Vector<std::uint8_t>& out,
                 const dstd::Vector<std::uint64_t>& values) {
     std::uint64_t prev = 0;
     for (const std::uint64_t v : values) {
-        append_varint(out, zigzag_bits(v - prev));
+        append_varint(out, zigzag_encode(static_cast<std::int64_t>(v - prev)));
         prev = v;
     }
 }
@@ -103,7 +94,8 @@ void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
     std::uint64_t step_prev = 0;
     for (const std::uint64_t ts : block.ts) {
         const std::uint64_t step = ts - ts_prev;
-        append_varint(out, zigzag_bits(step - step_prev));
+        append_varint(
+            out, zigzag_encode(static_cast<std::int64_t>(step - step_prev)));
         step_prev = step;
         ts_prev = ts;
     }
@@ -119,7 +111,9 @@ void put_core(dstd::Vector<std::uint8_t>& out, const ChunkColumns& block) {
     std::uint64_t dur_prev = 0;
     for (std::size_t r = 0; r < block.has_dur.size(); ++r) {
         if (block.has_dur[r] == 0) continue;
-        append_varint(out, zigzag_bits(block.dur[r] - dur_prev));
+        append_varint(
+            out,
+            zigzag_encode(static_cast<std::int64_t>(block.dur[r] - dur_prev)));
         dur_prev = block.dur[r];
     }
     put_deltas(out, block.pid);
@@ -140,7 +134,8 @@ void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column) {
     if (column.kind != ColumnKind::Double) {
         std::uint64_t prev = 0;
         for (const std::uint64_t bits : column.bits) {
-            append_varint(out, zigzag_bits(bits - prev));
+            append_varint(
+                out, zigzag_encode(static_cast<std::int64_t>(bits - prev)));
             prev = bits;
         }
         return;
@@ -166,7 +161,8 @@ void put_column(dstd::Vector<std::uint8_t>& out, const ChunkColumn& column) {
         std::int64_t i = 0;
         if (!encodes_as(bits_double(bits), exponent, i)) continue;
         const auto value = static_cast<std::uint64_t>(i);
-        append_varint(out, zigzag_bits(value - prev));
+        append_varint(out,
+                      zigzag_encode(static_cast<std::int64_t>(value - prev)));
         prev = value;
     }
 }
@@ -183,17 +179,10 @@ void append_block(const ChunkColumns& block, std::size_t column_count,
         put_column(out, block.columns[k]);
 }
 
-bool get_varint(LeReader& r, std::uint64_t& out) {
-    const std::uint8_t* p = r.position();
-    if (!read_varint(p, p + r.remaining(), out)) return false;
-    r.take(static_cast<std::size_t>(p - r.position()));
-    return true;
-}
-
 /// Every element takes at least one byte, so a count above the bytes left is
 /// malformed and never reserves a large buffer.
 bool get_count(LeReader& r, std::uint64_t limit, std::uint64_t& n) {
-    return get_varint(r, n) && n <= limit && n <= r.remaining();
+    return read_varint(r, n) && n <= limit && n <= r.remaining();
 }
 
 bool get_gaps(LeReader& r, std::uint64_t rows, std::size_t n,
@@ -202,7 +191,7 @@ bool get_gaps(LeReader& r, std::uint64_t rows, std::size_t n,
     std::uint64_t prev = 0;
     for (std::size_t k = 0; k < n; ++k) {
         std::uint64_t gap = 0;
-        if (!get_varint(r, gap)) return false;
+        if (!read_varint(r, gap)) return false;
         if (k == 0) {
             if (gap >= rows) return false;
             prev = gap;
@@ -220,8 +209,8 @@ bool get_deltas(LeReader& r, std::size_t n, dstd::Vector<std::uint64_t>& out) {
     std::uint64_t prev = 0;
     for (std::size_t k = 0; k < n; ++k) {
         std::uint64_t z = 0;
-        if (!get_varint(r, z)) return false;
-        prev += unzigzag_bits(z);
+        if (!read_varint(r, z)) return false;
+        prev += static_cast<std::uint64_t>(zigzag_decode(z));
         out[k] = prev;
     }
     return true;
@@ -235,7 +224,7 @@ bool get_rle(LeReader& r, std::uint64_t rows, dstd::Vector<std::uint8_t>& out) {
     for (std::uint64_t i = 0; i < runs; ++i) {
         std::uint64_t length = 0;
         std::uint8_t value = 0;
-        if (!get_varint(r, length) || !r.u8(value) || length == 0 ||
+        if (!read_varint(r, length) || !r.u8(value) || length == 0 ||
             length > rows - at) {
             return false;
         }
@@ -253,7 +242,7 @@ bool get_rle(LeReader& r, std::uint64_t rows, std::size_t id_count,
     for (std::uint64_t i = 0; i < runs; ++i) {
         std::uint64_t length = 0;
         std::uint64_t value = 0;
-        if (!get_varint(r, length) || !get_varint(r, value) || length == 0 ||
+        if (!read_varint(r, length) || !read_varint(r, value) || length == 0 ||
             length > rows - at || value >= id_count) {
             return false;
         }
@@ -286,8 +275,8 @@ bool get_core(LeReader& r, ChunkColumns& block, std::size_t id_count) {
     for (std::size_t k = 0; k < steps.size(); ++k) {
         if (block.has_dur[k] == 0) continue;
         std::uint64_t z = 0;
-        if (!get_varint(r, z)) return false;
-        dur_prev += unzigzag_bits(z);
+        if (!read_varint(r, z)) return false;
+        dur_prev += static_cast<std::uint64_t>(zigzag_decode(z));
         block.dur[k] = dur_prev;
     }
     return get_deltas(r, steps.size(), block.pid) &&
@@ -303,7 +292,7 @@ bool get_column(LeReader& r, std::uint64_t rows, std::size_t id_count,
                 ChunkColumn& column) {
     std::uint64_t path = 0;
     std::uint8_t kind = 0;
-    if (!get_varint(r, path) || path >= id_count || !r.u8(kind) ||
+    if (!read_varint(r, path) || path >= id_count || !r.u8(kind) ||
         kind > static_cast<std::uint8_t>(ColumnKind::Double)) {
         return false;
     }
@@ -330,7 +319,7 @@ bool get_column(LeReader& r, std::uint64_t rows, std::size_t id_count,
     std::uint64_t prev = 0;
     for (std::size_t k = 0; k < bits.size(); ++k) {
         std::uint64_t gap = 0;
-        if (!get_varint(r, gap)) return false;
+        if (!read_varint(r, gap)) return false;
         if (k == 0) {
             if (gap >= rows) return false;
             prev = gap;
@@ -350,8 +339,8 @@ bool get_column(LeReader& r, std::uint64_t rows, std::size_t id_count,
             continue;
         }
         std::uint64_t z = 0;
-        if (!get_varint(r, z)) return false;
-        value_prev += unzigzag_bits(z);
+        if (!read_varint(r, z)) return false;
+        value_prev += static_cast<std::uint64_t>(zigzag_decode(z));
         const std::int64_t i = static_cast<std::int64_t>(value_prev);
         column.bits[k] = double_bits(static_cast<double>(i) / POW10[exponent]);
     }
@@ -500,7 +489,7 @@ dstd::Expected<ChunkColumns, ErrorCode> decode_chunk_columns(
     block.ids.resize(static_cast<std::size_t>(ids));
     for (std::size_t k = 0; k < block.ids.size(); ++k) {
         std::uint64_t id = 0;
-        if (!get_varint(r, id) || id > UINT32_MAX) return bad();
+        if (!read_varint(r, id) || id > UINT32_MAX) return bad();
         block.ids[k] = static_cast<std::uint32_t>(id);
     }
     if (!get_core(r, block, block.ids.size())) return bad();

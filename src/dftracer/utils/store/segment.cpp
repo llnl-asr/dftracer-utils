@@ -53,15 +53,6 @@ ByteView vector_view(const dstd::Vector<std::uint8_t>& bytes,
     return {bytes.data() + offset, length};
 }
 
-std::size_t varint_size(std::uint64_t value) {
-    std::size_t size = 1;
-    while (value >= 0x80U) {
-        value >>= 7U;
-        ++size;
-    }
-    return size;
-}
-
 std::size_t encoded_entry_size(ByteView key, ByteView value) {
     const bool big = value.size() > BIG_VALUE_BYTES;
     const std::size_t stored_value_bytes = big ? 20U : value.size();
@@ -272,11 +263,7 @@ void SegmentBuilder::write_to(std::uint8_t* out) const {
         at += 4;
     };
     const auto put_varint = [&at](std::uint64_t value) {
-        while (value >= 0x80U) {
-            *at++ = static_cast<std::uint8_t>(value | 0x80U);
-            value >>= 7U;
-        }
-        *at++ = static_cast<std::uint8_t>(value);
+        at = write_varint(at, value);
     };
 
     put_bytes(ByteView{reinterpret_cast<const std::byte*>(SEGMENT_MAGIC.data()),

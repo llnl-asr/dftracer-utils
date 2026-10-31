@@ -22,20 +22,6 @@ std::uint32_t granule(std::uint64_t checkpoint_idx) {
     return static_cast<std::uint32_t>(checkpoint_idx);
 }
 
-std::string agg_partial_key(int file_id, std::uint64_t chunk,
-                            std::uint32_t cat_id, std::uint32_t name_id,
-                            std::uint32_t host_id, std::uint32_t extra_id,
-                            std::uint8_t kind) {
-    auto key = layout::granule_key(Ext::Agg, layout::agg_kind::PARTIAL,
-                                   fid(file_id), granule(chunk));
-    dstd::append_u32_be(key, cat_id);
-    dstd::append_u32_be(key, name_id);
-    dstd::append_u32_be(key, host_id);
-    dstd::append_u32_be(key, extra_id);
-    key.push_back(static_cast<char>(kind));
-    return key;
-}
-
 }  // namespace
 
 void clear_file(IndexWrite& w, Ext ext, int file_id) {
@@ -223,63 +209,6 @@ void put_rowset(IndexWrite& w, int file_id, std::string_view name,
               layout::path_prefix(Ext::Rowset, layout::rowset_kind::FRAME,
                                   fid(file_id), name),
               frame);
-}
-
-void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
-                     std::uint32_t cat_id, std::uint32_t name_id,
-                     std::uint32_t host_id, std::uint32_t extra_id,
-                     std::uint8_t kind, std::string_view payload) {
-    put_value(w, Ext::Agg, layout::agg_kind::PARTIAL,
-              agg_partial_key(file_id, chunk, cat_id, name_id, host_id,
-                              extra_id, kind),
-              payload);
-}
-
-void put_agg_partial_value(IndexWrite& w, int file_id, std::uint64_t chunk,
-                           std::uint32_t cat_id, std::uint32_t name_id,
-                           std::uint32_t host_id, std::uint32_t extra_id,
-                           std::uint8_t kind, std::string_view value) {
-    w.put(agg_partial_key(file_id, chunk, cat_id, name_id, host_id, extra_id,
-                          kind),
-          value);
-}
-
-void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
-                           std::string_view payload) {
-    put_value(w, Ext::Agg, layout::agg_kind::COLUMNS,
-              layout::granule_key(Ext::Agg, layout::agg_kind::COLUMNS,
-                                  fid(file_id), granule(chunk)),
-              payload);
-}
-
-void put_agg_chunk_columns_value(IndexWrite& w, int file_id,
-                                 std::uint64_t chunk, std::string_view value) {
-    w.put(layout::granule_key(Ext::Agg, layout::agg_kind::COLUMNS, fid(file_id),
-                              granule(chunk)),
-          value);
-}
-
-void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
-                              std::string_view text) {
-    auto key =
-        layout::file_prefix(Ext::Agg, layout::agg_kind::DICT, fid(file_id));
-    dstd::append_u32_be(key, id);
-    put_value(w, Ext::Agg, layout::agg_kind::DICT, key, text);
-}
-
-void put_agg_meta(IndexWrite& w, std::string_view name,
-                  std::string_view payload) {
-    auto key = layout::file_prefix(Ext::Agg, layout::agg_kind::META,
-                                   layout::INDEX_WIDE);
-    key.append(name);
-    put_value(w, Ext::Agg, layout::agg_kind::META, key, payload);
-}
-
-void del_agg_meta(IndexWrite& w, std::string_view name) {
-    auto key = layout::file_prefix(Ext::Agg, layout::agg_kind::META,
-                                   layout::INDEX_WIDE);
-    key.append(name);
-    w.del(key);
 }
 
 }  // namespace dftracer::utils::index::store::records

@@ -10,7 +10,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
 
 #include <cstddef>
@@ -24,10 +23,13 @@
 #include <vector>
 
 // The only code that reads or writes the aggregation extension's storage.
+namespace dftracer::utils::index {
+class Index;
+}
+
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
 using index::store::IndexDatabase;
-using index::store::IndexWrite;
 
 struct Config {
     std::uint64_t time_interval_us = 0;
@@ -47,11 +49,8 @@ struct TimeBounds {
 
 /// nullopt when the index holds no config, or one in another format.
 std::optional<Config> read_config(const IndexDatabase& db);
-void write_config(IndexDatabase& db, const Config& config);
-
-void put_file(IndexWrite& w, int file_id, std::uint64_t params_hash);
-void put_files(IndexDatabase& db, std::span<const int> file_ids,
-               std::uint64_t params_hash);
+/// Replaces the index-wide config, blocking until it is published.
+void write_config(const Index& index, const Config& config);
 
 /// Calls fn(chunk, cat_id, name_id, host_id, extra_id, kind, bytes) for each
 /// partial of `file_id` in chunk order until fn returns false. `bytes` is the
@@ -79,7 +78,8 @@ bool get_chunk_columns(const IndexDatabase& db, int file_id,
                        std::uint64_t chunk, ChunkColumns& out);
 
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db);
-void widen_time_bounds(IndexDatabase& db, TimeBounds bounds);
+/// Replaces the index-wide time bounds, blocking until they are published.
+void write_time_bounds(const Index& index, TimeBounds bounds);
 
 void load_dictionary(const IndexDatabase& db, AggInternTable& table);
 
@@ -88,8 +88,9 @@ void load_dictionary(const IndexDatabase& db, AggInternTable& table);
 void load_file_texts(const IndexDatabase& db, int file_id,
                      dstd::HashMap<std::uint32_t, dstd::String>& texts);
 
-/// Removes every record of the aggregation tier from the index.
-void clear(IndexDatabase& db);
+/// Removes every record of the aggregation tier from `index`, the config and
+/// the time bounds included. Blocking.
+void clear(const Index& index);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier
 

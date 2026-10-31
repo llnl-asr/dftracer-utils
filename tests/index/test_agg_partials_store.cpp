@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -14,6 +15,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
+#include <testing_runtime.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -332,13 +334,13 @@ TEST_SUITE("AggPartialsStore") {
 
         // An index of an earlier build: another params hash and no partials.
         {
+            auto target = unwrap(index::Index::open(index_path));
             IndexDatabase db(index_path);
             const auto config = agg::tier::read_config(db);
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
-            agg::tier::write_config(db, old);
-            agg::tier::put_files(db, ids, old.params_hash);
+            agg::tier::write_config(target, old);
             auto w = db.begin_write();
             for (const int id : ids) {
                 const auto begin = layout::file_prefix(
@@ -347,6 +349,35 @@ TEST_SUITE("AggPartialsStore") {
                 w->delete_range(begin, layout::prefix_end(begin));
             }
             w->commit();
+
+            std::vector<std::string> logical;
+            std::vector<index::SourceStat> stats;
+            for (const auto& f : files) {
+                logical.push_back(index::store::internal::get_logical_path(f));
+                const auto stat = db.get_file_stat(logical.back());
+                const auto hash = db.get_file_hash(logical.back());
+                REQUIRE(stat);
+                REQUIRE(hash);
+                stats.push_back(
+                    index::SourceStat{stat->mtime, stat->size, *hash});
+            }
+
+            bool marked = true;
+            dftu_utils_test::run_coro(
+                [&](CoroScope&) -> coro::CoroTask<void> {
+                    for (std::size_t i = 0; i < logical.size(); ++i) {
+                        auto build = target.build(logical[i], stats[i]);
+                        if (!build) {
+                            marked = false;
+                            co_return;
+                        }
+                        build->finish(index::store::IndexExtension::Agg,
+                                      old.params_hash);
+                        if (!co_await build->commit()) marked = false;
+                    }
+                },
+                "stale aggregation index");
+            CHECK(marked);
         }
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);

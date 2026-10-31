@@ -7,12 +7,18 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace dftracer::utils::index::build {
 
 /// Give `factory` to IndexBuildBatchConfig::agg_fold_factory, then call
 /// finish_aggregation with the build's result.
 struct AggRun {
+    AggRun(std::string path,
+           std::shared_ptr<index::store::IndexDatabase> database,
+           IndexBuildBatchConfig::AggFoldFactory agg_factory);
+
+    std::string index_path;
     std::shared_ptr<index::store::IndexDatabase> db;
     IndexBuildBatchConfig::AggFoldFactory factory;
 };

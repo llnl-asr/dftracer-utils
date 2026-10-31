@@ -154,35 +154,6 @@ void put_catalog_path(IndexWrite& w, int file_id, std::string_view path,
 void put_rowset(IndexWrite& w, int file_id, std::string_view name,
                 std::string_view frame);
 
-/// `payload` is the serialized AggPartial. The ids are dictionary ids.
-void put_agg_partial(IndexWrite& w, int file_id, std::uint64_t chunk,
-                     std::uint32_t cat_id, std::uint32_t name_id,
-                     std::uint32_t host_id, std::uint32_t extra_id,
-                     std::uint8_t kind, std::string_view payload);
-
-/// As put_agg_partial, with `value` the whole stored value including the layout
-/// header (layout::append_value), so it is stored without a copy.
-void put_agg_partial_value(IndexWrite& w, int file_id, std::uint64_t chunk,
-                           std::uint32_t cat_id, std::uint32_t name_id,
-                           std::uint32_t host_id, std::uint32_t extra_id,
-                           std::uint8_t kind, std::string_view value);
-
-/// `payload` is the encoded block (see schemas/dft/agg/chunk_columns.h).
-void put_agg_chunk_columns(IndexWrite& w, int file_id, std::uint64_t chunk,
-                           std::string_view payload);
-
-/// As put_agg_chunk_columns, with `value` the whole stored value including the
-/// layout header (layout::append_value).
-void put_agg_chunk_columns_value(IndexWrite& w, int file_id,
-                                 std::uint64_t chunk, std::string_view value);
-
-void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
-                              std::string_view text);
-
-void put_agg_meta(IndexWrite& w, std::string_view name,
-                  std::string_view payload);
-void del_agg_meta(IndexWrite& w, std::string_view name);
-
 }  // namespace records
 
 }  // namespace dftracer::utils::index::store

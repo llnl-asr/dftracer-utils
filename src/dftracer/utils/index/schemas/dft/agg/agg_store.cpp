@@ -1,12 +1,13 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/agg_row_reader.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/runtime.h>
 
-#include <algorithm>
 #include <array>
+#include <utility>
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
@@ -41,11 +42,25 @@ std::optional<std::string> get_meta(const IndexDatabase& db,
     return AggRowReader::get_row(db, layout::agg_kind::META, meta_key(name));
 }
 
-void put_meta(IndexDatabase& db, std::string_view name,
-              std::string_view value) {
-    auto write = db.begin_write();
-    index::store::records::put_agg_meta(*write, name, value);
-    write->commit();
+/// Publishes one index-wide record. Blocking, so a caller inside a coroutine
+/// does not have to await it.
+void publish_meta(const Index& index, std::string_view name,
+                  std::string_view value) {
+    dstd::Expected<void, dstd::Error> published;
+    default_runtime().run_blocking(
+        "aggregation meta", [&](CoroScope&) -> coro::CoroTask<void> {
+            published = co_await put_agg_meta(index, name, value);
+        });
+    unwrap(std::move(published));
+}
+
+void drop_meta(const Index& index, std::string_view name) {
+    dstd::Expected<void, dstd::Error> dropped;
+    default_runtime().run_blocking(
+        "aggregation meta drop", [&](CoroScope&) -> coro::CoroTask<void> {
+            dropped = co_await delete_agg_meta(index, name);
+        });
+    unwrap(std::move(dropped));
 }
 
 [[noreturn]] void throw_conflict(std::uint32_t id, std::string_view existing,
@@ -96,7 +111,7 @@ std::optional<Config> read_config(const IndexDatabase& db) {
     return c;
 }
 
-void write_config(IndexDatabase& db, const Config& config) {
+void write_config(const Index& index, const Config& config) {
     std::string value;
     dstd::append_u64_be(value, config.time_interval_us);
     dstd::append_u64_be(value, config.params_hash);
@@ -106,20 +121,7 @@ void write_config(IndexDatabase& db, const Config& config) {
         if (i != 0) value.push_back(KEY_SEP);
         value.append(config.extra_group_keys[i]);
     }
-    put_meta(db, CONFIG_NAME, value);
-}
-
-void put_file(IndexWrite& w, int file_id, std::uint64_t params_hash) {
-    index::store::records::put_manifest(w, file_id, layout::Ext::Agg,
-                                        params_hash);
-}
-
-void put_files(IndexDatabase& db, std::span<const int> file_ids,
-               std::uint64_t params_hash) {
-    auto write = db.begin_write();
-    for (const int file_id : file_ids)
-        if (file_id >= 0) put_file(*write, file_id, params_hash);
-    write->commit();
+    publish_meta(index, CONFIG_NAME, value);
 }
 
 void for_each_partial(
@@ -214,15 +216,11 @@ std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db) {
                       layout::read_u64(std::string_view(*value).substr(8))};
 }
 
-void widen_time_bounds(IndexDatabase& db, TimeBounds bounds) {
-    if (auto stored = read_time_bounds(db)) {
-        bounds.min_bucket = std::min(bounds.min_bucket, stored->min_bucket);
-        bounds.max_bucket = std::max(bounds.max_bucket, stored->max_bucket);
-    }
+void write_time_bounds(const Index& index, TimeBounds bounds) {
     std::string value;
     dstd::append_u64_be(value, bounds.min_bucket);
     dstd::append_u64_be(value, bounds.max_bucket);
-    put_meta(db, TIME_BOUNDS_NAME, value);
+    publish_meta(index, TIME_BOUNDS_NAME, value);
 }
 
 void load_dictionary(const IndexDatabase& db, AggInternTable& table) {
@@ -260,15 +258,22 @@ void load_file_texts(const IndexDatabase& db, int file_id,
         });
 }
 
-void clear(IndexDatabase& db) {
-    const auto file_ids = AggRowReader::file_ids(db);
-    auto write = db.begin_write();
-    for (const std::uint32_t file_id : file_ids)
-        index::store::records::clear_file(*write, layout::Ext::Agg,
-                                          static_cast<int>(file_id));
-    for (const std::string_view name : META_NAMES)
-        index::store::records::del_agg_meta(*write, name);
-    write->commit();
+void clear(const Index& index) {
+    auto snapshot = unwrap(index.snapshot());
+    auto files = unwrap(snapshot.files());
+    dstd::Vector<dstd::StringView> paths;
+    paths.reserve(files.size());
+    for (const FileRef& file : files) paths.push_back(file.path());
+    const dstd::Span<const dstd::StringView> listed(paths.data(), paths.size());
+
+    dstd::Expected<void, dstd::Error> dropped;
+    default_runtime().run_blocking(
+        "aggregation tier clear", [&](CoroScope&) -> coro::CoroTask<void> {
+            dropped =
+                co_await remove_extension(index, layout::Ext::Agg, listed);
+        });
+    unwrap(std::move(dropped));
+    for (const std::string_view name : META_NAMES) drop_meta(index, name);
 }
 
 }  // namespace dftracer::utils::index::schemas::dft::agg::tier

@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+namespace dftracer::utils::index {
+class Index;
+}
+
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// The out-of-band outputs of an AggregationFold per file. The partials and
@@ -19,11 +23,12 @@ struct AggFoldOutput {
     std::size_t events_processed = 0;
 };
 
-/// Widens the stored time bounds of `db` by the range of the events of
+/// Widens the stored time bounds of `index` by the range of the events of
 /// `outputs`. Synchronous, so safe to call from a coroutine without suspending.
-/// `db` must be open for writing.
+/// `db` reads the bounds already stored.
 void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
-                             index::store::IndexDatabase& db);
+                             index::store::IndexDatabase& db,
+                             const index::Index& index);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg
 

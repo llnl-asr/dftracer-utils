@@ -29,8 +29,6 @@ class AggRowReader {
     static std::optional<std::string> get_row(const IndexDatabase& db,
                                               std::uint8_t kind,
                                               std::string_view key);
-
-    static std::vector<std::uint32_t> file_ids(const IndexDatabase& db);
 };
 
 }  // namespace dftracer::utils::index::store

@@ -278,6 +278,10 @@ class IndexDatabase {
     /// on a store error.
     void close_writer();
 
+    /// The index root this handle reads and writes, normalized. An Index opened
+    /// on it addresses the same files.
+    const std::string& index_path() const;
+
     /// Later reads through any handle of this index in this process see the
     /// data files other processes wrote since. File ids keep their paths.
     void refresh();

@@ -809,6 +809,8 @@ IndexDatabase::IndexDatabase(IndexDatabase&&) noexcept = default;
 IndexDatabase& IndexDatabase::operator=(IndexDatabase&&) noexcept = default;
 IndexDatabase::~IndexDatabase() = default;
 
+const std::string& IndexDatabase::index_path() const { return impl_->db_path_; }
+
 void IndexDatabase::for_each_record(
     const std::function<void(std::string_view, std::string_view)>& fn) const {
     const auto held = impl_->store_->snapshot();
@@ -1420,10 +1422,6 @@ std::optional<std::string> AggRowReader::get_row(const IndexDatabase& db,
                                                  std::uint8_t kind,
                                                  std::string_view key) {
     return db.impl_->get(layout::Ext::Agg, kind, key);
-}
-
-std::vector<std::uint32_t> AggRowReader::file_ids(const IndexDatabase& db) {
-    return db.impl_->file_ids_of(ext_spec(layout::Ext::Agg));
 }
 
 }  // namespace dftracer::utils::index::store

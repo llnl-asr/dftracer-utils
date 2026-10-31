@@ -1,4 +1,6 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/python/index_database.h>
@@ -117,9 +119,14 @@ static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
     if (!PyArg_ParseTuple(args, "O", &config_obj)) return NULL;
     const auto config = dftracer::utils::python::agg_config_from_py(config_obj);
     if (!run_blocking([&] {
+            const auto agg_config =
+                dftracer::utils::index::schemas::dft::agg::tier::Config{
+                    config.time_interval_us, config.params_hash(),
+                    config.group_by_file, config.extra_group_keys};
+            const auto index = dftracer::utils::unwrap(
+                dftracer::utils::index::Index::open(self->db->index_path()));
             dftracer::utils::index::schemas::dft::agg::tier::write_config(
-                *self->db, {config.time_interval_us, config.params_hash(),
-                            config.group_by_file, config.extra_group_keys});
+                index, agg_config);
         }))
         return NULL;
     Py_RETURN_NONE;

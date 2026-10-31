@@ -13,6 +13,7 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
@@ -406,9 +407,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
     for (const auto& root : roots)
         if (fs::exists(root)) {
             index::store::release_index(root);
-            index::store::IndexDatabase db(
-                root, index::store::IndexOpenMode::ReadWrite);
-            agg::tier::clear(db);
+            auto target = unwrap(index::Index::open(
+                index::store::internal::normalize_index_root(root)));
+            agg::tier::clear(target);
         }
     std::string retry_failure;
     try {

@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/runtime/runtime.h>

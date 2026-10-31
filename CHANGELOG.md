@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `dftracer_comparator` give each of its two index builds half of the executor threads when it builds both at once, where each planned for all of them.
+  A cold comparison of the 7,742 matrix traces at 96 threads takes 20 s where it took 23 s, and peaks at 5.6 GB where it peaked at 8.1 GB.
 - Make `dftracer_stats` read the per-file rows of a fresh index for every report except `detailed`, where it folded the aggregation of every chunk and wrote a rollup cache beside the index on the first run.
   A run now writes nothing.
   The time span ends at the end of the last event, and the duration count, mean and deviation use only the events that have a duration.

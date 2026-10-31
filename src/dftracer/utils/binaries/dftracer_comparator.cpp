@@ -19,6 +19,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <ctime>
 #include <optional>
@@ -337,7 +338,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
     auto resolve_and_build =
         [&config](CoroScope& scope, const std::string& path,
                   const std::string& index_dir,
-                  std::vector<std::string>& out_files) -> coro::CoroTask<void> {
+                  std::vector<std::string>& out_files,
+                  std::size_t parallelism) -> coro::CoroTask<void> {
         if (!dftracer::utils::input_exists(path)) {
             DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
             co_return;
@@ -351,7 +353,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
         }
         input.index_dir = index_dir;
         input.checkpoint_size = config.checkpoint_size;
-        input.parallelism = config.executor_threads;
+        input.parallelism = parallelism;
         input.force_rebuild = config.force_rebuild;
         input.build_bloom = false;
 
@@ -394,36 +396,40 @@ static int run_comparator(const ComparatorArgParse* cli) {
         auto enum_index_shared = make_task(
             [&config, &baseline_files, &variant_files,
              &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await resolve_and_build(scope, config.baseline,
-                                           config.baseline_index_dir,
-                                           baseline_files);
+                co_await resolve_and_build(
+                    scope, config.baseline, config.baseline_index_dir,
+                    baseline_files, config.executor_threads);
                 if (config.baseline == config.variant) {
                     variant_files = baseline_files;
                 } else {
-                    co_await resolve_and_build(scope, config.variant,
-                                               config.variant_index_dir,
-                                               variant_files);
+                    co_await resolve_and_build(
+                        scope, config.variant, config.variant_index_dir,
+                        variant_files, config.executor_threads);
                 }
             },
             "EnumIndex");
         enum_index_base = enum_index_shared;
         enum_index_var = enum_index_shared;
     } else {
+        // The two builds run at once on one executor, so each plans for half
+        // of its threads. Each holds buffers per planned worker.
+        const std::size_t build_threads =
+            std::max<std::size_t>(1, config.executor_threads / 2);
         enum_index_base = make_task(
-            [&config, &baseline_files,
-             &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
+            [&config, &baseline_files, &resolve_and_build,
+             build_threads](CoroScope& scope) -> coro::CoroTask<void> {
                 co_await resolve_and_build(scope, config.baseline,
                                            config.baseline_index_dir,
-                                           baseline_files);
+                                           baseline_files, build_threads);
             },
             "EnumIndexBaseline");
 
         enum_index_var = make_task(
-            [&config, &variant_files,
-             &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
+            [&config, &variant_files, &resolve_and_build,
+             build_threads](CoroScope& scope) -> coro::CoroTask<void> {
                 co_await resolve_and_build(scope, config.variant,
                                            config.variant_index_dir,
-                                           variant_files);
+                                           variant_files, build_threads);
             },
             "EnumIndexVariant");
     }

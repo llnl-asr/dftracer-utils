@@ -3,13 +3,13 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
@@ -34,6 +34,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -79,6 +80,33 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
         stats->stats.min_nonzero_timestamp_us <= bounds.max_timestamp_us)
         bounds.min_timestamp_us = stats->stats.min_nonzero_timestamp_us;
     return bounds;
+}
+
+// True when the index at `root` no longer matches `paths`: a path is not
+// indexed, its stat changed, or the index holds a path that is not listed.
+bool index_is_stale(const std::string& root,
+                    const std::vector<std::string>& paths) {
+    namespace ix = dftracer::utils::index;
+    const auto snapshot = unwrap(ix::plan::open_snapshot(root));
+    dstd::StringViewSet listed;
+    std::vector<std::string> logical_paths;
+    logical_paths.reserve(paths.size());
+    for (const auto& path : paths) {
+        logical_paths.push_back(ix::store::internal::get_logical_path(path));
+        listed.insert(logical_paths.back());
+        InputFileStat st;
+        ix::SourceStat now;
+        if (stat_input(path, st)) {
+            now.mtime = static_cast<std::uint64_t>(st.mtime);
+            now.size = st.size;
+        }
+        if (snapshot.freshness(logical_paths.back(), now) !=
+            ix::Freshness::Current)
+            return true;
+    }
+    for (const auto& file : unwrap(snapshot.files()))
+        if (listed.find(file.path()) == listed.end()) return true;
+    return false;
 }
 
 }  // namespace
@@ -519,8 +547,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
             if (!fs::exists(root)) continue;
             bool stale = false;
             try {
-                dftracer::utils::index::store::IndexDatabase db(root);
-                stale = db.find_stale_files(paths).stale();
+                stale = index_is_stale(root, paths);
             } catch (const std::exception& e) {
                 DFTRACER_UTILS_LOG_WARN(
                     "TraceIndex: stale check failed for %s: %s; rebuilding",
@@ -620,20 +647,26 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
                         }
 
+                        namespace ix = dftracer::utils::index;
+                        std::optional<ix::Snapshot> snapshot;
+                        try {
+                            snapshot.emplace(
+                                unwrap(ix::plan::open_snapshot(ipath)));
+                        } catch (const std::exception&) {
+                        }
+
                         for (auto idx : idxs) {
                             auto* info = &(*files_ptr)[idx];
                             bool bloom_ok = false;
-                            try {
-                                dftracer::utils::index::store::IndexDatabase db(
-                                    ipath, dftracer::utils::index::store::
-                                               IndexOpenMode::ReadOnly);
-                                int fid = db.get_file_info_id(
-                                    dftracer::utils::index::store::internal::
-                                        get_logical_path(info->path));
+                            if (snapshot) {
+                                const auto file = snapshot->file(
+                                    ix::store::internal::get_logical_path(
+                                        info->path));
                                 bloom_ok =
-                                    fid >= 0 && db.pruning_tier_current(fid);
-                            } catch (const std::exception&) {
-                                bloom_ok = false;
+                                    file &&
+                                    ix::extension_current(
+                                        *snapshot, *file,
+                                        ix::store::IndexExtension::Stats);
                             }
                             if (bloom_ok) {
                                 info->index_path = ipath;
@@ -972,16 +1005,15 @@ std::shared_ptr<const TraceIndex::FileChunkMeta> TraceIndex::chunk_meta(
     std::shared_ptr<const FileChunkMeta> meta;  // null == known-unavailable
     if (!file.index_path.empty()) {
         try {
-            dftracer::utils::index::store::IndexDatabase db(
-                file.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            int fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(
-                    file.path));
-            if (fid >= 0) {
+            namespace ix = dftracer::utils::index;
+            const auto snapshot =
+                unwrap(ix::plan::open_snapshot(file.index_path));
+            const auto ref =
+                snapshot.file(ix::store::internal::get_logical_path(file.path));
+            if (ref) {
                 auto m = std::make_shared<FileChunkMeta>();
-                m->spans = db.query_chunk_spans(fid);
-                m->stats = db.query_chunk_statistics(fid);
+                m->spans = unwrap(ix::spans(snapshot, *ref));
+                m->stats = unwrap(ix::chunk_stats(snapshot, *ref));
                 meta = std::move(m);
             }
         } catch (const std::exception& e) {

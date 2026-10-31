@@ -2,8 +2,10 @@
 #define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/schemas/dft/statistics.h>
 #include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/server/viz_result_cache.h>
@@ -49,8 +51,9 @@ class TraceIndex {
     /// Per-file chunk metadata read once from the immutable index: byte spans
     /// and per-chunk statistics, keyed by checkpoint index. Shared read-only.
     struct FileChunkMeta {
-        std::vector<dftracer::utils::index::gzip::ChunkSpan> spans;
-        std::vector<dftracer::utils::index::schemas::dft::ChunkStatisticsResult>
+        dstd::Vector<dftracer::utils::index::gzip::ChunkSpan> spans;
+        dstd::Vector<
+            dftracer::utils::index::schemas::dft::ChunkStatisticsResult>
             stats;
     };
 

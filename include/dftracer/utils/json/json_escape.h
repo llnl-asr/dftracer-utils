@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_JSON_JSON_ESCAPE_H
 #define DFTRACER_UTILS_JSON_JSON_ESCAPE_H
 
-#include <cstdio>
+#include <dftracer/utils/dstd/string.h>
+
 #include <string>
-#include <string_view>
 
 namespace dftracer::utils::json {
 
@@ -12,7 +12,8 @@ namespace dftracer::utils::json {
 /// character below 0x20, all required by the JSON spec) to `out`. No
 /// temporary allocation, so callers building a JSON line in a loop don't
 /// churn a string per field.
-inline void append_json_escaped(std::string& out, std::string_view s) {
+inline void append_json_escaped(std::string& out, dstd::StringView s) {
+    static constexpr char HEX[] = "0123456789abcdef";
     for (char c : s) {
         switch (c) {
             case '"':
@@ -36,23 +37,24 @@ inline void append_json_escaped(std::string& out, std::string_view s) {
             case '\t':
                 out += "\\t";
                 break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x",
-                                  static_cast<unsigned char>(c));
-                    out += buf;
+            default: {
+                const unsigned char u = static_cast<unsigned char>(c);
+                if (u < 0x20) {
+                    const char escaped[6] = {'\\', 'u',         '0',
+                                             '0',  HEX[u >> 4], HEX[u & 15]};
+                    out.append(escaped, sizeof(escaped));
                 } else {
                     out += c;
                 }
                 break;
+            }
         }
     }
 }
 
 /// Like append_json_escaped, into `dst` with room for 6 * s.size() bytes.
 /// Returns the end of the written bytes.
-inline char* escape_json_to(char* dst, std::string_view s) {
+inline char* escape_json_to(char* dst, dstd::StringView s) {
     static constexpr char HEX[] = "0123456789abcdef";
     for (char c : s) {
         const unsigned char u = static_cast<unsigned char>(c);
@@ -103,7 +105,7 @@ inline char* escape_json_to(char* dst, std::string_view s) {
 }
 
 /// Escape a string for embedding in a JSON string literal.
-inline std::string escape_json_string(std::string_view s) {
+inline std::string escape_json_string(dstd::StringView s) {
     std::string result;
     result.reserve(s.size());
     append_json_escaped(result, s);

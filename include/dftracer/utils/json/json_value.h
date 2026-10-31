@@ -1,15 +1,13 @@
 #ifndef DFTRACER_UTILS_JSON_JSON_VALUE_H
 #define DFTRACER_UTILS_JSON_JSON_VALUE_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 #include <simdjson.h>
 
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <limits>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::json {
@@ -60,11 +58,7 @@ class JsonValue {
         return JsonValue(result.value_unsafe());
     }
 
-    JsonValue operator[](const std::string& key) const {
-        return (*this)[key.c_str()];
-    }
-
-    JsonValue operator[](std::string_view key) const {
+    JsonValue operator[](dstd::StringView key) const {
         if (!valid_ || !elem_.is_object()) return JsonValue();
         auto result = elem_[key];
         if (result.error()) return JsonValue();
@@ -83,8 +77,7 @@ class JsonValue {
     }
 
     JsonValue at(const char* path) const;
-    JsonValue at(const std::string& path) const;
-    JsonValue at(std::string_view path) const;
+    JsonValue at(dstd::StringView path) const;
 
     template <typename T>
     T get(const T& default_val = T{}) const {
@@ -93,10 +86,10 @@ class JsonValue {
         if constexpr (std::is_same_v<T, bool>) {
             auto r = elem_.get_bool();
             return r.error() ? default_val : r.value_unsafe();
-        } else if constexpr (std::is_same_v<T, std::string>) {
+        } else if constexpr (std::is_same_v<T, dstd::String>) {
             auto r = elem_.get_string();
-            return r.error() ? default_val : std::string(r.value_unsafe());
-        } else if constexpr (std::is_same_v<T, std::string_view>) {
+            return r.error() ? default_val : dstd::String(r.value_unsafe());
+        } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             auto r = elem_.get_string();
             return r.error() ? default_val : r.value_unsafe();
         } else if constexpr (std::is_same_v<T, const char*>) {
@@ -143,19 +136,22 @@ class JsonValue {
     }
 
     template <typename T>
-    std::optional<T> get_optional() const {
+    dstd::Optional<T> get_optional() const {
         if (!valid_) return std::nullopt;
 
-        if constexpr (std::is_same_v<T, std::string>) {
+        if constexpr (std::is_same_v<T, dstd::String>) {
+            auto r = elem_.get_string();
+            return r.error()
+                       ? std::nullopt
+                       : dstd::Optional<T>(dstd::String(r.value_unsafe()));
+        } else if constexpr (std::is_same_v<T, dstd::StringView>) {
             auto r = elem_.get_string();
             return r.error() ? std::nullopt
-                             : std::optional(std::string(r.value_unsafe()));
-        } else if constexpr (std::is_same_v<T, std::string_view>) {
-            auto r = elem_.get_string();
-            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
+                             : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, const char*>) {
             auto r = elem_.get_c_str();
-            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
+            return r.error() ? std::nullopt
+                             : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, std::uint64_t>) {
             auto r = elem_.get_uint64();
             if (!r.error()) return r.value_unsafe();
@@ -165,7 +161,8 @@ class JsonValue {
             return std::nullopt;
         } else if constexpr (std::is_same_v<T, std::int64_t>) {
             auto r = elem_.get_int64();
-            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
+            return r.error() ? std::nullopt
+                             : dstd::Optional<T>(r.value_unsafe());
         } else if constexpr (std::is_same_v<T, double>) {
             auto r = elem_.get_double();
             if (!r.error()) return r.value_unsafe();
@@ -176,7 +173,8 @@ class JsonValue {
             return std::nullopt;
         } else if constexpr (std::is_same_v<T, bool>) {
             auto r = elem_.get_bool();
-            return r.error() ? std::nullopt : std::optional(r.value_unsafe());
+            return r.error() ? std::nullopt
+                             : dstd::Optional<T>(r.value_unsafe());
         } else {
             static_assert(!sizeof(T),
                           "Unsupported type for JsonValue::get_optional<T>()");

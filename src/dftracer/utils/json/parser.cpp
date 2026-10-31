@@ -4,7 +4,7 @@ namespace dftracer::utils::json {
 
 JsonParser::JsonParser(std::size_t capacity) : parser_(capacity) {}
 
-bool JsonParser::parse(std::string_view json_line) {
+bool JsonParser::parse(dstd::StringView json_line) {
     // Reuse padbuf_'s capacity instead of allocating a padded_string per line;
     // resize() zero-fills the SIMDJSON_PADDING tail On-Demand requires.
     padbuf_.assign(json_line.data(), json_line.size());
@@ -27,43 +27,43 @@ void JsonParser::rewind() {
     }
 }
 
-std::optional<std::int64_t> JsonParser::get_int64(std::string_view key) {
+dstd::Optional<std::int64_t> JsonParser::get_int64(dstd::StringView key) {
     if (!valid_) return std::nullopt;
     auto result = active_[key].get_int64();
     if (result.error()) return std::nullopt;
     return result.value();
 }
 
-std::optional<std::uint64_t> JsonParser::get_uint64(std::string_view key) {
+dstd::Optional<std::uint64_t> JsonParser::get_uint64(dstd::StringView key) {
     if (!valid_) return std::nullopt;
     auto result = active_[key].get_uint64();
     if (result.error()) return std::nullopt;
     return result.value();
 }
 
-std::optional<double> JsonParser::get_double(std::string_view key) {
+dstd::Optional<double> JsonParser::get_double(dstd::StringView key) {
     if (!valid_) return std::nullopt;
     auto result = active_[key].get_double();
     if (result.error()) return std::nullopt;
     return result.value();
 }
 
-std::optional<bool> JsonParser::get_bool(std::string_view key) {
+dstd::Optional<bool> JsonParser::get_bool(dstd::StringView key) {
     if (!valid_) return std::nullopt;
     auto result = active_[key].get_bool();
     if (result.error()) return std::nullopt;
     return result.value();
 }
 
-std::optional<std::string_view> JsonParser::get_string(std::string_view key) {
+dstd::Optional<dstd::StringView> JsonParser::get_string(dstd::StringView key) {
     if (!valid_) return std::nullopt;
     auto result = active_[key].get_string();
     if (result.error()) return std::nullopt;
     return result.value();
 }
 
-std::optional<simdjson::ondemand::value> JsonParser::get_value(
-    std::string_view key) {
+dstd::Optional<simdjson::ondemand::value> JsonParser::get_value(
+    dstd::StringView key) {
     if (!valid_) return std::nullopt;
     auto result = active_[key];
     if (result.error()) return std::nullopt;

@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/parser.h>
@@ -253,7 +254,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                             for (const auto& dim :
                                  input.config.extra_dimensions) {
                                 if (key == dim) {
-                                    std::string str_val =
+                                    dstd::String str_val =
                                         ondemand_value_to_string(val);
                                     if (!str_val.empty()) {
                                         output.bloom_filters[dim].add(str_val);
@@ -279,7 +280,7 @@ coro::CoroTask<ChunkIndexerOutput> ChunkIndexer::operator()(
                                                 if (fkey.value() == suffix) {
                                                     auto fval = field.value();
                                                     if (fval.error()) continue;
-                                                    std::string str_val =
+                                                    dstd::String str_val =
                                                         ondemand_value_to_string(
                                                             fval.value());
                                                     if (!str_val.empty()) {

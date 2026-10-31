@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_JSON_CANONICAL_H
 #define DFTRACER_UTILS_JSON_CANONICAL_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <simdjson.h>
 
 #include <string>
-#include <string_view>
 
 namespace dftracer::utils::json {
 
@@ -16,7 +16,7 @@ void append_canonical_json(std::string& out, simdjson::dom::element v);
 
 /// The canonical form of the JSON text `text`, or `text` itself when it does
 /// not parse.
-std::string canonical_json_text(std::string_view text);
+std::string canonical_json_text(dstd::StringView text);
 
 }  // namespace dftracer::utils::json
 

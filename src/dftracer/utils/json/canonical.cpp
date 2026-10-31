@@ -1,18 +1,38 @@
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/record_parser.h>
 
 #include <algorithm>
-#include <vector>
+#include <cstdint>
+#include <string>
+#include <utility>
 
 namespace dftracer::utils::json {
+
+namespace {
+
+void append_int64(std::string& out, std::int64_t v) {
+    char buf[24];
+    if (char* end = dstd::to_chars_i64(buf, buf + sizeof(buf), v))
+        out.append(buf, end);
+}
+
+void append_uint64(std::string& out, std::uint64_t v) {
+    char buf[24];
+    if (char* end = dstd::to_chars_u64(buf, buf + sizeof(buf), v))
+        out.append(buf, end);
+}
+
+}  // namespace
 
 void append_canonical_json(std::string& out, simdjson::dom::element v) {
     using T = simdjson::dom::element_type;
     switch (v.type()) {
         case T::OBJECT: {
-            std::vector<std::pair<std::string_view, simdjson::dom::element>>
+            dstd::Vector<std::pair<dstd::StringView, simdjson::dom::element>>
                 members;
             const simdjson::dom::object obj = v.get_object().value_unsafe();
             for (auto kv : obj) members.emplace_back(kv.key, kv.value);
@@ -48,10 +68,10 @@ void append_canonical_json(std::string& out, simdjson::dom::element v) {
             out += '"';
             return;
         case T::INT64:
-            out += std::to_string(v.get_int64().value_unsafe());
+            append_int64(out, v.get_int64().value_unsafe());
             return;
         case T::UINT64:
-            out += std::to_string(v.get_uint64().value_unsafe());
+            append_uint64(out, v.get_uint64().value_unsafe());
             return;
         case T::BIGINT:
             out += v.get_bigint().value_unsafe();
@@ -72,7 +92,7 @@ void append_canonical_json(std::string& out, simdjson::dom::element v) {
     }
 }
 
-std::string canonical_json_text(std::string_view text) {
+std::string canonical_json_text(dstd::StringView text) {
     thread_local dftracer::utils::json::RecordParser parser;
     simdjson::dom::element root;
     if (parser.parse(simdjson::padded_string(text)).get(root) !=

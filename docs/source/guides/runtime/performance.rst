@@ -36,7 +36,7 @@ chunks; too many on a shared or oversubscribed node hurts more than it helps.
 
          ExecutorConfig config;
          config.num_threads = 8;      // running cap; 0 = hardware_concurrency
-         config.io_pool_size = 4;     // I/O thread pool; 0 = hardware_concurrency
+         config.io_pool_size = 4;     // I/O thread pool; 0 = one per worker
          config.min_workers = 2;      // elastic floor: start at 2, grow to
                                        // num_threads under backlog, idle-retire
                                        // back down (0 = eager, spawn all up front)

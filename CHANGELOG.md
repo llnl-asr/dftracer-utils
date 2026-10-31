@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Size a runtime's I/O thread pool to its worker count when no I/O thread count is given, where it used to start one I/O thread per hardware thread.
+  The CLI tools keep their `--io-threads` default of one per CPU core.
 - Make `dftracer_comparator` skip the parts of each stored aggregation partial that it never reads, and give each side half of the executor threads when it aggregates both at once.
   A warm comparison of the 7,742 matrix traces at 96 threads takes 2.7 s where it took 3.8 s, with a quarter less CPU time, and the report stays the same.
   Its per-process pass keeps only the count and the duration and size sums of each row, so a warm comparison takes 2.0 s and peaks at 2.4 GB where it peaked at 3.5 GB.

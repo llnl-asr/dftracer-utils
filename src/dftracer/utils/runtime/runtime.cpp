@@ -36,15 +36,15 @@ std::size_t resolve_threads(std::size_t requested) {
 // Resolve the I/O-pool size. DFTRACER_UTILS_IO_THREADS overrides everything (a
 // lever to bound the epoll/kqueue thread pool independently of the compute
 // pool, e.g. so the coordinator does not open a full-machine-sized pool).
-// Otherwise 0 means hardware_concurrency, matching the executor default.
-std::size_t resolve_io_threads(std::size_t requested) {
+// Otherwise 0 means one I/O thread per worker.
+std::size_t resolve_io_threads(std::size_t requested, std::size_t workers) {
     if (auto env = Env::get<std::string_view>("DFTRACER_UTILS_IO_THREADS");
         env.has_value()) {
         const long long n =
             std::strtoll(std::string(*env).c_str(), nullptr, 10);
         if (n > 0) return static_cast<std::size_t>(n);
     }
-    return requested == 0 ? hardware_concurrency() : requested;
+    return requested == 0 ? workers : requested;
 }
 }  // namespace
 
@@ -52,7 +52,8 @@ Runtime::Runtime(std::size_t threads) : threads_(resolve_threads(threads)) {
     unwrap(configure_memory_from_env());
     ExecutorConfig config;
     config.num_threads = threads_.load(std::memory_order_relaxed);
-    config.io_pool_size = resolve_io_threads(config.io_pool_size);
+    config.io_pool_size = resolve_io_threads(
+        config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(config);
     executor_->start();
 
@@ -67,7 +68,8 @@ Runtime::Runtime(const ExecutorConfig& config, bool enable_watchdog)
     unwrap(configure_memory_from_env());
     ExecutorConfig cfg = config;
     cfg.num_threads = threads_.load(std::memory_order_relaxed);
-    cfg.io_pool_size = resolve_io_threads(config.io_pool_size);
+    cfg.io_pool_size = resolve_io_threads(
+        config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(cfg);
     executor_->start();
 
@@ -84,7 +86,8 @@ Runtime::Runtime(const ExecutorConfig& config,
       io_batch_threshold_(config.io_batch_threshold) {
     ExecutorConfig cfg = config;
     cfg.num_threads = threads_.load(std::memory_order_relaxed);
-    cfg.io_pool_size = resolve_io_threads(config.io_pool_size);
+    cfg.io_pool_size = resolve_io_threads(
+        config.io_pool_size, threads_.load(std::memory_order_relaxed));
     executor_ = make_task_executor(cfg);
     executor_->start();
 
@@ -225,7 +228,8 @@ void Runtime::configure(const RuntimeSettings& settings) {
         threads_.store(executor_->get_num_threads(), std::memory_order_release);
     }
     if (settings.io_threads != 0)
-        executor_->grow_io_threads(resolve_io_threads(settings.io_threads));
+        executor_->grow_io_threads(resolve_io_threads(
+            settings.io_threads, threads_.load(std::memory_order_acquire)));
     if (settings.deadlock_timeout)
         executor_->set_deadlock_timeout(*settings.deadlock_timeout);
 }

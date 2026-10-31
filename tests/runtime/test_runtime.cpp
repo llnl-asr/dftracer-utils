@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <set>
 #include <stdexcept>
@@ -34,6 +35,15 @@ static CoroTask<void> throw_void_async() {
 }
 
 }  // namespace
+
+TEST_CASE("Runtime - an unsized I/O pool has one thread per worker") {
+#ifndef DFTRACER_UTILS_VALGRIND_MODE
+    if (std::getenv("DFTRACER_UTILS_IO_THREADS") != nullptr) return;
+    Runtime rt(3);
+    CHECK(rt.io_threads() == 3);
+#endif
+    rt.shutdown();
+}
 
 TEST_CASE("Runtime - parallel_for covers the range exactly once") {
     Runtime rt(4);

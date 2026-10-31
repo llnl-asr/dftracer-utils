@@ -49,7 +49,7 @@ struct ExecutorConfig {
     std::chrono::milliseconds elastic_keepalive{250};
     std::chrono::seconds idle_timeout{5};
     std::chrono::seconds deadlock_timeout{10};
-    std::size_t io_pool_size = 0;  ///< 0 = hardware_concurrency
+    std::size_t io_pool_size = 0;  ///< 0 = one per worker
     io::IoBackendType io_backend_type = io::IoBackendType::Auto;
     unsigned io_batch_threshold = 16;
 };

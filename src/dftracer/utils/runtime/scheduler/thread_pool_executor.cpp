@@ -33,10 +33,7 @@ ThreadPoolExecutor::ThreadPoolExecutor(const ExecutorConfig& config)
         threads = 2;
     }
     std::size_t io_threads =
-        config.io_pool_size == 0 ? hardware_concurrency() : config.io_pool_size;
-    if (io_threads == 0) {
-        io_threads = 2;
-    }
+        config.io_pool_size == 0 ? threads : config.io_pool_size;
 #ifdef DFTRACER_UTILS_VALGRIND_MODE
     // Per-Executor thread churn dominates runtime when Valgrind serializes and
     // instruments every thread, so cap the pools.

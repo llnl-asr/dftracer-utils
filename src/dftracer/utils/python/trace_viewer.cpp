@@ -25,6 +25,7 @@
 #include <dftracer/utils/python/trace_viewer.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
+#include <dftracer/utils/trace/views/live_view.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
@@ -1173,7 +1174,115 @@ PyMethodDef module_methods[] = {
      "duql_canonical(text) -> the canonical duql text of `text`."},
     {nullptr, nullptr, 0, nullptr}};
 
+// -- _LiveTraceViewer -------------------------------------------------------
+
+views::LiveView& live_of(PyObject* self) {
+    return *reinterpret_cast<LiveTraceViewerObject*>(self)->live;
+}
+
+PyObject* ltv_new(PyTypeObject* type, PyObject*, PyObject*) {
+    auto* self =
+        reinterpret_cast<LiveTraceViewerObject*>(type->tp_alloc(type, 0));
+    if (self) self->live = nullptr;
+    return reinterpret_cast<PyObject*>(self);
+}
+
+void ltv_dealloc(LiveTraceViewerObject* self) {
+    delete self->live;
+    Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
+}
+
+int ltv_init(LiveTraceViewerObject* self, PyObject* args, PyObject* kwds) {
+    static const char* kwlist[] = {"files", "index_path", "snapshot_dir",
+                                   nullptr};
+    PyObject* files = nullptr;
+    PyObject* index_obj = nullptr;
+    PyObject* snapshot_obj = nullptr;
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|OO",
+                                     const_cast<char**>(kwlist), &files,
+                                     &index_obj, &snapshot_obj))
+        return -1;
+    std::vector<std::string> paths;
+    if (!py::parse_string_seq(files, "files must be a sequence of paths",
+                              paths))
+        return -1;
+    std::string index_dir;
+    std::string snapshot_dir;
+    for (auto [obj, out] : {std::pair{index_obj, &index_dir},
+                            std::pair{snapshot_obj, &snapshot_dir}}) {
+        if (!obj || obj == Py_None) continue;
+        const char* s = as_utf8(obj);
+        if (!s) return -1;
+        *out = s;
+    }
+    views::LiveView* live = nullptr;
+    if (!run_blocking([&] {
+            live =
+                new views::LiveView(std::move(paths), index_dir, snapshot_dir);
+        }))
+        return -1;
+    delete self->live;
+    self->live = live;
+    return 0;
+}
+
+PyObject* ltv_refresh(PyObject* self, PyObject*) {
+    View tv;
+    if (!run_blocking([&] { tv = live_of(self).refresh(); })) return nullptr;
+    return guarded([&] { return make_viewer(std::move(tv)); });
+}
+
+PyObject* ltv_verified_bytes(PyObject* self, PyObject*) {
+    return PyLong_FromUnsignedLongLong(live_of(self).verified_bytes());
+}
+
+PyObject* ltv_skipped_tail_bytes(PyObject* self, PyObject*) {
+    return PyLong_FromUnsignedLongLong(live_of(self).skipped_tail_bytes());
+}
+
+PyObject* ltv_holes(PyObject* self, PyObject*) {
+    const std::vector<views::LiveHole> holes = live_of(self).holes();
+    PyObject* out = PyList_New(static_cast<Py_ssize_t>(holes.size()));
+    if (!out) return nullptr;
+    for (std::size_t i = 0; i < holes.size(); ++i) {
+        PyObject* t =
+            Py_BuildValue("(sKK)", holes[i].path.c_str(),
+                          static_cast<unsigned long long>(holes[i].offset),
+                          static_cast<unsigned long long>(holes[i].length));
+        if (!t) {
+            Py_DECREF(out);
+            return nullptr;
+        }
+        PyList_SET_ITEM(out, static_cast<Py_ssize_t>(i), t);
+    }
+    return out;
+}
+
+PyMethodDef ltv_methods[] = {
+    {"refresh", ltv_refresh, METH_NOARGS,
+     "Walk the files again; a _TraceViewer of what is whole now."},
+    {"verified_bytes", ltv_verified_bytes, METH_NOARGS,
+     "Bytes of whole members being read."},
+    {"skipped_tail_bytes", ltv_skipped_tail_bytes, METH_NOARGS,
+     "Bytes from each file's stop point to its end."},
+    {"holes", ltv_holes, METH_NOARGS,
+     "(path, offset, length) of the hole that cut each file short."},
+    {nullptr, nullptr, 0, nullptr}};
+
 }  // namespace
+
+PyTypeObject LiveTraceViewerType = [] {
+    PyTypeObject t{PyVarObject_HEAD_INIT(nullptr, 0)};
+    t.tp_name = "dftracer_utils_ext._LiveTraceViewer";
+    t.tp_basicsize = sizeof(LiveTraceViewerObject);
+    t.tp_dealloc = reinterpret_cast<destructor>(ltv_dealloc);
+    t.tp_flags = Py_TPFLAGS_DEFAULT;
+    t.tp_doc = "Trace files that may still be growing.";
+    t.tp_methods = ltv_methods;
+    t.tp_init = reinterpret_cast<initproc>(ltv_init);
+    t.tp_new = ltv_new;
+    return t;
+}();
 
 PyTypeObject TraceViewerType = [] {
     PyTypeObject t{PyVarObject_HEAD_INIT(nullptr, 0)};
@@ -1190,5 +1299,7 @@ PyTypeObject TraceViewerType = [] {
 
 int dftracer::utils::python::init_trace_viewer(PyObject* m) {
     if (register_type(m, &TraceViewerType, "_TraceViewer") < 0) return -1;
+    if (register_type(m, &LiveTraceViewerType, "_LiveTraceViewer") < 0)
+        return -1;
     return PyModule_AddFunctions(m, module_methods);
 }

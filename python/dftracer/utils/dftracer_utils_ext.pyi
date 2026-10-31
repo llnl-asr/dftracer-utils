@@ -1072,6 +1072,22 @@ def set_log_level(
     """Set the C++ logger level (trace|debug|info|warn|error|off)."""
     ...
 
+class _LiveTraceViewer:
+    """Trace files that may still be growing."""
+
+    def __init__(
+        self,
+        files: Sequence[str],
+        index_path: Optional[str] = ...,
+        snapshot_dir: Optional[str] = ...,
+    ) -> None: ...
+    def refresh(self) -> "_TraceViewer":
+        """Walk the files again; a _TraceViewer of what is whole now."""
+        ...
+    def verified_bytes(self) -> int: ...
+    def skipped_tail_bytes(self) -> int: ...
+    def holes(self) -> List[Tuple[str, int, int]]: ...
+
 class _TraceViewer:
     """A trace scan and the plan over it. Builders return a new _TraceViewer;
     lazy() is the plan as a _LazyFrame, and the plan-returning terminals give

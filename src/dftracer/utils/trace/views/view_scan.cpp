@@ -298,7 +298,11 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     std::vector<std::vector<ScanUnit>> per_file(plan.files.size());
     std::vector<std::uint64_t> skip_v(plan.files.size(), 0);
     std::vector<std::exception_ptr> errors(plan.files.size());
+    std::vector<std::uint64_t> uc_sizes(plan.files.size(), 0);
+    std::vector<std::size_t> n_ckpts_v(plan.files.size(), 0);
 
+    // Metadata first: it can write to an index root that files share, and a
+    // write cannot start while a sibling's planner holds that root read-only.
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
             scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
@@ -330,14 +334,36 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                         uc_size = md.uncompressed_size;
                         n_ckpts = md.num_checkpoints;
                     }
+                    uc_sizes[fi] = uc_size;
+                    n_ckpts_v[fi] = n_ckpts;
+                } catch (...) {
+                    errors[fi] = std::current_exception();
+                }
+            });
+        }
+        co_return;
+    });
+    for (const auto& e : errors)
+        if (e) std::rethrow_exception(e);
+
+    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+        for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
+            scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
+                // The scope does not rethrow a spawned task's exception.
+                try {
+                    if (is_cancelled(plan)) co_return;
+                    const auto& f = plan.files[fi];
+                    const std::size_t ckpt =
+                        checkpoint_size_or_default(f.checkpoint_size);
+                    const std::string& index_path = f.index_path;
 
                     ViewPlannerInput pin;
                     pin.with_view(vdef)
                         .with_file_path(f.file_path)
                         .with_index_path(fs::exists(index_path) ? index_path
                                                                 : "")
-                        .with_uncompressed_size(uc_size)
-                        .with_num_checkpoints(n_ckpts);
+                        .with_uncompressed_size(uc_sizes[fi])
+                        .with_num_checkpoints(n_ckpts_v[fi]);
                     // Path-decoded files prune time through their time field.
                     if (plan.time_range && !vdef.by_path)
                         pin.with_time_range(plan.time_range->first,

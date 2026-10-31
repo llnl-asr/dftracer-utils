@@ -4,8 +4,9 @@
 #include <Python.h>
 
 namespace dftracer::utils::trace::views {
+class LiveView;
 class View;
-}
+}  // namespace dftracer::utils::trace::views
 
 // _TraceViewer: the native handle behind the Python TraceViewer, one C++
 // trace::views::View. The trace builders return a new handle; lazy()
@@ -17,6 +18,14 @@ typedef struct {
 } TraceViewerObject;
 
 extern PyTypeObject TraceViewerType;
+
+// _LiveTraceViewer: the native handle behind the Python LiveTraceViewer, one
+// C++ trace::views::LiveView. refresh() returns a _TraceViewer.
+typedef struct {
+    PyObject_HEAD dftracer::utils::trace::views::LiveView *live;
+} LiveTraceViewerObject;
+
+extern PyTypeObject LiveTraceViewerType;
 
 namespace dftracer::utils::python {
 

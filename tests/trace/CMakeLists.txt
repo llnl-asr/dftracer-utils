@@ -26,6 +26,7 @@ set(TRACE_TEST_SOURCES
     views/test_view_definition.cpp
     views/test_view_planner.cpp
     views/test_view_index_freshness.cpp
+    views/test_live_view.cpp
     views/test_view_scanner.cpp
     views/test_view_scan.cpp
     views/test_view_duql.cpp

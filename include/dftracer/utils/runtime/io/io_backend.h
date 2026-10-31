@@ -117,10 +117,12 @@ class IoBackend {
     /// Returns number of operations flushed.
     virtual int flush() { return 0; }
 
-    /// Grows the threads that run blocking operations to `threads`. A smaller
-    /// count changes nothing. False for a backend with no such threads.
-    virtual bool grow_threads(std::size_t threads) {
+    /// Raises the cap on the threads that run blocking operations to
+    /// `threads`. A smaller count changes nothing. `eager` true starts every
+    /// thread up to the cap. False for a backend with no such threads.
+    virtual bool grow_threads(std::size_t threads, bool eager) {
         (void)threads;
+        (void)eager;
         return false;
     }
 

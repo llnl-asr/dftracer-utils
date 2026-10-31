@@ -82,8 +82,9 @@ void ThreadPoolExecutor::start() {
 
     // Create and start I/O backend before workers so workers
     // can use it immediately.
-    io_backend_ = io::create_io_backend(*this, io_pool_size_.load(),
-                                        io_backend_type_, io_batch_threshold_);
+    io_backend_ =
+        io::create_io_backend(*this, io_pool_size_.load(), io_backend_type_,
+                              io_batch_threshold_, {eager_.load(), keepalive_});
     io_backend_->start();
 
     // Spawn the floor (== the cap in eager mode). The elastic monitor grows the
@@ -420,6 +421,9 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
     const bool was_eager = eager_.load(std::memory_order_acquire);
     const bool now_eager = eager.value_or(was_eager);
     eager_.store(now_eager, std::memory_order_release);
+    if (io_backend_)
+        io_backend_->grow_threads(io_pool_size_.load(std::memory_order_acquire),
+                                  now_eager);
     // An elastic pool keeps its floor. One that turns elastic starts at one.
     const std::size_t old_floor = min_workers_.load(std::memory_order_acquire);
     const std::size_t floor =
@@ -450,9 +454,11 @@ void ThreadPoolExecutor::set_threads(std::size_t threads,
 
 void ThreadPoolExecutor::grow_io_threads(std::size_t threads) {
     std::lock_guard<std::mutex> resize(resize_mutex_);
-    if (threads <= io_pool_size_.load(std::memory_order_acquire)) return;
-    if (io_backend_ && io_backend_->grow_threads(threads))
-        io_pool_size_.store(threads, std::memory_order_release);
+    const std::size_t cap =
+        std::max(threads, io_pool_size_.load(std::memory_order_acquire));
+    if (io_backend_ &&
+        io_backend_->grow_threads(cap, eager_.load(std::memory_order_acquire)))
+        io_pool_size_.store(cap, std::memory_order_release);
 }
 
 void ThreadPoolExecutor::set_deadlock_timeout(std::chrono::seconds timeout) {

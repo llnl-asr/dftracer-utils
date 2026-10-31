@@ -215,6 +215,7 @@ set(TEST_CPP_SOURCES
     runtime/test_coro_scope_join.cpp
     runtime/test_frame_heap.cpp
     runtime/test_io_backend_env.cpp
+    runtime/test_io_thread_pool.cpp
     runtime/test_watchdog.cpp
     runtime/test_executor_wakeups.cpp
     runtime/test_timer_service.cpp

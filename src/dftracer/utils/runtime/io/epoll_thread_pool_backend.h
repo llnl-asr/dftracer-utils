@@ -24,7 +24,8 @@ class EpollThreadPoolBackend : public ThreadPoolFileOps {
    public:
     explicit EpollThreadPoolBackend(Executor& executor,
                                     std::size_t pool_size = 4,
-                                    unsigned batch_threshold = 0);
+                                    unsigned batch_threshold = 0,
+                                    IoPoolOptions pool_options = {});
     ~EpollThreadPoolBackend() override;
 
     void start() override;

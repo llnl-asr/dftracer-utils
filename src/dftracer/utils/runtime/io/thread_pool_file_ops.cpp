@@ -83,8 +83,9 @@ bool wait_ready(int fd, short events, const IoThreadPool& pool) {
 }  // namespace
 
 ThreadPoolFileOps::ThreadPoolFileOps(Executor& executor, std::size_t pool_size,
-                                     unsigned batch_threshold)
-    : executor_(executor), pool_(pool_size, batch_threshold) {}
+                                     unsigned batch_threshold,
+                                     IoPoolOptions pool_options)
+    : executor_(executor), pool_(pool_size, batch_threshold, pool_options) {}
 
 IoAwaitable ThreadPoolFileOps::make_request(IoOp op, int fd, void* buf,
                                             std::size_t len, off_t offset,

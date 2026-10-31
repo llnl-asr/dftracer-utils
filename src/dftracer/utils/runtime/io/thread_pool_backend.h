@@ -19,7 +19,8 @@ namespace dftracer::utils::io {
 class ThreadPoolBackend : public ThreadPoolFileOps {
    public:
     explicit ThreadPoolBackend(Executor& executor, std::size_t pool_size = 4,
-                               unsigned batch_threshold = 0);
+                               unsigned batch_threshold = 0,
+                               IoPoolOptions pool_options = {});
 
     void start() override;
     void stop() override;

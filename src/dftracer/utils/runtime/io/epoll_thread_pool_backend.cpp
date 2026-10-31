@@ -14,8 +14,9 @@ namespace dftracer::utils::io {
 
 EpollThreadPoolBackend::EpollThreadPoolBackend(Executor& executor,
                                                std::size_t pool_size,
-                                               unsigned batch_threshold)
-    : ThreadPoolFileOps(executor, pool_size, batch_threshold) {}
+                                               unsigned batch_threshold,
+                                               IoPoolOptions pool_options)
+    : ThreadPoolFileOps(executor, pool_size, batch_threshold, pool_options) {}
 
 EpollThreadPoolBackend::~EpollThreadPoolBackend() = default;
 

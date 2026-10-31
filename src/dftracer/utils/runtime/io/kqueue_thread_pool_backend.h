@@ -26,7 +26,8 @@ class KqueueThreadPoolBackend : public ThreadPoolFileOps {
    public:
     explicit KqueueThreadPoolBackend(Executor& executor,
                                      std::size_t pool_size = 4,
-                                     unsigned batch_threshold = 0);
+                                     unsigned batch_threshold = 0,
+                                     IoPoolOptions pool_options = {});
     ~KqueueThreadPoolBackend() override;
 
     void start() override;

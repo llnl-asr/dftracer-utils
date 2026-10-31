@@ -58,7 +58,8 @@ struct IoRequest : SubmitContext {
 class ThreadPoolFileOps : public IoBackend {
    public:
     explicit ThreadPoolFileOps(Executor& executor, std::size_t pool_size = 4,
-                               unsigned batch_threshold = 0);
+                               unsigned batch_threshold = 0,
+                               IoPoolOptions pool_options = {});
 
     IoAwaitable submit_read(int fd, void* buf, std::size_t len) override;
     IoAwaitable submit_write(int fd, const void* buf, std::size_t len) override;
@@ -103,8 +104,8 @@ class ThreadPoolFileOps : public IoBackend {
 
     std::size_t in_flight() const override { return pool_.tracked(); }
 
-    bool grow_threads(std::size_t threads) override {
-        pool_.grow(threads);
+    bool grow_threads(std::size_t threads, bool eager) override {
+        pool_.grow(threads, eager);
         return true;
     }
 

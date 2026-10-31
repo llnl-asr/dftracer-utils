@@ -20,6 +20,10 @@
 #include <string>
 #include <vector>
 
+namespace dftracer::utils::index {
+class FileBuild;
+}  // namespace dftracer::utils::index
+
 namespace dftracer::utils::index::gzip {
 
 struct GzipBuildArtifacts {
@@ -71,6 +75,11 @@ coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     int fd, const std::string &gz_path, std::uint64_t ckpt_size,
     const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
     const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
+
+/// Write the file's members, restart windows and metadata into `build` and
+/// finish its Members extension.
+void persist_gzip_index_artifacts(index::FileBuild &build,
+                                  const GzipBuildArtifacts &artifacts);
 
 /// Replace the file's `core.members` data (members and metadata) and write
 /// its manifest entry into `w`.

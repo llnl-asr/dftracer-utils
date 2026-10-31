@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -136,6 +137,27 @@ void throw_on_failures(const build::ResolverResult& r) {
     const auto& f = r.failures.front();
     throw DFTUtilsException::cat(ErrorCode::Io, "failed to index ", f.file_path,
                                  ": ", f.message);
+}
+
+void throw_on_error(const dstd::Error& error, std::string_view what) {
+    throw DFTUtilsException::cat(ErrorCode::Io, what, ": ", error.message());
+}
+
+/// Clears plugin extension `name` of every file in `traces`. A plugin namespace
+/// has no remove in the index API yet, so this keeps the record writer.
+void drop_plugin_extension(const std::string& index_path,
+                           const std::string& name,
+                           const std::vector<const std::string*>& traces) {
+    std::lock_guard<std::mutex> lock(build::index_write_mutex(index_path));
+    store::IndexDatabase db(index_path);
+    auto writer = db.begin_write();
+    for (const auto* p : traces) {
+        const int fid =
+            db.get_file_info_id(store::internal::get_logical_path(*p));
+        if (fid < 0) continue;
+        store::records::clear_plugin(*writer, fid, name);
+    }
+    writer->commit();
 }
 
 store::IndexExtension tier_extension(const std::string& name) {
@@ -427,19 +449,25 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
-        std::lock_guard<std::mutex> lock(build::index_write_mutex(index_path));
-        store::IndexDatabase db(index_path);
-        auto writer = db.begin_write();
-        for (const auto* p : traces) {
-            const int fid =
-                db.get_file_info_id(store::internal::get_logical_path(*p));
-            if (fid < 0) continue;
-            if (ext == store::IndexExtension::Plugin)
-                store::records::clear_plugin(*writer, fid, extension);
-            else
-                store::records::clear_file(*writer, ext, fid);
+        if (ext == store::IndexExtension::Plugin) {
+            drop_plugin_extension(index_path, extension, traces);
+            continue;
         }
-        writer->commit();
+        auto opened = Index::open(index_path);
+        if (!opened)
+            throw_on_error(opened.error(), "drop extension " + extension);
+        std::vector<std::string> logical;
+        logical.reserve(traces.size());
+        for (const auto* p : traces)
+            logical.push_back(store::internal::get_logical_path(*p));
+        std::vector<dstd::StringView> views;
+        views.reserve(logical.size());
+        for (const auto& path : logical) views.emplace_back(path);
+        auto dropped = co_await remove_extension(
+            *opened, ext,
+            dstd::Span<const dstd::StringView>(views.data(), views.size()));
+        if (!dropped)
+            throw_on_error(dropped.error(), "drop extension " + extension);
     }
     co_return co_await status(scope);
 }

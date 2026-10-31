@@ -9,10 +9,12 @@
 #include <dftracer/utils/index/gzip/checkpoint_size.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -1064,6 +1066,18 @@ build_gzip_index_artifacts(int fd, const std::string& gz_path,
     co_return artifacts;
 }
 
+void persist_gzip_index_artifacts(index::FileBuild& build,
+                                  const GzipBuildArtifacts& artifacts) {
+    for (const auto& member : artifacts.members)
+        index::put_gzip_member(build, member);
+    for (const auto& [member_idx, window] : artifacts.restart_windows)
+        index::put_restart_window(build, member_idx, window);
+    index::put_file_metadata(build, artifacts.checkpoint_size,
+                             artifacts.total_lines, artifacts.total_uc_size,
+                             artifacts.truncated);
+    build.finish(index::store::IndexExtension::Members, 0);
+}
+
 void persist_gzip_index_artifacts(index::store::IndexWrite& w, int file_id,
                                   const GzipBuildArtifacts& artifacts) {
     namespace records = index::store::records;
@@ -1195,14 +1209,28 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
 
     int file_id = -1;
     {
-        auto w = db.begin_write();
-        file_id = w->file_id_for(logical);
-        index::store::records::put_file_record(
-            *w, logical,
-            {static_cast<std::uint32_t>(file_id),
-             static_cast<std::uint64_t>(mtime), hash, bytes});
-        persist_gzip_index_artifacts(*w, file_id, *artifacts);
-        w->commit();
+        auto opened = index::Index::open(index_path);
+        auto build =
+            opened ? opened->build(
+                         logical,
+                         index::SourceStat{static_cast<std::uint64_t>(mtime),
+                                           bytes, hash})
+                   : dstd::Expected<index::FileBuild, dstd::Error>(
+                         dstd::Unexpected<dstd::Error>(opened.error()));
+        dstd::Expected<void, dstd::Error> committed = {};
+        if (build) {
+            persist_gzip_index_artifacts(*build, *artifacts);
+            committed = co_await build->commit();
+        } else {
+            committed = dstd::Unexpected<dstd::Error>(build.error());
+        }
+        if (!committed) {
+            throw index::store::IndexerError(
+                index::store::IndexerError::Type::BuildError,
+                "Failed to write the index of " + gz_path + ": " +
+                    std::string(committed.error().message()));
+        }
+        file_id = db.get_file_info_id(logical);
     }
 
     cached_is_valid = true;

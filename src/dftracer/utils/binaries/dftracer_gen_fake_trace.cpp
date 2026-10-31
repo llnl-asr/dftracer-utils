@@ -5,10 +5,10 @@
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -33,7 +33,6 @@ using namespace dftracer::utils::index::extensions;
 using namespace dftracer::utils::index::plan;
 using dftracer::utils::index::build::BatchBuilder;
 using dftracer::utils::index::build::IndexBuildBatchConfig;
-using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::IndexExtension;
 using dftracer::utils::index::store::internal::get_logical_path;
 
@@ -115,14 +114,24 @@ static coro::CoroTask<int> run_verify(
         try {
             std::string idx_path_bidx =
                 internal::determine_index_path(abs_path, "");
-            IndexDatabase idx_db(idx_path_bidx);
-            auto writer = idx_db.begin_write();
-
-            const int fid = writer->file_id_for(get_logical_path(abs_path));
-            namespace records = dftracer::utils::index::store::records;
+            auto opened = index::Index::open(idx_path_bidx);
+            if (!opened) {
+                std::fprintf(stderr, "  WARN: index open failed for %s\n",
+                             abs_path.c_str());
+                continue;
+            }
+            index::SourceStat source;
+            source.mtime = static_cast<std::uint64_t>(
+                index::store::internal::get_file_modification_time(abs_path));
+            source.size = index::store::internal::file_size_bytes(abs_path);
+            source.hash = index::store::internal::calculate_file_hash(abs_path);
+            auto build = opened->build(get_logical_path(abs_path), source);
+            if (!build) {
+                std::fprintf(stderr, "  WARN: index build failed for %s\n",
+                             abs_path.c_str());
+                continue;
+            }
             namespace kinds = dftracer::utils::index::extensions::kinds;
-            records::clear_file(*writer, IndexExtension::Bloom, fid);
-            records::clear_file(*writer, IndexExtension::Stats, fid);
 
             std::size_t file_size = metadata.uncompressed_size;
             std::size_t num_ckpts = metadata.num_checkpoints;
@@ -166,8 +175,8 @@ static coro::CoroTask<int> run_verify(
 
                 for (auto& [dim, bloom] : output.bloom_filters) {
                     auto blob = bloom.serialize();
-                    records::put_path_granule(
-                        *writer, IndexExtension::Bloom, fid, dim,
+                    index::put_path_granule(
+                        *build, IndexExtension::Bloom, dim,
                         output.checkpoint_idx,
                         kinds::encode_bloom(blob, bloom.num_entries()));
 
@@ -179,25 +188,28 @@ static coro::CoroTask<int> run_verify(
                     }
                 }
 
-                records::put_chunk_statistics(
-                    *writer, fid, output.checkpoint_idx, output.statistics);
+                index::put_chunk_statistics(*build, output.checkpoint_idx,
+                                            output.statistics);
             }
 
             for (auto& [dim, bloom] : file_blooms) {
                 auto blob = bloom.serialize();
-                records::put_path_file(
-                    *writer, IndexExtension::Bloom, fid, dim,
+                index::put_path_file(
+                    *build, IndexExtension::Bloom, dim,
                     kinds::encode_bloom(blob, bloom.num_entries()));
             }
             for (const auto& dim : all_dimensions)
-                records::put_path(*writer, IndexExtension::Bloom, fid, dim);
-            records::put_manifest(
-                *writer, fid, IndexExtension::Bloom,
-                indexer_config.params_hash(IndexExtension::Bloom));
-            records::put_manifest(
-                *writer, fid, IndexExtension::Stats,
-                indexer_config.params_hash(IndexExtension::Stats));
-            writer->commit();
+                index::put_path(*build, IndexExtension::Bloom, dim);
+            build->finish(IndexExtension::Bloom,
+                          indexer_config.params_hash(IndexExtension::Bloom));
+            build->finish(IndexExtension::Stats,
+                          indexer_config.params_hash(IndexExtension::Stats));
+            auto committed = co_await build->commit();
+            if (!committed) {
+                std::fprintf(stderr, "  WARN: index commit failed for %s\n",
+                             abs_path.c_str());
+                continue;
+            }
 
             std::string basename = fs::path(abs_path).filename().string();
             std::printf("  %s: indexed (%zu events, %zu chunks)\n",

@@ -182,7 +182,7 @@ class ExtentWriter {
 
     std::mutex idle_mutex_;
     std::condition_variable idle_cv_;
-    dstd::Vector<std::coroutine_handle<>> idle_waiters_;
+    dstd::Vector<IdleWait*> idle_waiters_;
     std::uint64_t in_flight_ = 0;
 };
 

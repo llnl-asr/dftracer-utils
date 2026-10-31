@@ -12,6 +12,7 @@
 namespace dftracer::utils {
 
 class Executor;
+struct ParkNode;
 
 }  // namespace dftracer::utils
 
@@ -73,7 +74,8 @@ class WriterExtents {
 
     /// Suspends the calling coroutine until the bytes it waits for are written
     /// (a release after @p epoch, nothing held, or latched). It reports no
-    /// result, so retry the commit. Await it on the writer's executor.
+    /// result, so retry the commit. Parks on the executor it waits on, so a
+    /// RunLoop driving it knows a release still wakes it.
     class SpaceWait {
        public:
         SpaceWait(WriterExtents& extents, std::uint64_t epoch) noexcept
@@ -86,12 +88,17 @@ class WriterExtents {
 
         bool await_ready() const;
         bool await_suspend(std::coroutine_handle<> handle);
-        void await_resume() const noexcept {}
+        void await_resume() noexcept;
 
        private:
+        // The release wakes the waiter on its own.
+        static void ignore_cancel(void*) noexcept {}
+
         WriterExtents* extents_;
         std::uint64_t epoch_;
         std::coroutine_handle<> parked_;
+        Executor* executor_ = nullptr;
+        ParkNode* park_ = nullptr;
     };
 
     SpaceWait wait_release(std::uint64_t epoch) noexcept {

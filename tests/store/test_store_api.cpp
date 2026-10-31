@@ -580,4 +580,26 @@ TEST_SUITE("store api") {
         CHECK(get_value(store, ns, own, "k") ==
               std::optional<std::string>("own"));
     }
+
+    TEST_CASE("flush and close finish when the caller drives them itself") {
+        // get() on a thread with no executor drives the task on a RunLoop,
+        // which only waits when the store's waits register as parked.
+        dftu_utils_test::ScopedTestDir dir("store_api_run_loop");
+        Store store = open_store(dir);
+        const Namespace ns = register_ns(store, spec_of("dftu.test.loop"));
+        const ScopeKey scope = ScopeKey::file("/traces/loop.pfw");
+        for (int round = 0; round < 4; ++round) {
+            Batch batch = store.batch(ns, scope);
+            for (int i = 0; i < 256; ++i) {
+                const std::string key = "k" + std::to_string(round * 1000 + i);
+                const std::string value(4096, static_cast<char>('a' + round));
+                batch.put(view_of(key), view_of(value));
+            }
+            REQUIRE(store.commit(std::move(batch)).get().has_value());
+            REQUIRE(store.flush().get().has_value());
+        }
+        CHECK(get_value(store, ns, scope, "k3000") ==
+              std::optional<std::string>(std::string(4096, 'd')));
+        REQUIRE(store.close().get().has_value());
+    }
 }

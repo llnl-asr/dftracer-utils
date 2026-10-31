@@ -116,10 +116,23 @@ bool WriterExtents::SpaceWait::await_suspend(std::coroutine_handle<> handle) {
     if (extents_->ready_locked(epoch_)) return false;
     extents_->waiters_.push_back(Waiter{handle, executor});
     parked_ = handle;
+    executor_ = executor;
+    if (executor_ != nullptr) {
+        park_ = executor_->park(this, &SpaceWait::ignore_cancel);
+    }
     return true;
 }
 
+void WriterExtents::SpaceWait::await_resume() noexcept {
+    if (park_ != nullptr) {
+        executor_->unpark(park_);
+        park_ = nullptr;
+    }
+    parked_ = nullptr;
+}
+
 WriterExtents::SpaceWait::~SpaceWait() {
+    if (park_ != nullptr) executor_->unpark(park_);
     if (!parked_) return;
     std::lock_guard<std::mutex> lock(extents_->mutex_);
     auto& waiters = extents_->waiters_;

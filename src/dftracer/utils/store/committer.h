@@ -164,6 +164,7 @@ class Committer {
     std::uint64_t pending_bytes_ = 0;
     std::shared_ptr<WakeState> wake_state_;
     std::coroutine_handle<> stop_waiter_{};
+    Executor* stop_executor_ = nullptr;
     std::condition_variable done_cv_;
     bool stopping_ = false;
     bool started_ = false;

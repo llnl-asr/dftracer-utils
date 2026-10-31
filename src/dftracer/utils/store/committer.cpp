@@ -123,8 +123,12 @@ struct Committer::WaitForWork {
     }
 };
 
+/// Parks on the executor it waits on, so a RunLoop driving the close knows the
+/// loop's end still resumes it, and is resumed through that executor.
 struct Committer::StopWait {
     Committer& committer;
+    Executor* executor = nullptr;
+    ParkNode* park = nullptr;
 
     bool await_ready() const {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);
@@ -134,11 +138,23 @@ struct Committer::StopWait {
     bool await_suspend(std::coroutine_handle<> handle) {
         std::lock_guard<std::mutex> lock(committer.queue_mutex_);
         if (committer.loop_done_) return false;
+        executor = Executor::current();
+        if (executor == nullptr) executor = &committer.executor_;
         committer.stop_waiter_ = handle;
+        committer.stop_executor_ = executor;
+        park = executor->park(this, &StopWait::ignore_cancel);
         return true;
     }
 
-    void await_resume() {}
+    // The committer loop ends on its own and resumes the waiter.
+    static void ignore_cancel(void*) noexcept {}
+
+    void await_resume() {
+        if (park != nullptr) {
+            executor->unpark(park);
+            park = nullptr;
+        }
+    }
 };
 
 Committer::Committer(DataFileWriter& file, Executor& executor,
@@ -204,18 +220,21 @@ coro::Coro Committer::run() {
 
 void Committer::finish_loop() {
     std::coroutine_handle<> waiter;
+    Executor* resume_on = &executor_;
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         loop_done_ = true;
         wake_state_.reset();
         waiter = stop_waiter_;
         stop_waiter_ = nullptr;
+        resume_on = stop_executor_ != nullptr ? stop_executor_ : &executor_;
+        stop_executor_ = nullptr;
         // Notified under the lock: the destructor returns as soon as it sees
         // loop_done_, so it must not read the flag before the notify that
         // wakes its wait on the condition variable is under way.
         done_cv_.notify_all();
     }
-    if (waiter) coro::resume_continuation(&executor_, waiter);
+    if (waiter) coro::resume_continuation(resume_on, waiter);
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> Committer::stop() {
@@ -225,7 +244,7 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Committer::stop() {
         if (!started_) loop_done_ = true;
     }
     wake();
-    StopWait stop{*this};
+    StopWait stop{*this, nullptr, nullptr};
     co_await stop;
     if (failed()) co_return dstd::Unexpected<dstd::Error>(error());
     co_return {};

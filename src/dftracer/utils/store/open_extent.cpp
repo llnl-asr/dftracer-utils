@@ -375,21 +375,68 @@ void ExtentWriter::begin_write() {
     ++in_flight_;
 }
 
+/// Suspends the calling coroutine while an extent write is in flight. The last
+/// completion resumes it through the executor it waits on, which it parks on
+/// so that a RunLoop driving it knows a wake-up is still to come. Queued under
+/// the lock the check takes, so a completion that lands first is not lost.
+struct ExtentWriter::IdleWait {
+    ExtentWriter& writer;
+    std::coroutine_handle<> handle;
+    Executor* executor = nullptr;
+    ParkNode* park = nullptr;
+
+    bool await_ready() const {
+        std::lock_guard<std::mutex> lock(writer.idle_mutex_);
+        return writer.in_flight_ == 0;
+    }
+
+    bool await_suspend(std::coroutine_handle<> awaiting) {
+        std::lock_guard<std::mutex> lock(writer.idle_mutex_);
+        if (writer.in_flight_ == 0) return false;
+        handle = awaiting;
+        executor = Executor::current();
+        if (executor == nullptr) executor = &writer.executor_;
+        writer.idle_waiters_.push_back(this);
+        park = executor->park(this, &IdleWait::ignore_cancel);
+        return true;
+    }
+
+    // The write in flight finishes and resumes the waiter on its own.
+    static void ignore_cancel(void*) noexcept {}
+
+    dstd::Expected<void, dstd::Error> await_resume() {
+        if (park != nullptr) {
+            executor->unpark(park);
+            park = nullptr;
+        }
+        const int latched =
+            writer.latched_errno_.load(std::memory_order_acquire);
+        if (latched != 0) {
+            return dstd::Unexpected<dstd::Error>(writer.latched_error());
+        }
+        return {};
+    }
+};
+
 void ExtentWriter::release_in_flight() {
-    dstd::Vector<std::coroutine_handle<>> waiters;
+    dstd::Vector<std::pair<Executor*, std::coroutine_handle<>>> waiters;
     {
         std::lock_guard<std::mutex> lock(idle_mutex_);
         --in_flight_;
         // Under the lock, so wait_idle() cannot observe the zero count, return
         // and let the writer be destroyed while this notify is still running.
         if (in_flight_ == 0) {
-            waiters.swap(idle_waiters_);
+            waiters.reserve(idle_waiters_.size());
+            for (IdleWait* waiter : idle_waiters_) {
+                waiters.emplace_back(waiter->executor, waiter->handle);
+            }
+            idle_waiters_.clear();
             if (on_idle_ != nullptr) on_idle_(on_written_context_);
         }
         idle_cv_.notify_all();
     }
-    for (std::coroutine_handle<> waiter : waiters) {
-        coro::resume_continuation(&executor_, waiter);
+    for (const auto& [executor, handle] : waiters) {
+        coro::resume_continuation(executor, handle);
     }
 }
 
@@ -645,37 +692,9 @@ dstd::Expected<void, dstd::Error> ExtentWriter::wait_idle() {
     return {};
 }
 
-/// Suspends the calling coroutine while an extent write is in flight. The last
-/// completion resumes it through the writer's executor, under the same lock
-/// the check takes, so a completion that lands first is not lost.
-struct ExtentWriter::IdleWait {
-    ExtentWriter& writer;
-
-    bool await_ready() const {
-        std::lock_guard<std::mutex> lock(writer.idle_mutex_);
-        return writer.in_flight_ == 0;
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle) {
-        std::lock_guard<std::mutex> lock(writer.idle_mutex_);
-        if (writer.in_flight_ == 0) return false;
-        writer.idle_waiters_.push_back(handle);
-        return true;
-    }
-
-    dstd::Expected<void, dstd::Error> await_resume() const {
-        const int latched =
-            writer.latched_errno_.load(std::memory_order_acquire);
-        if (latched != 0) {
-            return dstd::Unexpected<dstd::Error>(writer.latched_error());
-        }
-        return {};
-    }
-};
-
 coro::CoroTask<dstd::Expected<void, dstd::Error>>
 ExtentWriter::wait_idle_async() {
-    IdleWait idle{*this};
+    IdleWait idle{*this, {}, nullptr, nullptr};
     co_return co_await idle;
 }
 

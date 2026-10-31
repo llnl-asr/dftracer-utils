@@ -139,7 +139,13 @@ class Runner {
     static std::size_t stripe_of(const AggKey& key) {
         return (AggKeyHash{}(key) >> 32U) % MERGE_STRIPES;
     }
-    void collect();
+    using Values = AggQueryResult::Rows::value_container_type;
+    /// Stripes moved into the result at once. Each wave grows the result by
+    /// its rows only and frees its stripes, so the peak stays near one copy.
+    static constexpr std::size_t JOIN_WAVE = 8;
+    coro::CoroTask<void> collect();
+    coro::CoroTask<void> move_task(std::size_t at, Values* values,
+                                   std::size_t offset);
     coro::CoroTask<void> drain_task(std::size_t at);
 
     coro::CoroTask<void> file_task(std::size_t source, std::size_t file,
@@ -417,24 +423,44 @@ coro::CoroTask<void> Runner::run() {
             co_return;
         });
     }
-    collect();
+    co_await collect();
     out.stats.groups = out.rows.size();
 }
 
-void Runner::collect() {
-    std::size_t total = out.rows.size();
+// A key lives in one stripe, so the stripes join without a lookup.
+coro::CoroTask<void> Runner::collect() {
+    std::size_t total = 0;
     for (const Stripe& stripe : stripes) total += stripe.rows.size();
-    out.rows.reserve(total);
-    for (Stripe& stripe : stripes) {
-        for (auto& [key, partial] : stripe.rows) {
-            auto it = out.rows.find(key);
-            if (it == out.rows.end())
-                out.rows.emplace(key, std::move(partial));
-            else
-                it->second.merge(partial);
+    Values values;
+    values.reserve(total);
+    for (std::size_t first = 0; first < MERGE_STRIPES; first += JOIN_WAVE) {
+        const std::size_t last = std::min(first + JOIN_WAVE, MERGE_STRIPES);
+        std::array<std::size_t, JOIN_WAVE> offsets{};
+        std::size_t end = values.size();
+        for (std::size_t at = first; at < last; ++at) {
+            offsets[at - first] = end;
+            end += stripes[at].rows.size();
         }
-        stripe.rows = AggQueryResult::Rows();
+        values.resize(end);
+        co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+            for (std::size_t at = first; at < last; ++at)
+                scope.spawn([this, at, values = &values,
+                             offset = offsets[at - first]](CoroScope&) {
+                    return move_task(at, values, offset);
+                });
+            co_return;
+        });
     }
+    out.rows.replace(std::move(values));
+}
+
+coro::CoroTask<void> Runner::move_task(std::size_t at, Values* values,
+                                       std::size_t offset) {
+    Values part = std::move(stripes[at].rows).extract();
+    stripes[at].rows = AggQueryResult::Rows();
+    std::move(part.begin(), part.end(),
+              values->begin() + static_cast<std::ptrdiff_t>(offset));
+    co_return;
 }
 
 coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,

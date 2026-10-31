@@ -38,6 +38,10 @@ enum class ColumnType : std::uint8_t {
 /// merges across files.
 ColumnType merge_column_type(ColumnType a, ColumnType b);
 
+/// The type of a catalog path from the bitmask of PathType values seen for
+/// it. Unknown when only nulls, objects or arrays were seen.
+ColumnType seen_column_type(std::uint8_t seen);
+
 /// Canonical lowercase name for a ColumnType ("int64"/"float64"/"string"/
 /// "json");
 /// empty string for Unknown.

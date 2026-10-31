@@ -2,10 +2,12 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -16,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,7 +30,9 @@ namespace dstd = dftracer::utils::dstd;
 namespace coro = dftracer::utils::coro;
 namespace index = dftracer::utils::index;
 namespace index_store = dftracer::utils::index::store;
+namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace agg_tier = dftracer::utils::index::schemas::dft::agg::tier;
+namespace kv = dftracer::utils::store;
 
 using index::FileRef;
 using index::Freshness;
@@ -77,6 +82,10 @@ T take(dstd::Expected<T, dstd::Error> result) {
     return std::move(*result);
 }
 
+void ok(dstd::Expected<void, dstd::Error> result) {
+    REQUIRE(result.has_value());
+}
+
 std::string build_into(const std::string& dir,
                        const std::vector<std::string>& traces) {
     const auto index_path = dir + "/.dftindex";
@@ -117,7 +126,105 @@ std::vector<std::string> create_traces(dftu_utils_test::TestEnvironment& env,
 }
 
 void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
-                const FileRef& file) {
+                const FileRef& file, bool has_plugin);
+
+struct PartialRow {
+    std::uint64_t chunk = 0;
+    std::uint32_t cat = 0;
+    std::uint32_t name = 0;
+    std::uint32_t host = 0;
+    std::uint32_t extra = 0;
+    agg::PartialKind kind = agg::PartialKind::Event;
+    std::string bytes;
+};
+
+std::vector<PartialRow> partials(const IndexDatabase& db, int file_id) {
+    std::vector<PartialRow> rows;
+    agg_tier::for_each_partial(
+        db, file_id,
+        [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
+            std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
+            std::span<const std::uint8_t> bytes) {
+            rows.push_back(
+                {chunk, cat, name, host, extra, kind,
+                 std::string(reinterpret_cast<const char*>(bytes.data()),
+                             bytes.size())});
+            return true;
+        });
+    return rows;
+}
+
+std::vector<PartialRow> partials(const index::Snapshot& snapshot,
+                                 const FileRef& file) {
+    std::vector<PartialRow> rows;
+    ok(index::for_each_agg_partial(
+        snapshot, file,
+        [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
+            std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
+            dstd::Span<const std::uint8_t> bytes) {
+            rows.push_back(
+                {chunk, cat, name, host, extra, kind,
+                 std::string(reinterpret_cast<const char*>(bytes.data()),
+                             bytes.size())});
+            return true;
+        }));
+    return rows;
+}
+
+using Blocks = std::vector<std::pair<std::uint64_t, agg::ChunkColumns>>;
+
+Blocks blocks(const IndexDatabase& db, int file_id) {
+    Blocks out;
+    agg_tier::for_each_chunk_columns(
+        db, file_id, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+            out.emplace_back(chunk, block);
+            return true;
+        });
+    return out;
+}
+
+Blocks blocks(const index::Snapshot& snapshot, const FileRef& file) {
+    std::vector<std::pair<std::uint64_t, agg::ChunkColumns>> out;
+    ok(index::for_each_agg_chunk_columns(
+        snapshot, file,
+        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+            out.emplace_back(chunk, block);
+            return true;
+        }));
+    return out;
+}
+
+void check_block(const agg::ChunkColumns& got,
+                 const agg::ChunkColumns& expected) {
+    CHECK(got.chunk == expected.chunk);
+    CHECK(got.rows == expected.rows);
+    REQUIRE(got.ids.size() == expected.ids.size());
+    REQUIRE(got.texts.size() == expected.texts.size());
+    for (std::size_t i = 0; i < got.ids.size(); ++i)
+        CHECK(got.ids[i] == expected.ids[i]);
+    for (std::size_t i = 0; i < got.texts.size(); ++i)
+        CHECK(str(got.texts[i]) == str(expected.texts[i]));
+    CHECK(got.cat == expected.cat);
+    CHECK(got.name == expected.name);
+    CHECK(got.host == expected.host);
+    CHECK(got.file == expected.file);
+    CHECK(got.ts == expected.ts);
+    CHECK(got.dur == expected.dur);
+    CHECK(got.has_dur == expected.has_dur);
+    CHECK(got.pid == expected.pid);
+    CHECK(got.tid == expected.tid);
+    CHECK(got.phase == expected.phase);
+    REQUIRE(got.columns.size() == expected.columns.size());
+    for (std::size_t i = 0; i < got.columns.size(); ++i) {
+        CHECK(got.columns[i].path == expected.columns[i].path);
+        CHECK(got.columns[i].kind == expected.columns[i].kind);
+        CHECK(got.columns[i].rows == expected.columns[i].rows);
+        CHECK(got.columns[i].bits == expected.columns[i].bits);
+    }
+}
+
+void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
+                const FileRef& file, bool has_plugin) {
     const std::string path = str(file.path());
     const int file_id = db.get_file_info_id(path);
     REQUIRE(file_id >= 0);
@@ -127,6 +234,20 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
     CHECK(file.stat().mtime == stat->mtime);
     CHECK(file.stat().size == stat->size);
     CHECK(file.stat().hash == db.get_file_hash(path).value_or(0));
+
+    const auto hash = index::file_hash(snapshot, file);
+    const auto old_hash = db.get_file_hash(path);
+    CHECK(hash.has_value() == old_hash.has_value());
+    if (hash && old_hash) CHECK(*hash == *old_hash);
+
+    const auto types = take(index::file_column_types(snapshot, file));
+    const auto old_types = db.file_column_types(file_id);
+    REQUIRE(types.size() == old_types.size());
+    CHECK_FALSE(types.empty());
+    for (std::size_t i = 0; i < types.size(); ++i) {
+        CHECK(str(types[i].first) == old_types[i].first);
+        CHECK(types[i].second == old_types[i].second);
+    }
 
     const auto old_members = db.query_gzip_members(file_id);
     const auto members = take(index::members(snapshot, file));
@@ -240,6 +361,50 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
     const auto old_rowset = db.rowset(file_id, "missing");
     CHECK(rowset.has_value() == old_rowset.has_value());
 
+    dstd::HashMap<std::uint32_t, dstd::String> old_texts;
+    agg_tier::load_file_texts(db, file_id, old_texts);
+    dstd::HashMap<std::uint32_t, dstd::String> texts;
+    ok(index::agg_file_texts(snapshot, file, texts));
+    const auto text_count = old_texts.size();
+    CHECK(texts.size() == text_count);
+    for (const auto& [id, text] : old_texts) {
+        const auto at = texts.find(id);
+        REQUIRE(at != texts.end());
+        CHECK(str(at->second) == str(text));
+    }
+
+    const auto old_partials = partials(db, file_id);
+    const auto new_partials = partials(snapshot, file);
+    REQUIRE(new_partials.size() == old_partials.size());
+    for (std::size_t i = 0; i < old_partials.size(); ++i) {
+        CHECK(new_partials[i].chunk == old_partials[i].chunk);
+        CHECK(new_partials[i].cat == old_partials[i].cat);
+        CHECK(new_partials[i].name == old_partials[i].name);
+        CHECK(new_partials[i].host == old_partials[i].host);
+        CHECK(new_partials[i].extra == old_partials[i].extra);
+        CHECK(new_partials[i].kind == old_partials[i].kind);
+        CHECK(new_partials[i].bytes == old_partials[i].bytes);
+    }
+
+    const auto old_blocks = blocks(db, file_id);
+    const auto new_blocks = blocks(snapshot, file);
+    REQUIRE(new_blocks.size() == old_blocks.size());
+    for (std::size_t i = 0; i < old_blocks.size(); ++i) {
+        CHECK(new_blocks[i].first == old_blocks[i].first);
+        check_block(new_blocks[i].second, old_blocks[i].second);
+    }
+    for (const auto& [chunk, old_block] : old_blocks) {
+        const auto one = take(index::agg_chunk_columns(snapshot, file, chunk));
+        REQUIRE(one.has_value());
+        check_block(*one, old_block);
+    }
+    const std::uint64_t absent_chunk =
+        old_blocks.empty() ? 0 : old_blocks.back().first + 1000;
+    agg::ChunkColumns unused;
+    CHECK_FALSE(agg_tier::get_chunk_columns(db, file_id, absent_chunk, unused));
+    CHECK_FALSE(take(index::agg_chunk_columns(snapshot, file, absent_chunk))
+                    .has_value());
+
     for (IndexExtension ext : PATH_KEYED) {
         const auto old_paths = db.extension_paths(file_id, ext);
         const auto paths = take(index::paths(snapshot, file, ext));
@@ -281,6 +446,7 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
     for (IndexExtension ext : BUILT_IN) {
         const auto state = db.extension_state(file_id, ext);
         const bool current = db.extension_current(file_id, ext);
+        CHECK(index::extension_current(snapshot, file, ext) == current);
         const Freshness got =
             snapshot.extension(file, ext, state ? state->params_hash : 0);
         if (current) {
@@ -290,6 +456,7 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
         }
     }
 
+    if (!has_plugin) return;
     const auto old_plugins = db.plugin_extension_states(file_id);
     const auto plugins = take(index::plugins(snapshot, file));
     REQUIRE(plugins.size() == old_plugins.size());
@@ -389,7 +556,7 @@ TEST_CASE("the index api reads what IndexDatabase reads") {
 
     for (const FileRef& file : files) {
         CHECK(snapshot.file(file.path()).has_value());
-        check_file(db, snapshot, file);
+        check_file(db, snapshot, file, true);
     }
     CHECK_FALSE(snapshot.file("/no/such/file").has_value());
 
@@ -407,6 +574,135 @@ TEST_CASE("the index api reads what IndexDatabase reads") {
         CHECK(snapshot.freshness(logical, stat_of(st.mtime + 1, st.size)) ==
               Freshness::Stale);
     }
+}
+
+TEST_CASE("the typed agg readers read what the aggregation store reads") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const std::filesystem::path root(env.get_dir());
+    std::filesystem::create_directories(root);
+    const auto traces = create_traces(env, root);
+
+    index::IndexerOptions options;
+    options.index_dir = root.string();
+    options.checkpoint_size = CHECKPOINT;
+    options.parallelism = 4;
+    agg::AggregationConfig config;
+    config.time_interval_us = 100000;
+    options.aggregation = config;
+    auto indexer = index::Indexer::open(traces, options);
+    indexer.build();
+
+    const std::string index_path = (root / ".dftindex").string();
+    IndexDatabase db(index_path, index_store::IndexOpenMode::ReadOnly);
+    auto opened = Index::open(index_path);
+    REQUIRE(opened.has_value());
+    const auto snapshot = take(opened->snapshot());
+
+    auto old_dictionary = agg::make_intern_table();
+    agg_tier::load_dictionary(db, *old_dictionary);
+    auto dictionary = agg::make_intern_table();
+    ok(index::agg_dictionary(snapshot, *dictionary));
+    CHECK(dictionary->intern.size() == old_dictionary->intern.size());
+    CHECK(dictionary->intern.size() > 0);
+    for (std::size_t i = 0; i < old_dictionary->intern.size(); ++i) {
+        const std::uint32_t id = old_dictionary->intern.entry_id(i);
+        CHECK(dictionary->intern.entry_id(i) == id);
+        CHECK(std::string(dictionary->intern.resolve(id)) ==
+              std::string(old_dictionary->intern.resolve(id)));
+    }
+
+    const auto old_config = agg_tier::read_config(db);
+    REQUIRE(old_config.has_value());
+    const auto config_read = take(agg_tier::read_config(snapshot));
+    REQUIRE(config_read.has_value());
+    CHECK(config_read->time_interval_us == old_config->time_interval_us);
+    CHECK(config_read->params_hash == old_config->params_hash);
+    CHECK(config_read->params_hash == config.params_hash());
+    CHECK(config_read->group_by_file == old_config->group_by_file);
+    CHECK(config_read->extra_group_keys == old_config->extra_group_keys);
+
+    const auto old_bounds = agg_tier::read_time_bounds(db);
+    REQUIRE(old_bounds.has_value());
+    const auto bounds = take(agg_tier::read_time_bounds(snapshot));
+    REQUIRE(bounds.has_value());
+    CHECK(bounds->min_bucket == old_bounds->min_bucket);
+    CHECK(bounds->max_bucket == old_bounds->max_bucket);
+
+    const auto raw_config = take(index::agg_meta(snapshot, "config"));
+    REQUIRE(raw_config.has_value());
+    CHECK_FALSE(raw_config->empty());
+    CHECK_FALSE(take(index::agg_meta(snapshot, "absent")).has_value());
+
+    const auto files = take(snapshot.files());
+    REQUIRE(files.size() == traces.size());
+    std::size_t block_count = 0;
+    std::size_t partial_count = 0;
+    for (const FileRef& file : files) {
+        check_file(db, snapshot, file, false);
+        partial_count += partials(snapshot, file).size();
+
+        dstd::HashMap<std::uint32_t, dstd::String> texts;
+        ok(index::agg_file_texts(snapshot, file, texts));
+        REQUIRE(texts.size() > 0);
+        for (const auto& [id, text] : texts) {
+            CHECK(std::string(dictionary->intern.resolve(id)) == str(text));
+            CHECK(std::string(old_dictionary->intern.resolve(id)) == str(text));
+        }
+        ok(index::for_each_agg_chunk_columns(
+            snapshot, file, [&](std::uint64_t, const agg::ChunkColumns&) {
+                ++block_count;
+                return true;
+            }));
+    }
+    CHECK(block_count >= files.size());
+    CHECK(partial_count >= files.size());
+    CHECK_FALSE(snapshot.file("/no/such/file").has_value());
+}
+
+TEST_CASE("a copy at another format version is not current") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const std::string root = env.get_dir() + "/.dftindex";
+    auto opened = Index::open(root);
+    REQUIRE(opened.has_value());
+    const std::string path = "/traces/versioned.pfw.gz";
+    const SourceStat stat = stat_of(1000, 4000, 9);
+
+    auto build = take(opened->build(path, stat));
+    put_members(build, 1);
+    REQUIRE(run(build.commit()).has_value());
+
+    auto store = kv::Store::open(root + "/store");
+    REQUIRE(store.has_value());
+    kv::NamespaceSpec spec;
+    const std::string name =
+        index_store::store_layout::namespace_name(IndexExtension::Profile);
+    spec.name.assign(name.data(), name.size());
+    spec.format_version =
+        index_store::layout::ext_version(IndexExtension::Profile) + 1;
+    auto ns = store->ns(spec);
+    REQUIRE(ns.has_value());
+    const kv::ScopeKey scope = kv::ScopeKey::file(path);
+    kv::Batch batch = store->batch(*ns, scope);
+    batch.put(dstd::ByteView("\x02\x00", 2), dstd::ByteView());
+    REQUIRE(run(store->commit(std::move(batch))).has_value());
+
+    IndexDatabase db(root, index_store::IndexOpenMode::ReadOnly);
+    const int file_id = db.get_file_info_id(path);
+    REQUIRE(file_id >= 0);
+    CHECK_FALSE(db.extension_current(file_id, IndexExtension::Profile));
+    CHECK(db.extension_current(file_id, IndexExtension::Members));
+
+    const auto snapshot = take(opened->snapshot());
+    const auto file = snapshot.file(path);
+    REQUIRE(file.has_value());
+    CHECK_FALSE(
+        index::extension_current(snapshot, *file, IndexExtension::Profile));
+    CHECK(index::extension_current(snapshot, *file, IndexExtension::Members));
+    CHECK(snapshot.extension(*file, IndexExtension::Profile, 0) !=
+          Freshness::Current);
+    CHECK_FALSE(take(index::schema(snapshot, *file)).has_value());
 }
 
 TEST_CASE("a committed FileBuild is visible whole and only after the commit") {

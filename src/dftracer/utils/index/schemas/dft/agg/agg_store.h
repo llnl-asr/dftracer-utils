@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
@@ -25,7 +26,8 @@
 // The only code that reads or writes the aggregation extension's storage.
 namespace dftracer::utils::index {
 class Index;
-}
+class Snapshot;
+}  // namespace dftracer::utils::index
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
 
@@ -49,6 +51,9 @@ struct TimeBounds {
 
 /// nullopt when the index holds no config, or one in another format.
 std::optional<Config> read_config(const IndexDatabase& db);
+/// As above, read through a snapshot.
+dstd::Expected<std::optional<Config>, dstd::Error> read_config(
+    const Snapshot& snapshot);
 /// Replaces the index-wide config, blocking until it is published.
 void write_config(const Index& index, const Config& config);
 
@@ -78,6 +83,9 @@ bool get_chunk_columns(const IndexDatabase& db, int file_id,
                        std::uint64_t chunk, ChunkColumns& out);
 
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db);
+/// As above, read through a snapshot.
+dstd::Expected<std::optional<TimeBounds>, dstd::Error> read_time_bounds(
+    const Snapshot& snapshot);
 /// Replaces the index-wide time bounds, blocking until they are published.
 void write_time_bounds(const Index& index, TimeBounds bounds);
 

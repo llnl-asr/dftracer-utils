@@ -3,6 +3,7 @@
 
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/span.h>
@@ -12,9 +13,13 @@
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
 #include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/schemas/dft/statistics.h>
 #include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/store.h>
@@ -115,6 +120,47 @@ Result<dstd::Vector<PluginCopy>> plugins(const Snapshot& snapshot,
 Result<dstd::Optional<PluginData>> plugin(const Snapshot& snapshot,
                                           const FileRef& file,
                                           dstd::StringView name);
+
+/// The aggregation tier of one file. `bytes` is the serialized AggPartial and
+/// stays valid during the call.
+using AggPartialFn = dstd::Function<bool(
+    std::uint64_t chunk, std::uint32_t cat_id, std::uint32_t name_id,
+    std::uint32_t host_id, std::uint32_t extra_id,
+    schemas::dft::agg::PartialKind kind, dstd::Span<const std::uint8_t> bytes)>;
+using AggChunkColumnsFn = dstd::Function<bool(
+    std::uint64_t chunk, const schemas::dft::agg::ChunkColumns& block)>;
+
+/// Calls fn for each partial of the file until fn returns false. A malformed
+/// record is an error, not a throw.
+Result<void> for_each_agg_partial(const Snapshot& snapshot, const FileRef& file,
+                                  const AggPartialFn& fn);
+/// `block.texts` holds the text of each id of `block.ids`, empty where the file
+/// holds none.
+Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
+                                        const FileRef& file,
+                                        const AggChunkColumnsFn& fn);
+Result<dstd::Optional<schemas::dft::agg::ChunkColumns>> agg_chunk_columns(
+    const Snapshot& snapshot, const FileRef& file, std::uint64_t chunk);
+Result<void> agg_file_texts(const Snapshot& snapshot, const FileRef& file,
+                            dstd::HashMap<std::uint32_t, dstd::String>& texts);
+/// Every dictionary entry the index holds, in key order.
+Result<void> agg_dictionary(const Snapshot& snapshot,
+                            schemas::dft::agg::AggInternTable& table);
+/// The index-wide aggregation record `name`, without its value header.
+Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
+                                              dstd::StringView name);
+
+/// The hash the file was indexed with.
+dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
+                                        const FileRef& file);
+/// The extension is ready, and at the format version this code reads. False for
+/// a plugin extension, which is current only for its params hash.
+bool extension_current(const Snapshot& snapshot, const FileRef& file,
+                       store::IndexExtension ext);
+/// The type of each catalog path, in path order, without the paths whose
+/// observed values have none.
+Result<dstd::Vector<std::pair<dstd::String, store::ColumnType>>>
+file_column_types(const Snapshot& snapshot, const FileRef& file);
 
 // Writers. Each writes the keys and values of the current format into the
 // building copy of the extension. A failed put is reported by commit().

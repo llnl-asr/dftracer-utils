@@ -19,6 +19,7 @@ namespace decoding = store::internal::decoding;
 namespace encoding = store::internal::encoding;
 namespace layout = store::layout;
 namespace store_layout = store::store_layout;
+namespace agg = schemas::dft::agg;
 
 using layout::Ext;
 
@@ -235,6 +236,26 @@ kv::NamespaceSpec agg_meta_spec(dstd::StringView name) {
 Result<void> invalid_result(std::string_view message) {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::InvalidArgument, message));
+}
+
+dstd::Expected<agg::ChunkColumns, dstd::Error> decode_block(
+    std::string_view body) {
+    auto block = agg::decode_chunk_columns(dstd::Span<const std::uint8_t>(
+        reinterpret_cast<const std::uint8_t*>(body.data()), body.size()));
+    if (!block)
+        return dstd::Unexpected<dstd::Error>(dstd::Error(
+            dstd::Condition::Parse, "chunk columns: malformed record"));
+    return std::move(*block);
+}
+
+/// An id the file holds no entry for gets the empty text.
+void fill_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
+                agg::ChunkColumns& block) {
+    block.texts.resize(block.ids.size());
+    for (std::size_t i = 0; i < block.ids.size(); ++i) {
+        const auto at = texts.find(block.ids[i]);
+        if (at != texts.end()) block.texts[i] = at->second;
+    }
 }
 
 }  // namespace
@@ -519,6 +540,203 @@ Result<dstd::Optional<PluginData>> plugin(const Snapshot& snapshot,
     if (!whole) return dstd::Unexpected<dstd::Error>(whole.error());
     data.file = std::move(*whole);
     return dstd::Optional<PluginData>(std::move(data));
+}
+
+Result<void> for_each_agg_partial(const Snapshot& snapshot, const FileRef& file,
+                                  const AggPartialFn& fn) {
+    constexpr std::size_t RECORD_BYTES =
+        5 * sizeof(std::uint32_t) + sizeof(std::uint8_t);
+    dstd::Optional<dstd::Error> failed;
+    const std::string prefix = kind_key(layout::agg_kind::PARTIAL);
+    auto scanned = scan_payloads(
+        snapshot, file, read_ns(Ext::Agg), Ext::Agg, layout::agg_kind::PARTIAL,
+        prefix, [&](std::string_view key, std::string_view body) {
+            const std::string_view tail = key.substr(prefix.size());
+            if (tail.size() != RECORD_BYTES) {
+                failed = dstd::Error(dstd::Condition::Parse,
+                                     "aggregation partial: malformed record");
+                return false;
+            }
+            const auto kind = static_cast<std::uint8_t>(tail[RECORD_BYTES - 1]);
+            if (kind >
+                static_cast<std::uint8_t>(agg::PartialKind::Aggregated)) {
+                failed = dstd::Error(dstd::Condition::Parse,
+                                     "aggregation partial: unknown kind");
+                return false;
+            }
+            const dstd::Span<const std::uint8_t> bytes(
+                reinterpret_cast<const std::uint8_t*>(body.data()),
+                body.size());
+            return fn(tail_u32(tail, 0), tail_u32(tail, 4), tail_u32(tail, 8),
+                      tail_u32(tail, 12), tail_u32(tail, 16),
+                      static_cast<agg::PartialKind>(kind), bytes);
+        });
+    if (failed) return dstd::Unexpected<dstd::Error>(*failed);
+    if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
+    return {};
+}
+
+Result<void> for_each_agg_chunk_columns(const Snapshot& snapshot,
+                                        const FileRef& file,
+                                        const AggChunkColumnsFn& fn) {
+    constexpr std::size_t RECORD_BYTES = sizeof(std::uint32_t);
+    dstd::Optional<dstd::Error> failed;
+    const std::string prefix = kind_key(layout::agg_kind::COLUMNS);
+    dstd::HashMap<std::uint32_t, dstd::String> texts;
+    bool texts_read = false;
+    auto scanned = scan_payloads(
+        snapshot, file, read_ns(Ext::Agg), Ext::Agg, layout::agg_kind::COLUMNS,
+        prefix, [&](std::string_view key, std::string_view body) {
+            if (key.size() != prefix.size() + RECORD_BYTES) {
+                failed = dstd::Error(dstd::Condition::Parse,
+                                     "chunk columns: bad key");
+                return false;
+            }
+            if (!texts_read) {
+                auto loaded = agg_file_texts(snapshot, file, texts);
+                if (!loaded) {
+                    failed = loaded.error();
+                    return false;
+                }
+                texts_read = true;
+            }
+            auto block = decode_block(body);
+            if (!block) {
+                failed = block.error();
+                return false;
+            }
+            block->chunk = tail_u32(key, prefix.size());
+            fill_texts(texts, *block);
+            return fn(block->chunk, *block);
+        });
+    if (failed) return dstd::Unexpected<dstd::Error>(*failed);
+    if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
+    return {};
+}
+
+Result<dstd::Optional<agg::ChunkColumns>> agg_chunk_columns(
+    const Snapshot& snapshot, const FileRef& file, std::uint64_t chunk) {
+    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return dstd::Optional<agg::ChunkColumns>{};
+    const std::string key =
+        granule_key(Ext::Agg, layout::agg_kind::COLUMNS, chunk);
+    auto found = snap->get(read_ns(Ext::Agg), IndexAccess::scope(file),
+                           dstd::ByteView(key));
+    if (!found) return dstd::Unexpected<dstd::Error>(found.error());
+    if (!*found) return dstd::Optional<agg::ChunkColumns>{};
+    const auto body = layout::payload(as_text((*found)->bytes()), Ext::Agg,
+                                      layout::agg_kind::COLUMNS);
+    if (!body) return dstd::Optional<agg::ChunkColumns>{};
+    auto block = decode_block(*body);
+    if (!block) return dstd::Unexpected<dstd::Error>(block.error());
+    block->chunk = chunk;
+    dstd::HashMap<std::uint32_t, dstd::String> texts;
+    auto loaded = agg_file_texts(snapshot, file, texts);
+    if (!loaded) return dstd::Unexpected<dstd::Error>(loaded.error());
+    fill_texts(texts, *block);
+    return dstd::Optional<agg::ChunkColumns>(std::move(*block));
+}
+
+Result<void> agg_file_texts(const Snapshot& snapshot, const FileRef& file,
+                            dstd::HashMap<std::uint32_t, dstd::String>& texts) {
+    dstd::Optional<dstd::Error> failed;
+    const std::string prefix = kind_key(layout::agg_kind::DICT);
+    auto scanned = scan_payloads(
+        snapshot, file, read_ns(Ext::Agg), Ext::Agg, layout::agg_kind::DICT,
+        prefix, [&](std::string_view key, std::string_view text) {
+            if (key.size() != prefix.size() + sizeof(std::uint32_t)) {
+                failed = dstd::Error(dstd::Condition::Parse,
+                                     "aggregation dictionary: malformed entry");
+                return false;
+            }
+            texts.try_emplace(tail_u32(key, prefix.size()), own(text));
+            return true;
+        });
+    if (failed) return dstd::Unexpected<dstd::Error>(*failed);
+    if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
+    return {};
+}
+
+Result<void> agg_dictionary(const Snapshot& snapshot,
+                            agg::AggInternTable& table) {
+    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return {};
+    const std::string begin = kind_key(layout::agg_kind::DICT);
+    const std::string end = layout::prefix_end(begin);
+    kv::Cursor cursor = snap->scan_all(read_ns(Ext::Agg), dstd::ByteView(begin),
+                                       dstd::ByteView(end));
+    dstd::Optional<dstd::Error> failed;
+    for (; !cursor.at_end(); cursor.next()) {
+        auto value = cursor.value();
+        if (!value) return dstd::Unexpected<dstd::Error>(value.error());
+        const std::string_view key = as_text(cursor.key());
+        if (key.size() != begin.size() + sizeof(std::uint32_t)) {
+            failed = dstd::Error(dstd::Condition::Parse,
+                                 "aggregation dictionary: malformed entry");
+            break;
+        }
+        const auto text =
+            layout::payload(as_text(*value), Ext::Agg, layout::agg_kind::DICT);
+        if (!text) continue;
+        const auto status =
+            table.intern.insert_at_id(tail_u32(key, begin.size()), *text);
+        if (status == dstd::StringIntern::InsertStatus::Ok) continue;
+        failed =
+            dstd::Error(dstd::Condition::InvalidArgument,
+                        status == dstd::StringIntern::InsertStatus::Conflict
+                            ? "string intern: the id holds another string"
+                            : "string intern: the id is out of range");
+        break;
+    }
+    if (failed) return dstd::Unexpected<dstd::Error>(*failed);
+    if (cursor.error()) return dstd::Unexpected<dstd::Error>(*cursor.error());
+    return {};
+}
+
+Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
+                                              dstd::StringView name) {
+    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return dstd::Optional<dstd::String>{};
+    const std::string key =
+        file_key(Ext::Agg, layout::agg_kind::META,
+                 std::string_view(name.data(), name.size()));
+    auto found = snap->get(read_ns(agg_meta_spec(name)), kv::ScopeKey::root(),
+                           dstd::ByteView(key));
+    if (!found) return dstd::Unexpected<dstd::Error>(found.error());
+    if (!*found) return dstd::Optional<dstd::String>{};
+    const auto body = layout::payload(as_text((*found)->bytes()), Ext::Agg,
+                                      layout::agg_kind::META);
+    if (!body) return dstd::Optional<dstd::String>{};
+    return dstd::Optional<dstd::String>(own(*body));
+}
+
+dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
+                                        const FileRef& file) {
+    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return dstd::Optional<std::uint64_t>{};
+    const kv::CopyInfo info =
+        snap->copy_info(read_ns(Ext::Members), IndexAccess::scope(file));
+    if (info.sources.empty()) return dstd::Optional<std::uint64_t>{};
+    return dstd::Optional<std::uint64_t>(info.sources[0].hash);
+}
+
+bool extension_current(const Snapshot& snapshot, const FileRef& file,
+                       store::IndexExtension ext) {
+    if (!builtin_ext(ext)) return false;
+    return ready(snapshot, file, ext);
+}
+
+Result<dstd::Vector<std::pair<dstd::String, store::ColumnType>>>
+file_column_types(const Snapshot& snapshot, const FileRef& file) {
+    dstd::Vector<std::pair<dstd::String, store::ColumnType>> out;
+    auto listed = catalog(snapshot, file);
+    if (!listed) return dstd::Unexpected<dstd::Error>(listed.error());
+    for (auto& [path, stat] : *listed) {
+        const store::ColumnType type = store::seen_column_type(stat.seen);
+        if (type == store::ColumnType::Unknown) continue;
+        out.emplace_back(std::move(path), type);
+    }
+    return out;
 }
 
 void put_file_metadata(FileBuild& build, std::uint64_t checkpoint_size,

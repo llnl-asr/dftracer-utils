@@ -90,18 +90,15 @@ void resolve_texts(const dstd::HashMap<std::uint32_t, dstd::String>& texts,
     }
 }
 
-}  // namespace
-
-std::optional<Config> read_config(const IndexDatabase& db) {
-    auto value = get_meta(db, CONFIG_NAME);
-    if (!value || value->size() < CONFIG_FIXED_BYTES) return std::nullopt;
+std::optional<Config> decode_config(std::string_view value) {
+    if (value.size() < CONFIG_FIXED_BYTES) return std::nullopt;
     Config c;
-    c.time_interval_us = layout::read_u64(*value);
-    c.params_hash = layout::read_u64(std::string_view(*value).substr(8));
+    c.time_interval_us = layout::read_u64(value);
+    c.params_hash = layout::read_u64(value.substr(8));
     c.group_by_file =
-        (static_cast<std::uint8_t>((*value)[16]) & FLAG_GROUP_BY_FILE) != 0;
+        (static_cast<std::uint8_t>(value[16]) & FLAG_GROUP_BY_FILE) != 0;
     // The extra group keys follow, joined by 0x1F.
-    std::string_view keys = std::string_view(*value).substr(CONFIG_FIXED_BYTES);
+    std::string_view keys = value.substr(CONFIG_FIXED_BYTES);
     while (!keys.empty()) {
         const std::size_t at = keys.find(KEY_SEP);
         c.extra_group_keys.emplace_back(keys.substr(0, at));
@@ -109,6 +106,29 @@ std::optional<Config> read_config(const IndexDatabase& db) {
         keys.remove_prefix(at + 1);
     }
     return c;
+}
+
+std::optional<TimeBounds> decode_time_bounds(std::string_view value) {
+    if (value.size() < 16) return std::nullopt;
+    return TimeBounds{layout::read_u64(value),
+                      layout::read_u64(value.substr(8))};
+}
+
+}  // namespace
+
+std::optional<Config> read_config(const IndexDatabase& db) {
+    auto value = get_meta(db, CONFIG_NAME);
+    if (!value) return std::nullopt;
+    return decode_config(*value);
+}
+
+dstd::Expected<std::optional<Config>, dstd::Error> read_config(
+    const Snapshot& snapshot) {
+    auto value = agg_meta(
+        snapshot, dstd::StringView(CONFIG_NAME.data(), CONFIG_NAME.size()));
+    if (!value) return dstd::Unexpected<dstd::Error>(value.error());
+    if (!*value) return std::optional<Config>{};
+    return decode_config(std::string_view((*value)->data(), (*value)->size()));
 }
 
 void write_config(const Index& index, const Config& config) {
@@ -211,9 +231,18 @@ bool get_chunk_columns(const IndexDatabase& db, int file_id,
 
 std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db) {
     auto value = get_meta(db, TIME_BOUNDS_NAME);
-    if (!value || value->size() < 16) return std::nullopt;
-    return TimeBounds{layout::read_u64(*value),
-                      layout::read_u64(std::string_view(*value).substr(8))};
+    if (!value) return std::nullopt;
+    return decode_time_bounds(*value);
+}
+
+dstd::Expected<std::optional<TimeBounds>, dstd::Error> read_time_bounds(
+    const Snapshot& snapshot) {
+    auto value = agg_meta(snapshot, dstd::StringView(TIME_BOUNDS_NAME.data(),
+                                                     TIME_BOUNDS_NAME.size()));
+    if (!value) return dstd::Unexpected<dstd::Error>(value.error());
+    if (!*value) return std::optional<TimeBounds>{};
+    return decode_time_bounds(
+        std::string_view((*value)->data(), (*value)->size()));
 }
 
 void write_time_bounds(const Index& index, TimeBounds bounds) {

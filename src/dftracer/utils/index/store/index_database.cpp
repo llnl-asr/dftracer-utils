@@ -1111,11 +1111,7 @@ int IndexDatabase::find_file(std::string_view file_path) const {
     return get_file_info_id(get_logical_path(file_path));
 }
 
-namespace {
-
-// The schema type of a catalog path from the base types seen for it; nullopt
-// when only nulls were seen.
-std::optional<ColumnType> schema_type(std::uint8_t seen) {
+ColumnType seen_column_type(std::uint8_t seen) {
     auto has = [seen](PathType t) {
         return (seen >> static_cast<unsigned>(t)) & 1U;
     };
@@ -1127,10 +1123,8 @@ std::optional<ColumnType> schema_type(std::uint8_t seen) {
     if (has(PathType::Uint) || has(PathType::Double))
         return ColumnType::Float64;
     if (has(PathType::Bool) || has(PathType::Int)) return ColumnType::Int64;
-    return std::nullopt;
+    return ColumnType::Unknown;
 }
-
-}  // namespace
 
 std::vector<std::string> IndexDatabase::query_all_columns() const {
     std::vector<std::string> out;
@@ -1149,14 +1143,14 @@ IndexDatabase::query_all_column_types() const {
                     if (key.size() <= layout::KEY_PREFIX_BYTES) return;
                     auto stat = layout::decode_path_stat(body);
                     if (!stat) return;
-                    auto type = schema_type(stat->seen);
-                    if (!type) return;
+                    const ColumnType type = seen_column_type(stat->seen);
+                    if (type == ColumnType::Unknown) return;
                     auto path = key.substr(layout::KEY_PREFIX_BYTES);
                     if (path.starts_with(ARGS)) path.remove_prefix(ARGS.size());
                     auto [pos, inserted] =
-                        cols.emplace(std::string(path), *type);
+                        cols.emplace(std::string(path), type);
                     if (!inserted)
-                        pos->second = merge_column_type(pos->second, *type);
+                        pos->second = merge_column_type(pos->second, type);
                 });
     std::vector<std::pair<std::string, ColumnType>> out(cols.begin(),
                                                         cols.end());
@@ -1168,9 +1162,11 @@ IndexDatabase::query_all_column_types() const {
 std::vector<std::pair<std::string, ColumnType>>
 IndexDatabase::file_column_types(int file_id) const {
     std::vector<std::pair<std::string, ColumnType>> out;
-    for (auto& [path, stat] : catalog(file_id))
-        if (auto type = schema_type(stat.seen))
-            out.emplace_back(std::move(path), *type);
+    for (auto& [path, stat] : catalog(file_id)) {
+        const ColumnType type = seen_column_type(stat.seen);
+        if (type != ColumnType::Unknown)
+            out.emplace_back(std::move(path), type);
+    }
     return out;
 }
 

@@ -323,6 +323,21 @@ bool DistinctIds::read_from(LeReader& r) {
     return true;
 }
 
+bool DistinctIds::skip(LeReader& r) {
+    std::uint8_t tag = 0;
+    if (!r.u8(tag)) return false;
+    if (tag == TAG_DENSE) return r.take(Sketch::REGISTERS) != nullptr;
+    if (tag != TAG_LIST && tag != TAG_SPARSE) return false;
+    std::uint64_t n = 0;
+    const std::uint64_t limit =
+        tag == TAG_LIST ? DISTINCT_EXACT_CAPACITY : Sketch::SPARSE_LIMIT;
+    if (!get_count(r, limit, n)) return false;
+    std::uint64_t d = 0;
+    for (std::uint64_t i = 0; i < n; ++i)
+        if (!get_varint(r, d)) return false;
+    return true;
+}
+
 AggPartial::AggPartial(double relative_accuracy)
     : duration_q(relative_accuracy),
       size_q(relative_accuracy),
@@ -568,20 +583,30 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
          !get_varint(r, p.size_values))) {
         return bad();
     }
-    if ((flags & HAS_OFFSET) != 0 &&
-        (!get_stat(r, p.offset) ||
-         !get_quantiles(r, p.offset_q, keep.quantiles) ||
-         !get_varint(r, p.offset_values))) {
-        return bad();
+    if ((flags & HAS_OFFSET) != 0) {
+        if (!get_stat(r, p.offset) ||
+            !get_quantiles(r, p.offset_q, keep.quantiles && keep.offset) ||
+            !get_varint(r, p.offset_values)) {
+            return bad();
+        }
+        if (!keep.offset) {
+            p.offset = {};
+            p.offset_values = 0;
+        }
     }
-    if (!p.pids.read_from(r) || !p.tids.read_from(r) || !p.files.read_from(r) ||
-        !p.pid_tids.read_from(r) || !p.pid_files.read_from(r)) {
+    const auto read_ids = [&r](DistinctIds& ids, bool kept) {
+        return kept ? ids.read_from(r) : DistinctIds::skip(r);
+    };
+    if (!read_ids(p.pids, keep.pids) || !read_ids(p.tids, keep.tids) ||
+        !read_ids(p.files, keep.files) ||
+        !read_ids(p.pid_tids, keep.pid_tids) ||
+        !read_ids(p.pid_files, keep.pid_files)) {
         return bad();
     }
 
     std::uint64_t n = 0;
     if (!get_count(r, UINT64_MAX, n)) return bad();
-    p.pid_spans.reserve(n);
+    if (keep.pid_spans) p.pid_spans.reserve(n);
     std::uint64_t prev = 0;
     for (std::uint64_t i = 0; i < n; ++i) {
         std::uint64_t d = 0, first = 0, len = 0;
@@ -591,7 +616,8 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
         if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return bad();
         if (len > UINT64_MAX - first) return bad();
         prev += d;
-        p.pid_spans.push_back(PidSpan{prev, first, first + len});
+        if (keep.pid_spans)
+            p.pid_spans.push_back(PidSpan{prev, first, first + len});
     }
 
     if ((flags & HAS_BINS) != 0) {

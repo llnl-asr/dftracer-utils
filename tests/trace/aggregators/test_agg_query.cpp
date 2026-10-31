@@ -752,6 +752,59 @@ TEST_SUITE("AggQuery") {
         CHECK(side.groups[0].size() == 4);
     }
 
+    TEST_CASE("dropped parts leave the kept parts of the rows unchanged") {
+        auto fx = build(FIVE_SECONDS_US, "five");
+        const auto check_keep = [&](const Ask& ask, const char* what) {
+            INFO("case: ", what);
+            AggQuery full = make_query(*fx, ask, FIVE_SECONDS_US);
+            AggQuery trimmed = full;
+            trimmed.keep.tids = false;
+            trimmed.keep.files = false;
+            trimmed.keep.pid_files = false;
+            trimmed.keep.pid_spans = false;
+            trimmed.keep.offset = false;
+            const AggQueryResult a = run(full);
+            const AggQueryResult b = run(trimmed);
+            REQUIRE(a.rows.size() == b.rows.size());
+            std::map<Key, const agg::AggPartial*> by_key;
+            for (const auto& [k, p] : a.rows) by_key[row_key(a, k)] = &p;
+            for (const auto& [k, p] : b.rows) {
+                const auto it = by_key.find(row_key(b, k));
+                REQUIRE(it != by_key.end());
+                const agg::AggPartial& want = *it->second;
+                CHECK(p.count == want.count);
+                CHECK(p.ts == want.ts);
+                CHECK(p.te == want.te);
+                check_same_stat(p.duration, want.duration, "duration");
+                check_same_stat(p.size, want.size, "size");
+                check_same_quantiles(p.duration_q, want.duration_q);
+                check_same_quantiles(p.size_q, want.size_q);
+                CHECK(p.pids.count() == want.pids.count());
+                CHECK(p.pid_tids.count() == want.pid_tids.count());
+                CHECK(p.tids.empty());
+                CHECK(p.files.empty());
+                CHECK(p.pid_files.empty());
+                CHECK(p.pid_spans.empty());
+                CHECK(p.offset.n == 0);
+                CHECK(p.offset_q.count() == 0);
+                CHECK(p.offset_values == 0);
+            }
+            CHECK(a.stats.chunks_reread == b.stats.chunks_reread);
+        };
+        SUBCASE("category and name from the stored partials") {
+            Ask ask;
+            ask.quantiles = true;
+            check_keep(ask, "cat+name");
+        }
+        SUBCASE("pid and tid keys, some rows from a re-read") {
+            Ask ask;
+            ask.by_pid = true;
+            ask.by_tid = true;
+            ask.quantiles = true;
+            check_keep(ask, "pid+tid");
+        }
+    }
+
     TEST_CASE("windows re-read only the chunks that cross a boundary") {
         SUBCASE("5 s windows") {
             auto fx = build(FIVE_SECONDS_US, "five");

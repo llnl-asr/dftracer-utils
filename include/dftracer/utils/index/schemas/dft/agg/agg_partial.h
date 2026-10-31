@@ -61,6 +61,8 @@ class DistinctIds {
 
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
     bool read_from(LeReader& r);
+    /// Reads past one serialized set and keeps nothing.
+    static bool skip(LeReader& r);
 
    private:
     using List = dstd::Vector<std::uint64_t>;
@@ -175,6 +177,13 @@ struct AggPartial {
     struct Fields {
         bool quantiles = true;  ///< the duration, size and offset stores
         bool bins = true;       ///< the time bins
+        bool offset = true;     ///< the offset stat and store
+        bool pids = true;
+        bool tids = true;
+        bool files = true;
+        bool pid_tids = true;
+        bool pid_files = true;
+        bool pid_spans = true;
     };
 
     /// Parses exactly `bytes`; a truncated, malformed or over-long input is

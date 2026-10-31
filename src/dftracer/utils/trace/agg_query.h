@@ -37,6 +37,18 @@ struct AggQuerySource {
     dstd::Optional<std::uint64_t> params_hash;
 };
 
+/// The parts of a row that a query keeps. A part left out reads as absent and
+/// is not decoded from a stored partial or carried through the merges.
+struct AggKeep {
+    bool pids = true;
+    bool tids = true;
+    bool files = true;
+    bool pid_tids = true;
+    bool pid_files = true;
+    bool pid_spans = true;
+    bool offset = true;  ///< the offset stat and its quantile store
+};
+
 struct AggQuery {
     dstd::Vector<AggQuerySource> sources;
 
@@ -84,6 +96,10 @@ struct AggQuery {
     /// Polled before a chunk is read and before a parsed batch is folded. True
     /// stops the query, which answers with the rows it folded so far.
     std::function<bool()> cancelled;
+
+    /// The parts of the rows to keep. Grouping by pid or tid does not need
+    /// the ids kept.
+    AggKeep keep;
 
     /// The quantile stores of the rows. Without them none are merged.
     bool quantiles = false;

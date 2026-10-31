@@ -690,6 +690,51 @@ TEST_SUITE("DFTracerComparator") {
         CHECK(large.cold < COLD_BUDGET_BYTES);
     }
 
+    TEST_CASE("the report counts the processes, threads and files") {
+        auto binary = find_comparator_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_comparator binary not found, skipping.");
+            return;
+        }
+        dftu_utils_test::ScopedTestDir dir("comparator_meta");
+        const std::string work = dir.path().string();
+        write_scale_set(work + "/base", 3, false);
+        write_scale_set(work + "/var", 3, true);
+        const std::string out = work + "/meta.json";
+        REQUIRE(run_comparator(binary,
+                               {"--baseline", work + "/base", "--variant",
+                                work + "/var", "--format", "json"},
+                               out) == 0);
+        simdjson::dom::parser parser;
+        auto doc = parser.parse(read_file(out));
+        REQUIRE(!doc.error());
+        for (const char* side : {"baseline_meta", "variant_meta"}) {
+            INFO("side: ", std::string(side));
+            // The four file hashes of the events, not the three trace files.
+            CHECK(doc[side]["files"].get_uint64().value() == 4);
+            CHECK(doc[side]["processes"].get_uint64().value() == 3);
+            CHECK(doc[side]["threads"].get_uint64().value() == 6);
+        }
+        std::uint64_t base_count = 0;
+        std::uint64_t var_count = 0;
+        double dur_delta = 0;
+        for (auto m : doc["nodes"].at(0)["summary"]["metrics"]) {
+            std::string_view name;
+            if (m["name"].get(name) != simdjson::SUCCESS) continue;
+            if (name == "count") {
+                base_count = static_cast<std::uint64_t>(
+                    m["baseline"].get_double().value());
+                var_count = static_cast<std::uint64_t>(
+                    m["variant"].get_double().value());
+            } else if (name == "dur_mean") {
+                dur_delta = m["delta"].get_double().value();
+            }
+        }
+        CHECK(base_count == 180);
+        CHECK(var_count == 180);
+        CHECK(dur_delta == doctest::Approx(30.0));
+    }
+
     TEST_CASE("node queries count the events a hand count says") {
         auto binary = find_comparator_binary();
         if (binary.empty()) {

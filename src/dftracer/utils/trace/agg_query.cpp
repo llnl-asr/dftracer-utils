@@ -250,7 +250,25 @@ class Task {
     std::shared_ptr<std::string> buf_ = std::make_shared<std::string>();
 };
 
+void trim_row(agg::AggPartial& p, const AggKeep& keep) {
+    const auto drop = [](agg::DistinctIds& ids, bool kept) {
+        if (!kept && !ids.empty()) ids = agg::DistinctIds();
+    };
+    drop(p.pids, keep.pids);
+    drop(p.tids, keep.tids);
+    drop(p.files, keep.files);
+    drop(p.pid_tids, keep.pid_tids);
+    drop(p.pid_files, keep.pid_files);
+    if (!keep.pid_spans) p.pid_spans.clear();
+    if (!keep.offset) {
+        p.offset = {};
+        p.offset_q = agg::QuantileStore(p.accuracy);
+        p.offset_values = 0;
+    }
+}
+
 void Runner::merge(Task& task) {
+    for (auto& row : task.rows) trim_row(row.second, rules.q.keep);
     dstd::Vector<std::pair<std::uint32_t, AggQueryResult::Rows::value_type*>>
         order;
     order.reserve(task.rows.size());
@@ -540,6 +558,14 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
     agg::AggPartial::Fields keep;
     keep.quantiles = r_.rules.q.quantiles && !r_.reread_only;
     keep.bins = r_.rules.q.sums_only && !r_.reread_only;
+    const AggKeep& kept = r_.rules.q.keep;
+    keep.offset = kept.offset;
+    keep.pid_spans = kept.pid_spans;
+    keep.files = kept.files;
+    keep.pid_tids = kept.pid_tids;
+    keep.pid_files = kept.pid_files;
+    keep.pids = kept.pids || r_.rules.q.by_pid || !r_.rules.pids.empty();
+    keep.tids = kept.tids || r_.rules.q.by_tid;
     auto parsed = agg::AggPartial::deserialize(
         dstd::Span<const std::uint8_t>(bytes.data(), bytes.size()),
         r_.rules.q.config.sketch_accuracy, keep);
@@ -597,6 +623,7 @@ void Task::take_partial(std::uint32_t chunk, const AggGroup& group,
         key.window = r_.rules.bucket(p.ts);
         if (r_.rules.bucket(p.ts_last_start) != key.window) split = true;
     }
+    trim_row(p, kept);
     if (split) {
         if (!bins_answer(p)) {
             queue_reread(chunk, group);

@@ -574,7 +574,13 @@ coro::CoroTask<Result<SideAggregate>> aggregate_side(
         fine.window_us = window_us;
         fine.quantiles = false;
         fine.sums_only = true;
+        fine.keep.pids = fine.keep.tids = fine.keep.files = false;
+        fine.keep.pid_tids = fine.keep.pid_files = false;
+        fine.keep.pid_spans = fine.keep.offset = false;
         coarse.quantiles = true;
+        coarse.keep.tids = false;
+        coarse.keep.pid_spans = false;
+        coarse.keep.offset = false;
 
         auto coarse_result = co_await run_agg_query(coarse);
         if (!coarse_result)
@@ -585,12 +591,18 @@ coro::CoroTask<Result<SideAggregate>> aggregate_side(
 
         side.group_chunks_reread += fine_result->stats.chunks_reread;
         side.metadata_chunks_reread += coarse_result->stats.chunks_reread;
+        if (cut.front() == 0)
+            side.meta =
+                extract_metadata(*coarse_result, filters[0], files.size());
+        for (auto& [key, p] : coarse_result->rows) {
+            p.pids = {};
+            p.files = {};
+            p.pid_tids = {};
+            p.pid_files = {};
+        }
         for (std::size_t i : cut) {
             side.groups[i] = collapse_by_group(*fine_result, *coarse_result,
                                                filters[i], strings);
-            if (i == 0)
-                side.meta =
-                    extract_metadata(*coarse_result, filters[i], files.size());
         }
     }
     if (!filters.empty() && filters[0].keeps_nothing())

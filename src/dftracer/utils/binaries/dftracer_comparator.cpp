@@ -160,12 +160,12 @@ struct NodeAggPlan {
 static coro::CoroTask<void> aggregate_all(
     const std::vector<std::string>& files,
     const dstd::Vector<ComparisonFilter>& filters, const std::string& index_dir,
-    const ComparisonConfig& config, dstd::StringIntern& strings,
-    SideAggregate& out, bool& failed) {
+    const ComparisonConfig& config, std::size_t workers,
+    dstd::StringIntern& strings, SideAggregate& out, bool& failed) {
     auto result = co_await aggregate_side(
         files, index_dir, filters,
         static_cast<std::uint64_t>(config.defaults.time_interval_ms * 1000.0),
-        config.executor_threads, strings);
+        workers, strings);
     if (!result) {
         DFTRACER_UTILS_LOG_ERROR("Aggregation failed: %s",
                                  result.error().format().c_str());
@@ -446,32 +446,37 @@ static int run_comparator(const ComparatorArgParse* cli) {
                 if (baseline_files.empty()) co_return;
                 co_await aggregate_all(baseline_files, filters,
                                        config.baseline_index_dir, config,
-                                       strings, baseline_side, baseline_failed);
+                                       config.executor_threads, strings,
+                                       baseline_side, baseline_failed);
             },
             "Aggregate");
         agg_shared->depends_on(enum_index_base);
         agg_base = agg_shared;
         agg_var = agg_shared;
     } else {
+        // The two aggregations run at once, so each takes half of the threads.
+        const std::size_t agg_threads =
+            std::max<std::size_t>(1, config.executor_threads / 2);
         agg_base = make_task(
             [&baseline_files, &baseline_side, &baseline_failed, &filters,
-             &strings,
-             &config]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+             &strings, &config, agg_threads](
+                [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
                 if (baseline_files.empty()) co_return;
-                co_await aggregate_all(baseline_files, filters,
-                                       config.baseline_index_dir, config,
-                                       strings, baseline_side, baseline_failed);
+                co_await aggregate_all(
+                    baseline_files, filters, config.baseline_index_dir, config,
+                    agg_threads, strings, baseline_side, baseline_failed);
             },
             "AggBaseline");
         agg_base->depends_on(enum_index_base);
 
         agg_var = make_task(
             [&variant_files, &variant_side, &variant_failed, &filters, &strings,
-             &config]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+             &config, agg_threads](
+                [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
                 if (variant_files.empty()) co_return;
-                co_await aggregate_all(variant_files, filters,
-                                       config.variant_index_dir, config,
-                                       strings, variant_side, variant_failed);
+                co_await aggregate_all(
+                    variant_files, filters, config.variant_index_dir, config,
+                    agg_threads, strings, variant_side, variant_failed);
             },
             "AggVariant");
         agg_var->depends_on(enum_index_var);

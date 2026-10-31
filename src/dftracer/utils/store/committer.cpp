@@ -289,6 +289,17 @@ void Committer::on_fail(PendingBatch* batch) {
     add_entry(std::move(entry));
 }
 
+void Committer::on_publish(dstd::Span<PendingBatch* const> batches) {
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        for (PendingBatch* batch : batches) {
+            PendingEntry entry;
+            entry.batch = batch;
+            entries_.push_back(std::move(entry));
+        }
+    }
+}
+
 void Committer::drain(dstd::Vector<PendingEntry>& out) {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     out.swap(entries_);

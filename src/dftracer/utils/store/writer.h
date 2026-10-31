@@ -81,6 +81,14 @@ struct NamespaceId {
     }
 };
 
+/// One building copy for Writer::publish.
+struct PublishTarget {
+    NamespaceId namespace_id;
+    const ScopeKey* scope = nullptr;
+    std::uint64_t params_hash = 0;
+    const dstd::Vector<SourceStat>* sources = nullptr;
+};
+
 class Writer;
 
 /// The entries of one commit. One batch is atomic: it becomes visible whole or
@@ -166,13 +174,14 @@ class Writer {
     /// it, until publish() makes it the copy readers see. A plain batch of a
     /// scope whose copy is building is InvalidArgument at commit.
     Batch building_batch(NamespaceId namespace_id, const ScopeKey& scope);
-    /// Makes the building copy of `scope` the copy readers see, with
-    /// `params_hash` and `sources` (one per path, or none). Call flush() first,
-    /// so the record that publishes it never comes before one of its segments.
-    /// InvalidArgument when the scope has no building copy.
+    /// Makes the building copy of each target the copy readers see, with its
+    /// `params_hash` and `sources` (one per path, or none). All targets go in
+    /// one record, so a reader sees all of them or none. Call flush() first,
+    /// so that record never comes before one of their segments.
+    /// InvalidArgument, and nothing published, when a target has no building
+    /// copy or names a copy twice.
     dstd::Expected<void, dstd::Error> publish(
-        NamespaceId namespace_id, const ScopeKey& scope,
-        std::uint64_t params_hash, const dstd::Vector<SourceStat>* sources);
+        dstd::Span<const PublishTarget> targets);
 
     /// InvalidArgument on a closed writer, an unknown namespace, an invalid
     /// batch, or a copy with other params hash or sources than its first. The

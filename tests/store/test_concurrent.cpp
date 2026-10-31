@@ -54,6 +54,7 @@ using store::DataFileReader;
 using store::FoldKind;
 using store::NamespaceId;
 using store::NamespaceSpec;
+using store::PublishTarget;
 using store::ScopeKey;
 using store::ScopeState;
 using store::Snapshot;
@@ -834,6 +835,80 @@ TEST_CASE(
 
     REQUIRE(close_writer(*writer).has_value());
     CHECK(CommitterTestHook::syncs() == 4);
+}
+
+TEST_CASE("one publish of several building copies writes one record") {
+    dftu_utils_test::ScopedTestDir dir("store_concurrent_publish_many");
+    CommitterTestHook::reset();
+
+    auto writer = make_writer(dir, manual_options(EXTENT));
+    auto first = writer->add_namespace(durable_spec("first", true));
+    auto second = writer->add_namespace(durable_spec("second", true));
+    REQUIRE(first.has_value());
+    REQUIRE(second.has_value());
+    const ScopeKey scope = file_scope("/data/publish.dft");
+    const ScopeKey other = file_scope("/data/publish_other.dft");
+
+    for (const NamespaceId space : {*first, *second}) {
+        Batch entries = writer->building_batch(space, scope);
+        entries.put(view_of(std::string("k")), view_of(std::string("v")));
+        REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
+    }
+    Batch entries = writer->building_batch(*first, other);
+    entries.put(view_of(std::string("k")), view_of(std::string("v")));
+    REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+    const std::uint64_t before = CommitterTestHook::syncs();
+
+    const PublishTarget targets[] = {{*first, &scope, 1, nullptr},
+                                     {*second, &scope, 2, nullptr},
+                                     {*first, &other, 3, nullptr}};
+    REQUIRE(writer->publish(targets).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+    CHECK(CommitterTestHook::syncs() - before == 2);
+
+    auto snapshot = Snapshot::open(dir.str());
+    REQUIRE(snapshot.has_value());
+    CHECK(snapshot->copy_info(durable_spec("first", true), scope).state ==
+          ScopeState::Ready);
+    CHECK(
+        snapshot->copy_info(durable_spec("second", true), scope).params_hash ==
+        2);
+    CHECK(snapshot->copy_info(durable_spec("first", true), other).state ==
+          ScopeState::Ready);
+    REQUIRE(close_writer(*writer).has_value());
+}
+
+TEST_CASE("a publish with one bad target publishes nothing") {
+    dftu_utils_test::ScopedTestDir dir("store_concurrent_publish_bad");
+    auto writer = make_writer(dir, manual_options(EXTENT));
+    auto space = writer->add_namespace(durable_spec("space", true));
+    REQUIRE(space.has_value());
+    const ScopeKey building = file_scope("/data/building.dft");
+    const ScopeKey ready = file_scope("/data/ready.dft");
+
+    Batch staged = writer->building_batch(*space, building);
+    staged.put(view_of(std::string("k")), view_of(std::string("v")));
+    REQUIRE(commit_waiting(*writer, std::move(staged)).has_value());
+    Batch plain = writer->batch(*space, ready, 0);
+    plain.put(view_of(std::string("k")), view_of(std::string("v")));
+    REQUIRE(commit_waiting(*writer, std::move(plain)).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+
+    const PublishTarget targets[] = {{*space, &building, 1, nullptr},
+                                     {*space, &ready, 1, nullptr}};
+    CHECK_FALSE(writer->publish(targets).has_value());
+    const PublishTarget twice[] = {{*space, &building, 1, nullptr},
+                                   {*space, &building, 1, nullptr}};
+    CHECK_FALSE(writer->publish(twice).has_value());
+    REQUIRE(flush_writer(*writer).has_value());
+
+    auto snapshot = Snapshot::open(dir.str());
+    REQUIRE(snapshot.has_value());
+    CHECK(snapshot->copy_info(durable_spec("space", true), building).state !=
+          ScopeState::Ready);
+    REQUIRE(writer->publish({targets, 1}).has_value());
+    REQUIRE(close_writer(*writer).has_value());
 }
 
 TEST_CASE("drops and failures from many threads keep the generation rules") {

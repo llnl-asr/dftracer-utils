@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -1184,19 +1185,34 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         // Every batch is recorded before the records that publish them.
         const auto recorded = co_await writer.flush();
         check("store index: flush the writer", recorded);
+        // Every building copy goes in one publish, so a reader sees the
+        // whole staged write or none of it.
+        dstd::Deque<dstd::Vector<kv::SourceStat>> sources_of;
+        dstd::Vector<kv::PublishTarget> targets;
+        dstd::Vector<StagedCopy*> building;
+        for (auto& entry : staged_copies_) {
+            StagedCopy& copy = entry.second;
+            if (!copy.building) continue;
+            dstd::Vector<kv::SourceStat>& sources = sources_of.emplace_back();
+            const bool have_sources =
+                root_->sources_of(copy.scope, file_stats_, sources);
+            targets.push_back(kv::PublishTarget{
+                root_->namespace_id(copy.name, copy.version), &copy.scope,
+                copy.params_hash, have_sources ? &sources : nullptr});
+            building.push_back(&copy);
+        }
+        check("store index: publish the staged copies",
+              writer.publish(targets));
+        for (std::size_t i = 0; i < building.size(); ++i) {
+            const StagedCopy& copy = *building[i];
+            root_->mark_committed(copy.name, copy.scope, copy.params_hash,
+                                  targets[i].sources);
+        }
         for (auto& entry : staged_copies_) {
             StagedCopy& copy = entry.second;
             const kv::NamespaceId id =
                 root_->namespace_id(copy.name, copy.version);
             if (copy.building) {
-                dstd::Vector<kv::SourceStat> sources;
-                const bool have_sources =
-                    root_->sources_of(copy.scope, file_stats_, sources);
-                check("store index: publish a copy",
-                      writer.publish(id, copy.scope, copy.params_hash,
-                                     have_sources ? &sources : nullptr));
-                root_->mark_committed(copy.name, copy.scope, copy.params_hash,
-                                      have_sources ? &sources : nullptr);
                 if (copy.failed) {
                     check("store index: fail a copy",
                           writer.fail(id, copy.scope, copy.params_hash));

@@ -4,6 +4,7 @@
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -94,6 +95,9 @@ class Committer {
     /// building copy published (PendingBatch::publish). Takes ownership of
     /// `batch`.
     void on_fail(PendingBatch* batch);
+    /// Queues published building copies under one lock, so one record holds
+    /// all of them. Takes ownership of every batch.
+    void on_publish(dstd::Span<PendingBatch* const> batches);
 
     /// Records everything queued now as one record and rewrites the header
     /// tail, syncing before and after it when any of those batches is durable.

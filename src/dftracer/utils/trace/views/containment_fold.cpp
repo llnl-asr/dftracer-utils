@@ -2,6 +2,7 @@
 #include <dftracer/utils/dataframe/flame_arena.h>
 #include <dftracer/utils/dataframe/parallel.h>
 #include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 
 #include <algorithm>
@@ -19,15 +20,6 @@ namespace df = dftracer::utils::dataframe;
 using df::Series;
 
 namespace {
-
-inline std::uint64_t mix64(std::uint64_t x) {
-    x ^= x >> 30;
-    x *= dftracer::utils::dstd::hash::SPLITMIX64_MUL1;
-    x ^= x >> 27;
-    x *= dftracer::utils::dstd::hash::SPLITMIX64_MUL2;
-    x ^= x >> 31;
-    return x;
-}
 
 FieldRef classify(dftracer::utils::dstd::StringIntern& intern,
                   const std::string& f, bool& needs_args,
@@ -204,7 +196,8 @@ bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
     if (spec.dur_ref.kind == FieldRef::Kind::Dur && !ev.has_dur) return false;
     std::uint64_t lane = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
     for (const FieldRef& f : spec.lane_fields)
-        lane = mix64(lane ^ static_cast<std::uint64_t>(field_i64(ev, f)));
+        lane = dftracer::utils::dstd::hash::splitmix64(
+            lane ^ static_cast<std::uint64_t>(field_i64(ev, f)));
     out = ContainmentRow{lane,
                          static_cast<std::int64_t>(ev.pid),
                          static_cast<std::int64_t>(ev.tid),

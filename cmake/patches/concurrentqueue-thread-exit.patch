@@ -1,0 +1,17 @@
+--- a/concurrentqueue.h
++++ b/concurrentqueue.h
+@@ -2465,10 +2465,10 @@
+ 			// empty (all other remaining blocks must be completely full).
+ 			
+ #ifdef MOODYCAMEL_CPP11_THREAD_LOCAL_SUPPORTED
+-			// Unregister ourselves for thread termination notification
+-			if (!this->inactive.load(std::memory_order_relaxed)) {
+-				details::ThreadExitNotifier::unsubscribe(&threadExitListener);
+-			}
++			// Unregister ourselves for thread termination notification. Always
++			// take the notifier lock, because an exiting thread sets inactive in
++			// its callback and reads this listener until it drops that lock.
++			details::ThreadExitNotifier::unsubscribe(&threadExitListener);
+ #endif
+ 			
+ 			// Destroy all remaining elements!

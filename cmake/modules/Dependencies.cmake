@@ -611,7 +611,9 @@ function(need_concurrentqueue)
       GITHUB_REPOSITORY
       cameron314/concurrentqueue
       GIT_TAG
-      c68072129c8a5b4025122ca5a0c82ab14b30cb03
+      36c5755dc0789e5bcddbbb9a201d3af2bbf3024c
+      PATCHES
+      ${PROJECT_SOURCE_DIR}/cmake/patches/concurrentqueue-thread-exit.patch
       DOWNLOAD_ONLY
       YES)
 

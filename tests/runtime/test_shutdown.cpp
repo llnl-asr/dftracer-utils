@@ -505,3 +505,41 @@ TEST_CASE("a runtime can end as soon as a foreign thread resumes its frame") {
     }
     CHECK(ended == ROUNDS);
 }
+
+TEST_CASE("a foreign thread can exit while the runtime it resumed ends") {
+    // The thread leaves the run queue's producer list as the queue is
+    // destroyed, so the two must not touch the same producer at once.
+    constexpr int ROUNDS = 50;
+    int ended = 0;
+    for (int round = 0; round < ROUNDS; ++round) {
+        auto rt =
+            std::make_unique<Runtime>(ExecutorConfig{.num_threads = 2}, false);
+        ForeignHandoff handoff;
+        std::atomic<bool> finished{false};
+        auto frame = [&]() -> coro::CoroTask<void> {
+            ParkForForeign park{&handoff};
+            co_await park;
+            finished.store(true, std::memory_order_release);
+        };
+        rt->submit(frame(), "ResumedByExitingThread");
+        std::thread foreign([&] {
+            void* handle = nullptr;
+            while ((handle = handoff.handle.load(std::memory_order_acquire)) ==
+                   nullptr)
+                std::this_thread::yield();
+            coro::resume_continuation(
+                handoff.executor,
+                std::coroutine_handle<>::from_address(handle));
+        });
+        const auto deadline = std::chrono::steady_clock::now() + HANG_LIMIT;
+        while (!finished.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() > deadline)
+                fail_hung("foreign resume");
+            std::this_thread::yield();
+        }
+        rt.reset();
+        foreign.join();
+        ++ended;
+    }
+    CHECK(ended == ROUNDS);
+}

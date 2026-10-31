@@ -1,11 +1,14 @@
 #include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -178,18 +181,6 @@ coro::AsyncGenerator<Line> read_lines_indexed(
     std::shared_ptr<internal::Reader> reader, std::string index_path,
     std::string file_path, ReadConfig config, std::optional<Query> query,
     bool chunk_prune_only = false) {
-    // Keep the index open for the generator's lifetime so per-method opens
-    // in GzipIndexer reuse its handle.
-    std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
-    if (!index_path.empty()) {
-        try {
-            db_keep_alive.emplace(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        } catch (...) {
-        }
-    }
-
     index::plan::Prefilter prefilter =
         query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
     auto range_type = config.has_line_range() ? internal::RangeType::LineRange
@@ -212,11 +203,14 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
     if (query && !index_path.empty() &&
         range_type == internal::RangeType::ByteRange) {
+        auto snapshot =
+            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
             .file_path = file_path,
             .query = &*query,
+            .snapshot = &snapshot,
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
             std::move(prune_req));
@@ -224,16 +218,14 @@ coro::AsyncGenerator<Line> read_lines_indexed(
 
         if (!pruned->all_chunks &&
             pruned->candidates.size() < pruned->total_chunks) {
-            dftracer::utils::index::store::IndexDatabase idx_db(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(
                     file_path);
-            int fid = idx_db.get_file_info_id(logical);
+            const auto file = snapshot.file(logical);
 
-            if (fid >= 0) {
-                auto spans = idx_db.query_chunk_spans(fid);
+            if (file) {
+                auto spans =
+                    unwrap(dftracer::utils::index::spans(snapshot, *file));
 
                 std::vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
@@ -321,18 +313,6 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     std::shared_ptr<internal::Reader> reader, std::string index_path,
     std::string file_path, ReadConfig config, std::optional<Query> query,
     bool extend_to_line_boundary) {
-    // Keep the index open for the generator's lifetime so per-method opens
-    // in GzipIndexer reuse its handle.
-    std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
-    if (!index_path.empty()) {
-        try {
-            db_keep_alive.emplace(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        } catch (...) {
-        }
-    }
-
     index::plan::Prefilter prefilter =
         query ? index::plan::Prefilter(*query) : index::plan::Prefilter{};
     auto range_type = config.has_line_range() ? internal::RangeType::LineRange
@@ -354,11 +334,14 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
     }
 
     if (query && !index_path.empty() && !config.skip_pruning) {
+        auto snapshot =
+            unwrap(dftracer::utils::index::plan::open_snapshot(index_path));
         // GCC 12 destroys a temporary built inside co_await twice.
         dftracer::utils::index::plan::PruneRequest prune_req{
             .index_path = index_path,
             .file_path = file_path,
             .query = &*query,
+            .snapshot = &snapshot,
             .metadata = dftracer::utils::index::plan::MetadataUse::All};
         auto pruned = co_await dftracer::utils::index::plan::prune_file(
             std::move(prune_req));
@@ -366,16 +349,14 @@ coro::AsyncGenerator<std::span<const char>> read_chunks_indexed(
 
         if (!pruned->all_chunks &&
             pruned->candidates.size() < pruned->total_chunks) {
-            dftracer::utils::index::store::IndexDatabase idx_db(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
             auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(
                     file_path);
-            int fid = idx_db.get_file_info_id(logical);
+            const auto file = snapshot.file(logical);
 
-            if (fid >= 0) {
-                auto spans = idx_db.query_chunk_spans(fid);
+            if (file) {
+                auto spans =
+                    unwrap(dftracer::utils::index::spans(snapshot, *file));
 
                 std::vector<LineRange> ranges;
                 std::uint64_t prev_idx = UINT64_MAX;
@@ -457,16 +438,21 @@ void TraceReader::probe_index() {
     // freshness predicate, so a record with no stored stat is treated as stale
     // rather than trusted on existence alone.
     if (has_index_) {
-        try {
-            dftracer::utils::index::store::IndexDatabase db(
-                index_path_,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            if (db.check_freshness(config_.file_path) !=
-                dftracer::utils::index::store::IndexDatabase::Freshness::
-                    Fresh) {
+        auto snapshot =
+            dftracer::utils::index::plan::open_snapshot(index_path_);
+        if (snapshot) {
+            dftracer::utils::InputFileStat st;
+            dftracer::utils::index::SourceStat now;
+            if (dftracer::utils::stat_input(config_.file_path, st)) {
+                now.mtime = static_cast<std::uint64_t>(st.mtime);
+                now.size = st.size;
+            }
+            if (snapshot->freshness(
+                    dftracer::utils::index::store::internal::get_logical_path(
+                        config_.file_path),
+                    now) != dftracer::utils::index::Freshness::Current) {
                 has_index_ = false;
             }
-        } catch (...) {
         }
     }
 }
@@ -745,18 +731,6 @@ coro::AsyncGenerator<JsonLine> TraceReader::read_json(ReadConfig config) {
 coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
     ReadConfig config) {
     if (has_index_) {
-        // Keep the index open for the generator's lifetime so per-method
-        // opens in GzipIndexer reuse its handle.
-        std::optional<dftracer::utils::index::store::IndexDatabase>
-            db_keep_alive;
-        if (!index_path_.empty()) {
-            try {
-                db_keep_alive.emplace(
-                    index_path_,
-                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            } catch (...) {
-            }
-        }
         auto reader = create_indexed_reader();
         auto stream_type = resolve_raw_stream_type(config);
         auto range_type = resolve_range_type(config);
@@ -780,11 +754,14 @@ coro::AsyncGenerator<std::span<const char>> TraceReader::read_raw(
             range_type == internal::RangeType::ByteRange) {
             auto parsed = Query::from_string(config.query);
             if (!parsed) throw duql::DuqlParseError(parsed.error());
+            auto snapshot = unwrap(
+                dftracer::utils::index::plan::open_snapshot(index_path_));
             // GCC 12 destroys a temporary built inside co_await twice.
             dftracer::utils::index::plan::PruneRequest prune_req{
                 .index_path = index_path_,
                 .file_path = config_.file_path,
                 .query = &*parsed,
+                .snapshot = &snapshot,
                 .metadata = dftracer::utils::index::plan::MetadataUse::All};
             auto pruned = co_await dftracer::utils::index::plan::prune_file(
                 std::move(prune_req));

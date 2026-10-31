@@ -11,7 +11,6 @@
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
@@ -1086,7 +1085,6 @@ GzipIndexer::GzipIndexer(const std::string& gz_path_,
       ckpt_size(ckpt_size_),
       force_rebuild(force_rebuild_),
       cached_is_valid(false),
-      cached_file_id(-1),
       cached_max_bytes(0),
       cached_max_bytes_ready(false),
       cached_num_lines(0),
@@ -1127,7 +1125,6 @@ GzipIndexer::GzipIndexer(GzipIndexer&& other) noexcept
       force_rebuild(other.force_rebuild),
       visitors_(std::move(other.visitors_)),
       cached_is_valid(other.cached_is_valid.load()),
-      cached_file_id(other.cached_file_id.load()),
       cached_max_bytes(other.cached_max_bytes.load()),
       cached_max_bytes_ready(other.cached_max_bytes_ready.load()),
       cached_num_lines(other.cached_num_lines.load()),
@@ -1135,6 +1132,8 @@ GzipIndexer::GzipIndexer(GzipIndexer&& other) noexcept
       cached_checkpoint_size(other.cached_checkpoint_size.load()),
       cached_checkpoint_size_ready(other.cached_checkpoint_size_ready.load()),
       cached_members(std::move(other.cached_members)),
+      snapshot_(std::move(other.snapshot_)),
+      file_ref_(std::move(other.file_ref_)),
       cached_loaded(other.cached_loaded.load()) {}
 
 GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
@@ -1146,7 +1145,6 @@ GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
         force_rebuild = other.force_rebuild;
         visitors_ = std::move(other.visitors_);
         cached_is_valid.store(other.cached_is_valid.load());
-        cached_file_id.store(other.cached_file_id.load());
         cached_max_bytes.store(other.cached_max_bytes.load());
         cached_max_bytes_ready.store(other.cached_max_bytes_ready.load());
         cached_num_lines.store(other.cached_num_lines.load());
@@ -1157,6 +1155,8 @@ GzipIndexer& GzipIndexer::operator=(GzipIndexer&& other) noexcept {
         cached_loaded.store(other.cached_loaded.load());
         std::lock_guard<std::mutex> lock(cached_members_mutex);
         cached_members = std::move(other.cached_members);
+        snapshot_ = std::move(other.snapshot_);
+        file_ref_ = std::move(other.file_ref_);
     }
     return *this;
 }
@@ -1170,7 +1170,6 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
         co_return;
     }
 
-    index::store::IndexDatabase db(index_path);
     const std::time_t mtime =
         index::store::internal::get_file_modification_time(gz_path);
     const auto hash = index::store::internal::calculate_file_hash(gz_path);
@@ -1192,7 +1191,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
             "Failed to build index for " + gz_path);
     }
 
-    int file_id = -1;
+    dstd::Optional<index::Snapshot> snapshot;
     {
         auto opened = index::Index::open(index_path);
         auto build =
@@ -1215,19 +1214,31 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
                 "Failed to write the index of " + gz_path + ": " +
                     std::string(committed.error().message()));
         }
-        file_id = db.get_file_info_id(logical);
+        snapshot.emplace(unwrap(opened->snapshot()));
     }
 
     cached_is_valid = true;
-    cached_file_id = file_id;
     cached_checkpoint_size = final_ckpt_size;
     cached_checkpoint_size_ready = true;
-    cached_num_lines = db.get_num_lines(file_id);
+    const auto file = snapshot->file(logical);
+    store::FileMetadataResult metadata;
+    if (file) {
+        if (auto stored = unwrap(index::file_metadata(*snapshot, *file)))
+            metadata = *stored;
+    }
+    cached_num_lines = metadata.num_lines;
     cached_num_lines_ready = true;
-    cached_max_bytes = db.get_max_bytes(file_id);
+    cached_max_bytes = metadata.max_bytes;
     cached_max_bytes_ready = true;
     std::lock_guard<std::mutex> lock(cached_members_mutex);
-    cached_members = db.query_gzip_members(file_id);
+    if (file) {
+        auto members = unwrap(index::members(*snapshot, *file));
+        cached_members.assign(members.begin(), members.end());
+    } else {
+        cached_members.clear();
+    }
+    file_ref_ = file;
+    snapshot_ = std::move(snapshot);
     cached_loaded.store(true, std::memory_order_release);
     co_return;
 }
@@ -1247,19 +1258,29 @@ bool GzipIndexer::need_rebuild() const {
     }
 
     try {
-        index::store::IndexDatabase db(index_path,
-                                       index::store::IndexOpenMode::ReadOnly);
-        const int file_id = db.get_file_info_id(gz_path_logical_path);
-        if (file_id < 0) {
+        auto opened = unwrap(index::Index::open(index_path));
+        auto snapshot = unwrap(opened.snapshot());
+        const auto file = snapshot.file(gz_path_logical_path);
+        if (!file) {
             return true;
         }
-        if (db.check_freshness(gz_path) !=
-            index::store::IndexDatabase::Freshness::Fresh) {
+        index::SourceStat now;
+        dftracer::utils::InputFileStat st;
+        if (stat_input(gz_path, st)) {
+            now.mtime = static_cast<std::uint64_t>(st.mtime);
+            now.size = st.size;
+        }
+        if (snapshot.freshness(gz_path_logical_path, now) !=
+            index::Freshness::Current) {
             return true;
         }
         // The stat check misses a same-size rewrite within one mtime second.
-        const auto stored_hash = db.get_file_hash(gz_path_logical_path);
-        if (!stored_hash || db.get_checkpoint_size(file_id) == 0) {
+        const auto stored_hash = index::file_hash(snapshot, *file);
+        if (!stored_hash) {
+            return true;
+        }
+        const auto metadata = unwrap(index::file_metadata(snapshot, *file));
+        if (!metadata || metadata->checkpoint_size == 0) {
             return true;
         }
         return index::store::internal::calculate_file_hash(gz_path) !=
@@ -1286,25 +1307,28 @@ void GzipIndexer::ensure_loaded() const {
     if (cached_loaded.load(std::memory_order_relaxed)) {
         return;
     }
-    index::store::IndexDatabase db(index_path,
-                                   index::store::IndexOpenMode::ReadOnly);
-    const int file_id = db.get_file_info_id(gz_path_logical_path);
-    cached_file_id.store(file_id, std::memory_order_relaxed);
-    if (file_id != -1) {
-        cached_num_lines.store(db.get_num_lines(file_id),
-                               std::memory_order_relaxed);
+    auto opened = unwrap(index::Index::open(index_path));
+    auto snapshot = unwrap(opened.snapshot());
+    const auto file = snapshot.file(gz_path_logical_path);
+    if (file) {
+        store::FileMetadataResult metadata;
+        if (auto stored = unwrap(index::file_metadata(snapshot, *file)))
+            metadata = *stored;
+        cached_num_lines.store(metadata.num_lines, std::memory_order_relaxed);
         cached_num_lines_ready.store(true, std::memory_order_relaxed);
-        cached_max_bytes.store(db.get_max_bytes(file_id),
-                               std::memory_order_relaxed);
+        cached_max_bytes.store(metadata.max_bytes, std::memory_order_relaxed);
         cached_max_bytes_ready.store(true, std::memory_order_relaxed);
-        cached_checkpoint_size.store(db.get_checkpoint_size(file_id),
+        cached_checkpoint_size.store(metadata.checkpoint_size,
                                      std::memory_order_relaxed);
         cached_checkpoint_size_ready.store(true, std::memory_order_relaxed);
-        cached_members = db.query_gzip_members(file_id);
+        auto members = unwrap(index::members(snapshot, *file));
+        cached_members.assign(members.begin(), members.end());
         for (const auto& m : cached_members)
             if (m.kind == GzipRecordKind::Head)
                 cached_heads.push_back(m.c_offset);
     }
+    file_ref_ = file;
+    snapshot_ = std::move(snapshot);
     cached_loaded.store(true, std::memory_order_release);
 }
 
@@ -1321,17 +1345,6 @@ std::uint64_t GzipIndexer::get_checkpoint_size() const {
 std::uint64_t GzipIndexer::get_num_lines() const {
     ensure_loaded();
     return cached_num_lines.load(std::memory_order_relaxed);
-}
-
-int GzipIndexer::get_file_id() const {
-    ensure_loaded();
-    return cached_file_id.load(std::memory_order_relaxed);
-}
-
-int GzipIndexer::find_file_id(const std::string& path) const {
-    index::store::IndexDatabase db(index_path,
-                                   index::store::IndexOpenMode::ReadOnly);
-    return db.get_file_info_id(index::store::internal::get_logical_path(path));
 }
 
 bool GzipIndexer::find_member(std::size_t target_offset,
@@ -1361,11 +1374,12 @@ dstd::Vector<std::uint64_t> GzipIndexer::piece_heads() const {
 
 std::string GzipIndexer::restart_window(std::uint64_t member_idx) const {
     ensure_loaded();
-    const int file_id = cached_file_id.load(std::memory_order_relaxed);
-    if (file_id == -1) return {};
-    index::store::IndexDatabase db(index_path,
-                                   index::store::IndexOpenMode::ReadOnly);
-    return db.query_restart_window(file_id, member_idx).value_or(std::string{});
+    std::lock_guard<std::mutex> lock(cached_members_mutex);
+    if (!file_ref_) return {};
+    auto window =
+        unwrap(index::restart_window(*snapshot_, *file_ref_, member_idx));
+    if (!window) return {};
+    return std::string(window->data(), window->size());
 }
 
 }  // namespace dftracer::utils::index::gzip

@@ -3,8 +3,9 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/internal/index_root.h>
@@ -68,21 +69,26 @@ namespace {
 std::optional<internal::IndexedFile> fresh_index_record(
     const std::string& index_path, const std::string& file,
     const dftracer::utils::InputFileStat& st) {
-    namespace store = dftracer::utils::index::store;
+    namespace idx = dftracer::utils::index;
     try {
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        const int id =
-            db.get_file_info_id(store::internal::get_logical_path(file));
-        if (id < 0 || db.check_freshness(file, st.size, st.mtime) !=
-                          store::IndexDatabase::Freshness::Fresh)
+        auto snapshot =
+            dftracer::utils::unwrap(idx::plan::open_snapshot(index_path));
+        const auto logical = idx::store::internal::get_logical_path(file);
+        if (snapshot.freshness(
+                logical, idx::SourceStat{static_cast<std::uint64_t>(st.mtime),
+                                         st.size}) != idx::Freshness::Current)
             return std::nullopt;
-        const auto checkpoint_size = db.get_checkpoint_size(id);
-        if (checkpoint_size == 0) return std::nullopt;
-        return internal::IndexedFile{{st.mtime, st.size},
-                                     db.get_num_lines(id),
-                                     db.get_max_bytes(id),
-                                     checkpoint_size,
-                                     db.query_gzip_members(id).size()};
+        const auto ref = snapshot.file(logical);
+        if (!ref) return std::nullopt;
+        const auto meta =
+            dftracer::utils::unwrap(idx::file_metadata(snapshot, *ref));
+        if (!meta || meta->checkpoint_size == 0) return std::nullopt;
+        return internal::IndexedFile{
+            {st.mtime, st.size},
+            meta->num_lines,
+            meta->max_bytes,
+            meta->checkpoint_size,
+            dftracer::utils::unwrap(idx::members(snapshot, *ref)).size()};
     } catch (const std::exception& e) {
         DFTRACER_UTILS_LOG_DEBUG("Index of %s unreadable (%s)", file.c_str(),
                                  e.what());

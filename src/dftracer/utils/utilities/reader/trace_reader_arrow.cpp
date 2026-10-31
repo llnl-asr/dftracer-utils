@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -337,18 +336,6 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
             co_yield builder.finish();
         }
         co_return;
-    }
-
-    // Keep the index open for the generator's lifetime so per-method opens
-    // in GzipIndexer reuse its handle.
-    std::optional<dftracer::utils::index::store::IndexDatabase> db_keep_alive;
-    if (has_index_ && !index_path_.empty()) {
-        try {
-            db_keep_alive.emplace(
-                index_path_,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        } catch (...) {
-        }
     }
 
     auto reader = create_indexed_reader();

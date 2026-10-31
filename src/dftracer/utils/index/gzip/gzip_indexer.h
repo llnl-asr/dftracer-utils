@@ -4,10 +4,11 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
@@ -109,10 +110,8 @@ class GzipIndexer : public CheckpointIndexer {
     std::uint64_t get_checkpoint_size() const override;
     std::uint64_t get_max_bytes() const override;
     std::uint64_t get_num_lines() const override;
-    int get_file_id() const;
 
     // Lookup
-    int find_file_id(const std::string &gz_path) const;
     bool find_member(std::size_t target_offset,
                      GzipMemberRecord &member) const override;
     std::vector<GzipMemberRecord> get_members() const override;
@@ -136,7 +135,6 @@ class GzipIndexer : public CheckpointIndexer {
 
     // Cached values (atomic for thread-safe lazy initialization)
     mutable std::atomic<bool> cached_is_valid{false};
-    mutable std::atomic<int> cached_file_id{-1};
     mutable std::atomic<std::uint64_t> cached_max_bytes{0};
     mutable std::atomic<bool> cached_max_bytes_ready{false};
     mutable std::atomic<std::uint64_t> cached_num_lines{0};
@@ -145,6 +143,9 @@ class GzipIndexer : public CheckpointIndexer {
     mutable std::atomic<bool> cached_checkpoint_size_ready{false};
     mutable std::vector<GzipMemberRecord> cached_members;
     mutable dstd::Vector<std::uint64_t> cached_heads;
+    // One snapshot per loaded indexer, so a restart read opens nothing.
+    mutable dstd::Optional<index::Snapshot> snapshot_;
+    mutable dstd::Optional<index::FileRef> file_ref_;
     mutable std::mutex cached_members_mutex;
     mutable std::atomic<bool> cached_loaded{false};
 

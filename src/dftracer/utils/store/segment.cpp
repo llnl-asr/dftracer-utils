@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/store/segment.h>
 #include <dftracer/utils/store/varint.h>
@@ -61,10 +62,6 @@ std::size_t encoded_entry_size(ByteView key, ByteView value) {
         (big ? 1U : 0U);
     return varint_size(key.size()) + varint_size(value_code) + key.size() +
            stored_value_bytes;
-}
-
-std::size_t align_up(std::size_t value, std::size_t alignment) {
-    return (value + alignment - 1U) & ~(alignment - 1U);
 }
 
 }  // namespace
@@ -224,7 +221,7 @@ dstd::Expected<std::size_t, dstd::Error> SegmentBuilder::plan(
 
     std::size_t body_bytes = 0;
     for (const PlannedGroup& group : groups_) body_bytes += group.bytes;
-    planned_bytes_ = align_up(index_bytes_ + body_bytes, SEGMENT_ALIGN);
+    planned_bytes_ = bits::align_up(index_bytes_ + body_bytes, SEGMENT_ALIGN);
 
     if (planned_bytes_ > std::numeric_limits<std::uint32_t>::max() ||
         entries_.size() > std::numeric_limits<std::uint32_t>::max() ||

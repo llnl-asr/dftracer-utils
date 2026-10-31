@@ -1,5 +1,6 @@
 // The _advanced create functions take the tracked allocator.
 #define ZSTD_STATIC_LINKING_ONLY
+#include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
@@ -56,10 +57,6 @@ struct DecompressContext {
     ZSTD_DCtx* ctx = ZSTD_createDCtx_advanced(general_pool_mem());
     ~DecompressContext() { ZSTD_freeDCtx(ctx); }
 };
-
-std::size_t align_up(std::size_t value, std::size_t align) {
-    return (value + align - 1) / align * align;
-}
 
 const std::uint8_t* bytes_of(ByteView view) {
     return reinterpret_cast<const std::uint8_t*>(view.data());
@@ -173,7 +170,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
         stored += page_bytes;
     }
     out.resize(stored);
-    out.resize(align_up(out.size(), align));
+    out.resize(bits::align_up(out.size(), align));
     write_u32_le(out.data(), static_cast<std::uint32_t>(count));
     write_u32_le(out.data() + 4, static_cast<std::uint32_t>(raw_length));
     if (dict != nullptr && codec_wanted == PageCodec::Zstd) {

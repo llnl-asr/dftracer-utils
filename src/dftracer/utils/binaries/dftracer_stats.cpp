@@ -308,16 +308,6 @@ static std::vector<CountPair> sorted_by_count_desc(const Map& counts) {
     return sorted;
 }
 
-// Format a byte value for human-readable display
-static std::string format_bytes(double bytes) {
-    return cli::human_bytes(bytes);
-}
-
-// Format a bandwidth value (bytes/sec) for human-readable display
-static std::string format_bandwidth(double bps) {
-    return cli::human_bytes(bps, "/s");
-}
-
 // Build a DetailedStatistics from TraceStatistics (summary path).
 // Per-op distributions come from ChunkStatistics in-memory sketches
 // (populated during live scanning, empty when loaded from index).
@@ -589,14 +579,14 @@ static void print_detailed_grouped_io(
             const auto& io = *sorted_io[0].second;
             std::printf("    Count: %llu   Size Mean: %s",
                         (unsigned long long)io.size.count(),
-                        format_bytes(io.size.mean()).c_str());
+                        human_bytes(io.size.mean()).c_str());
             if (!io.size.sketch.empty()) {
                 std::printf("   Size p50: %s",
-                            format_bytes(io.size.sketch.quantile(0.5)).c_str());
+                            human_bytes(io.size.sketch.quantile(0.5)).c_str());
             }
             if (io.bandwidth.count() > 0 && !io.bandwidth.sketch.empty()) {
                 std::printf("   BW p50: %s",
-                            format_bandwidth(io.bandwidth.sketch.quantile(0.5))
+                            human_bytes(io.bandwidth.sketch.quantile(0.5), "/s")
                                 .c_str());
             }
             std::printf("\n");
@@ -610,9 +600,9 @@ static void print_detailed_grouped_io(
                     std::printf("  I/O Size Percentiles:\n");
                     std::printf(
                         "    p50: %s  p90: %s  p99: %s\n",
-                        format_bytes(io.size.sketch.quantile(0.5)).c_str(),
-                        format_bytes(io.size.sketch.quantile(0.9)).c_str(),
-                        format_bytes(io.size.sketch.quantile(0.99)).c_str());
+                        human_bytes(io.size.sketch.quantile(0.5)).c_str(),
+                        human_bytes(io.size.sketch.quantile(0.9)).c_str(),
+                        human_bytes(io.size.sketch.quantile(0.99)).c_str());
                 }
             }
         } else {
@@ -628,19 +618,19 @@ static void print_detailed_grouped_io(
                     display_key = display_key.substr(0, 27) + "...";
                 }
 
-                std::string size_mean = format_bytes(io->size.mean());
+                std::string size_mean = human_bytes(io->size.mean());
                 std::string size_p50 =
                     io->size.sketch.empty()
                         ? "-"
-                        : format_bytes(io->size.sketch.quantile(0.5));
+                        : human_bytes(io->size.sketch.quantile(0.5));
                 std::string bw_p50 =
                     (io->bandwidth.count() == 0 || io->bandwidth.sketch.empty())
                         ? "-"
-                        : format_bandwidth(io->bandwidth.sketch.quantile(0.5));
+                        : human_bytes(io->bandwidth.sketch.quantile(0.5), "/s");
                 std::string offset_p50 =
                     (io->offset.count() == 0 || io->offset.sketch.empty())
                         ? "-"
-                        : format_bytes(io->offset.sketch.quantile(0.5));
+                        : human_bytes(io->offset.sketch.quantile(0.5));
 
                 std::printf("    %-30s %12llu %12s %12s %12s %12s\n",
                             display_key.c_str(),

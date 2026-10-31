@@ -2,7 +2,6 @@
 #define DFTRACER_UTILS_UTILITIES_HASH_FNV1A_HASHER_UTILITY_H
 
 #include <dftracer/utils/dstd/hash/fnv1a.h>
-#include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/utilities/hash/types.h>
 
 #include <cstddef>
@@ -98,11 +97,6 @@ class Fnv1aHasherUtility {
     Hash process(const Args&... args) {
         (update(args), ...);
         return get_hash();
-    }
-
-    /// Combine a hash value into a seed (boost-style).
-    static void hash_combine(std::size_t& seed, std::size_t value) {
-        dftracer::utils::hash_combine(seed, value);
     }
 
    private:

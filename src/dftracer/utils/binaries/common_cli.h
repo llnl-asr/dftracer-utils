@@ -163,13 +163,6 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     }
 }
 
-// Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s"; see
-// dftracer::utils::human_bytes.
-inline std::string human_bytes(double value, const char* per_suffix = "",
-                               int precision = 1) {
-    return dftracer::utils::human_bytes(value, per_suffix, precision);
-}
-
 // Read a string-valued argument as a byte size, accepting human-readable units
 // (e.g. "64MB", "1.5GiB") as well as a bare byte count. Throws
 // std::runtime_error on malformed input so ArgParse::parse reports it like any

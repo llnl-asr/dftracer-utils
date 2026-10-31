@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -114,13 +115,6 @@ struct GzipStreamInflater::Impl {
     static constexpr unsigned char FLAG_COMMENT = 16;
     static constexpr unsigned char FLAG_RESERVED = 0xe0;
     static constexpr unsigned FIXED_BYTES = 6;
-
-    static std::uint32_t read_le32(const unsigned char* p) {
-        return static_cast<std::uint32_t>(p[0]) |
-               static_cast<std::uint32_t>(p[1]) << 8 |
-               static_cast<std::uint32_t>(p[2]) << 16 |
-               static_cast<std::uint32_t>(p[3]) << 24;
-    }
 
     void restart_member() {
         phase = raw ? Phase::Body : Phase::Header;
@@ -257,8 +251,8 @@ struct GzipStreamInflater::Impl {
                     return first ? InflateStatus::BufError : InflateStatus::Ok;
                 }
                 phase = Phase::Done;
-                if (read_le32(trailer) != crc ||
-                    read_le32(trailer + 4) != size) {
+                if (read_le<std::uint32_t>(trailer) != crc ||
+                    read_le<std::uint32_t>(trailer + 4) != size) {
                     return InflateStatus::DataError;
                 }
             } else {

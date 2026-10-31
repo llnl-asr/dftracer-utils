@@ -16,6 +16,7 @@
 #include <dftracer/utils/dataframe/internal/fingerprint.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
+#include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
@@ -3047,15 +3048,6 @@ const char* join_how_name(JoinHow how) {
             return "nest";
     }
     return "?";
-}
-
-std::string join_names(const std::vector<std::string>& v) {
-    std::string s;
-    for (std::size_t i = 0; i < v.size(); ++i) {
-        if (i) s += ", ";
-        s += v[i];
-    }
-    return s;
 }
 
 std::unordered_map<std::string, std::string> rename_map(

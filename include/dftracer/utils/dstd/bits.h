@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace dftracer::utils::bits {
 
@@ -25,9 +26,22 @@ inline int bit_width_u64(std::uint64_t x) {
     return x == 0 ? 0 : 64 - __builtin_clzll(x);
 }
 
-/// `x` rounded up to a multiple of `a`; `x` itself when `a` is 0.
-inline std::size_t align_up(std::size_t x, std::size_t a) {
-    return a ? (x + a - 1) / a * a : x;
+/// `x` rounded up to a multiple of `a`, or `x` itself when `a` is 0. The result
+/// has the common type of the arguments.
+template <typename T, typename U>
+constexpr std::common_type_t<T, U> align_up(T x, U a) {
+    using R = std::common_type_t<T, U>;
+    return a ? (static_cast<R>(x) + static_cast<R>(a) - 1) / static_cast<R>(a) *
+                   static_cast<R>(a)
+             : static_cast<R>(x);
+}
+
+/// `n / d` rounded up, for a positive `d` and a `n` that is not negative. The
+/// result has the common type of the arguments.
+template <typename T, typename U>
+constexpr std::common_type_t<T, U> div_ceil(T n, U d) {
+    using R = std::common_type_t<T, U>;
+    return (static_cast<R>(n) + static_cast<R>(d) - 1) / static_cast<R>(d);
 }
 
 }  // namespace dftracer::utils::bits

@@ -73,7 +73,7 @@ class InfoArgParse : public cli::ArgParse {
 };
 
 static std::string format_size(std::uint64_t bytes) {
-    return cli::human_bytes(static_cast<double>(bytes), "", 2);
+    return human_bytes(static_cast<double>(bytes), "", 2);
 }
 
 using FileRegistry = StringViewMap<FileRegistryEntry>;

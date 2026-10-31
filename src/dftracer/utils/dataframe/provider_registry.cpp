@@ -10,6 +10,7 @@
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>
 #include <dftracer/utils/dataframe/internal/governor.h>
+#include <dftracer/utils/dataframe/internal/join_names.h>
 #include <dftracer/utils/dataframe/internal/lazyframe_handle.h>
 #include <dftracer/utils/dataframe/internal/provider_source.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>
@@ -70,15 +71,6 @@ Pushed to_pushed(std::int32_t v) {
         default:
             return Pushed::No;
     }
-}
-
-std::string join_names(const std::vector<std::string>& names) {
-    std::ostringstream out;
-    for (std::size_t i = 0; i < names.size(); ++i) {
-        if (i) out << ", ";
-        out << names[i];
-    }
-    return out.str();
 }
 
 // A type this ABI lets a provider nest a child field under: DataType::fields

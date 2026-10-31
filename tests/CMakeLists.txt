@@ -449,6 +449,13 @@ foreach(test_file ${TEST_CPP_SOURCES})
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()
 
+  # Eight forked writers, each with an I/O pool of one thread per hardware
+  # thread, pass the per-user thread limit of a 224-thread node when seven
+  # other tests run beside them.
+  if(bin_exec STREQUAL "store/test_processes")
+    set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
+  endif()
+
   # test_big_member_reads inflates several large gzip members: 13 s alone on
   # macOS, 41 s on Corona under the full suite, past 120 s on a 4-core CI
   # runner. test_catalog takes 82 to past 120 s on the same runners, and

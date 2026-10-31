@@ -1,9 +1,9 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
 
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <cstdlib>
 
@@ -134,11 +134,8 @@ namespace {
 bool strip_bearer_prefix(std::string_view h, std::string_view& token) {
     constexpr std::string_view BEARER = "Bearer ";
     if (h.size() <= BEARER.size()) return false;
-    for (std::size_t i = 0; i < BEARER.size(); ++i) {
-        if (std::tolower(static_cast<unsigned char>(h[i])) !=
-            std::tolower(static_cast<unsigned char>(BEARER[i])))
-            return false;
-    }
+    if (!::dftracer::utils::detail::iequals(h.substr(0, BEARER.size()), BEARER))
+        return false;
     token = h.substr(BEARER.size());
     return true;
 }

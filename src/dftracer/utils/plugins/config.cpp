@@ -1,7 +1,7 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/plugins/config.h>
 #include <simdjson.h>
 
-#include <cctype>
 #include <cerrno>
 #include <charconv>
 #include <cstdlib>
@@ -121,15 +121,7 @@ ConfigTree::Node ConfigTree::infer_leaf(std::string_view raw) {
             return n;
         }
     }
-    auto iequals = [](std::string_view a, std::string_view b) {
-        if (a.size() != b.size()) return false;
-        for (std::size_t i = 0; i < a.size(); ++i) {
-            if (std::tolower(static_cast<unsigned char>(a[i])) !=
-                std::tolower(static_cast<unsigned char>(b[i])))
-                return false;
-        }
-        return true;
-    };
+    using ::dftracer::utils::detail::iequals;
     if (iequals(raw, "true")) {
         n.kind = DFTU_VAL_BOOL;
         n.b = true;

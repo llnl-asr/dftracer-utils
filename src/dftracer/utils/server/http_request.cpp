@@ -1,19 +1,15 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/server/http_parser.h>
 #include <dftracer/utils/server/http_request.h>
 
 #include <algorithm>
-#include <cctype>
 
 namespace dftracer::utils::server {
 
 namespace {
 
 bool icase_equal(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    return std::equal(a.begin(), a.end(), b.begin(), [](char ca, char cb) {
-        return std::tolower(static_cast<unsigned char>(ca)) ==
-               std::tolower(static_cast<unsigned char>(cb));
-    });
+    return ::dftracer::utils::detail::iequals(a, b);
 }
 
 }  // namespace

@@ -3,12 +3,12 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/memory/budget.h>
 #include <pwd.h>
 #include <unistd.h>
 
 #include <atomic>
-#include <cctype>
 #include <cstdint>
 #include <string>
 #include <system_error>
@@ -23,8 +23,7 @@ std::string env_str(const char* name) {
 }
 
 std::string lower(std::string s) {
-    for (char& c : s)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    detail::lower_ascii(s);
     return s;
 }
 

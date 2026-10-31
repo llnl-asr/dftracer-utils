@@ -120,6 +120,11 @@ constexpr char to_lower_ascii(char c) {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
 }
 
+// Lowers ASCII letters of s[from..] in place. Bytes >= 0x80 stay unchanged.
+inline void lower_ascii(std::string& s, std::size_t from = 0) {
+    for (std::size_t i = from; i < s.size(); ++i) s[i] = to_lower_ascii(s[i]);
+}
+
 constexpr std::string_view trim_ws(std::string_view s) {
     while (!s.empty() && is_ascii_space(s.front())) s.remove_prefix(1);
     while (!s.empty() && is_ascii_space(s.back())) s.remove_suffix(1);

@@ -1,6 +1,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -34,7 +35,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <memory>
@@ -1180,9 +1180,7 @@ static std::optional<ChunkStatistics> file_rows_to_statistics(
         add_path_counts(db, file_id, "cat", raw);
         for (const auto& [cat, count] : raw) {
             std::string lower(cat);
-            for (auto& ch : lower)
-                ch = static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(ch)));
+            ::dftracer::utils::detail::lower_ascii(lower);
             cs.category_counts[lower] += count;
         }
     }

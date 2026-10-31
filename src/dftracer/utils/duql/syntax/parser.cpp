@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 
@@ -11,13 +12,7 @@ namespace dftracer::utils::duql::syntax {
 
 namespace {
 
-bool iequals(std::string_view a, std::string_view b) {
-    return a.size() == b.size() &&
-           std::equal(a.begin(), a.end(), b.begin(),
-                      [](unsigned char x, unsigned char y) {
-                          return std::tolower(x) == std::tolower(y);
-                      });
-}
+using ::dftracer::utils::detail::iequals;
 
 constexpr std::string_view RESERVED[] = {"and",    "or",    "not",     "in",
                                          "like",   "ilike", "between", "is",
@@ -509,9 +504,7 @@ class Parser {
         const Token& first = cur();
         const std::string kw = [&] {
             std::string w(advance().text);
-            for (auto& c : w)
-                c = static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(c)));
+            ::dftracer::utils::detail::lower_ascii(w);
             return w;
         }();
         Stage s;

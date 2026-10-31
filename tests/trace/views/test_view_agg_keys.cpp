@@ -64,7 +64,7 @@ TEST_SUITE("View") {
         }
 
         // Mixed-case cat values: the GroupMap path lowercases the group key
-        // (agg_fold.h's lower_ascii), so "POSIX"/"posix"/"Stdio"/"STDIO" must
+        // (str_format.h lower_ascii), so "POSIX"/"posix"/"Stdio"/"STDIO" must
         // merge into two groups ("posix", "stdio") in both paths.
         const std::string gz3 = parity_sub("cat") + "/agg_engine_cat.pfw.gz";
         const std::string idx3 = determine_index_path(gz3, "");

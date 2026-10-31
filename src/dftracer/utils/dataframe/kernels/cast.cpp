@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal.h>
@@ -8,7 +9,6 @@
 #include <dftracer/utils/dstd/to_chars.h>
 #include <simdjson.h>
 
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -171,7 +171,7 @@ dftu_series* parse_numbers_w(const dftu_series& v, TypeId mid) {
                 od[i] = std::stod(text, &used);
             }
             while (used < text.size() &&
-                   std::isspace(static_cast<unsigned char>(text[used])))
+                   ::dftracer::utils::detail::is_ascii_space(text[used]))
                 ++used;
             ok = used == text.size();
         } catch (const std::exception&) {

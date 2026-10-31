@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -22,7 +23,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <iterator>
 #include <limits>
@@ -350,8 +350,7 @@ std::string transform_key_base(
     if (key_is_resolved(gk.kind))
         return resolver ? resolve_group_value(*resolver, gk, raw) : raw;
     if (gk.kind == GroupKey::Kind::Cat)
-        for (char& ch : raw)
-            ch = static_cast<char>(::tolower(static_cast<unsigned char>(ch)));
+        ::dftracer::utils::detail::lower_ascii(raw);
     return raw;
 }
 
@@ -1056,9 +1055,7 @@ dataframe::DataFrame build_agg_input_frame(
                 continue;
             }
             std::string s(src.string_at(r));
-            for (char& ch : s)
-                ch = static_cast<char>(
-                    ::tolower(static_cast<unsigned char>(ch)));
+            ::dftracer::utils::detail::lower_ascii(s);
             vals[static_cast<std::size_t>(r)] = std::move(s);
             vbits[static_cast<std::size_t>(r) >> 3] |=
                 static_cast<std::uint8_t>(1u << (r & 7));

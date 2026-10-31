@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -5,7 +6,6 @@
 #include <dftracer/utils/server/viz_ui.h>
 #include <simdjson.h>
 
-#include <cctype>
 #include <string>
 
 namespace dftracer::utils::server {
@@ -55,9 +55,8 @@ std::string openapi_json(const Router& router) {
         b.append_colon();
         b.start_object();
         std::string method;
-        for (char c : r.method)
-            method +=
-                static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        method.assign(r.method);
+        ::dftracer::utils::detail::lower_ascii(method);
         b.escape_and_append_with_quotes(method);
         b.append_colon();
         b.start_object();

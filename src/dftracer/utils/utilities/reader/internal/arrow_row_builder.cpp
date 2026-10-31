@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/utilities/reader/internal/arrow_row_builder.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
@@ -8,7 +9,6 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
 
-#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -69,16 +69,7 @@ std::int8_t get_io_cat(std::string_view func) {
                                  : static_cast<std::int8_t>(IoOther);
 }
 
-bool str_iequal(std::string_view a, const char *b) {
-    std::size_t len = std::strlen(b);
-    if (a.size() != len) return false;
-    for (std::size_t i = 0; i < len; ++i) {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            static_cast<unsigned char>(b[i]))
-            return false;
-    }
-    return true;
-}
+using ::dftracer::utils::detail::iequals;
 
 // Fields extracted from a row's "args" object in a single pass.
 struct ParsedArgs {
@@ -229,7 +220,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         else
             row_type = RowMetadata;
     } else if (is_C) {
-        row_type = str_iequal(cat_sv, "sys") ? RowSystem : RowProfile;
+        row_type = iequals(cat_sv, "sys") ? RowSystem : RowProfile;
     }
     bool is_hash = (row_type >= RowFileHash && row_type <= RowStringHash) ||
                    row_type == RowProcMetadata;
@@ -275,8 +266,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
         char lbuf[256];
         std::size_t clen = std::min(cat_sv.size(), sizeof(lbuf));
         for (std::size_t i = 0; i < clen; ++i)
-            lbuf[i] = static_cast<char>(
-                std::tolower(static_cast<unsigned char>(cat_sv[i])));
+            lbuf[i] = ::dftracer::utils::detail::to_lower_ascii(cat_sv[i]);
         builder.append_string(ci_cat, arena.push(lbuf, clen));
     } else {
         builder.append_null(ci_cat);
@@ -330,7 +320,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // --- IO columns (events only) ---
     if (is_event) {
         bool is_posix_stdio =
-            str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
+            iequals(cat_sv, "posix") || iequals(cat_sv, "stdio");
         std::int8_t io_cat = is_posix_stdio ? get_io_cat(out_name)
                                             : static_cast<std::int8_t>(IoOther);
         // Size uses the shared io-cat rule (size_sum > posix/stdio read|write
@@ -355,7 +345,7 @@ bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
     // --- Profile columns ---
     if (is_profile) {
         bool is_posix_stdio =
-            str_iequal(cat_sv, "posix") || str_iequal(cat_sv, "stdio");
+            iequals(cat_sv, "posix") || iequals(cat_sv, "stdio");
         std::int8_t io_cat = is_posix_stdio ? get_io_cat(out_name)
                                             : static_cast<std::int8_t>(IoOther);
         builder.append_int64(ci_io_cat, io_cat);

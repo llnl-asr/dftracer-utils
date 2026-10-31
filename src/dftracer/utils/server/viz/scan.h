@@ -5,6 +5,7 @@
 // threshold, viz-query (ViewDefinition) building from request params, and
 // target-file selection. Internal to the server.
 
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
@@ -38,7 +39,9 @@ inline bool rewrite_uint_field(std::string& json, std::string_view key,
     auto pos = json.find(key);
     if (pos == std::string::npos) return false;
     pos += key.size();
-    while (pos < json.size() && std::isspace(json[pos])) ++pos;
+    while (pos < json.size() &&
+           ::dftracer::utils::detail::is_ascii_space(json[pos]))
+        ++pos;
     auto end_pos = pos;
     while (end_pos < json.size() &&
            (std::isdigit(json[end_pos]) || json[end_pos] == '-')) {

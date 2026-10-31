@@ -1,11 +1,10 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
-
-#include <cctype>
 
 namespace dftracer::utils::trace::internal {
 
@@ -42,25 +41,13 @@ std::string_view to_lower_ascii(std::string_view s, std::string& storage) {
     }
     if (!has_upper) return s;
     storage.assign(s);
-    for (auto& c : storage) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
+    ::dftracer::utils::detail::lower_ascii(storage);
     return storage;
 }
 
-bool ascii_iequals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (std::size_t i = 0; i < a.size(); ++i) {
-        if (std::tolower(static_cast<unsigned char>(a[i])) !=
-            std::tolower(static_cast<unsigned char>(b[i]))) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool is_data_transfer_op(std::string_view cat, std::string_view name) {
-    if (!ascii_iequals(cat, "posix") && !ascii_iequals(cat, "stdio")) {
+    if (!::dftracer::utils::detail::iequals(cat, "posix") &&
+        !::dftracer::utils::detail::iequals(cat, "stdio")) {
         return false;
     }
     auto eq = [](std::string_view a, std::string_view b) { return a == b; };

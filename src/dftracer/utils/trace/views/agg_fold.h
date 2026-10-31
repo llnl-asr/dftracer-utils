@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_AGG_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_AGG_FOLD_H
 
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/event_source.h>
 
-#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -15,12 +15,6 @@
 // runs identically over a live simdjson element (DomSource) and the interned
 // POD (PodSource).
 namespace dftracer::utils::trace::views::detail {
-
-inline void lower_ascii(std::string& s, std::size_t from) {
-    for (std::size_t i = from; i < s.size(); ++i)
-        s[i] =
-            static_cast<char>(std::tolower(static_cast<unsigned char>(s[i])));
-}
 
 // "size" is the io-cat-derived byte size, ret becoming size for POSIX/STDIO
 // read|write, so aggregates match dfanalyzer.

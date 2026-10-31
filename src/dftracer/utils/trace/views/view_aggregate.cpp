@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -5,7 +6,6 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 
 #include <algorithm>
-#include <cctype>
 #include <set>
 #include <string>
 #include <utility>
@@ -146,9 +146,7 @@ std::string apply_group_transform(const GroupKey& gk, std::string v) {
             return slash == std::string::npos ? v : v.substr(slash + 1);
         }
         case GroupKey::Transform::Lower: {
-            for (auto& ch : v)
-                ch = static_cast<char>(
-                    ::tolower(static_cast<unsigned char>(ch)));
+            ::dftracer::utils::detail::lower_ascii(v);
             return v;
         }
         case GroupKey::Transform::Bucket:

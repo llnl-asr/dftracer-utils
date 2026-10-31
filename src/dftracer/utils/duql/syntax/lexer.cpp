@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 
 #include <cctype>
@@ -58,7 +59,7 @@ dftracer::utils::dstd::Expected<std::vector<Token>, duql::DuqlError> lex(
 
     while (true) {
         while (pos < src.size()) {
-            if (std::isspace(static_cast<unsigned char>(src[pos]))) {
+            if (::dftracer::utils::detail::is_ascii_space(src[pos])) {
                 ++pos;
                 adjacent = false;
             } else if (src[pos] == '#') {

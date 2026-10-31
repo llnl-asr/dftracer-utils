@@ -4,7 +4,7 @@
 // end to end through a real fold_adapter host.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 
@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <vector>
 
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::OwnedLazyFrame;
 using dftracer::utils::plugins::PluginFold;
 

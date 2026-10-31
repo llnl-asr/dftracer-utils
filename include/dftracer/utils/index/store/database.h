@@ -1,7 +1,9 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_DATABASE_H
 #define DFTRACER_UTILS_INDEX_STORE_DATABASE_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <rocksdb/db.h>
 #include <rocksdb/env.h>
@@ -10,6 +12,8 @@
 #include <rocksdb/options.h>
 #include <rocksdb/write_batch.h>
 
+#include <atomic>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -17,6 +21,11 @@
 #include <vector>
 
 namespace dftracer::utils::index::store {
+
+/// Size of the process's one block cache, read when the first database opens.
+/// A test lowers it so its peaks measure our code, not cached blocks.
+inline std::atomic<std::size_t> g_block_cache_bytes{
+    constants::rocksdb::BLOCK_CACHE_BYTES};
 
 void mark_process_exiting_for_rocksdb();
 
@@ -88,6 +97,20 @@ class RocksDatabase {
     ::rocksdb::Status compact(
         std::string_view column_family = index::store::cf::DEFAULT);
 
+    /// Sets the column family's `disable_auto_compactions` and stores the
+    /// value it had in `*previous`. Turning it back on schedules the
+    /// compactions that were held back.
+    ::rocksdb::Status set_auto_compactions_disabled(
+        std::string_view column_family, bool disabled, bool* previous);
+
+    /// Waits for the running flushes and compactions to end, and for none to
+    /// start that was not already scheduled.
+    ::rocksdb::Status wait_for_compactions();
+
+    /// SST files the column family holds at `level`, from RocksDB's
+    /// "rocksdb.num-files-at-level<N>"; 0 when the property is unavailable.
+    std::size_t files_at_level(std::string_view column_family, int level) const;
+
     /// Bulk-ingest externally built SST files into the named column family.
     /// Keys across the SSTs must be sorted and non-overlapping unless the
     /// caller requests `ingest_behind`, which pushes entries to the bottom
@@ -128,6 +151,26 @@ class RocksDatabase {
     ::rocksdb::DB* db_ = nullptr;
     StringViewMap<::rocksdb::ColumnFamilyHandle*> column_families_;
     CfOptionsOverride cf_options_override_;
+};
+
+/// Holds back the automatic compactions of every column family of `db` while
+/// it lives, so a run of ingests meets no running compaction. Each family goes
+/// back to the value it had. Throws when a family cannot be paused.
+class AutoCompactionPause {
+   public:
+    explicit AutoCompactionPause(std::shared_ptr<RocksDatabase> db);
+    AutoCompactionPause(const AutoCompactionPause&) = delete;
+    AutoCompactionPause& operator=(const AutoCompactionPause&) = delete;
+    /// Resumes without throwing; an error is dropped.
+    ~AutoCompactionPause();
+
+    /// Restores every family, also when one fails, and returns the first
+    /// error. A second call does nothing.
+    ::rocksdb::Status resume();
+
+   private:
+    std::shared_ptr<RocksDatabase> db_;
+    dstd::Vector<std::pair<std::string_view, bool>> previous_;
 };
 
 }  // namespace dftracer::utils::index::store

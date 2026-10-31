@@ -131,7 +131,7 @@ TEST_CASE("C++ builder in / match round-trip") {
     CHECK(ints.to_string() ==
           Query::from_string("pid in [1, 2, 3]")->to_string());
 
-    auto like = field_match("name", MatchOp::LIKE, "MPI_%").build();
+    auto like = field_match("name", MatchOp::Like, "MPI_%").build();
     REQUIRE(like.has_value());
     auto parsed = Query::from_string(R"(name like "MPI_%")");
     REQUIRE(parsed.has_value());
@@ -364,8 +364,8 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .pivot(c("k"), {"a", "b"}, {{"n", fn("count")}}, {"x", ""})
              .take_range(3, param("b")),
          R"(distinct c = cat, d = dur // 10 | pivot k in ["a" as x, "b"] { n = count() } | take 3..$b)"},
-        {Pipe().sort({SortKey(-c("dur"), Nulls::LAST),
-                      SortKey(c("name"), Nulls::FIRST)}),
+        {Pipe().sort({SortKey(-c("dur"), Nulls::Last),
+                      SortKey(c("name"), Nulls::First)}),
          "sort -dur nulls last, name nulls first"},
         {Pipe().take(3, {c("pid")}, {-c("dur")}).take(param("k")),
          "take 3 by pid sort -dur | take $k"},
@@ -384,22 +384,22 @@ TEST_CASE("pipe builder builds the text tree of every stage and expression") {
              .lookup("files", {JoinKey(c("fhash"), c("fh")), "pid"}),
          "lookup files on fhash into f | lookup files on fhash == fh, pid"},
         {Pipe()
-             .lookup("files", {"fhash"}, {}, LookupHow::INNER)
-             .lookup("files", {"fhash"}, {}, LookupHow::ANTI)
-             .lookup("files", {"fhash"}, "f", LookupHow::INNER),
+             .lookup("files", {"fhash"}, {}, LookupHow::Inner)
+             .lookup("files", {"fhash"}, {}, LookupHow::Anti)
+             .lookup("files", {"fhash"}, "f", LookupHow::Inner),
          "lookup files on fhash inner | lookup files on fhash anti | lookup "
          "files on fhash inner into f"},
         {Pipe().lookup(source("f.pfw.gz").where(c("x") == 1), {"pid"}, "m",
-                       LookupHow::INNER),
+                       LookupHow::Inner),
          R"(lookup (from "f.pfw.gz" | where x == 1) on pid inner into m)"},
-        {Pipe().lookup(rowset("files").take(3), {"pid"}, {}, LookupHow::ANTI),
+        {Pipe().lookup(rowset("files").take(3), {"pid"}, {}, LookupHow::Anti),
          "lookup (from files | take 3) on pid anti"},
         {Pipe().lookup_asof(rowset("s"), {"pid"}, "ts"),
          "lookup (from s) on pid asof ts"},
         {Pipe()
              .lookup_asof("samples", {"pid"}, JoinKey(c("ts"), c("t")),
-                          Asof::NEAREST, duration(5, "ms"))
-             .lookup_asof("samples", {"pid"}, "ts", Asof::FORWARD),
+                          Asof::Nearest, duration(5, "ms"))
+             .lookup_asof("samples", {"pid"}, "ts", Asof::Forward),
          "lookup samples on pid asof ts == t nearest within 5ms | lookup "
          "samples on pid asof ts forward"},
         {Pipe().lookup_overlap("spans", {"pid"}, "m"),

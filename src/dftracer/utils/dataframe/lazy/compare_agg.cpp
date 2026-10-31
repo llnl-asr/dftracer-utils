@@ -1,5 +1,7 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 #include <dftracer/utils/dataframe/lazy/numeric.h>
+#include <dftracer/utils/memory/budget.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -115,6 +117,8 @@ class CompareAggCursor : public Cursor {
           n_key_(n_key),
           budget_(budget) {}
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
         auto df = co_await gen_->next();
@@ -128,9 +132,18 @@ class CompareAggCursor : public Cursor {
     }
 
    private:
+    void govern(spill::Spool& left, spill::Spool& right) {
+        if (budget_ == 0 || budget_ == memory::NO_SPILL_BUDGET) return;
+        if (gov_.check(left.memory_bytes() + right.memory_bytes()) == 0) return;
+        left.spill();
+        right.spill();
+        gov_.spilled(left.memory_bytes() + right.memory_bytes());
+    }
+
     static std::uint64_t share_of(std::uint64_t budget) {
-        return budget == 0 || budget == NO_SPILL_BUDGET ? NO_SPILL_BUDGET
-                                                        : budget / share::SPOOL;
+        return budget == 0 || budget == memory::NO_SPILL_BUDGET
+                   ? memory::NO_SPILL_BUDGET
+                   : budget / share::SPOOL;
     }
 
     // The type of a column is the first one a morsel gives it that is known:
@@ -160,9 +173,12 @@ class CompareAggCursor : public Cursor {
         auto rspool = std::make_shared<spill::Spool>(share_of(budget_));
         std::vector<std::string> lnames = sch_;
         std::vector<DataType> ltypes;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             note_types(ltypes, m->columns);
             lspool->add(std::move(m->columns), m->rows);
+            govern(*lspool, *rspool);
         }
         if (auto produced = in_->out_names(); produced && !produced->empty())
             lnames = std::move(*produced);
@@ -172,7 +188,9 @@ class CompareAggCursor : public Cursor {
         std::vector<std::string> rnames;
         std::vector<DataType> rtypes;
         auto gen = other.stream(max_rows);
-        while (auto df = co_await gen.next()) {
+        for (;;) {
+            auto df = co_await gen.next();
+            if (!df) break;
             if (rtypes.empty()) rnames = df->names;
             note_types(rtypes, df->columns);
             std::vector<Series> cols;
@@ -181,6 +199,7 @@ class CompareAggCursor : public Cursor {
                                    ? c.share()
                                    : c.materialize());
             rspool->add(std::move(cols), df->num_rows());
+            govern(*lspool, *rspool);
         }
 
         const std::vector<Field> lf = fields_of(lnames, ltypes);
@@ -191,7 +210,7 @@ class CompareAggCursor : public Cursor {
             LazyFrame::scan(std::make_shared<SpoolSource>(rspool, Schema{rf}));
         LazyFrame composed = compose_compare_agg(
             left, right, lf, rf, static_cast<std::size_t>(n_key_));
-        if (budget_ != 0 && budget_ != NO_SPILL_BUDGET)
+        if (budget_ != 0 && budget_ != memory::NO_SPILL_BUDGET)
             composed = composed.memory_budget(budget_);
         plan_.emplace(std::move(composed));
         gen_.emplace(plan_->stream(max_rows));
@@ -203,6 +222,7 @@ class CompareAggCursor : public Cursor {
     LazyFrame other_;
     std::int64_t n_key_;
     std::uint64_t budget_;
+    Governor gov_{"compare_agg"};
     std::optional<LazyFrame> plan_;
     std::optional<coro::AsyncGenerator<DataFrame>> gen_;
     std::optional<std::vector<std::string>> out_names_;

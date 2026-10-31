@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/kernels/order.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 
@@ -13,8 +14,8 @@ namespace {
 // to keep its order as a signed one), floats as doubles, strings as views into
 // the morsel; nulls sort last in both directions, as in cmp_cell.
 struct KeyData {
-    enum class Kind { INT, FLOAT, BYTES, DEC128, DEC256 };
-    Kind kind = Kind::INT;
+    enum class Kind { Int, Float, Bytes, Dec128, Dec256 };
+    Kind kind = Kind::Int;
     std::vector<std::int64_t> ints;
     std::vector<double> floats;
     std::vector<std::string_view> bytes;  // strings, binary and decimal cells
@@ -35,7 +36,7 @@ struct KeyData {
             case TypeId::String:
             case TypeId::Binary:
             case TypeId::FixedSizeBinary:
-                kind = Kind::BYTES;
+                kind = Kind::Bytes;
                 bytes.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     if (!null_at(i))
@@ -44,7 +45,7 @@ struct KeyData {
             case TypeId::Decimal128:
             case TypeId::Decimal256: {
                 const std::size_t width = t == TypeId::Decimal128 ? 16 : 32;
-                kind = t == TypeId::Decimal128 ? Kind::DEC128 : Kind::DEC256;
+                kind = t == TypeId::Decimal128 ? Kind::Dec128 : Kind::Dec256;
                 bytes.resize(size);
                 const char* base =
                     reinterpret_cast<const char*>(c.data<std::uint8_t>());
@@ -53,27 +54,27 @@ struct KeyData {
                 break;
             }
             case TypeId::Float16:
-                kind = Kind::FLOAT;
+                kind = Kind::Float;
                 floats.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     floats[static_cast<std::size_t>(i)] = static_cast<double>(
                         half_to_float(c.data<std::uint16_t>()[i]));
                 break;
             case TypeId::Float32:
-                kind = Kind::FLOAT;
+                kind = Kind::Float;
                 floats.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     floats[static_cast<std::size_t>(i)] =
                         static_cast<double>(c.data<float>()[i]);
                 break;
             case TypeId::Float64:
-                kind = Kind::FLOAT;
+                kind = Kind::Float;
                 floats.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     floats[static_cast<std::size_t>(i)] = c.data<double>()[i];
                 break;
             default:
-                kind = Kind::INT;
+                kind = Kind::Int;
                 ints.resize(size);
                 for (std::int64_t i = 0; i < n; ++i)
                     ints[static_cast<std::size_t>(i)] = int_cell(c, t, i);
@@ -90,16 +91,16 @@ struct KeyData {
         const auto a = static_cast<std::size_t>(i);
         const auto b = static_cast<std::size_t>(j);
         switch (kind) {
-            case Kind::INT:
+            case Kind::Int:
                 return ints[a] < o.ints[b] ? -1 : (ints[a] > o.ints[b] ? 1 : 0);
-            case Kind::BYTES:
+            case Kind::Bytes:
                 return bytes[a] < o.bytes[b] ? -1
                                              : (bytes[a] > o.bytes[b] ? 1 : 0);
-            case Kind::DEC128:
+            case Kind::Dec128:
                 return compare_decimal128(bytes[a].data(), o.bytes[b].data());
-            case Kind::DEC256:
+            case Kind::Dec256:
                 return compare_decimal256(bytes[a].data(), o.bytes[b].data());
-            case Kind::FLOAT:
+            case Kind::Float:
                 break;
         }
         return compare_doubles(floats[a], o.floats[b]);
@@ -344,6 +345,8 @@ class SortMergeCursor : public Cursor {
         co_return co_await in_->narrow(predicate);
     }
 
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
+
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
 
@@ -428,15 +431,16 @@ class SortMergeCursor : public Cursor {
             // The merged run keeps the morsel size of the runs it replaces, so
             // the fan-in chosen for the first pass holds for every later one.
             const std::int64_t rows = run_rows_ > 0 ? run_rows_ : max_rows;
-            while (auto m = co_await merger.next(rows)) {
+            for (;;) {
+                auto m = co_await merger.next(rows);
+                if (!m) break;
                 run_morsel_bytes_ = std::max<std::uint64_t>(
                     run_morsel_bytes_, spill::columns_bytes(m->columns));
                 w.write(m->columns, m->rows);
             }
             w.close();
         }
-        std::error_code ec;
-        for (int id : ids) fs::remove(dir_.run_path(id), ec);
+        for (int id : ids) dir_.remove_run(dir_.run_path(id));
         co_return out_id;
     }
 
@@ -448,12 +452,17 @@ class SortMergeCursor : public Cursor {
         std::vector<std::vector<Series>> pending;
         std::size_t pend_bytes = 0;
         int run_id = 0;
-        while (auto m = co_await in_->next(max_rows)) {
+        for (;;) {
+            auto m = co_await in_->next(max_rows);
+            if (!m) break;
             pend_bytes += spill::columns_bytes(m->columns);
             pending.push_back(std::move(m->columns));
-            if (budget_ > 0 && pend_bytes > budget_ / share::SORT_RUN) {
+            if (budget_ > 0 &&
+                (pend_bytes > budget_ / share::SORT_RUN ||
+                 (has_cap(budget_) && gov_.check(pend_bytes) != 0))) {
                 spill_run(pending, run_id++, max_rows);
                 pend_bytes = 0;
+                gov_.spilled(0);
             }
         }
 
@@ -519,6 +528,7 @@ class SortMergeCursor : public Cursor {
     std::optional<RunMerger> merger_;
     std::unique_ptr<Cursor> single_;
     std::optional<Morsel> empty_;
+    Governor gov_{"sort"};
 };
 
 }  // namespace

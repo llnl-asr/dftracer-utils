@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 #include <dftracer/utils/index/store/internal/statistics_codec.h>
@@ -8,14 +9,14 @@ std::string encode_file_scalar_stats_value(
     const index::schemas::dft::ChunkStatistics& stats,
     std::uint64_t num_chunks) {
     std::string value;
-    append_u64(value, stats.total_events);
-    append_u64(value, stats.min_timestamp_us);
-    append_u64(value, stats.max_timestamp_us);
-    append_i64(value, stats.duration_sum_us);
-    append_u64(value, stats.duration_min_us);
-    append_u64(value, stats.duration_max_us);
-    append_u64(value, stats.duration_count);
-    append_double(value, stats.duration_m2);
+    append_u64_be(value, stats.total_events);
+    append_u64_be(value, stats.min_timestamp_us);
+    append_u64_be(value, stats.max_timestamp_us);
+    append_u64_be(value, static_cast<std::uint64_t>(stats.duration_sum_us));
+    append_u64_be(value, stats.duration_min_us);
+    append_u64_be(value, stats.duration_max_us);
+    append_u64_be(value, stats.duration_count);
+    append_f64_be(value, stats.duration_m2);
 
     auto duration_sketch = stats.duration_sketch.serialize();
     append_blob(value, duration_sketch);
@@ -23,8 +24,8 @@ std::string encode_file_scalar_stats_value(
     auto duration_histogram = stats.duration_histogram.to_json();
     append_string(value, duration_histogram);
 
-    append_u64(value, num_chunks);
-    append_u64(value, stats.min_nonzero_timestamp_us);
+    append_u64_be(value, num_chunks);
+    append_u64_be(value, stats.min_nonzero_timestamp_us);
 
     return value;
 }
@@ -32,7 +33,7 @@ std::string encode_file_scalar_stats_value(
 index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
     std::string_view value) {
     if (value.size() < 8) {
-        throw IndexerError(IndexerError::Type::DATABASE_ERROR,
+        throw IndexerError(IndexerError::Type::DatabaseError,
                            "Corrupt file scalar statistics value");
     }
     Cursor cursor(value);

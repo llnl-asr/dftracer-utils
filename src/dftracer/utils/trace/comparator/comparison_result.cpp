@@ -1,6 +1,5 @@
-#include <dftracer/utils/core/common/hash/hash_combine.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
-#include <dftracer/utils/trace/internal/utils.h>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 #include <dftracer/utils/utilities/common/arrow/column_builder.h>
@@ -8,64 +7,11 @@
 
 #include <cmath>
 #include <cstdint>
-#include <limits>
 #include <string>
-#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace dftracer::utils::trace::comparator {
-
-TraceMetadata extract_metadata(const StringIntern& intern,
-                               const AggregationMap& aggregations,
-                               std::size_t file_count) {
-    TraceMetadata meta;
-
-    std::unordered_set<std::uint64_t> pids;
-    // Use pid+tid combined as unique thread identifier
-    std::unordered_set<std::uint64_t> tids;
-    // Distinct data files (fhash_id) and per-process accesses (pid | fhash_id).
-    std::unordered_set<std::uint64_t> fhashes;
-    std::unordered_set<std::uint64_t> pid_fhashes;
-    // Bounded by the number of aggregation keys; reserve to avoid rehashing.
-    fhashes.reserve(aggregations.size());
-    pid_fhashes.reserve(aggregations.size());
-    std::uint64_t earliest_ts = std::numeric_limits<std::uint64_t>::max();
-    std::uint64_t latest_te = 0;
-
-    for (const auto& [key, metrics] : aggregations) {
-        pids.insert(key.pid);
-        std::uint64_t ptid = (key.pid << 32) | (key.tid & 0xFFFFFFFF);
-        tids.insert(ptid);
-
-        // 0 means no associated file (e.g. metadata events).
-        if (key.fhash != 0) {
-            fhashes.insert(key.fhash);
-            pid_fhashes.insert(key.fhash ^ (key.pid * hash::GOLDEN_RATIO));
-        }
-
-        meta.total_io_time_us += static_cast<double>(metrics.duration.total());
-
-        if (internal::is_data_transfer_op(key.cat(intern), key.name(intern))) {
-            meta.total_bytes += static_cast<double>(metrics.size.total());
-        }
-
-        if (metrics.ts < earliest_ts) earliest_ts = metrics.ts;
-        if (metrics.te > latest_te) latest_te = metrics.te;
-    }
-
-    // Both fall back to trace-file count when the trace carries no fhash.
-    meta.file_count = fhashes.empty() ? file_count : fhashes.size();
-    meta.proc_file_count =
-        pid_fhashes.empty() ? meta.file_count : pid_fhashes.size();
-
-    meta.process_count = pids.size();
-    meta.thread_count = tids.size();
-    if (latest_te > earliest_ts) {
-        meta.makespan_us = static_cast<double>(latest_te - earliest_ts);
-    }
-
-    return meta;
-}
 
 std::vector<MetricComparison> build_metadata_metrics(
     const TraceMetadata& baseline, const TraceMetadata& variant) {
@@ -80,7 +26,7 @@ std::vector<MetricComparison> build_metadata_metrics(
         mc.delta = vval - bval;
         mc.pct_change = bval == 0.0 ? (vval != 0.0 ? 100.0 : 0.0)
                                     : (vval - bval) / bval * 100.0;
-        mc.significance = Significance::NEGLIGIBLE;
+        mc.significance = Significance::Negligible;
         mc.is_regression = false;
         return mc;
     };
@@ -104,14 +50,14 @@ std::vector<MetricComparison> build_metadata_metrics(
     return out;
 }
 
-double compute_cohens_d(const MetricStats& base, std::uint64_t n_base,
-                        const MetricStats& var, std::uint64_t n_var) {
+double compute_cohens_d(const dataframe::FieldStat& base, std::uint64_t n_base,
+                        const dataframe::FieldStat& var, std::uint64_t n_var) {
     if (n_base < 2 || n_var < 2) return 0.0;
     // `m2` is the central second moment, sum (x - mean)^2.
     // Population variance: Var = m2 / n.
-    auto pop_var = [](const MetricStats& ms, std::uint64_t n) {
+    auto pop_var = [](const dataframe::FieldStat& ms, std::uint64_t n) {
         const double nd = static_cast<double>(n);
-        const double central = ms.m2();
+        const double central = ms.cm2;
         return (central > 0.0 ? central : 0.0) / nd;
     };
     double var_base = pop_var(base, n_base);
@@ -123,10 +69,10 @@ double compute_cohens_d(const MetricStats& base, std::uint64_t n_base,
 
 Significance classify_significance(double d) {
     double abs_d = std::abs(d);
-    if (abs_d > 0.8) return Significance::LARGE;
-    if (abs_d > 0.5) return Significance::MEDIUM;
-    if (abs_d > 0.2) return Significance::SMALL;
-    return Significance::NEGLIGIBLE;
+    if (abs_d > 0.8) return Significance::Large;
+    if (abs_d > 0.5) return Significance::Medium;
+    if (abs_d > 0.2) return Significance::Small;
+    return Significance::Negligible;
 }
 
 namespace {
@@ -137,9 +83,9 @@ double safe_pct_change(double baseline, double variant) {
     return (variant - baseline) / baseline * 100.0;
 }
 
-double safe_quantile(const MetricStats& stats, double p) {
-    if (!stats.sketch) return 0.0;
-    double v = stats.sketch->quantile(p);
+double safe_quantile(const QuantileStore& store, double p) {
+    if (store.count() == 0) return 0.0;
+    double v = store.quantile(p);
     return std::isnan(v) ? 0.0 : v;
 }
 
@@ -147,138 +93,7 @@ std::string percentile_label(const std::string& prefix, double p) {
     return prefix + "_p" + std::to_string(static_cast<int>(p * 100.0));
 }
 
-// Key for (cat, name, time_bucket), uses string_view pointing into the
-// caller's StringIntern table (or string literals in tests).
-struct WindowKey {
-    std::string_view cat;
-    std::string_view name;
-    std::uint64_t time_bucket;
-    bool operator==(const WindowKey& o) const {
-        return cat == o.cat && name == o.name && time_bucket == o.time_bucket;
-    }
-};
-
-struct WindowKeyHash {
-    std::size_t operator()(const WindowKey& k) const {
-        std::size_t h = std::hash<std::string_view>{}(k.cat);
-        hash_combine_value(h, k.name);
-        hash_combine_value(h, k.time_bucket);
-        return h;
-    }
-};
-
-// Per-window max across processes for a (cat, name, time_bucket).
-struct WindowMax {
-    double count = 0.0;
-    double dur_mean = 0.0;
-    double size_mean = 0.0;
-    double xfer_size = 0.0;  // total_bytes / count
-    double bandwidth = 0.0;  // total_bytes / total_dur_sec
-    AggregationMetrics merged{0.01};
-};
-
-double safe_div(double a, double b) { return b > 0.0 ? a / b : 0.0; }
-
 }  // anonymous namespace
-
-CollapsedMap collapse_by_group(const AggregationMap& aggregations,
-                               const StringIntern& src, StringIntern& dst) {
-    std::unordered_map<WindowKey, WindowMax, WindowKeyHash> windows;
-
-    for (const auto& [key, m] : aggregations) {
-        WindowKey wk{key.cat(src), key.name(src), key.time_bucket};
-        auto& w = windows[wk];
-
-        double cnt = static_cast<double>(m.count);
-        double dm = std::isnan(m.duration.mean()) ? 0.0 : m.duration.mean();
-        double sm = std::isnan(m.size.mean()) ? 0.0 : m.size.mean();
-        if (cnt > w.count) w.count = cnt;
-        if (dm > w.dur_mean) w.dur_mean = dm;
-        if (sm > w.size_mean) w.size_mean = sm;
-
-        if (internal::is_data_transfer_op(key.cat(src), key.name(src))) {
-            double total_bytes = static_cast<double>(m.size.total());
-            double total_dur_us = static_cast<double>(m.duration.total());
-            double xfer = safe_div(total_bytes, cnt);
-            double bw = safe_div(total_bytes, total_dur_us / 1e6);
-            if (xfer > w.xfer_size) w.xfer_size = xfer;
-            if (bw > w.bandwidth) w.bandwidth = bw;
-        }
-        w.merged.merge_from(m);
-    }
-
-    struct GroupAccum {
-        std::vector<double> counts;
-        std::vector<double> dur_means;
-        std::vector<double> size_means;
-        std::vector<double> xfers;
-        std::vector<double> bws;
-        AggregationMetrics merged{0.01};
-    };
-    std::unordered_map<AggregationKey, GroupAccum, AggregationKeyHash,
-                       AggregationKeyEqual>
-        groups;
-
-    for (auto& [wk, w] : windows) {
-        AggregationKey gk;
-        gk.cat_id = dst.get_or_insert(wk.cat);
-        gk.name_id = dst.get_or_insert(wk.name);
-        gk.pid = 0;
-        gk.tid = 0;
-        gk.time_bucket = 0;
-        auto& g = groups[gk];
-        g.counts.push_back(w.count);
-        g.dur_means.push_back(w.dur_mean);
-        g.size_means.push_back(w.size_mean);
-        g.xfers.push_back(w.xfer_size);
-        g.bws.push_back(w.bandwidth);
-        g.merged.merge_from(w.merged);
-    }
-
-    auto mean_stdev =
-        [](const std::vector<double>& v) -> std::pair<double, double> {
-        if (v.empty()) return {0.0, 0.0};
-        double sum = 0.0;
-        for (double x : v) sum += x;
-        double mean = sum / static_cast<double>(v.size());
-        if (v.size() < 2) return {mean, 0.0};
-        double sq = 0.0;
-        for (double x : v) {
-            double d = x - mean;
-            sq += d * d;
-        }
-        return {mean, std::sqrt(sq / (static_cast<double>(v.size()) - 1.0))};
-    };
-
-    CollapsedMap result;
-    for (auto& [gk, g] : groups) {
-        CollapsedMetrics cm;
-        cm.merged = std::move(g.merged);
-        cm.num_windows = g.dur_means.size();
-
-        auto [cm_mean, cm_std] = mean_stdev(g.counts);
-        cm.count_mean = cm_mean;
-
-        auto [dm, ds] = mean_stdev(g.dur_means);
-        cm.dur_mean_of_means = dm;
-        cm.dur_stdev_of_means = ds;
-
-        auto [sm, ss] = mean_stdev(g.size_means);
-        cm.size_mean_of_means = sm;
-        cm.size_stdev_of_means = ss;
-
-        auto [xm, xs] = mean_stdev(g.xfers);
-        cm.xfer_mean = xm;
-        cm.xfer_stdev = xs;
-
-        auto [bm, bs] = mean_stdev(g.bws);
-        cm.bw_mean = bm;
-        cm.bw_stdev = bs;
-
-        result[gk] = std::move(cm);
-    }
-    return result;
-}
 
 std::vector<MetricComparison> compare_metrics(
     const CollapsedMetrics& baseline, const CollapsedMetrics& variant,
@@ -318,8 +133,8 @@ std::vector<MetricComparison> compare_metrics(
             for (double p : percentiles) {
                 MetricComparison pct_cmp;
                 pct_cmp.metric_name = percentile_label("dur", p);
-                pct_cmp.baseline_value = safe_quantile(bm.duration, p);
-                pct_cmp.variant_value = safe_quantile(vm.duration, p);
+                pct_cmp.baseline_value = safe_quantile(bm.duration_q, p);
+                pct_cmp.variant_value = safe_quantile(vm.duration_q, p);
                 pct_cmp.delta = pct_cmp.variant_value - pct_cmp.baseline_value;
                 pct_cmp.pct_change = safe_pct_change(pct_cmp.baseline_value,
                                                      pct_cmp.variant_value);
@@ -345,8 +160,8 @@ std::vector<MetricComparison> compare_metrics(
             for (double p : percentiles) {
                 MetricComparison pct_cmp;
                 pct_cmp.metric_name = percentile_label("size", p);
-                pct_cmp.baseline_value = safe_quantile(bm.size, p);
-                pct_cmp.variant_value = safe_quantile(vm.size, p);
+                pct_cmp.baseline_value = safe_quantile(bm.size_q, p);
+                pct_cmp.variant_value = safe_quantile(vm.size_q, p);
                 pct_cmp.delta = pct_cmp.variant_value - pct_cmp.baseline_value;
                 pct_cmp.pct_change = safe_pct_change(pct_cmp.baseline_value,
                                                      pct_cmp.variant_value);
@@ -414,13 +229,13 @@ std::string metric_leaf(const std::string& name) {
 
 const char* significance_to_string(Significance s) {
     switch (s) {
-        case Significance::NEGLIGIBLE:
+        case Significance::Negligible:
             return "NEGLIGIBLE";
-        case Significance::SMALL:
+        case Significance::Small:
             return "SMALL";
-        case Significance::MEDIUM:
+        case Significance::Medium:
             return "MEDIUM";
-        case Significance::LARGE:
+        case Significance::Large:
             return "LARGE";
     }
     return "NEGLIGIBLE";
@@ -474,18 +289,18 @@ void flatten_node(RecordBatchBuilder& builder, const NodeResult& node,
 ArrowExportResult ComparisonOutput::to_arrow() const {
     RecordBatchBuilder builder;
     builder.declare_schema({
-        {"node_path", ColumnType::STRING},
-        {"metric_group", ColumnType::STRING},
-        {"metric_name", ColumnType::STRING},
-        {"baseline", ColumnType::DOUBLE},
-        {"variant", ColumnType::DOUBLE},
-        {"baseline_stdev", ColumnType::DOUBLE},
-        {"variant_stdev", ColumnType::DOUBLE},
-        {"delta", ColumnType::DOUBLE},
-        {"pct_change", ColumnType::DOUBLE},
-        {"cohens_d", ColumnType::DOUBLE},
-        {"significance", ColumnType::STRING},
-        {"is_regression", ColumnType::BOOL},
+        {"node_path", ColumnType::String},
+        {"metric_group", ColumnType::String},
+        {"metric_name", ColumnType::String},
+        {"baseline", ColumnType::Double},
+        {"variant", ColumnType::Double},
+        {"baseline_stdev", ColumnType::Double},
+        {"variant_stdev", ColumnType::Double},
+        {"delta", ColumnType::Double},
+        {"pct_change", ColumnType::Double},
+        {"cohens_d", ColumnType::Double},
+        {"significance", ColumnType::String},
+        {"is_regression", ColumnType::Bool},
     });
 
     for (const auto& node : nodes) {

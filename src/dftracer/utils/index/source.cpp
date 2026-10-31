@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -17,11 +17,11 @@ namespace syn = duql::syntax;
 
 std::int64_t ns_per(TimeUnit unit) {
     switch (unit) {
-        case TimeUnit::NS:
+        case TimeUnit::Ns:
             return 1;
-        case TimeUnit::US:
+        case TimeUnit::Us:
             return 1000;
-        case TimeUnit::MS:
+        case TimeUnit::Ms:
             return 1'000'000;
         case TimeUnit::S:
             return 1'000'000'000;
@@ -35,7 +35,7 @@ struct Member {
 };
 
 [[noreturn]] void bad(std::string_view origin, const std::string& why) {
-    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT, "source of ",
+    throw DFTUtilsException::cat(ErrorCode::InvalidArgument, "source of ",
                                  origin, ": ", why);
 }
 
@@ -92,15 +92,15 @@ duql::Roles duql_roles(const RecordSchema& s) {
     r.duration = s.roles.duration;
     r.schema = s.id;
     if (const FieldSpec* t = s.field_at(s.roles.time))
-        r.time_text = t->type == FieldType::STRING;
+        r.time_text = t->type == FieldType::String;
     auto add = [&](const std::string& key, std::int64_t ns) {
         if (!key.empty()) r.fields.emplace(key, ns);
     };
     add(s.roles.time, ns_per(s.roles.time_unit));
     add(s.roles.duration, ns_per(s.roles.duration_unit));
     for (const auto& f : s.fields) {
-        if (f.role != Role::TIME && f.role != Role::DURATION) continue;
-        const std::int64_t ns = ns_per(f.unit.value_or(TimeUnit::US));
+        if (f.role != Role::Time && f.role != Role::Duration) continue;
+        const std::int64_t ns = ns_per(f.unit.value_or(TimeUnit::Us));
         add(f.name, ns);
         add(f.path, ns);
     }
@@ -172,7 +172,7 @@ std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
     for (const auto& side : program->sides) {
         if (!side.rowset) continue;
         const duql::Pipeline& p = side.pipeline;
-        if (p.input.kind != duql::InputKind::ALL) continue;
+        if (p.input.kind != duql::InputKind::All) continue;
         bool reads_sides = false;
         duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
             reads_sides =
@@ -200,7 +200,7 @@ std::vector<IndexedRowSet> indexed_rowsets(const RecordSchema& schema) {
             if (!sel) continue;
             for (const auto& it : sel->items) {
                 const auto* f = std::get_if<duql::TField>(&it.term->node);
-                if (!f || f->root != duql::FieldRoot::RECORD ||
+                if (!f || f->root != duql::FieldRoot::Record ||
                     f->neg_at != f->steps.size()) {
                     plain = false;
                     break;

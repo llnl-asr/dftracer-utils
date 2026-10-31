@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_FILE_COMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_COMPRESSOR_UTILITY_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
@@ -131,7 +131,7 @@ class FileCompressorUtility {
             // Validate input file exists
             if (!fs::exists(input.input_path)) {
                 co_return make_error(
-                    ErrorCode::NOT_FOUND,
+                    ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
@@ -153,7 +153,9 @@ class FileCompressorUtility {
 
             std::string carry;
             auto gen = fileio::read_binary_file(input.input_path, member_size);
-            while (auto chunk = co_await gen.next()) {
+            for (;;) {
+                auto chunk = co_await gen.next();
+                if (!chunk) break;
                 std::string_view block(chunk->as<char>(), chunk->size());
                 const auto nl = block.rfind('\n');
                 if (nl == std::string_view::npos) {
@@ -174,7 +176,7 @@ class FileCompressorUtility {
             remove_file_quietly(input.output_path);
 
             co_return make_error(
-                ErrorCode::COMPRESSION,
+                ErrorCode::Compression,
                 std::string("Compression failed: ") + e.what());
         }
 

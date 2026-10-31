@@ -1,7 +1,4 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
@@ -14,6 +11,9 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
@@ -21,6 +21,9 @@
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <rocksdb/iterator.h>
+#include <testing_runtime.h>
+#include <trace/views/groupmap_oracle.h>
+#include <trace/views/test_view_common.h>
 #include <zlib.h>
 
 #include <array>
@@ -31,14 +34,10 @@
 #include <utility>
 #include <vector>
 
-#include "groupmap_oracle.h"
-#include "test_view_common.h"
-#include "testing_runtime.h"
-
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftu_utils_test::run_coro;
 namespace dataframe = dftracer::utils::dataframe;
 
@@ -429,12 +428,13 @@ std::string write_multi_member(const std::string& dir, int members = 40,
 
 std::vector<std::string> record_index_pass(const std::string& gz,
                                            const std::string& idx,
-                                           std::size_t parse_ahead) {
+                                           std::size_t workers) {
     StringIntern intern;
     RecordingFold rec(intern);
     std::array<Fold*, 1> folds{&rec};
     IndexFoldDriver driver(intern, folds, gz, idx);
-    driver.set_parse_ahead(parse_ahead);
+    dftracer::utils::index::build::ParseGate gate(nullptr, workers);
+    if (workers > 1) driver.set_parse_gate(gate);
     run_coro(
         [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
@@ -474,7 +474,7 @@ class ThrowingFold final : public Fold {
 };
 
 // Every live key and value of every family of an index, in order.
-std::vector<std::pair<std::string, std::string>> index_contents(
+static std::vector<std::pair<std::string, std::string>> index_contents(
     const std::string& index_path) {
     namespace store = dftracer::utils::index::store;
     store::RocksDBManager::instance().reset(index_path);
@@ -511,9 +511,10 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
     // The default budget holds every chunk, and the tier is still written
     // as sorted runs.
     const std::string runs = determine_index_path(gz, env.get_dir() + "/runs");
-    CHECK(count(held, dftracer::utils::NO_SPILL_BUDGET) ==
+    CHECK(count(held, dftracer::utils::memory::NO_SPILL_BUDGET) ==
           count(spilled, 4096));
-    CHECK(count(runs, 0) == count(held, dftracer::utils::NO_SPILL_BUDGET));
+    CHECK(count(runs, 0) ==
+          count(held, dftracer::utils::memory::NO_SPILL_BUDGET));
     CHECK_FALSE(fs::exists(spilled + ".spill"));
     CHECK_FALSE(fs::exists(runs + ".spill"));
     const auto expected = index_contents(held);
@@ -530,7 +531,8 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     ThrowingFold thrower;
     std::array<Fold*, 2> folds{&bloom, &thrower};
     IndexFoldDriver driver(intern, folds, gz, env.get_dir() + "/idx");
-    driver.set_parse_ahead(8);
+    dftracer::utils::index::build::ParseGate gate(nullptr, 8);
+    driver.set_parse_gate(gate);
     bool threw = false;
     run_coro(
         [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {

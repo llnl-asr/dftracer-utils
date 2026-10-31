@@ -12,12 +12,12 @@
 //
 //   member_cache_bench [uncompressed_member_MB] [members] [concurrent_readers]
 
-#include <dftracer/utils/core/coro/async_once.h>
-#include <dftracer/utils/core/coro/async_mutex.h>
-#include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
+#include <dftracer/utils/runtime/coro/async_once.h>
+#include <dftracer/utils/runtime/coro/coro.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <atomic>
@@ -67,14 +67,14 @@ Blob make_blob(std::size_t uncompressed_bytes) {
 coro::CoroTask<Bytes> decode(const Blob* blob) {
     g_decodes.fetch_add(1, std::memory_order_relaxed);
     compress::GzipMemberDecompressor dec;
-    auto out = dec.decompress_member(blob->compressed.data(),
-                                     blob->compressed.size(),
-                                     blob->uncompressed);
+    auto out = dec.decompress_member(
+        blob->compressed.data(), blob->compressed.size(), blob->uncompressed);
     if (!out) {
         std::fprintf(stderr, "decode failed\n");
         std::exit(1);
     }
-    co_return std::make_shared<const std::vector<std::uint8_t>>(std::move(*out));
+    co_return std::make_shared<const std::vector<std::uint8_t>>(
+        std::move(*out));
 }
 
 // --- strategy: no coalescing ------------------------------------------------
@@ -126,28 +126,30 @@ struct OnceCoalesce {
             if (!slot) slot = std::make_shared<coro::AsyncOnce<Bytes>>();
             once = slot;
         }
-        co_return co_await once->get(
-            [blob]() -> coro::CoroTask<Bytes> { co_return co_await decode(blob); });
+        co_return co_await once->get([blob]() -> coro::CoroTask<Bytes> {
+            co_return co_await decode(blob);
+        });
     }
 };
 
 template <typename Strategy>
-double run_round(Runtime& rt, Strategy& strat, const Blob& blob,
-                 int members, int readers) {
+double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
+                 int readers) {
     g_decodes.store(0, std::memory_order_relaxed);
     const auto* blob_ptr = &blob;
     auto t0 = std::chrono::steady_clock::now();
 
     auto task = run_coro_scope(
         rt.executor(),
-        [&strat, blob_ptr, members, readers](CoroScope&) -> coro::CoroTask<void> {
+        [&strat, blob_ptr, members,
+         readers](CoroScope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<Bytes>> tasks;
             tasks.reserve(static_cast<std::size_t>(readers) * members);
             // Reader r requests every member -> R readers overlap on each.
             for (int r = 0; r < readers; ++r) {
                 for (int m = 0; m < members; ++m) {
-                    tasks.push_back(strat.get(static_cast<std::uint64_t>(m),
-                                              blob_ptr));
+                    tasks.push_back(
+                        strat.get(static_cast<std::uint64_t>(m), blob_ptr));
                 }
             }
             co_await coro::when_all(std::move(tasks));
@@ -183,16 +185,16 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
                 std::vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
-                    tasks.push_back([](std::shared_ptr<Entry> ent)
-                                        -> coro::CoroTask<int> {
-                        co_await ent->mutex.lock();
-                        coro::AsyncMutexGuard g(ent->mutex);
-                        if (!ent->ready) {
-                            ent->value = co_await cheap_producer();
-                            ent->ready = true;
-                        }
-                        co_return ent->value;
-                    }(e));
+                    tasks.push_back(
+                        [](std::shared_ptr<Entry> ent) -> coro::CoroTask<int> {
+                            co_await ent->mutex.lock();
+                            coro::AsyncMutexGuard g(ent->mutex);
+                            if (!ent->ready) {
+                                ent->value = co_await cheap_producer();
+                                ent->ready = true;
+                            }
+                            co_return ent->value;
+                        }(e));
                 }
                 co_await coro::when_all(std::move(tasks));
             }
@@ -212,11 +214,10 @@ double bench_once_wake(Runtime& rt, int rounds, int waiters) {
                 std::vector<coro::CoroTask<int>> tasks;
                 tasks.reserve(waiters);
                 for (int w = 0; w < waiters; ++w) {
-                    tasks.push_back(
-                        [](std::shared_ptr<coro::AsyncOnce<int>> o)
-                            -> coro::CoroTask<int> {
-                            co_return co_await o->get(cheap_producer);
-                        }(once));
+                    tasks.push_back([](std::shared_ptr<coro::AsyncOnce<int>> o)
+                                        -> coro::CoroTask<int> {
+                        co_return co_await o->get(cheap_producer);
+                    }(once));
                 }
                 co_await coro::when_all(std::move(tasks));
             }
@@ -234,8 +235,8 @@ int main(int argc, char** argv) {
     int members = argc > 2 ? std::atoi(argv[2]) : 8;
     int readers = argc > 3 ? std::atoi(argv[3]) : 32;
 
-    std::printf("member=%zuMB members=%d readers=%d  (requests=%d)\n", member_mb,
-                members, readers, members * readers);
+    std::printf("member=%zuMB members=%d readers=%d  (requests=%d)\n",
+                member_mb, members, readers, members * readers);
 
     Blob blob = make_blob(member_mb * 1024 * 1024);
     std::printf("compressed %.1f MB -> %.1f MB uncompressed\n",
@@ -280,8 +281,9 @@ int main(int argc, char** argv) {
     for (int rep = 0; rep < 3; ++rep) {
         double t_mtx = bench_mutex_wake(rt, rounds, waiters);
         double t_once = bench_once_wake(rt, rounds, waiters);
-        std::printf("[rep %d] asyncmutex: %8.2f ms | asynconce: %8.2f ms  (%.2fx)\n",
-                    rep, t_mtx, t_once, t_mtx / t_once);
+        std::printf(
+            "[rep %d] asyncmutex: %8.2f ms | asynconce: %8.2f ms  (%.2fx)\n",
+            rep, t_mtx, t_once, t_mtx / t_once);
     }
 
     rt.shutdown();

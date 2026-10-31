@@ -1,9 +1,7 @@
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -12,6 +10,8 @@
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -80,7 +80,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
     const std::string index_path = trace::internal::determine_index_path(
         opts.output_path, opts.index_path);
     const auto& schema = plan_record_schema(plan);
-    dftracer::utils::StringIntern intern;
+    dftracer::utils::dstd::StringIntern intern;
     dftracer::utils::index::extensions::BloomFold bloom(
         intern, dftracer::utils::index::build::for_schema({}, schema));
     std::array<Fold*, 1> folds{&bloom};
@@ -193,7 +193,7 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         opts.output_path, std::move(wopts));
     if (!opened) {
         throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
     }
     auto writer = std::move(*opened);
 
@@ -205,12 +205,17 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             // members and names their parts.
             child.spawn([&](CoroScope&) -> coro::CoroTask<void> {
                 auto cons = ch->consumer();
-                while (auto item = co_await cons.receive()) {
-                    if (co_await writer.append(*item)) continue;
+                for (;;) {
+                    auto item = co_await cons.receive();
+                    if (!item) break;
+                    const auto append_ok = co_await writer.append(*item);
+                    if (append_ok) continue;
                     ok = false;
                     failed.store(true, std::memory_order_relaxed);
                     // Drain, so producers blocked on the channel finish.
-                    while (co_await cons.receive()) {
+                    for (;;) {
+                        const auto receive_ok = co_await cons.receive();
+                        if (!receive_ok) break;
                     }
                     co_return;
                 }
@@ -238,7 +243,9 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
                                     units[i], vdef, vdef.query);
                                 ViewScannerUtility scanner;
                                 auto gen = scanner(sin);
-                                while (auto b = co_await gen.next()) {
+                                for (;;) {
+                                    auto b = co_await gen.next();
+                                    if (!b) break;
                                     if (is_cancelled(plan) ||
                                         failed.load(std::memory_order_relaxed))
                                         co_return;
@@ -279,10 +286,13 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
         });
     });
 
-    if (ok && !co_await writer.close()) ok = false;
+    if (ok) {
+        const auto closed = co_await writer.close();
+        if (!closed) ok = false;
+    }
     if (!ok || parts.empty()) {
         throw DFTUtilsException(
-            ErrorCode::IO, "export_trace failed writing " + opts.output_path);
+            ErrorCode::Io, "export_trace failed writing " + opts.output_path);
     }
 
     for (auto& sl : pool) bloom.merge(*sl->bloom);
@@ -314,21 +324,21 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
             records::put_file_record(
                 *w, logical,
                 {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-            for (auto ext : {IndexExtension::ZONEMAP, IndexExtension::BLOOM,
-                             IndexExtension::COUNTS, IndexExtension::POSTINGS,
-                             IndexExtension::STATS})
+            for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
+                             IndexExtension::Counts, IndexExtension::Postings,
+                             IndexExtension::Stats})
                 records::clear_file(*w, ext, fid);
-            records::clear_file(*w, IndexExtension::MEMBERS, fid);
+            records::clear_file(*w, IndexExtension::Members, fid);
             for (const auto& m : part.members)
                 records::put_gzip_member(*w, fid, m);
             records::put_file_metadata(*w, fid, member_size, part.total_lines,
                                        part.total_uc, false);
-            records::put_manifest(*w, fid, IndexExtension::MEMBERS, 0);
+            records::put_manifest(*w, fid, IndexExtension::Members, 0);
             records::put_profile(*w, fid, schema.id, schema.params_hash());
         }
         w->commit();
     } catch (const std::exception& e) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 std::string("fused index build failed for ") +
                                     opts.output_path + ": " + e.what());
     }

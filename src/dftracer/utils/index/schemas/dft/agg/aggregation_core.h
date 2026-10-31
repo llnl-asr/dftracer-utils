@@ -2,13 +2,10 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_CORE_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_logic.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_output.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
@@ -57,25 +54,14 @@ inline std::uint64_t agg_hash_of_hex(std::string_view sv) {
     return v ? v : 1;
 }
 
-/// The mutable accumulation state, shared verbatim by the visitor and the fold.
+/// The mutable accumulation state of the fold: the system metric rows and the
+/// time range of the events.
 struct AggState {
-    // Segmented: last_entry points into local_buffer across events, and
-    // large values would spike peak memory on a flat map's regrowth.
-    ankerl::unordered_dense::segmented_map<std::string, AggregationMetrics,
-                                           TransparentStringHash,
-                                           TransparentStringEqual>
-        local_buffer;
     ankerl::unordered_dense::segmented_map<
         std::string, SystemAggregationMetrics, TransparentStringHash,
         TransparentStringEqual>
         system_buffer;
-    AggregationMetrics* last_entry = nullptr;
-    std::string_view last_key;
-    std::string key_buf;
     std::string system_key_buf;
-    StringViewSet observed_extra_keys;
-    StringViewSet observed_custom_metrics;
-    StringViewSet observed_system_metrics;
     std::uint64_t min_time_bucket = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_time_bucket = 0;
     std::size_t events_processed = 0;
@@ -103,124 +89,66 @@ void aggregate_system_event(const Acc& acc, AggState& st,
     acc.for_each_numeric_arg([&](std::string_view k, std::uint64_t, double d) {
         if (k == "hhash" || k == "fhash") return;
         entry.update_metric(k, d, compute_percentiles);
-        st.observed_system_metrics.insert(std::string(k));
     });
     st.events_processed++;
 }
 
-/// Accumulate one event into `st`. The AssociationTracker feed and the
-/// flush-threshold check are the caller's job (out-of-band / backend-specific).
-template <class Acc>
-void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
-                     StringIntern& intern) {
-    if (acc.is_metadata()) return;
-
-    bool is_preaggregated_system = false;
-    if (acc.is_system()) {
-        const bool is_preaggregated = acc.arg_is_number("count") ||
-                                      acc.arg_is_number("dftu_cnt") ||
-                                      acc.arg_is_number("dft_cnt");
-        if (!is_preaggregated) {
-            aggregate_system_event(acc, st, cfg);
-            return;
-        }
-        is_preaggregated_system = true;
-    }
-
-    AggMapType map_type = AggMapType::EVENT;
-    if (is_preaggregated_system) {
-        map_type = AggMapType::SYSTEM;
-    } else if (acc.is_profile()) {
-        map_type = AggMapType::PROFILE;
-    }
-
-    auto hhash = acc.arg_string("hhash");
-    auto fhash = acc.arg_string("fhash");
-    auto time_bucket = compute_time_bucket(acc.ts(), cfg);
-    if (time_bucket < st.min_time_bucket) st.min_time_bucket = time_bucket;
-    if (time_bucket > st.max_time_bucket) st.max_time_bucket = time_bucket;
-
-    std::vector<std::pair<std::string_view, std::string_view>> extra_keys_vec;
-    std::vector<std::pair<std::string_view, std::string_view>>* extra_ptr =
-        nullptr;
-    if (!cfg.extra_group_keys.empty()) {
-        for (const auto& extra_key : cfg.extra_group_keys) {
-            auto value = acc.arg_string(extra_key);
-            if (!value.empty()) {
-                extra_keys_vec.emplace_back(extra_key, value);
-                st.observed_extra_keys.emplace(extra_key);
-            }
-        }
-        if (!extra_keys_vec.empty()) extra_ptr = &extra_keys_vec;
-    }
-
-    std::string cat_storage;
-    std::string_view cat_lower =
-        trace::internal::to_lower_ascii(acc.cat(), cat_storage);
-    auto key_fhash = cfg.group_by_file ? fhash : std::string_view{};
-    serialize_agg_key_into(st.key_buf, map_type, cat_lower, acc.name(),
-                           acc.pid(), acc.tid(), hhash, key_fhash, time_bucket,
-                           intern, extra_ptr);
-
-    AggregationMetrics* entry_ptr;
-    if (st.last_entry != nullptr && st.last_key == st.key_buf) {
-        entry_ptr = st.last_entry;
-    } else {
-        auto [it, inserted] =
-            st.local_buffer.try_emplace(st.key_buf, cfg.sketch_accuracy);
-        entry_ptr = &it->second;
-        st.last_entry = entry_ptr;
-        st.last_key = it->first;
-    }
-    auto& entry = *entry_ptr;
-    if (!cfg.group_by_file && !fhash.empty())
-        entry.distinct_files.add_hash(agg_hash_of_hex(fhash));
-    const bool compute_percentiles = cfg.compute_percentiles;
-
+/// Applies one event's metric rules to `sink`. The rules live here once; the
+/// Sink decides where the numbers go (a partial).
+/// A Sink provides:
+///   add_count(n) ; span(ts, len) ; duration(dur) ; size(v) ; offset(v)
+///   merge_duration(FieldStat) ; merge_size(FieldStat) ;
+///   merge_offset(FieldStat) custom(key, u) ; custom_stat(key) -> FieldStat& ;
+///   note_custom(key)
+/// duration(dur) counts the event; add_count(n) counts a pre-aggregated one.
+template <class Acc, class Sink>
+void accumulate_event_metrics(const Acc& acc, const AggregationConfig& cfg,
+                              Sink& sink) {
+    using dftracer::utils::dataframe::FieldStat;
     std::uint64_t ev_count = 1;
     if (acc.is_counter()) {
         ev_count = acc.arg_exists("dftu_cnt")  ? acc.arg_uint("dftu_cnt")
                    : acc.arg_exists("dft_cnt") ? acc.arg_uint("dft_cnt")
                    : acc.arg_exists("count")   ? acc.arg_uint("count")
                                                : 1;
-        entry.count += ev_count;
+        sink.add_count(ev_count);
 
         const bool has_dur_sum = acc.arg_exists("dur_sum");
         if (has_dur_sum || acc.arg_exists("dur")) {
-            MetricStats tmp(cfg.sketch_accuracy);
-            tmp.stat.n = ev_count;
-            tmp.stat.sum = static_cast<double>(
-                has_dur_sum ? acc.arg_uint("dur_sum") : acc.arg_uint("dur"));
-            tmp.stat.min =
+            FieldStat tmp;
+            tmp.n = ev_count;
+            tmp.sum = static_cast<double>(has_dur_sum ? acc.arg_uint("dur_sum")
+                                                      : acc.arg_uint("dur"));
+            tmp.min =
                 static_cast<double>(acc.arg_exists("dur_min")
                                         ? acc.arg_uint("dur_min")
                                         : (has_dur_sum ? acc.arg_uint("dur_sum")
                                                        : acc.arg_uint("dur")));
-            tmp.stat.max =
+            tmp.max =
                 static_cast<double>(acc.arg_exists("dur_max")
                                         ? acc.arg_uint("dur_max")
                                         : (has_dur_sum ? acc.arg_uint("dur_sum")
                                                        : acc.arg_uint("dur")));
-            entry.duration.merge_from(tmp);
+            sink.merge_duration(tmp);
         }
 
         const bool has_ret_sum = acc.arg_exists("ret_sum");
         if (has_ret_sum || acc.arg_exists("ret")) {
-            MetricStats tmp(cfg.sketch_accuracy);
-            tmp.stat.n = ev_count;
-            tmp.stat.sum = static_cast<double>(
-                has_ret_sum ? acc.arg_uint("ret_sum") : acc.arg_uint("ret"));
-            tmp.stat.min =
+            FieldStat tmp;
+            tmp.n = ev_count;
+            tmp.sum = static_cast<double>(has_ret_sum ? acc.arg_uint("ret_sum")
+                                                      : acc.arg_uint("ret"));
+            tmp.min =
                 static_cast<double>(acc.arg_exists("ret_min")
                                         ? acc.arg_uint("ret_min")
                                         : (has_ret_sum ? acc.arg_uint("ret_sum")
                                                        : acc.arg_uint("ret")));
-            tmp.stat.max =
+            tmp.max =
                 static_cast<double>(acc.arg_exists("ret_max")
                                         ? acc.arg_uint("ret_max")
                                         : (has_ret_sum ? acc.arg_uint("ret_sum")
                                                        : acc.arg_uint("ret")));
-            entry.size.merge_from(tmp);
+            sink.merge_size(tmp);
         }
 
         const bool off_sum = acc.arg_exists("offset_sum");
@@ -228,34 +156,33 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
         const bool off_min = acc.arg_exists("offset_min");
         const bool off_max = acc.arg_exists("offset_max");
         if (off_sum || off_plain || off_min || off_max) {
-            MetricStats tmp(cfg.sketch_accuracy);
-            tmp.stat.n = ev_count;
-            tmp.stat.sum =
-                static_cast<double>(off_sum     ? acc.arg_uint("offset_sum")
-                                    : off_plain ? acc.arg_uint("offset")
-                                                : 0);
-            tmp.stat.min = static_cast<double>(
+            FieldStat tmp;
+            tmp.n = ev_count;
+            tmp.sum = static_cast<double>(off_sum ? acc.arg_uint("offset_sum")
+                                          : off_plain ? acc.arg_uint("offset")
+                                                      : 0);
+            tmp.min = static_cast<double>(
                 off_min     ? acc.arg_uint("offset_min")
                 : off_plain ? acc.arg_uint("offset")
-                            : static_cast<std::uint64_t>(tmp.stat.sum));
-            tmp.stat.max = static_cast<double>(
+                            : static_cast<std::uint64_t>(tmp.sum));
+            tmp.max = static_cast<double>(
                 off_max     ? acc.arg_uint("offset_max")
                 : off_plain ? acc.arg_uint("offset")
-                            : static_cast<std::uint64_t>(tmp.stat.sum));
-            entry.offset.merge_from(tmp);
+                            : static_cast<std::uint64_t>(tmp.sum));
+            sink.merge_offset(tmp);
         }
 
-        entry.update_timestamp(acc.ts(), cfg.time_interval_us);
+        sink.span(acc.ts(), cfg.time_interval_us);
     } else {
-        entry.update_duration(acc.dur(), compute_percentiles);
-        entry.update_timestamp(acc.ts(), acc.dur());
+        sink.duration(acc.dur());
+        sink.span(acc.ts(), acc.dur());
 
         if (acc.arg_exists("ret") &&
             trace::internal::is_data_transfer_op(acc.cat(), acc.name())) {
-            entry.update_size(acc.arg_uint("ret"), compute_percentiles);
+            sink.size(acc.arg_uint("ret"));
         }
         if (acc.arg_exists("offset")) {
-            entry.update_offset(acc.arg_uint("offset"), compute_percentiles);
+            sink.offset(acc.arg_uint("offset"));
         }
     }
 
@@ -269,12 +196,7 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
                     if (gk == k) return;
                 for (const auto& cf : cfg.custom_metric_fields)
                     if (cf == k) return;
-                entry.update_custom_metric(k, u, compute_percentiles);
-                // The visitor collected these in seal_local_buffer by scanning
-                // the accumulated custom_metrics maps; record the name here so
-                // the fold's observed set (a build-time out-of-band output, not
-                // a CF record) matches.
-                st.observed_custom_metrics.insert(std::string(k));
+                sink.custom(k, u);
             });
     }
 
@@ -290,12 +212,8 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
                                                ? std::string_view(sum_suffix)
                                                : field;
             if (acc.arg_exists(sum_k) && acc.arg_is_number(sum_k)) {
-                if (!entry.custom_metrics) {
-                    entry.custom_metrics = std::make_unique<CustomMetricsMap>();
-                }
-                auto& cm = *entry.custom_metrics;
-                auto& stats = find_or_create(cm, field, cfg.sketch_accuracy);
-                dftracer::utils::dataframe::FieldStat add;
+                FieldStat& stats = sink.custom_stat(field);
+                FieldStat add;
                 add.n = ev_count;
                 add.sum = static_cast<double>(acc.arg_uint(sum_k));
                 const std::string_view min_k =
@@ -303,27 +221,47 @@ void aggregate_event(const Acc& acc, AggState& st, const AggregationConfig& cfg,
                                                : field;
                 add.min = (acc.arg_exists(min_k) && acc.arg_is_number(min_k))
                               ? static_cast<double>(acc.arg_uint(min_k))
-                          : stats.stat.n ? stats.stat.min
-                                         : add.sum;
+                          : stats.n ? stats.min
+                                    : add.sum;
                 const std::string_view max_k =
                     acc.arg_exists(max_suffix) ? std::string_view(max_suffix)
                                                : field;
                 add.max = (acc.arg_exists(max_k) && acc.arg_is_number(max_k))
                               ? static_cast<double>(acc.arg_uint(max_k))
-                          : stats.stat.n ? stats.stat.max
-                                         : add.sum;
-                stats.stat.merge(add);
-                st.observed_custom_metrics.insert(std::string(field));
+                          : stats.n ? stats.max
+                                    : add.sum;
+                stats.merge(add);
+                sink.note_custom(field);
             }
         } else {
             if (acc.arg_exists(field) && acc.arg_is_number(field)) {
-                entry.update_custom_metric(field, acc.arg_uint(field),
-                                           compute_percentiles);
-                st.observed_custom_metrics.insert(std::string(field));
+                sink.custom(field, acc.arg_uint(field));
             }
         }
     }
+}
 
+/// Accounts one event in `st`: a system event that is not pre-aggregated
+/// folds into the system metric rows, any other widens the time range (its
+/// metrics are the partials', see agg_partial_update.h).
+template <class Acc>
+void aggregate_event(const Acc& acc, AggState& st,
+                     const AggregationConfig& cfg) {
+    if (acc.is_metadata()) return;
+
+    if (acc.is_system()) {
+        const bool is_preaggregated = acc.arg_is_number("count") ||
+                                      acc.arg_is_number("dftu_cnt") ||
+                                      acc.arg_is_number("dft_cnt");
+        if (!is_preaggregated) {
+            aggregate_system_event(acc, st, cfg);
+            return;
+        }
+    }
+
+    const auto time_bucket = compute_time_bucket(acc.ts(), cfg);
+    if (time_bucket < st.min_time_bucket) st.min_time_bucket = time_bucket;
+    if (time_bucket > st.max_time_bucket) st.max_time_bucket = time_bucket;
     st.events_processed++;
 }
 

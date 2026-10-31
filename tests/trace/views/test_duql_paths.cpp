@@ -4,13 +4,12 @@
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <trace/views/test_view_common.h>
 
 #include <set>
 #include <string>
 #include <string_view>
 #include <vector>
-
-#include "test_view_common.h"
 
 template <>
 struct doctest::StringMaker<std::set<std::string>> {

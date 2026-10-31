@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/mask.h>
@@ -14,10 +14,10 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::Condition;
 using dftracer::utils::DFTUtilsException;
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::Series;
+using dftracer::utils::dstd::Condition;
 namespace duql = dftracer::utils::duql;
 namespace dataframe = dftracer::utils::dataframe;
 

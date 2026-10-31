@@ -16,16 +16,15 @@
 namespace dftracer::utils::index::store::layout {
 
 enum class Family : std::uint8_t {
-    REGISTRY,
-    MEMBERS,
-    GRANULE,
-    BLOB,
-    POSTINGS,
-    AGGREGATION,
-    SYSTEM_METRICS,
+    Registry,
+    Members,
+    Granule,
+    Blob,
+    Postings,
+    SystemMetrics,
 };
 
-inline constexpr std::size_t FAMILY_COUNT = 7;
+inline constexpr std::size_t FAMILY_COUNT = 6;
 
 std::string_view family_name(Family family);
 
@@ -87,6 +86,20 @@ namespace rowset_kind {
 inline constexpr std::uint8_t FRAME = 0;
 }  // namespace rowset_kind
 
+/// Aggregation partials: one PARTIAL record per file, chunk, category, name,
+/// host, extra values and kind, keyed [chunk u32][category id u32][name id
+/// u32][host id u32][extra id u32][kind u8] after the file id, so a file's
+/// partials are one range in chunk order. The ids are the index root's
+/// dictionary ids; the extra id is that of the extra group key values joined
+/// by 0x1F, the empty text when there are none. META and DICT are index-wide
+/// (file_id INDEX_WIDE): META holds named records (config, tracker, time
+/// bounds), keyed [name]; DICT holds the dictionary, keyed [id u32].
+namespace agg_kind {
+inline constexpr std::uint8_t PARTIAL = 0;
+inline constexpr std::uint8_t META = 1;
+inline constexpr std::uint8_t DICT = 2;
+}  // namespace agg_kind
+
 /// file_id of data that belongs to the whole index rather than one file.
 inline constexpr std::uint32_t INDEX_WIDE = 0xFFFFFFFFU;
 
@@ -105,9 +118,6 @@ Family family_of(Ext ext, std::uint8_t kind);
 /// version is stale.
 std::uint32_t ext_version(Ext ext);
 
-void append_u16(std::string& out, std::uint16_t value);
-void append_u32(std::string& out, std::uint32_t value);
-void append_u64(std::string& out, std::uint64_t value);
 std::uint16_t read_u16(std::string_view bytes);
 std::uint32_t read_u32(std::string_view bytes);
 std::uint64_t read_u64(std::string_view bytes);
@@ -136,12 +146,12 @@ std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload);
 std::optional<std::string_view> payload(std::string_view value, Ext ext,
                                         std::uint8_t kind);
 
-enum class ExtStatus : std::uint8_t { READY = 1, FAILED = 2 };
+enum class ExtStatus : std::uint8_t { Ready = 1, Failed = 2 };
 
 struct ManifestEntry {
     std::uint32_t version = 0;
     std::uint64_t params_hash = 0;
-    ExtStatus status = ExtStatus::READY;
+    ExtStatus status = ExtStatus::Ready;
 };
 
 std::string encode_chunk_metadata(const ChunkMetadata& metadata);

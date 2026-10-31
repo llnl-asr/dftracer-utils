@@ -11,7 +11,7 @@ Indexer
 The flat C interface to the indexer. Include ``dftracer/utils/index/abi.h``.
 Calls block until done and return a ``DFTU_RESULT`` value-or-error; an
 error message is borrowed until the next call on the same indexer. The
-aggregation tier, bloom tuning, a caller-chosen runtime and the async forms
+aggregation partials, bloom tuning, a caller-chosen runtime and the async forms
 are C++ only.
 
 .. doxygenfile:: dftracer/utils/index/abi.h

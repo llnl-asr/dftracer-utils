@@ -4,23 +4,22 @@
 // provider, cycle) fail at build instead of after a wasted scan.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include "test_plugin_common.h"
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
@@ -211,9 +210,9 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin p = make_graph_plugin(&consumer);
         auto set = build_injected_plugins({&p});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("com.example.absent") !=
+        CHECK(set.error().message().find("com.example.absent") !=
               std::string::npos);
-        CHECK(set.error().message.find("no loaded plugin provides") !=
+        CHECK(set.error().message().find("no loaded plugin provides") !=
               std::string::npos);
     }
 
@@ -225,8 +224,9 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pb = make_graph_plugin(&b);
         auto set = build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("com.example.dup") != std::string::npos);
-        CHECK(set.error().message.find("both provide") != std::string::npos);
+        CHECK(set.error().message().find("com.example.dup") !=
+              std::string::npos);
+        CHECK(set.error().message().find("both provide") != std::string::npos);
     }
 
     TEST_CASE("a provides/consumes cycle fails the build") {
@@ -239,7 +239,7 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pb = make_graph_plugin(&b);
         auto set = build_injected_plugins({&pa, &pb});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("cycle") != std::string::npos);
+        CHECK(set.error().message().find("cycle") != std::string::npos);
     }
 
     TEST_CASE("a dftu.-prefixed provided name fails the build") {
@@ -248,8 +248,9 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pa = make_graph_plugin(&a);
         auto set = build_injected_plugins({&pa});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("dftu.hash.fnv1a") != std::string::npos);
-        CHECK(set.error().message.find("belongs to the host") !=
+        CHECK(set.error().message().find("dftu.hash.fnv1a") !=
+              std::string::npos);
+        CHECK(set.error().message().find("belongs to the host") !=
               std::string::npos);
     }
 
@@ -259,8 +260,8 @@ TEST_SUITE("PluginFoldOrder") {
         dftu_plugin pa = make_graph_plugin(&a);
         auto set = build_injected_plugins({&pa});
         REQUIRE_FALSE(set.has_value());
-        CHECK(set.error().message.find("dftu.svc.agg") != std::string::npos);
-        CHECK(set.error().message.find("belongs to the host") !=
+        CHECK(set.error().message().find("dftu.svc.agg") != std::string::npos);
+        CHECK(set.error().message().find("belongs to the host") !=
               std::string::npos);
     }
 

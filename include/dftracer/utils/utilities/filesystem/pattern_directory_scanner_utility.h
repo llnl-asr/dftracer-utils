@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 
 #include <algorithm>

@@ -1,9 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -64,8 +64,8 @@ class PartsCursor : public Cursor {
 
    private:
     std::shared_ptr<const std::vector<DataFrame>> parts_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-        std::make_shared<dftracer::utils::StringIntern>();
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+        std::make_shared<dftracer::utils::dstd::StringIntern>();
     std::size_t next_ = 0;
 };
 

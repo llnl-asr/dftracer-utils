@@ -16,6 +16,7 @@
 #include <index_test_helpers.h>
 #include <simdjson.h>
 #include <testing_runtime.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,12 +27,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "test_view_common.h"
-
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::index::extensions::ScalableBloomFilter;
 
 namespace {
@@ -77,7 +76,7 @@ bool file_bloom_contains(dftracer::utils::index::store::IndexDatabase& db,
                          int fid, std::string_view dim,
                          std::string_view value) {
     auto fb = db.path_file_value(
-        fid, dftracer::utils::index::store::IndexExtension::BLOOM, dim);
+        fid, dftracer::utils::index::store::IndexExtension::Bloom, dim);
     REQUIRE(fb.has_value());
     auto bloom = dftracer::utils::index::extensions::kinds::decode_bloom(*fb);
     REQUIRE(bloom.has_value());
@@ -152,7 +151,8 @@ TEST_SUITE("BloomFold") {
             BloomFold fold(intern);
             fold.enable_spill(1, dropped, 1);
             drive(fold);
-            CHECK(fold.spill_runs() == 3);
+            // The three spills fill one run, far under the run size floor.
+            CHECK(fold.spill_runs() == 1);
             CHECK(fs::exists(dropped));
         }
         CHECK_FALSE(fs::exists(dropped));
@@ -165,8 +165,8 @@ TEST_SUITE("BloomFold") {
             drive(fold);
             runs = fold.finish_spilled(1).size();
         }
-        // Three spilled runs, one with the chunks left and one closing run.
-        CHECK(runs == 5);
+        // The spilled run, one with the chunks left and one closing run.
+        CHECK(runs == 3);
         CHECK(fs::exists(kept));
     }
 
@@ -199,7 +199,7 @@ TEST_SUITE("BloomFold") {
         CHECK(file_bloom_contains(db, fid, "hhash", "hh1"));
 
         auto name_chunks = db.path_granules(
-            fid, dftracer::utils::index::store::IndexExtension::BLOOM, "name");
+            fid, dftracer::utils::index::store::IndexExtension::Bloom, "name");
         REQUIRE(name_chunks.size() > 1);
         for (const auto& [chunk, bytes] : name_chunks) {
             auto bloom =
@@ -470,13 +470,14 @@ TEST_SUITE("BloomCore") {
         BloomCore::ChunkState a, b;
         BloomCore::init_chunk_state(a, config, {});
         BloomCore::init_chunk_state(b, config, {});
-        BloomCore::PidTidCache cache;
-        BloomCore::observe_data(a, cache, "read", "POSIX", 9, 1, 9, 9, true, "",
-                                "", "");
-        BloomCore::observe_data(b, cache, "read", "POSIX", 10, 1, 10, 10, true,
-                                "", "", "");
+        BloomCore::EventCache cache_a;
+        BloomCore::EventCache cache_b;
+        BloomCore::observe_data(a, cache_a, 0, 1, "read", "POSIX", 9, 1, 9, 9,
+                                true, "", "", "");
+        BloomCore::observe_data(b, cache_b, 0, 1, "read", "POSIX", 10, 1, 10,
+                                10, true, "", "", "");
         BloomCore::merge_chunk_state(a, b);
-        const auto& ts = a.fixed_dim_stats[BloomCore::FD_TS];
+        const auto& ts = a.fixed_dim_stats[BloomCore::FdTs];
         CHECK(ts.min_value == "9");
         CHECK(ts.max_value == "10");
     }
@@ -571,11 +572,11 @@ TEST_SUITE("BloomFold - auto fields") {
             index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
         const int fid = file_id_of(db, gz);
         using dftracer::utils::index::store::IndexExtension;
-        auto dims = db.extension_paths(fid, IndexExtension::ZONEMAP);
+        auto dims = db.extension_paths(fid, IndexExtension::Zonemap);
         for (auto d : {"size", "mode", "fname"})
             CHECK(std::find(dims.begin(), dims.end(), d) != dims.end());
 
-        auto size = db.path_granules(fid, IndexExtension::ZONEMAP, "size");
+        auto size = db.path_granules(fid, IndexExtension::Zonemap, "size");
         REQUIRE(size.size() >= 2);
         for (const auto& [chunk, bytes] : size) {
             auto zone =

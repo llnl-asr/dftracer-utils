@@ -3,21 +3,22 @@
 // DAG:
 //   scan -> execute
 //
-// scan    : enumerate inputs (.pfw / .pfw.gz, recursive optional)
+// scan    : enumerate inputs (.pfw / .pfw.gz, directories recursively)
 // execute : either ReplayEngine::run_pipelined (producer+consumer with
 //           Channel<Trace> so read/parse latency is hidden behind the
 //           consumer's apply_timing+execute) or, when --use-call-tree is
 //           set, the legacy replay_with_call_tree path that builds a
 //           hierarchical tree first
 
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/mpi/mpi_utils.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/mpi/mpi_utils.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 
 #include <argparse/argparse.hpp>
@@ -50,7 +51,6 @@ class ReplayArgParse : public cli::ArgParse {
     bool dry_run = false;
     bool dftracer_mode = false;
     bool no_sleep = false;
-    bool recursive = false;
     bool use_call_tree = false;
     bool hierarchical_replay = false;
     bool respect_call_hierarchy = false;
@@ -102,10 +102,6 @@ class ReplayArgParse : public cli::ArgParse {
                 "When used with --dftracer-mode, disable sleep calls for "
                 "maximum speed")
             .flag();
-        p.add_argument("-r", "--recursive")
-            .help("Recursively search directories for trace files")
-            .flag();
-
         p.add_argument("--use-call-tree")
             .help("Build and use call tree structure for hierarchical replay")
             .flag();
@@ -198,7 +194,6 @@ class ReplayArgParse : public cli::ArgParse {
         dry_run = p.get<bool>("--dry-run");
         dftracer_mode = p.get<bool>("--dftracer-mode");
         no_sleep = p.get<bool>("--no-sleep");
-        recursive = p.get<bool>("--recursive");
         use_call_tree = p.get<bool>("--use-call-tree");
         hierarchical_replay = p.get<bool>("--hierarchical-replay");
         respect_call_hierarchy = p.get<bool>("--respect-call-hierarchy");
@@ -293,8 +288,7 @@ coro::CoroTask<void> task_scan(RunCtx* ctx, CoroScope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
 
     ctx->trace_files = co_await cli::collect_input_trace_files(
-        scope, ctx->cli->inputs, ctx->cli->recursive,
-        [](const std::string& in) {
+        scope, ctx->cli->inputs, /*recursive=*/true, [](const std::string& in) {
             DFTRACER_UTILS_LOG_ERROR("Input not found or not accessible: %s",
                                      in.c_str());
         });
@@ -465,6 +459,12 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
 
 int run(int argc, char** argv) {
     dftracer::utils::logger::init();
+    if (auto configured = dftracer::utils::configure_memory_from_env();
+        !configured) {
+        DFTRACER_UTILS_LOG_ERROR("Error: %s",
+                                 configured.error().format().c_str());
+        return 1;
+    }
 
     argparse::ArgumentParser program("dftracer_replay",
                                      DFTRACER_UTILS_PACKAGE_VERSION);

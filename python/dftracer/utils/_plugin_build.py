@@ -2,7 +2,7 @@
 select a compiler, and build a source file to a loadable shared object.
 
 Both the ``@jit.plugin`` backend and the ``dftracer_plugin`` console-script use
-this. Include-dir resolution order: (1) ``DFTRACER_PLUGIN_INCLUDE``, (2) headers
+this. Include-dir resolution order: (1) ``DFTRACER_UTILS_PLUGIN_INCLUDE``, (2) headers
 bundled in the installed package (``<pkg>/include``), (3) the source-tree parent
 walk (dev checkout).
 """
@@ -24,7 +24,7 @@ class PluginBuildError(Exception):
 
 def include_dir() -> str:
     """Resolve the directory that contains ``dftracer/utils/plugins/abi.h``."""
-    env = os.environ.get("DFTRACER_PLUGIN_INCLUDE")
+    env = os.environ.get("DFTRACER_UTILS_PLUGIN_INCLUDE")
     if env:
         return env
     rel = Path("dftracer") / "utils" / "plugins" / "abi.h"
@@ -33,7 +33,9 @@ def include_dir() -> str:
     for base in Path(__file__).resolve().parents:
         if (base / "include" / rel).is_file():
             return str(base / "include")
-    raise PluginBuildError("cannot locate the plugin include dir; set DFTRACER_PLUGIN_INCLUDE")
+    raise PluginBuildError(
+        "cannot locate the plugin include dir; set DFTRACER_UTILS_PLUGIN_INCLUDE"
+    )
 
 
 def compiler() -> str:
@@ -97,7 +99,7 @@ def cflags() -> List[str]:
 
 
 def cache_dir() -> Path:
-    env = os.environ.get("DFTRACER_JIT_CACHE")
+    env = os.environ.get("DFTRACER_UTILS_JIT_CACHE")
     base = Path(env) if env else Path.home() / ".cache" / "dftracer-utils" / "jit"
     base.mkdir(parents=True, exist_ok=True)
     return base

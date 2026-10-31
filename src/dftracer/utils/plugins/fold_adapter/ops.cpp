@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/reserved_names.h>
@@ -10,13 +10,13 @@ namespace dftracer::utils::plugins {
 namespace {
 
 ::dftu_error not_found_error() {
-    return ::dftu_error{dftracer::utils::CORE_DOMAIN.id,
+    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
                         static_cast<std::int32_t>(DFTU_COND_NOT_FOUND),
                         DFTU_COND_NOT_FOUND, "no such op"};
 }
 
 ::dftu_error rejected_error() {
-    return ::dftu_error{dftracer::utils::CORE_DOMAIN.id,
+    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
                         static_cast<std::int32_t>(DFTU_COND_INVALID_ARGUMENT),
                         DFTU_COND_INVALID_ARGUMENT,
                         "op rejected: kind/arity/shape mismatch"};

@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_EXECUTOR_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_EXECUTOR_H
 
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/agg.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -14,7 +14,7 @@
 #include <memory>
 #include <span>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 class StringIntern;
 }
 
@@ -28,6 +28,30 @@ class DynamicPrune;
 // terminals apply internally, exposed so the CLI does not duplicate them.
 bool export_bootstrap_eligible(const ViewPlan& plan);
 bool collect_bootstrap_eligible(const ViewPlan& plan);
+
+/// Files the first-touch bootstrap has in flight, for tests: the most at once
+/// since the last reset, the sinks it committed, the ingests it made, and the
+/// ingests that started while another file was in flight, and the most
+/// ingests at once.
+struct BootstrapCounters {
+    std::atomic<std::size_t> in_flight{0};
+    std::atomic<std::size_t> max_in_flight{0};
+    std::atomic<std::size_t> sink_commits{0};
+    std::atomic<std::size_t> ingest_calls{0};
+    std::atomic<std::size_t> ingests_during_parse{0};
+    std::atomic<std::size_t> ingests_in_flight{0};
+    std::atomic<std::size_t> max_ingests_in_flight{0};
+    void reset() {
+        in_flight.store(0, std::memory_order_relaxed);
+        max_in_flight.store(0, std::memory_order_relaxed);
+        sink_commits.store(0, std::memory_order_relaxed);
+        ingest_calls.store(0, std::memory_order_relaxed);
+        ingests_during_parse.store(0, std::memory_order_relaxed);
+        ingests_in_flight.store(0, std::memory_order_relaxed);
+        max_ingests_in_flight.store(0, std::memory_order_relaxed);
+    }
+};
+BootstrapCounters& bootstrap_counters();
 
 coro::CoroTask<ExportStats> run_export(const ViewPlan& plan, ExportSink& sink);
 
@@ -110,11 +134,10 @@ coro::CoroTask<std::string> run_flamegraph_partial(
 // their ids agree and per-worker slices merge. `dyn_prune` (optional) is
 // forwarded to fuse() so a cursor's narrow() can still prune units not yet
 // claimed.
-coro::CoroTask<ExportStats> run_folds(const ViewPlan& plan,
-                                      std::span<Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      DynamicPrune* dyn_prune = nullptr,
-                                      coro::CoroSemaphore* gate = nullptr);
+coro::CoroTask<ExportStats> run_folds(
+    const ViewPlan& plan, std::span<Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern,
+    DynamicPrune* dyn_prune = nullptr, coro::CoroSemaphore* gate = nullptr);
 
 // Build-only terminal: materialize the filtered-trace MV (row query) or the
 // rollup (aggregation) and return scan stats. A no-op when the MV already
@@ -254,7 +277,8 @@ void propose_base_prune(ViewSessionState& state, duql::Query q);
 // constructs it with the scan's intern, `finalize` runs after the merge.
 void add_fold_factory(
     ViewSessionState& state,
-    std::function<std::unique_ptr<Fold>(dftracer::utils::StringIntern&)> make,
+    std::function<std::unique_ptr<Fold>(dftracer::utils::dstd::StringIntern&)>
+        make,
     std::function<void()> finalize);
 coro::CoroTask<ExportStats> run_session(
     std::shared_ptr<ViewSessionState> state);

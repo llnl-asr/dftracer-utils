@@ -1,12 +1,8 @@
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/hash_combine.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -14,9 +10,6 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregator_types.h>
-#include <dftracer/utils/index/schemas/dft/agg/event_aggregator.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
 #include <dftracer/utils/index/store/db_manager.h>
@@ -33,6 +26,10 @@
 #include <dftracer/utils/python/py_str_helpers.h>
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -408,7 +405,7 @@ static bool with_indexer(IndexerObject* self, Fn fn) {
     });
 }
 
-enum class IndexerCall { STATUS, BUILD, REBUILD, ENSURE };
+enum class IndexerCall { Status, Build, Rebuild, Ensure };
 
 static bool run_indexer(IndexerObject* self, IndexerCall call,
                         dftracer::utils::index::IndexStatus& out) {
@@ -420,16 +417,16 @@ static bool run_indexer(IndexerObject* self, IndexerCall call,
         auto ix = dftracer::utils::index::Indexer::open(std::move(paths),
                                                         std::move(*options));
         switch (call) {
-            case IndexerCall::STATUS:
+            case IndexerCall::Status:
                 out = ix.status();
                 break;
-            case IndexerCall::BUILD:
+            case IndexerCall::Build:
                 out = ix.build();
                 break;
-            case IndexerCall::REBUILD:
+            case IndexerCall::Rebuild:
                 out = ix.rebuild();
                 break;
-            case IndexerCall::ENSURE: {
+            case IndexerCall::Ensure: {
                 if (!force) {
                     out = ix.build();
                     break;
@@ -482,7 +479,7 @@ static PyObject* status_dict(const dftracer::utils::index::IndexStatus& st) {
 static PyObject* Indexer_resolve(IndexerObject* self,
                                  PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::index::IndexStatus st;
-    if (!run_indexer(self, IndexerCall::STATUS, st)) return nullptr;
+    if (!run_indexer(self, IndexerCall::Status, st)) return nullptr;
     return status_dict(st);
 }
 
@@ -495,7 +492,7 @@ static PyObject* Indexer_build(IndexerObject* self,
     dftracer::utils::index::IndexStatus st;
     if (!run_indexer(
             self,
-            self->force_rebuild ? IndexerCall::REBUILD : IndexerCall::BUILD,
+            self->force_rebuild ? IndexerCall::Rebuild : IndexerCall::Build,
             st))
         return nullptr;
     Py_RETURN_NONE;
@@ -508,7 +505,7 @@ static PyObject* Indexer_build(IndexerObject* self,
 static PyObject* Indexer_ensure_indexed(IndexerObject* self,
                                         PyObject* Py_UNUSED(ignored)) {
     dftracer::utils::index::IndexStatus st;
-    if (!run_indexer(self, IndexerCall::ENSURE, st)) return nullptr;
+    if (!run_indexer(self, IndexerCall::Ensure, st)) return nullptr;
     return status_dict(st);
 }
 

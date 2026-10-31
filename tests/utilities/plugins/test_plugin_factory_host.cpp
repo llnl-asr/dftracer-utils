@@ -4,15 +4,16 @@
 // fails the load instead of running on a host that is not there.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <cstdint>
 #include <cstring>
@@ -20,8 +21,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include "test_plugin_common.h"
 
 using dftracer::utils::plugins::NamedResult;
 using dftracer::utils::plugins::PluginRun;
@@ -69,7 +68,8 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
 
 TEST_CASE("an op registered by the factory is live before the scan") {
     auto set = Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     // Registration happened at load, so the op resolves before any batch has
@@ -93,7 +93,8 @@ TEST_CASE("an op registered by the factory is live before the scan") {
 
 TEST_CASE("describe() lists the ops a plugin's factory registered") {
     auto set = Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     auto info = set->describe();
@@ -113,7 +114,8 @@ TEST_CASE(
     {
         auto set =
             Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-        INFO((set.has_value() ? std::string{} : set.error().message));
+        INFO((set.has_value() ? std::string{}
+                              : std::string(set.error().message())));
         REQUIRE(set.has_value());
         REQUIRE(dftu_op_find("factory_registers_op.double_rows") != nullptr);
     }  // `set` destructs here: destroy() then dlclose unmaps the plugin.
@@ -127,14 +129,16 @@ TEST_CASE(
     // shadowing").
     auto set2 =
         Plugins::builder().add(FACTORY_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO((set2.has_value() ? std::string{} : set2.error().message));
+    INFO((set2.has_value() ? std::string{}
+                           : std::string(set2.error().message())));
     REQUIRE(set2.has_value());
     CHECK(dftu_op_find("factory_registers_op.double_rows") != nullptr);
 }
 
 TEST_CASE("the scan-time host refuses to register an op") {
     auto set = Plugins::builder().add(SCAN_REGISTERS_OP_PLUGIN_PATH).build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);
@@ -157,7 +161,8 @@ TEST_CASE("the scan-time host refuses to register an op") {
 
 TEST_CASE("the C++ builder registers a fold, an op and a state at once") {
     auto set = Plugins::builder().add(BUILDER_PLUGIN_PATH).build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     CHECK(dftu_op_find("builder_plugin.double_rows") != nullptr);
@@ -180,8 +185,8 @@ TEST_CASE("a factory reaching past the registration surface fails the load") {
     auto set = Plugins::builder().add(FACTORY_ESCAPES_PLUGIN_PATH).build();
 
     REQUIRE_FALSE(set.has_value());
-    CHECK(set.error().message.find(DFTU_SVC_IO) != std::string::npos);
-    CHECK(set.error().message.find("build-phase host") != std::string::npos);
-    CHECK(set.error().message.find(FACTORY_ESCAPES_PLUGIN_PATH) !=
+    CHECK(set.error().message().find(DFTU_SVC_IO) != std::string::npos);
+    CHECK(set.error().message().find("build-phase host") != std::string::npos);
+    CHECK(set.error().message().find(FACTORY_ESCAPES_PLUGIN_PATH) !=
           std::string::npos);
 }

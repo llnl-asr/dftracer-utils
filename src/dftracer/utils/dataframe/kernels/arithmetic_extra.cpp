@@ -39,8 +39,8 @@ bool integral(TypeId t) {
 }
 
 bool is_valid(const dftu_series& v, std::int64_t i) {
-    if (!v.validity) return true;
-    return (v.validity->data()[i >> 3] >> (i & 7)) & 1;
+    if (!v.validity.block()) return true;
+    return (v.validity.data()[i >> 3] >> (i & 7)) & 1;
 }
 
 dftu_series* alloc_flat(TypeId type, std::int64_t n) {
@@ -49,7 +49,7 @@ dftu_series* alloc_flat(TypeId type, std::int64_t n) {
     out->encoding = Encoding::Flat;
     out->length = n;
     out->null_count = 0;
-    out->data = Buffer::allocate(buffer_bytes(type, n));
+    out->data = new_buffer(buffer_bytes(type, n));
     return out;
 }
 
@@ -107,13 +107,13 @@ dftu_series* to(const dftu_series* v, TypeId t) {
 dftu_series* broadcast(dftu_scalar s, std::int64_t n) {
     if (s.kind == DFTU_SCALAR_TAG_F64) {
         dftu_series* out = alloc_flat(TypeId::Float64, n);
-        auto* p = reinterpret_cast<double*>(out->data->data());
+        auto* p = reinterpret_cast<double*>(writable(out->data));
         for (std::int64_t i = 0; i < n; ++i) p[i] = s.value.d;
         return out;
     }
     if (s.kind == DFTU_SCALAR_TAG_I64) {
         dftu_series* out = alloc_flat(TypeId::Int64, n);
-        auto* p = reinterpret_cast<std::int64_t*>(out->data->data());
+        auto* p = reinterpret_cast<std::int64_t*>(writable(out->data));
         for (std::int64_t i = 0; i < n; ++i) p[i] = s.value.i;
         return out;
     }
@@ -128,13 +128,13 @@ dftu_series* broadcast(dftu_scalar s, std::int64_t n) {
 template <class T, class GetB, class NullB>
 void run_extra(const dftu_series& fa, dftu_series& out, std::int64_t n,
                ExtraOp op, bool may_null, GetB bv, NullB b_null) {
-    const auto* pa = reinterpret_cast<const T*>(fa.data->data());
-    auto* po = reinterpret_cast<T*>(out.data->data());
+    const auto* pa = reinterpret_cast<const T*>(fa.data.data());
+    auto* po = reinterpret_cast<T*>(writable(out.data));
     std::uint8_t* valid = nullptr;
     if (may_null) {
-        out.validity = Buffer::allocate(buffer_bytes(TypeId::Bool, n));
-        std::memset(out.validity->data(), 0xff, out.validity->size());
-        valid = out.validity->data();
+        out.validity = new_buffer(buffer_bytes(TypeId::Bool, n));
+        std::memset(writable(out.validity), 0xff, out.validity.size());
+        valid = writable(out.validity);
     }
     constexpr std::int64_t GRAIN = std::int64_t{1} << 16;
     const std::int64_t nulls = parallel_reduce<std::int64_t>(
@@ -195,7 +195,7 @@ void run_extra(const dftu_series& fa, dftu_series& out, std::int64_t n,
         },
         [](std::int64_t x, std::int64_t y) { return x + y; });
     out.null_count = nulls;
-    if (nulls == 0) out.validity.reset();
+    if (nulls == 0) out.validity = {};
 }
 
 dftu_series* extra_binop(const dftu_series* a, const dftu_series* b,
@@ -216,13 +216,12 @@ dftu_series* extra_binop(const dftu_series* a, const dftu_series* b,
     // A divisor column may hold a zero anywhere, so the bitmap is always
     // needed here (pow over Int64 may overflow too).
     if (t == TypeId::Int64) {
-        const auto* pb =
-            reinterpret_cast<const std::int64_t*>(fb->data->data());
+        const auto* pb = reinterpret_cast<const std::int64_t*>(fb->data.data());
         run_extra<std::int64_t>(
             *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
             [fb](std::int64_t i) { return !is_valid(*fb, i); });
     } else {
-        const auto* pb = reinterpret_cast<const double*>(fb->data->data());
+        const auto* pb = reinterpret_cast<const double*>(fb->data.data());
         run_extra<double>(
             *fa, *out, n, op, true, [pb](std::int64_t i) { return pb[i]; },
             [fb](std::int64_t i) { return !is_valid(*fb, i); });
@@ -259,8 +258,8 @@ dftu_series* extra_scalar(const dftu_series* a, dftu_scalar s, ExtraOp op,
     }
     if (t == TypeId::Int64) {
         const std::int64_t y = s.value.i;
-        const bool may_null =
-            fa->validity != nullptr || y == 0 || op == ExtraOp::Pow;
+        const bool may_null = static_cast<bool>(fa->validity.block()) ||
+                              y == 0 || op == ExtraOp::Pow;
         run_extra<std::int64_t>(
             *fa, *out, n, op, may_null, [y](std::int64_t) { return y; },
             [](std::int64_t) { return false; });
@@ -268,7 +267,8 @@ dftu_series* extra_scalar(const dftu_series* a, dftu_scalar s, ExtraOp op,
         const double y = s.kind == DFTU_SCALAR_TAG_F64
                              ? s.value.d
                              : static_cast<double>(s.value.i);
-        const bool may_null = fa->validity != nullptr || y == 0.0;
+        const bool may_null =
+            static_cast<bool>(fa->validity.block()) || y == 0.0;
         run_extra<double>(
             *fa, *out, n, op, may_null, [y](std::int64_t) { return y; },
             [](std::int64_t) { return false; });

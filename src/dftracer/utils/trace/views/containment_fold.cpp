@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/hash/constants.h>
 #include <dftracer/utils/dataframe/containment.h>
 #include <dftracer/utils/dataframe/flame_arena.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
 
 #include <algorithm>
@@ -29,8 +29,9 @@ inline std::uint64_t mix64(std::uint64_t x) {
     return x;
 }
 
-FieldRef classify(dftracer::utils::StringIntern& intern, const std::string& f,
-                  bool& needs_args, std::vector<std::string>& nested,
+FieldRef classify(dftracer::utils::dstd::StringIntern& intern,
+                  const std::string& f, bool& needs_args,
+                  std::vector<std::string>& nested,
                   const dftracer::utils::index::Roles* roles) {
     // A role's slot name reads the role; an undeclared one reads the field.
     if (roles) {
@@ -110,7 +111,7 @@ std::uint32_t field_str_id(const FoldEvent& ev, const FieldRef& f) {
 // 0xFFFFFFFF when the spec has no group. A string-valued field contributes its
 // resolved value; any other field its integer value.
 std::uint32_t group_id_of(const FoldEvent& ev, const ContainmentSpec& spec,
-                          dftracer::utils::StringIntern& intern) {
+                          dftracer::utils::dstd::StringIntern& intern) {
     if (spec.group_fields.empty()) return 0xFFFFFFFFu;
     std::string key;
     for (std::size_t i = 0; i < spec.group_fields.size(); ++i) {
@@ -161,7 +162,7 @@ std::vector<std::vector<std::int64_t>> sorted_lanes(
 }
 
 ContainmentSpec make_containment_spec(
-    dftracer::utils::StringIntern& intern,
+    dftracer::utils::dstd::StringIntern& intern,
     const std::vector<std::string>& partition, const std::string& start_field,
     const std::string& dur_field, const std::string& name_field,
     const std::vector<std::string>& group,
@@ -189,16 +190,16 @@ ContainmentSpec make_containment_spec(
             s.out.ts /= ix::micros_per(roles->time_unit);
         if (s.dur_ref.kind == FieldRef::Kind::Dur)
             s.out.dur /= ix::micros_per(roles->duration_unit);
-        s.out.floating = roles->time_unit != ix::TimeUnit::US ||
-                         roles->duration_unit != ix::TimeUnit::US;
+        s.out.floating = roles->time_unit != ix::TimeUnit::Us ||
+                         roles->duration_unit != ix::TimeUnit::Us;
     }
     return s;
 }
 
 bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
-                     dftracer::utils::StringIntern& intern,
+                     dftracer::utils::dstd::StringIntern& intern,
                      ContainmentRow& out) {
-    if (ev.phase == RecordPhase::METADATA || ev.phase == RecordPhase::UNKNOWN)
+    if (ev.phase == RecordPhase::Metadata || ev.phase == RecordPhase::Unknown)
         return false;
     if (spec.dur_ref.kind == FieldRef::Kind::Dur && !ev.has_dur) return false;
     std::uint64_t lane = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
@@ -215,9 +216,10 @@ bool containment_row(const FoldEvent& ev, const ContainmentSpec& spec,
 }
 
 ContainmentFold::ContainmentFold(
-    dftracer::utils::StringIntern& intern, std::vector<std::string> partition,
-    std::string start_field, std::string dur_field, std::string name_field,
-    double time_scale, std::vector<std::string> group,
+    dftracer::utils::dstd::StringIntern& intern,
+    std::vector<std::string> partition, std::string start_field,
+    std::string dur_field, std::string name_field, double time_scale,
+    std::vector<std::string> group,
     const dftracer::utils::index::RecordSchema* path_schema)
     : intern_(&intern),
       spec_(make_containment_spec(intern, partition, start_field, dur_field,
@@ -246,7 +248,8 @@ void ContainmentFold::merge(Fold& other) {
 dataframe::DataFrame build_call_tree(
     const std::vector<ContainmentRow>& rows,
     const std::vector<std::vector<std::int64_t>>& lanes,
-    const dftracer::utils::StringIntern& intern, const TimeOut& time_out) {
+    const dftracer::utils::dstd::StringIntern& intern,
+    const TimeOut& time_out) {
     const std::int64_t n = static_cast<std::int64_t>(rows.size());
     const std::int64_t nlanes = static_cast<std::int64_t>(lanes.size());
     auto start = [&](std::int64_t i) {
@@ -334,7 +337,8 @@ dataframe::DataFrame build_call_tree(
 static std::vector<df::FlameNode> fold_flame_arena(
     const std::vector<ContainmentRow>& rows,
     const std::vector<std::vector<std::int64_t>>& lanes,
-    const dftracer::utils::StringIntern& intern, const TimeOut& time_out) {
+    const dftracer::utils::dstd::StringIntern& intern,
+    const TimeOut& time_out) {
     const std::int64_t nlanes = static_cast<std::int64_t>(lanes.size());
     auto start = [&](std::int64_t i) {
         return rows[static_cast<std::size_t>(i)].start;
@@ -465,14 +469,16 @@ static dataframe::DataFrame flame_arena_to_frame(
 dataframe::DataFrame build_flamegraph(
     const std::vector<ContainmentRow>& rows,
     const std::vector<std::vector<std::int64_t>>& lanes,
-    const dftracer::utils::StringIntern& intern, const TimeOut& time_out) {
+    const dftracer::utils::dstd::StringIntern& intern,
+    const TimeOut& time_out) {
     return flame_arena_to_frame(
         fold_flame_arena(rows, lanes, intern, time_out));
 }
 
-std::string flamegraph_partial(const std::vector<ContainmentRow>& rows,
-                               const dftracer::utils::StringIntern& intern,
-                               const TimeOut& time_out) {
+std::string flamegraph_partial(
+    const std::vector<ContainmentRow>& rows,
+    const dftracer::utils::dstd::StringIntern& intern,
+    const TimeOut& time_out) {
     std::vector<std::uint8_t> b = df::serialize_flame_arena(
         fold_flame_arena(rows, sorted_lanes(rows), intern, time_out));
     return std::string(b.begin(), b.end());
@@ -493,7 +499,8 @@ dataframe::DataFrame merge_flamegraph_partials(
 
 std::pair<dataframe::DataFrame, dataframe::DataFrame> build_containment_both(
     const std::vector<ContainmentRow>& rows,
-    const dftracer::utils::StringIntern& intern, const TimeOut& time_out) {
+    const dftracer::utils::dstd::StringIntern& intern,
+    const TimeOut& time_out) {
     std::vector<std::vector<std::int64_t>> lanes = sorted_lanes(rows);
     return {build_call_tree(rows, lanes, intern, time_out),
             build_flamegraph(rows, lanes, intern, time_out)};

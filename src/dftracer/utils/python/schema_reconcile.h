@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PYTHON_SCHEMA_RECONCILE_H
 #define DFTRACER_UTILS_PYTHON_SCHEMA_RECONCILE_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <nanoarrow/nanoarrow.h>

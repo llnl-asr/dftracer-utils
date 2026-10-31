@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_BLOOM_CORE_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
@@ -37,39 +37,39 @@ class BloomCore {
     /// Fixed bloom filter slots. Indices match DEFAULT_BLOOM_DIMENSIONS
     /// order: name, cat, pid, tid, hhash, fhash, shash.
     enum FixedBloom : std::uint8_t {
-        BF_NAME = 0,
-        BF_CAT,
-        BF_PID,
-        BF_TID,
-        BF_HHASH,
-        BF_FHASH,
-        BF_SHASH,
-        BF_COUNT
+        BfName = 0,
+        BfCat,
+        BfPid,
+        BfTid,
+        BfHhash,
+        BfFhash,
+        BfShash,
+        BfCount
     };
 
     /// Fixed dimension_stats slots. Superset of bloom dims plus pid_tid,
     /// ts, dur (which are observed for range stats but not hashed).
     enum FixedDim : std::uint8_t {
-        FD_NAME = 0,
-        FD_CAT,
-        FD_PID,
-        FD_TID,
-        FD_PID_TID,
-        FD_HHASH,
-        FD_FHASH,
-        FD_SHASH,
-        FD_TS,
-        FD_DUR,
-        FD_COUNT
+        FdName = 0,
+        FdCat,
+        FdPid,
+        FdTid,
+        FdPidTid,
+        FdHhash,
+        FdFhash,
+        FdShash,
+        FdTs,
+        FdDur,
+        FdCount
     };
 
     /// The paths the fixed dimensions are stored under, by FixedDim.
     static std::span<const std::string_view> fixed_dimension_names();
 
     struct ChunkState {
-        std::array<index::extensions::ScalableBloomFilter, BF_COUNT>
+        std::array<index::extensions::ScalableBloomFilter, BfCount>
             fixed_blooms;
-        std::array<ChunkDimensionStats, FD_COUNT> fixed_dim_stats;
+        std::array<ChunkDimensionStats, FdCount> fixed_dim_stats;
         /// Blooms of the leading extra dimensions, observed value by value.
         std::vector<index::extensions::ScalableBloomFilter> extra_blooms;
         std::vector<ChunkDimensionStats> extra_dim_stats;
@@ -86,15 +86,60 @@ class BloomCore {
         ChunkState();
     };
 
-    /// Per-thread cache so pid/tid decimal conversion runs once per distinct
-    /// value rather than once per event.
-    struct PidTidCache {
-        std::uint64_t last_pid = UINT64_MAX;
-        std::uint64_t last_tid = UINT64_MAX;
-        char pid_buf[24] = {};
-        char tid_buf[24] = {};
-        std::uint8_t pid_len = 0;
-        std::uint8_t tid_len = 0;
+    /// What observe_data learns about the keys of the events it sees, so a
+    /// key already seen needs no hashing, string compare or bloom probe. The
+    /// keys of a slot are interned ids and pid and tid. It belongs to one
+    /// chunk's state: call clear() before using it on another, or after the
+    /// state moves.
+    class EventCache {
+       public:
+        static constexpr std::size_t SLOTS = 256;
+        static constexpr std::uint32_t NO_SLOT = ChunkDimensionStats::NO_SLOT;
+
+        void clear() {
+            if (++epoch_ == 0) {
+                names_ = {};
+                pids_ = {};
+                epoch_ = 1;
+            }
+        }
+
+       private:
+        friend class BloomCore;
+
+        // One (name, category) pair.
+        struct NameSlot {
+            std::uint64_t key = 0;
+            std::uint32_t epoch = 0;
+            std::uint32_t name_dim = NO_SLOT;
+            std::uint32_t cat_dim = NO_SLOT;
+            bool name_in_bloom = false;
+            bool cat_in_bloom = false;
+            ChunkStatistics::NameSlots stats;
+        };
+        // One (pid, tid) pair, with their decimal texts.
+        struct PidSlot {
+            std::uint64_t pid = 0;
+            std::uint64_t tid = 0;
+            std::uint32_t epoch = 0;
+            std::uint32_t pid_dim = NO_SLOT;
+            std::uint32_t tid_dim = NO_SLOT;
+            std::uint32_t pid_tid_dim = NO_SLOT;
+            bool pid_in_bloom = false;
+            bool tid_in_bloom = false;
+            std::uint8_t pid_len = 0;
+            std::uint8_t tid_len = 0;
+            char pid_buf[24] = {};
+            char tid_buf[24] = {};
+            ChunkStatistics::PidSlots stats;
+        };
+
+        NameSlot& name_slot(std::uint32_t name_id, std::uint32_t cat_id);
+        PidSlot& pid_slot(std::uint64_t pid, std::uint64_t tid);
+
+        std::uint32_t epoch_ = 1;
+        std::array<NameSlot, SLOTS> names_{};
+        std::array<PidSlot, SLOTS> pids_{};
     };
 
     /// The event harvest. The caller extracts the fields from its own source
@@ -104,7 +149,8 @@ class BloomCore {
     static void init_chunk_state(ChunkState& chunk,
                                  const ChunkIndexerConfig& config,
                                  const std::vector<std::string>& extra_dims);
-    static void observe_data(ChunkState& chunk, PidTidCache& cache,
+    static void observe_data(ChunkState& chunk, EventCache& cache,
+                             std::uint32_t name_id, std::uint32_t cat_id,
                              std::string_view name, std::string_view cat,
                              std::uint64_t pid, std::uint64_t tid,
                              std::uint64_t ts, std::uint64_t dur, bool has_dur,

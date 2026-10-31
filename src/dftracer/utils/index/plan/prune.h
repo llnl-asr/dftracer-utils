@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_PRUNE_H
 #define DFTRACER_UTILS_INDEX_PLAN_PRUNE_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstdint>
 #include <optional>
@@ -17,15 +17,15 @@ namespace dftracer::utils::index::plan {
 /// The metadata (`ph="M"`) records a scan returns besides data events.
 enum class MetadataUse : std::uint8_t {
     /// None: prune for the data events alone.
-    NONE,
+    None,
     /// Metadata records bypass the query: also read every chunk holding one.
-    EVERY,
+    Every,
     /// The query selects metadata records only: read the chunks whose
     /// records may match it; data evidence and the time range do not apply.
-    RECORDS,
+    Records,
     /// The query selects data events and metadata records alike: read the
     /// chunks either may match in.
-    ALL,
+    All,
 };
 
 struct PruneRequest {
@@ -44,7 +44,7 @@ struct PruneRequest {
     /// pruned by their start times; otherwise by [first start, last end]
     /// against [begin, end], for events that overlap the window.
     bool by_start = false;
-    MetadataUse metadata = MetadataUse::NONE;
+    MetadataUse metadata = MetadataUse::None;
 };
 
 struct PruneResult {

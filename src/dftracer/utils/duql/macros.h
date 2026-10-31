@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_MACROS_H
 #define DFTRACER_UTILS_DUQL_MACROS_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/duql/parser.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 
@@ -29,7 +29,7 @@ using MacroScopes = std::vector<std::vector<Macro>>;
 
 /// `defs` as one scope, their bodies moved out; the `args_fallback` flag is
 /// not a macro and is left out. Fails for two macros of one name.
-dftracer::utils::expected<std::vector<Macro>, DuqlError> macros_of(
+dftracer::utils::dstd::Expected<std::vector<Macro>, DuqlError> macros_of(
     std::vector<syntax::Def>& defs, std::string_view text,
     const std::string& origin);
 
@@ -48,13 +48,13 @@ std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls);
 /// cycle, a macro with a built-in's name, a pipeline macro inside an
 /// expression, an expression macro or an unknown name after the first stage;
 /// errors point into `text`.
-dftracer::utils::expected<void, DuqlError> expand_macros(
+dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     syntax::Pipeline& pipeline, const MacroScopes& scopes,
     std::string_view text,
     const std::function<bool(std::string_view)>& builtin);
 
-/// The macros of the `.duql` files on `$DFTRACER_DUQL_PATH` (colon separated)
-/// and every path `load_macros` added. Thread-safe.
+/// The macros of the `.duql` files on `$DFTRACER_UTILS_DUQL_PATH` (colon
+/// separated) and every path `load_macros` added. Thread-safe.
 std::vector<Macro> path_macros();
 
 /// Adds the `def`s of the `.duql` file `path`, or of every `.duql` file of a

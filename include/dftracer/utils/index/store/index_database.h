@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_INDEX_DATABASE_H
 #define DFTRACER_UTILS_INDEX_STORE_INDEX_DATABASE_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/index/store/types.h>
 
@@ -123,10 +123,11 @@ class IndexDatabase {
     /// Stored mtime/size for `path`; nullopt if not registered.
     std::optional<FileStat> get_file_stat(std::string_view path) const;
 
-    /// Stored format version, 0 if unset or from an older layout.
-    std::uint32_t get_format_version() const;
+    /// Stored format version; nullopt if unset or from an older layout.
+    std::optional<std::uint32_t> get_format_version() const;
 
-    /// True if the stored format differs from FORMAT_VERSION.
+    /// True if no format is stored or the stored format differs from
+    /// FORMAT_VERSION.
     bool format_outdated() const;
 
     struct StaleCheckResult {
@@ -161,6 +162,10 @@ class IndexDatabase {
     /// therefore not detected. Build-option changes are the Resolver's
     /// concern (the manifest), not this check's.
     Freshness check_freshness(const std::string& file_path) const;
+    /// The same against a size and mtime the caller already read, so the file
+    /// is not stat'ed again.
+    Freshness check_freshness(const std::string& file_path, std::uint64_t size,
+                              std::int64_t mtime) const;
 
     StringViewMap<int> query_all_file_info_ids() const;
     StringViewMap<FileRegistryEntry> query_all_file_registry() const;
@@ -249,9 +254,9 @@ class IndexDatabase {
     /// Ingest, in one atomic call, the SSTs of `IndexDatabaseSstWriterContext`
     /// instances with disjoint file ids. No-op on an empty registry.
     ///
-    /// `skip_cfs` optionally holds CF names (e.g. `cf::AGGREGATION`) whose
+    /// `skip_cfs` optionally holds CF names (e.g. `cf::SYSTEM_METRICS`) whose
     /// SSTs must be left outside the unified DB. Distributed builds use this
-    /// to keep per-worker AGGREGATION / SYSTEM_METRICS SSTs addressable by
+    /// to keep per-worker SYSTEM_METRICS SSTs addressable by
     /// manifest for parallel reads at analyze time.
     void bulk_ingest(const SstArtifactRegistry& registry,
                      const StringViewSet& skip_cfs = {});
@@ -270,6 +275,10 @@ class IndexDatabase {
 
     /// Writes the format version and extension registry when absent.
     void init_schema();
+
+    /// Read-write opens of an index store by this process so far; each runs
+    /// init_schema.
+    static std::uint64_t read_write_opens() noexcept;
 
    private:
     struct Impl;

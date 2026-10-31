@@ -1,15 +1,14 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/indexing/bloom_query_utility.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <string>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::extensions;

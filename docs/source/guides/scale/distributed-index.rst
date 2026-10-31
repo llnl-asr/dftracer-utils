@@ -181,14 +181,15 @@ Three free functions manage the set:
   directories into a manifest at ``root``. Atomic (write-temp-then-rename), so
   a concurrent reader never sees a torn manifest.
 - ``consolidate_shard_set(scope, root, out_root)`` - rebuild one unified index
-  (with its aggregation tier) from the shards' trace files at ``out_root``,
+  (with its aggregation partials) from the shards' trace files at ``out_root``,
   re-reading traces. Requires the trace files to be present with distinct
   logical filenames across shards.
-- ``merge_shard_set(root, out_root)`` - merge the shards' aggregation tiers
-  into one consolidated tier index at ``out_root`` **without** re-reading
-  traces (re-keys each shard's interned strings into a unified dictionary and
-  combines them). Answers tier-covered queries from a single index, but does
-  not serve scan-fallback queries the way ``consolidate_shard_set`` does.
+- ``merge_shard_set(root, out_root)`` - merge the shards' aggregation partials
+  into one consolidated index at ``out_root`` **without** re-reading traces
+  (re-keys each shard's interned strings into a unified dictionary and copies
+  the partials and the system metric rows). Answers partial-covered queries
+  from a single index, but does not serve scan-fallback queries the way
+  ``consolidate_shard_set`` does.
 
 The default nested location a producer uses is ``<trace-dir>/.dftindex-shards``
 (``SHARD_SET_DIRNAME``) so the shard set does not get picked up as trace input

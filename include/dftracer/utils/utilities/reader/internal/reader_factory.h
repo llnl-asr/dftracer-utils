@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_FACTORY_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_FACTORY_H
 
-#include <dftracer/utils/core/common/format_detector.h>
+#include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>

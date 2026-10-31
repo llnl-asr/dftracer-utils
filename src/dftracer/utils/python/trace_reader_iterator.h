@@ -2,9 +2,9 @@
 #define DFTRACER_UTILS_PYTHON_TRACE_READER_ITERATOR_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/task_handle.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/python/memoryview_batch.h>
+#include <dftracer/utils/runtime/task_handle.h>
 #include <dftracer/utils/trace/args_map.h>
 #include <dftracer/utils/utilities/reader/internal/json_dict_builder.h>
 
@@ -21,10 +21,10 @@ extern PyTypeObject ArrowBatchCapsuleType;
 #endif
 
 enum class IteratorMode {
-    MEMORYVIEW,
-    JSON_DICT,
+    Memoryview,
+    JsonDict,
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-    ARROW,
+    Arrow,
 #endif
 };
 

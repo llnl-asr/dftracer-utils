@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/arg_type.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -20,10 +20,10 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::StringIntern;
 using dftracer::utils::coro::Channel;
 using dftracer::utils::coro::CoroSemaphore;
 using dftracer::utils::coro::CoroTask;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 using dftracer::utils::trace::views::detail::ArgKinds;
 using dftracer::utils::trace::views::detail::ArgType;
@@ -47,7 +47,7 @@ std::vector<FoldEvent> make_events(StringIntern& intern) {
     std::vector<FoldEvent> out;
     for (int i = 0; i < EVENTS; ++i) {
         FoldEvent ev;
-        ev.phase = RecordPhase::COMPLETE;
+        ev.phase = RecordPhase::Complete;
         ev.by_path = true;
         ev.args.emplace_back(size, static_cast<std::int64_t>(i * 10));
         if (i % 3 != 0) ev.args.emplace_back(lat, i * 0.25);
@@ -143,7 +143,7 @@ TEST_SUITE("RowBuild") {
         std::vector<FoldEvent> kept;
         for (std::size_t i = 0; i < events.size(); ++i) {
             if (i % 4 == 1) {
-                events[i].phase = RecordPhase::UNKNOWN;
+                events[i].phase = RecordPhase::Unknown;
             } else {
                 kept.push_back(events[i]);
             }
@@ -160,7 +160,7 @@ TEST_SUITE("RowBuild") {
     TEST_CASE("a batch with no kept event sends nothing") {
         auto intern = std::make_shared<StringIntern>();
         auto events = make_events(*intern);
-        for (auto& ev : events) ev.phase = RecordPhase::UNKNOWN;
+        for (auto& ev : events) ev.phase = RecordPhase::Unknown;
         CHECK(stepped(intern, std::move(events)).columns.empty());
     }
 

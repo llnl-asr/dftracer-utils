@@ -6,18 +6,17 @@
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
+#include <trace/views/test_view_common.h>
 
 #include <fstream>
 #include <string>
 #include <vector>
 
-#include "test_view_common.h"
-
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::extensions;
 namespace ix = dftracer::utils::index;
 namespace df = dftracer::utils::dataframe;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 
 namespace {
 

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_FIELD_H
 #define DFTRACER_UTILS_DATAFRAME_FIELD_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -142,38 +142,38 @@ class FieldExpr {
     // (apply); a string/bool rhs is filter-only.
     template <typename T>
     FieldExpr operator==(T&& v) const {
-        return cmp(duql::CompareOp::EQ, std::forward<T>(v));
+        return cmp(duql::CompareOp::Eq, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator!=(T&& v) const {
-        return cmp(duql::CompareOp::NE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Ne, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator>(T&& v) const {
-        return cmp(duql::CompareOp::GT, std::forward<T>(v));
+        return cmp(duql::CompareOp::Gt, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator<(T&& v) const {
-        return cmp(duql::CompareOp::LT, std::forward<T>(v));
+        return cmp(duql::CompareOp::Lt, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator>=(T&& v) const {
-        return cmp(duql::CompareOp::GE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Ge, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr operator<=(T&& v) const {
-        return cmp(duql::CompareOp::LE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Le, std::forward<T>(v));
     }
 
     /// Equality/inequality predicate in method form (parity with the Python
     /// `.eq()` / `.ne()`).
     template <typename T>
     FieldExpr eq(T&& v) const {
-        return cmp(duql::CompareOp::EQ, std::forward<T>(v));
+        return cmp(duql::CompareOp::Eq, std::forward<T>(v));
     }
     template <typename T>
     FieldExpr ne(T&& v) const {
-        return cmp(duql::CompareOp::NE, std::forward<T>(v));
+        return cmp(duql::CompareOp::Ne, std::forward<T>(v));
     }
 
     /// Membership predicates (filter-only). The field is (not) one of `values`.
@@ -193,19 +193,19 @@ class FieldExpr {
     /// String-match predicates (filter-only): SQL LIKE / ILIKE, duql regex /
     /// case-insensitive regex, and case-insensitive substring.
     FieldExpr like(std::string_view pattern) const {
-        return match(duql::MatchOp::LIKE, pattern);
+        return match(duql::MatchOp::Like, pattern);
     }
     FieldExpr ilike(std::string_view pattern) const {
-        return match(duql::MatchOp::ILIKE, pattern);
+        return match(duql::MatchOp::Ilike, pattern);
     }
     FieldExpr regex(std::string_view pattern) const {
-        return match(duql::MatchOp::REGEX, pattern);
+        return match(duql::MatchOp::Regex, pattern);
     }
     FieldExpr iregex(std::string_view pattern) const {
-        return match(duql::MatchOp::IREGEX, pattern);
+        return match(duql::MatchOp::Iregex, pattern);
     }
     FieldExpr contains(std::string_view substring) const {
-        return match(duql::MatchOp::ICONTAINS, substring);
+        return match(duql::MatchOp::Icontains, substring);
     }
 
     /// Unary numeric primitives -> a value expression (evaluate with apply).
@@ -248,7 +248,7 @@ class FieldExpr {
         auto q = e.build();
         if (!q.has_value()) {
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "failed to build query from field expression");
         }
         return std::move(q.value());
@@ -277,7 +277,7 @@ class FieldExpr {
             std::int64_t idx = df.column_index(names[i]);
             if (idx < 0) {
                 throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "field expression references column not present in frame: ",
                     names[i]);
             }
@@ -298,7 +298,7 @@ class FieldExpr {
 
     const detail::FNode& require() const {
         if (!node_) {
-            throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                          "empty field expression");
         }
         return *node_;
@@ -368,7 +368,7 @@ class FieldExpr {
         const detail::FNode& n = require();
         if (n.kind != detail::FKind::Col) {
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "string-match / membership needs a bare field on the left");
         }
         return n.name;
@@ -378,7 +378,7 @@ class FieldExpr {
         const detail::FNode& n = require();
         if (n.kind != detail::FKind::Col) {
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "aggregate needs a bare field, e.g. F(\"dur\").sum()");
         }
         return FieldAggExpr(fn, n.name);
@@ -407,7 +407,7 @@ class FieldExpr {
                                  : duql::field_in(n.name, n.in_ints);
             default:
                 throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "not an index-pushable predicate; compute it with apply() "
                     "or filter the materialized frame");
         }
@@ -416,7 +416,7 @@ class FieldExpr {
     static duql::Expr cmp_to_duql(const detail::FNode& n) {
         if (!n.a || n.a->kind != detail::FKind::Col) {
             throw DFTUtilsException::cat(
-                ErrorCode::INVALID_ARGUMENT,
+                ErrorCode::InvalidArgument,
                 "not an index-pushable predicate; compute it with apply() or "
                 "filter the materialized frame");
         }
@@ -435,7 +435,7 @@ class FieldExpr {
                 return duql::field_cmp(n.a->name, op,
                                        duql::detail::literal(n.str));
         }
-        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                      "unhandled comparison rhs");
     }
 
@@ -465,7 +465,7 @@ class FieldExpr {
                 if (n.rhs != detail::RhsKind::Int &&
                     n.rhs != detail::RhsKind::Float) {
                     throw DFTUtilsException::cat(
-                        ErrorCode::INVALID_ARGUMENT,
+                        ErrorCode::InvalidArgument,
                         "string/bool comparison is filter-only; push it down "
                         "with View::filter / to_duql()");
                 }
@@ -474,7 +474,7 @@ class FieldExpr {
             case FKind::Match:
             case FKind::In:
                 throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "string-match / membership is filter-only; push it down "
                     "with View::filter / to_duql()");
         }
@@ -520,24 +520,24 @@ class FieldExpr {
                 return expr_not(to_value_expr(*n.a, index));
             default:
                 throw DFTUtilsException::cat(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "filter-only predicate has no in-memory form");
         }
     }
 
     static CmpOp cmp_code(duql::CompareOp op) {
         switch (op) {
-            case duql::CompareOp::EQ:
+            case duql::CompareOp::Eq:
                 return CmpOp::Eq;
-            case duql::CompareOp::NE:
+            case duql::CompareOp::Ne:
                 return CmpOp::Ne;
-            case duql::CompareOp::GT:
+            case duql::CompareOp::Gt:
                 return CmpOp::Gt;
-            case duql::CompareOp::LT:
+            case duql::CompareOp::Lt:
                 return CmpOp::Lt;
-            case duql::CompareOp::GE:
+            case duql::CompareOp::Ge:
                 return CmpOp::Ge;
-            case duql::CompareOp::LE:
+            case duql::CompareOp::Le:
                 return CmpOp::Le;
         }
         return CmpOp::Eq;

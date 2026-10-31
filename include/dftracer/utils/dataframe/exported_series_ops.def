@@ -9,7 +9,7 @@
  *                   plugin registering one is refused at the plugin seam, so
  *                   a plugin can never shadow a host op. <family> is the
  *                   source module the utility comes from (hash ->
- *                   core/common/hash, hex -> the scalar hex codecs, text ->
+ *                   dstd/hash, hex -> the scalar hex codecs, text ->
  *                   utilities/text, fs -> utilities/filesystem, file ->
  *                   utilities/fileio). A leaf drops the family word when it
  *                   would repeat it (hex64_parse -> dftu.hex.parse64).

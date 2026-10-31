@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_LINE_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_INDEXED_FILE_LINE_ITERATOR_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/fileio/lines/iterator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -47,7 +47,7 @@ class IndexedFileLineIteratorConfig {
     std::shared_ptr<dftracer::utils::utilities::reader::internal::Reader>
         reader_;
     dftracer::utils::utilities::reader::internal::RangeType range_type_ =
-        dftracer::utils::utilities::reader::internal::RangeType::LINE_RANGE;
+        dftracer::utils::utilities::reader::internal::RangeType::LineRange;
     std::size_t start_ = 1;
     std::size_t end_ = 0;
     std::size_t buffer_size_ = 1024 * 1024;  ///< 1MB default buffer
@@ -73,7 +73,7 @@ class IndexedFileLineIteratorConfig {
     IndexedFileLineIteratorConfig& with_line_range(std::size_t start_line,
                                                    std::size_t end_line) {
         range_type_ =
-            dftracer::utils::utilities::reader::internal::RangeType::LINE_RANGE;
+            dftracer::utils::utilities::reader::internal::RangeType::LineRange;
         start_ = start_line;
         end_ = end_line;
         return *this;
@@ -82,7 +82,7 @@ class IndexedFileLineIteratorConfig {
     IndexedFileLineIteratorConfig& with_byte_range(std::size_t start_bytes,
                                                    std::size_t end_bytes) {
         range_type_ =
-            dftracer::utils::utilities::reader::internal::RangeType::BYTE_RANGE;
+            dftracer::utils::utilities::reader::internal::RangeType::ByteRange;
         start_ = start_bytes;
         end_ = end_bytes;
         return *this;
@@ -172,13 +172,13 @@ class IndexedFileLineIterator {
    private:
     void validate_and_initialize() {
         if (!config_.reader()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "Reader cannot be null");
         }
 
         // Validate range based on type
         if (config_.range_type() == dftracer::utils::utilities::reader::
-                                        internal::RangeType::LINE_RANGE) {
+                                        internal::RangeType::LineRange) {
             if (config_.end() == 0) {
                 std::size_t num_lines = config_.reader()->get_num_lines();
                 DFTRACER_UTILS_LOG_DEBUG(
@@ -193,12 +193,12 @@ class IndexedFileLineIterator {
 
             if (config_.start() < 1 || config_.end() < config_.start()) {
                 throw DFTUtilsException(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "Invalid line range (must be 1-based and start <= end)");
             }
         } else {
             if (config_.end() < config_.start()) {
-                throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                throw DFTUtilsException(ErrorCode::InvalidArgument,
                                         "Invalid byte range (start <= end)");
             }
         }
@@ -206,27 +206,27 @@ class IndexedFileLineIterator {
         dftracer::utils::utilities::reader::internal::StreamConfig
             stream_config;
         if (config_.range_type() == dftracer::utils::utilities::reader::
-                                        internal::RangeType::LINE_RANGE) {
+                                        internal::RangeType::LineRange) {
             stream_config
                 .stream_type(dftracer::utils::utilities::reader::internal::
-                                 StreamType::LINE)
+                                 StreamType::Line)
                 .range_type(dftracer::utils::utilities::reader::internal::
-                                RangeType::LINE_RANGE)
+                                RangeType::LineRange)
                 .from(config_.start())
                 .to(config_.end());
         } else {
             stream_config
                 .stream_type(dftracer::utils::utilities::reader::internal::
-                                 StreamType::LINE_BYTES)
+                                 StreamType::LineBytes)
                 .range_type(dftracer::utils::utilities::reader::internal::
-                                RangeType::BYTE_RANGE)
+                                RangeType::ByteRange)
                 .from(config_.start())
                 .to(config_.end());
         }
 
         stream_ = config_.reader()->stream(stream_config);
         if (!stream_) {
-            throw DFTUtilsException(ErrorCode::IO, "Failed to create stream");
+            throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
         }
     }
 
@@ -300,7 +300,7 @@ class IndexedFileLineIterator {
      */
     Line next() {
         if (!has_next()) {
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "No more lines available");
         }
 

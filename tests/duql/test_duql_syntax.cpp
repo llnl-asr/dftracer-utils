@@ -52,20 +52,20 @@ std::string lowered(std::string_view text, const duql::Params& params = {}) {
     return duql::to_string(**node);
 }
 
-dftracer::utils::expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
-    std::string_view text, const duql::Params& params,
-    const duql::Roles* roles) {
+dftracer::utils::dstd::Expected<duql::Pipeline, duql::DuqlError>
+compile_pipeline(std::string_view text, const duql::Params& params,
+                 const duql::Roles* roles) {
     duql::PluginCatalog plugins;
     plugins.kind = [](std::string_view name) {
         const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
-        if (!op) return duql::PluginKind::NONE;
+        if (!op) return duql::PluginKind::None;
         if (dftu_op_kind_of(op->sig) == DFTU_OP_KIND_SERIES)
-            return duql::PluginKind::COLUMN;
+            return duql::PluginKind::Column;
         if (dftu_op_kind_of(op->sig) == DFTU_OP_KIND_FRAME)
-            return duql::PluginKind::TABLE;
+            return duql::PluginKind::Table;
         if (dftu_op_kind_of(op->sig) == DFTU_OP_KIND_AGGREGATE)
-            return duql::PluginKind::AGGREGATE;
-        return duql::PluginKind::OTHER;
+            return duql::PluginKind::Aggregate;
+        return duql::PluginKind::Other;
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
         const std::string_view op = dftu_op_at(k)->name;
@@ -77,7 +77,7 @@ dftracer::utils::expected<duql::Pipeline, duql::DuqlError> compile_pipeline(
         std::unique(plugins.namespaces.begin(), plugins.namespaces.end()),
         plugins.namespaces.end());
     auto p = duql::compile_program(text, params, roles, {}, &plugins);
-    if (!p) return dftracer::utils::unexpected(p.error());
+    if (!p) return dftracer::utils::dstd::Unexpected(p.error());
     return std::move(p->main);
 }
 
@@ -143,25 +143,25 @@ bool has(const std::string& text, std::string_view part) {
 
 TEST_CASE("lex - minus is always an operator") {
     CHECK(kinds("5-3") ==
-          std::vector<Tok>{Tok::INT, Tok::MINUS, Tok::INT, Tok::END});
+          std::vector<Tok>{Tok::Int, Tok::Minus, Tok::Int, Tok::End});
     CHECK(kinds("x > -5") ==
-          std::vector<Tok>{Tok::NAME, Tok::GT, Tok::MINUS, Tok::INT, Tok::END});
+          std::vector<Tok>{Tok::Name, Tok::Gt, Tok::Minus, Tok::Int, Tok::End});
     CHECK(kinds("a->b") ==
-          std::vector<Tok>{Tok::NAME, Tok::ARROW, Tok::NAME, Tok::END});
+          std::vector<Tok>{Tok::Name, Tok::Arrow, Tok::Name, Tok::End});
 }
 
 TEST_CASE("lex - backtick keys") {
     auto tokens = duql::syntax::lex("counters.`cpu.idle_pct`.p50 > 90");
     REQUIRE(tokens.has_value());
     REQUIRE(tokens->size() >= 6);
-    CHECK((*tokens)[2].kind == Tok::QNAME);
+    CHECK((*tokens)[2].kind == Tok::Qname);
     CHECK((*tokens)[2].text == "cpu.idle_pct");
     CHECK_FALSE(duql::syntax::lex("`` == 1").has_value());
     CHECK_FALSE(duql::syntax::lex("`abc == 1").has_value());
 }
 
 TEST_CASE("lex - comments are skipped") {
-    CHECK(kinds("# only a comment") == std::vector<Tok>{Tok::END});
+    CHECK(kinds("# only a comment") == std::vector<Tok>{Tok::End});
     CHECK(kinds("a == 1 # trailing\nand b == 2") == kinds("a == 1 and b == 2"));
     CHECK(kinds("a # mid\n== 1") == kinds("a == 1"));
 }
@@ -169,13 +169,13 @@ TEST_CASE("lex - comments are skipped") {
 TEST_CASE("lex - params, durations and numbers") {
     auto tokens = duql::syntax::lex("$app 250ms 1.5 1e3 42");
     REQUIRE(tokens.has_value());
-    CHECK((*tokens)[0].kind == Tok::PARAM);
+    CHECK((*tokens)[0].kind == Tok::Param);
     CHECK((*tokens)[0].text == "app");
-    CHECK((*tokens)[1].kind == Tok::DURATION);
+    CHECK((*tokens)[1].kind == Tok::Duration);
     CHECK((*tokens)[1].text == "250ms");
-    CHECK((*tokens)[2].kind == Tok::FLOAT);
-    CHECK((*tokens)[3].kind == Tok::FLOAT);
-    CHECK((*tokens)[4].kind == Tok::INT);
+    CHECK((*tokens)[2].kind == Tok::Float);
+    CHECK((*tokens)[3].kind == Tok::Float);
+    CHECK((*tokens)[4].kind == Tok::Int);
     auto bad = duql::syntax::lex("x == 1abc");
     REQUIRE_FALSE(bad.has_value());
     CHECK(has(bad.error().message, "Invalid number"));
@@ -184,7 +184,7 @@ TEST_CASE("lex - params, durations and numbers") {
 TEST_CASE("lex - call adjacency") {
     auto call = duql::syntax::lex("any(tags)");
     REQUIRE(call.has_value());
-    CHECK((*call)[1].kind == Tok::LPAREN);
+    CHECK((*call)[1].kind == Tok::Lparen);
     CHECK((*call)[1].adjacent);
     auto spaced = duql::syntax::lex("f (x)");
     REQUIRE(spaced.has_value());
@@ -319,7 +319,7 @@ TEST_CASE("parse - bucket fill modes and ranges") {
     REQUIRE(q.has_value());
     const auto& b = std::get<duql::syntax::Bucket>(q->pipeline->stages[0].node);
     CHECK(b.fill);
-    CHECK(b.fill_mode == duql::syntax::FillMode::LINEAR);
+    CHECK(b.fill_mode == duql::syntax::FillMode::Linear);
     CHECK(b.low);
     CHECK(b.high);
     CHECK(b.as == "b");
@@ -327,7 +327,7 @@ TEST_CASE("parse - bucket fill modes and ranges") {
     REQUIRE(z.has_value());
     CHECK(
         std::get<duql::syntax::Bucket>(z->pipeline->stages[0].node).fill_mode ==
-        duql::syntax::FillMode::ZERO);
+        duql::syntax::FillMode::Zero);
     auto bad = duql::syntax::parse("bucket 1ms from 0 to 1ms");
     REQUIRE_FALSE(bad.has_value());
     CHECK(has(bad.error().message, "sets the range of 'fill'"));
@@ -455,7 +455,7 @@ TEST_CASE("parse - case block is the positional case") {
         parsed(R"(derive s = case(x > 1, "a", x > 0, "b", "c"))")));
     CHECK(duql::syntax::equal(parsed(R"(derive s = CASE { x > 1 => "a" })"),
                               parsed(R"(derive s = case(x > 1, "a", null))")));
-    CHECK(kinds("a => b")[1] == Tok::FATARROW);
+    CHECK(kinds("a => b")[1] == Tok::Fatarrow);
     const std::vector<std::pair<const char*, const char*>> errors = {
         {"derive s = case { }", "pair"},
         {R"(derive s = case { else => 1, x > 1 => 2 })", "last"},
@@ -478,7 +478,7 @@ TEST_CASE("lower - regex_replace compile errors") {
     CHECK(duql::parse(R"re(regex_replace(s, $pat, $to) == "aa")re", params)
               .has_value());
     auto ok = duql::parse(R"re(regex_replace(s, "(a)", "${1}x$$") == "a")re");
-    CHECK_MESSAGE(ok.has_value(), (ok ? "" : ok.error().message));
+    CHECK_MESSAGE(ok.has_value(), (ok ? std::string() : ok.error().message));
     const std::vector<std::pair<const char*, const char*>> errors = {
         {R"re(regex_replace(s, "(a)", "$2") == "x")re", "group 2"},
         {R"re(regex_replace(s, "(a)", "${nope}") == "x")re", "nope"},
@@ -557,7 +557,7 @@ TEST_CASE("parse - negative literal lowers to int64") {
     REQUIRE(node.has_value());
     const auto& cmp = std::get<duql::CompareNode>((*node)->data);
     CHECK(cmp.field.path == "x");
-    CHECK(cmp.op == duql::CompareOp::GT);
+    CHECK(cmp.op == duql::CompareOp::Gt);
     REQUIRE(std::holds_alternative<std::int64_t>(cmp.value.value));
     CHECK(std::get<std::int64_t>(cmp.value.value) == -5);
 }
@@ -565,10 +565,10 @@ TEST_CASE("parse - negative literal lowers to int64") {
 TEST_CASE("parse - subtraction") {
     const auto q = parsed("ts-1000 > 5");
     const auto& gt = std::get<duql::syntax::Binary>(where_condition(q).node);
-    CHECK(gt.op == duql::syntax::BinaryOp::GT);
+    CHECK(gt.op == duql::syntax::BinaryOp::Gt);
     const auto* sub = std::get_if<duql::syntax::Binary>(&gt.left->node);
     REQUIRE(sub);
-    CHECK(sub->op == duql::syntax::BinaryOp::SUB);
+    CHECK(sub->op == duql::syntax::BinaryOp::Sub);
     auto node = duql::parse("ts-1000 > 5");
     REQUIRE(node.has_value());
     CHECK(duql::to_string(**node) == "(ts - 1000) > 5");
@@ -747,7 +747,7 @@ TEST_CASE("parse - as-of lookup") {
     CHECK(a->rowset == "s");
     CHECK(a->keys.size() == 2);
     CHECK(a->time.second);
-    CHECK(a->direction == duql::syntax::AsofDirection::NEAREST);
+    CHECK(a->direction == duql::syntax::AsofDirection::Nearest);
     REQUIRE(a->within);
     CHECK(duql::syntax::to_text(*a->within) == "$w");
 
@@ -755,7 +755,7 @@ TEST_CASE("parse - as-of lookup") {
     const auto* b =
         std::get_if<duql::syntax::AsofLookup>(&d.pipeline->stages[0].node);
     REQUIRE(b);
-    CHECK(b->direction == duql::syntax::AsofDirection::BACKWARD);
+    CHECK(b->direction == duql::syntax::AsofDirection::Backward);
     CHECK_FALSE(b->within);
 
     const auto both = duql::syntax::parse("lookup s on pid asof ts into m");
@@ -805,7 +805,7 @@ TEST_CASE("parse - lookup kinds and inline sides print back") {
     const auto* l =
         std::get_if<duql::syntax::Lookup>(&q.pipeline->stages[0].node);
     REQUIRE(l);
-    CHECK(l->kind == duql::syntax::LookupKind::ANTI);
+    CHECK(l->kind == duql::syntax::LookupKind::Anti);
     CHECK(l->rowset.empty());
     CHECK(l->side);
     CHECK_FALSE(duql::syntax::equal(parsed("lookup r on k inner"),
@@ -845,12 +845,12 @@ TEST_CASE("parse - sort keys") {
     CHECK(keys[0].descending);
     const auto* add = std::get_if<duql::syntax::Binary>(&keys[0].value->node);
     REQUIRE(add);
-    CHECK(add->op == duql::syntax::BinaryOp::ADD);
+    CHECK(add->op == duql::syntax::BinaryOp::Add);
 
     CHECK(keys[1].descending);
     const auto* neg = std::get_if<duql::syntax::Unary>(&keys[1].value->node);
     REQUIRE(neg);
-    CHECK(neg->op == duql::syntax::UnaryOp::NEG);
+    CHECK(neg->op == duql::syntax::UnaryOp::Neg);
     CHECK(std::holds_alternative<duql::syntax::Path>(neg->operand->node));
 
     CHECK_FALSE(keys[2].descending);
@@ -1199,7 +1199,7 @@ TEST_CASE("lower - parameters") {
     REQUIRE(node.has_value());
     const auto& cmp = std::get<duql::CompareNode>((*node)->data);
     CHECK(cmp.field.path == "app");
-    CHECK(cmp.op == duql::CompareOp::EQ);
+    CHECK(cmp.op == duql::CompareOp::Eq);
     REQUIRE(std::holds_alternative<std::string>(cmp.value.value));
     CHECK(std::get<std::string>(cmp.value.value) == "laghos");
 
@@ -1268,9 +1268,9 @@ TEST_CASE("pipeline - reshaping stages") {
     REQUIRE(win.keys.size() == 2);
     CHECK(win.order[0].descending);
     REQUIRE(win.calls.size() == 2);
-    CHECK(win.calls[0].fn == duql::WinFn::LAG);
+    CHECK(win.calls[0].fn == duql::WinFn::Lag);
     CHECK(win.calls[0].offset == 2);
-    CHECK(win.calls[1].fn == duql::WinFn::ROW_NUMBER);
+    CHECK(win.calls[1].fn == duql::WinFn::RowNumber);
     CHECK(win.items[0].name == "g");
     CHECK(win.items[0].text == "ts - lag(ts, $n)");
 
@@ -1287,7 +1287,7 @@ TEST_CASE("pipeline - reshaping stages") {
     const auto& piv = std::get<duql::PipelinePivot>(pv.stages[0]);
     CHECK(piv.fixed);
     CHECK(piv.values.size() == 3);
-    CHECK(piv.aggs[0].fn == duql::AggFn::SUM);
+    CHECK(piv.aggs[0].fn == duql::AggFn::Sum);
 
     const auto g = compiled(
         "group k { d = count_distinct(x), c = collect(x), a = arg_max(x, y),"
@@ -1295,14 +1295,14 @@ TEST_CASE("pipeline - reshaping stages") {
         " q = quantile(merge(s), 0.9) }");
     const auto& grp = std::get<duql::PipelineGroup>(g.stages[0]);
     REQUIRE(grp.aggs.size() == 7);
-    CHECK(grp.aggs[0].fn == duql::AggFn::COUNT_DISTINCT);
-    CHECK(grp.aggs[1].fn == duql::AggFn::COLLECT);
-    CHECK(grp.aggs[2].fn == duql::AggFn::ARGMAX);
+    CHECK(grp.aggs[0].fn == duql::AggFn::CountDistinct);
+    CHECK(grp.aggs[1].fn == duql::AggFn::Collect);
+    CHECK(grp.aggs[2].fn == duql::AggFn::Argmax);
     CHECK(grp.aggs[2].text == "arg_max(x, y)");
     REQUIRE(grp.aggs[3].by);
-    CHECK(grp.aggs[4].fn == duql::AggFn::SKETCH);
-    CHECK(grp.aggs[5].fn == duql::AggFn::MERGE);
-    CHECK(grp.aggs[6].fn == duql::AggFn::QUANTILE);
+    CHECK(grp.aggs[4].fn == duql::AggFn::Sketch);
+    CHECK(grp.aggs[5].fn == duql::AggFn::Merge);
+    CHECK(grp.aggs[6].fn == duql::AggFn::Quantile);
     CHECK(grp.aggs[6].merged);
     CHECK(grp.aggs[6].q == 0.9);
     CHECK(grp.aggs[6].text == "quantile(merge(s), 0.9)");
@@ -1558,7 +1558,7 @@ TEST_CASE("pipeline - plugin reducers lower to plugin aggregates") {
     const auto& g = std::get<duql::PipelineGroup>(one->stages.back());
     REQUIRE(g.aggs.size() == 1);
     CHECK(g.aggs[0].name == "t");
-    CHECK(g.aggs[0].fn == duql::AggFn::PLUGIN);
+    CHECK(g.aggs[0].fn == duql::AggFn::Plugin);
     CHECK(g.aggs[0].plugin == "pa.total");
     CHECK(g.aggs[0].params.empty());
     CHECK(g.aggs[0].text == "pa.total(dur)");
@@ -1572,9 +1572,9 @@ TEST_CASE("pipeline - plugin reducers lower to plugin aggregates") {
     REQUIRE(a.aggs.size() == 3);
     CHECK(a.aggs[0].plugin == "pa.scaled");
     CHECK(a.aggs[0].params.size() == 2);
-    CHECK(a.aggs[1].fn == duql::AggFn::PLUGIN);
+    CHECK(a.aggs[1].fn == duql::AggFn::Plugin);
     CHECK(a.aggs[1].name == "r");
-    CHECK(a.aggs[2].fn == duql::AggFn::COUNT);
+    CHECK(a.aggs[2].fn == duql::AggFn::Count);
     CHECK(std::holds_alternative<duql::PipelineDerive>(ops2->stages[1]));
 
     const std::pair<std::string_view, std::string_view> cases[] = {

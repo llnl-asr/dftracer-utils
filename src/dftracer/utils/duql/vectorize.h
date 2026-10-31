@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_DUQL_VECTORIZE_H
 #define DFTRACER_UTILS_DUQL_VECTORIZE_H
 
-#include <dftracer/utils/core/common/expected.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/term.h>
 
@@ -55,7 +55,7 @@ struct VectorizeError {
 /// wrong type, compile to a null column. With `args_fallback`, a bare name no
 /// column names reads the column of that name under `args.`; the same holds
 /// for the functions below.
-dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize(
+dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
     const Term& t, const std::vector<VectorColumn>& columns,
     bool args_fallback);
 
@@ -65,9 +65,9 @@ bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
                   bool args_fallback);
 
 /// `t` as a Bool column: its truth, null where it is not a bool.
-dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize_condition(
-    const Term& t, const std::vector<VectorColumn>& columns,
-    bool args_fallback);
+dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
+vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
+                    bool args_fallback);
 
 /// The truth of `q` for each row of `inputs`, the frame `columns` describes:
 /// its condition runs over a frame of the list elements with the record's
@@ -75,13 +75,13 @@ dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize_condition(
 /// rule. Null where the subject is not a list or the result is unknown. A
 /// subject that is a lookup of every match reads the matching rows' values,
 /// null where none matches.
-dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
+dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
     const std::vector<VectorColumn>& columns, bool args_fallback);
 
 /// The column the bound lookup `l` (not `l.all`) gives for each row of
 /// `inputs`. Throws DFTUtilsException for a query error of the lookup.
-dftracer::utils::expected<dataframe::Series, VectorizeError> lookup(
+dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
     const std::vector<VectorColumn>& columns, bool args_fallback);
 

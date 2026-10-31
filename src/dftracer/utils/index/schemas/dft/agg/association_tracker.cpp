@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/association_tracker.h>
 #include <dftracer/utils/index/store/key_codec.h>
 
@@ -133,23 +134,17 @@ void AssociationTracker::merge(const AssociationTracker& other) {
 namespace {
 namespace rocks = index::store;
 
-void put_be64(std::string& out, std::uint64_t v) {
-    rocks::KeyCodec::append_be64(out, v);
-}
-void put_be32(std::string& out, std::uint32_t v) {
-    rocks::KeyCodec::append_be32(out, v);
-}
 void put_str(std::string& out, const std::string& s) {
-    put_be32(out, static_cast<std::uint32_t>(s.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(s.size()));
     out.append(s);
 }
 std::uint64_t read_be64(const char*& p) {
-    auto v = rocks::KeyCodec::decode_be64(std::string_view(p, 8));
+    auto v = read_u64_be(reinterpret_cast<const std::uint8_t*>(p));
     p += 8;
     return v;
 }
 std::uint32_t read_be32(const char*& p) {
-    auto v = rocks::KeyCodec::decode_be32(std::string_view(p, 4));
+    auto v = read_u32_be(reinterpret_cast<const std::uint8_t*>(p));
     p += 4;
     return v;
 }
@@ -165,32 +160,32 @@ std::string AssociationTracker::serialize() const {
     std::string out;
     out.reserve(4096);
 
-    put_be32(out, static_cast<std::uint32_t>(all_pids_.size()));
-    for (auto pid : all_pids_) put_be64(out, pid);
+    append_u32_be(out, static_cast<std::uint32_t>(all_pids_.size()));
+    for (auto pid : all_pids_) append_u64_be(out, pid);
 
-    put_be32(out, static_cast<std::uint32_t>(process_parents_.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(process_parents_.size()));
     for (const auto& [child, parent] : process_parents_) {
-        put_be64(out, child);
-        put_be64(out, parent);
+        append_u64_be(out, child);
+        append_u64_be(out, parent);
     }
 
-    put_be32(out, static_cast<std::uint32_t>(all_intervals_.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(all_intervals_.size()));
     for (const auto& iv : all_intervals_) {
         put_str(out, iv.name);
         put_str(out, iv.value);
-        put_be64(out, iv.start_ts);
-        put_be64(out, iv.end_ts);
+        append_u64_be(out, iv.start_ts);
+        append_u64_be(out, iv.end_ts);
     }
 
-    put_be32(out, static_cast<std::uint32_t>(process_intervals_.size()));
+    append_u32_be(out, static_cast<std::uint32_t>(process_intervals_.size()));
     for (const auto& [pid, intervals] : process_intervals_) {
-        put_be64(out, pid);
-        put_be32(out, static_cast<std::uint32_t>(intervals.size()));
+        append_u64_be(out, pid);
+        append_u32_be(out, static_cast<std::uint32_t>(intervals.size()));
         for (const auto& iv : intervals) {
             put_str(out, iv.name);
             put_str(out, iv.value);
-            put_be64(out, iv.start_ts);
-            put_be64(out, iv.end_ts);
+            append_u64_be(out, iv.start_ts);
+            append_u64_be(out, iv.end_ts);
         }
     }
 

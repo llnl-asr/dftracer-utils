@@ -1,9 +1,9 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/object_pool.h>
-#include <dftracer/utils/core/io/io_backend.h>
-#include <dftracer/utils/core/io/io_thread_pool.h>
-#include <dftracer/utils/core/pipeline/executor.h>
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/index/store/filesystem.h>
+#include <dftracer/utils/memory/heap.h>
+#include <dftracer/utils/runtime/executor/executor.h>
+#include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/io/io_thread_pool.h>
 #include <fcntl.h>
 #include <rocksdb/env.h>
 #include <rocksdb/file_system.h>
@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <condition_variable>
 #include <cstdint>
@@ -24,6 +25,8 @@
 namespace dftracer::utils::index::store {
 
 namespace {
+
+std::atomic<std::uint64_t> INGEST_REOPENS_SKIPPED{0};
 
 io::IoBackend* current_io_backend() {
     auto* executor = Executor::current();
@@ -39,11 +42,11 @@ struct AsyncReadHandle {
     explicit AsyncReadHandle(DfTracerFileSystem* owner_) : owner(owner_) {}
 
     static void* operator new(std::size_t size) {
-        return ObjectPool::instance().allocate(size);
+        return memory::allocate(size, __STDCPP_DEFAULT_NEW_ALIGNMENT__);
     }
 
     static void operator delete(void* ptr, std::size_t size) noexcept {
-        ObjectPool::instance().deallocate(ptr, size);
+        memory::deallocate(ptr, size);
     }
 
     DfTracerFileSystem* owner;
@@ -669,10 +672,18 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
         return ::rocksdb::IOStatus::OK();
     }
 
+    void set_reopen_refused(bool refused) noexcept {
+        reopen_refused_.store(refused, std::memory_order_release);
+    }
+
     ::rocksdb::IOStatus ReopenWritableFile(
         const std::string& fname, const ::rocksdb::FileOptions& file_opts,
         std::unique_ptr<::rocksdb::FSWritableFile>* result,
         ::rocksdb::IODebugContext*) override {
+        if (reopen_refused_.load(std::memory_order_acquire)) {
+            INGEST_REOPENS_SKIPPED.fetch_add(1, std::memory_order_relaxed);
+            return ::rocksdb::IOStatus::NotSupported("reopen refused");
+        }
         int fd = ::open(fname.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0644);
         if (fd < 0) {
             return io_error("open", fname);
@@ -742,11 +753,20 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
             handle->aborted = true;
         }
 
+        // As in RocksDB's posix AbortIO, an undelivered read gets its callback
+        // with Aborted: the callback frees RocksDB's per-read state.
         for (void* io_handle : io_handles) {
             auto* handle = static_cast<AsyncReadHandle*>(io_handle);
             std::unique_lock<std::mutex> lock(handle->mutex);
             handle->cv.wait(lock, [&] { return handle->finished; });
+            if (handle->callback_delivered) continue;
             handle->callback_delivered = true;
+            auto callback = handle->callback;
+            auto callback_arg = handle->callback_arg;
+            lock.unlock();
+            ::rocksdb::FSReadRequest req;
+            req.status = ::rocksdb::IOStatus::Aborted();
+            callback(req, callback_arg);
         }
 
         return ::rocksdb::IOStatus::OK();
@@ -832,6 +852,7 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
 
     std::once_flag fallback_started_;
     io::IoThreadPool fallback_pool_;
+    std::atomic<bool> reopen_refused_{false};
     std::mutex completions_mutex_;
     std::condition_variable completions_cv_;
 };
@@ -854,6 +875,19 @@ class DfTracerFileSystem final : public LocalFileSystemWrapper {
 }
 
 }  // namespace
+
+std::uint64_t ingest_reopens_skipped() noexcept {
+    return INGEST_REOPENS_SKIPPED.load(std::memory_order_relaxed);
+}
+
+IngestReopenSkip::IngestReopenSkip(::rocksdb::FileSystem& file_system)
+    : file_system_(file_system) {
+    static_cast<DfTracerFileSystem&>(file_system_).set_reopen_refused(true);
+}
+
+IngestReopenSkip::~IngestReopenSkip() {
+    static_cast<DfTracerFileSystem&>(file_system_).set_reopen_refused(false);
+}
 
 std::shared_ptr<::rocksdb::FileSystem> make_dftracer_file_system() {
     return std::make_shared<DfTracerFileSystem>(

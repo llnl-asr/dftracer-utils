@@ -43,7 +43,7 @@ df::DataFrame batch(df::Series k, df::Series v) {
 template <class... Batches>
 df::DataFrame fold(df::DataType key_type, Batches... bs) {
     FoldAgg a;
-    a.op = FoldOp::COUNT_DISTINCT;
+    a.op = FoldOp::CountDistinct;
     a.in = 1;
     a.type = df::scalar(df::TypeId::Int64);
     GroupFold g({key_type}, {a});

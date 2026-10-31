@@ -1,4 +1,5 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/duql/lookup.h>
 
 #include <algorithm>
@@ -16,17 +17,8 @@ constexpr char DOUBLE_TAG = 'd';
 constexpr char STRING_TAG = 's';
 constexpr char BOOL_TAG = 'b';
 
-void put_u64(std::string& out, std::uint64_t v) {
-    for (int i = 7; i >= 0; --i)
-        out += static_cast<char>((v >> (i * 8)) & 0xFF);
-}
-
 std::uint64_t get_u64(std::string_view s) {
-    std::uint64_t v = 0;
-    for (int i = 0; i < 8; ++i)
-        v = (v << 8) |
-            static_cast<unsigned char>(s[static_cast<std::size_t>(i)]);
-    return v;
+    return read_u64_be(reinterpret_cast<const std::uint8_t*>(s.data()));
 }
 
 }  // namespace
@@ -34,7 +26,7 @@ std::uint64_t get_u64(std::string_view s) {
 void append_int_key(std::string& out, bool negative, std::uint64_t magnitude) {
     out += INT_TAG;
     out += negative && magnitude != 0 ? '-' : '+';
-    put_u64(out, magnitude);
+    append_u64_be(out, magnitude);
 }
 
 bool append_double_key(std::string& out, double v) {
@@ -45,15 +37,13 @@ bool append_double_key(std::string& out, double v) {
         return true;
     }
     out += DOUBLE_TAG;
-    std::uint64_t bits = 0;
-    std::memcpy(&bits, &v, sizeof bits);
-    put_u64(out, bits);
+    append_f64_be(out, v);
     return true;
 }
 
 void append_string_key(std::string& out, std::string_view v) {
     out += STRING_TAG;
-    put_u64(out, v.size());
+    append_u64_be(out, v.size());
     out += v;
 }
 
@@ -79,9 +69,7 @@ std::string key_text(std::string_view key) {
             out += std::to_string(get_u64(key.substr(1)));
             key.remove_prefix(9);
         } else if (tag == DOUBLE_TAG) {
-            const std::uint64_t bits = get_u64(key);
-            double d = 0;
-            std::memcpy(&d, &bits, sizeof d);
+            const double d = bits_double(get_u64(key));
             char buf[32];
             std::snprintf(buf, sizeof buf, "%.17g", d);
             out += buf;
@@ -108,7 +96,7 @@ const std::vector<std::int64_t>* LookupTable::find(std::string_view key) const {
 void conflict(const LookupTable& table, std::string_view column,
               std::string_view key) {
     throw DFTUtilsException(
-        ErrorCode::INVALID_ARGUMENT,
+        ErrorCode::InvalidArgument,
         "View::duql '" + table.name + "' has rows with different values of '" +
             std::string(column) + "' for key " + key_text(key) +
             "; pick one with a narrower let, or read every row with "
@@ -117,7 +105,7 @@ void conflict(const LookupTable& table, std::string_view column,
 
 void scalar_conflict(std::string_view name, std::string_view key,
                      std::size_t rows) {
-    throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+    throw DFTUtilsException(ErrorCode::InvalidArgument,
                             "View::duql the sub-query '" + std::string(name) +
                                 "' gives " + std::to_string(rows) +
                                 " rows for key " + key_text(key) +
@@ -142,7 +130,7 @@ RangeIndex::Node combine(const RangeIndex& ix, RangeRead read,
         const int c =
             compare_ordered(*ix.args[static_cast<std::size_t>(a.best)],
                             *ix.args[static_cast<std::size_t>(b.best)]);
-        out.best = (read == RangeRead::MIN ? c <= 0 : c >= 0) ? a.best : b.best;
+        out.best = (read == RangeRead::Min ? c <= 0 : c >= 0) ? a.best : b.best;
     }
     return out;
 }
@@ -181,7 +169,7 @@ std::pair<std::int64_t, std::int64_t> kind_range(const RangeIndex& ix,
 }
 
 [[noreturn]] void range_fail(const std::string& why) {
-    throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT, "View::duql " + why);
+    throw DFTUtilsException(ErrorCode::InvalidArgument, "View::duql " + why);
 }
 
 }  // namespace
@@ -228,8 +216,8 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
                          const std::optional<Ordered>& high) {
     RangeAnswer out;
     const RangeRead read = l.range;
-    if (read == RangeRead::COUNT || read == RangeRead::COUNT_VALUES ||
-        read == RangeRead::COUNT_IF)
+    if (read == RangeRead::Count || read == RangeRead::CountValues ||
+        read == RangeRead::CountIf)
         out.number = Number{std::int64_t{0}};
     if ((l.low && !low) || (l.high && !high)) return out;
     if (low && high && kind_of(*low) != kind_of(*high)) return out;
@@ -238,12 +226,12 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
     if (it == ix.keys.end()) return out;
     const auto [first, last] = it->second;
     auto [lo, hi] = kind_range(ix, first, last, low ? *low : *high);
-    if (low) lo = position(ix, lo, hi, *low, *l.low == TermOp::GT);
-    if (high) hi = position(ix, lo, hi, *high, *l.high == TermOp::LE);
+    if (low) lo = position(ix, lo, hi, *low, *l.low == TermOp::Gt);
+    if (high) hi = position(ix, lo, hi, *high, *l.high == TermOp::Le);
     if (lo >= hi) return out;
     out.rows = hi - lo;
-    if (read == RangeRead::ROWS) {
-        if (l.kind == LookupKind::SCALAR && out.rows > 1)
+    if (read == RangeRead::Rows) {
+        if (l.kind == LookupKind::Scalar && out.rows > 1)
             range_fail(
                 "the sub-query '" + table.name + "' gives " +
                 std::to_string(out.rows) + " rows in the range of " +
@@ -252,7 +240,7 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
         out.row = ix.rows[static_cast<std::size_t>(lo)];
         return out;
     }
-    if (read == RangeRead::COUNT) {
+    if (read == RangeRead::Count) {
         out.number = Number{out.rows};
         return out;
     }
@@ -265,11 +253,11 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
         if (b & 1) acc = combine(ix, read, acc, t[--b]);
     }
     switch (read) {
-        case RangeRead::COUNT_VALUES:
-        case RangeRead::COUNT_IF:
+        case RangeRead::CountValues:
+        case RangeRead::CountIf:
             out.number = Number{acc.count};
             break;
-        case RangeRead::SUM:
+        case RangeRead::Sum:
             if (acc.count == 0) break;
             if (!ix.integral) {
                 out.number = Number{acc.fsum};
@@ -281,20 +269,20 @@ RangeAnswer range_answer(const TLookup& l, const LookupTable& table,
                 out.number = Number{static_cast<std::int64_t>(acc.isum)};
             }
             break;
-        case RangeRead::MEAN:
+        case RangeRead::Mean:
             if (acc.count == 0) break;
             out.number = Number{
                 (ix.integral ? static_cast<double>(acc.isum) : acc.fsum) /
                 static_cast<double>(acc.count)};
             break;
-        case RangeRead::MIN:
-        case RangeRead::MAX:
+        case RangeRead::Min:
+        case RangeRead::Max:
             if (acc.best >= 0)
                 out.row = ix.rows[static_cast<std::size_t>(acc.best)];
             break;
-        case RangeRead::NONE:
-        case RangeRead::ROWS:
-        case RangeRead::COUNT:
+        case RangeRead::None:
+        case RangeRead::Rows:
+        case RangeRead::Count:
             break;
     }
     return out;

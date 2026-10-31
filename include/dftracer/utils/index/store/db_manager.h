@@ -1,11 +1,13 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_DB_MANAGER_H
 #define DFTRACER_UTILS_INDEX_STORE_DB_MANAGER_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/store/database.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <list>
 #include <memory>
@@ -31,6 +33,9 @@ class RocksDBManager {
         RocksDatabase::OpenMode open_mode = RocksDatabase::OpenMode::ReadWrite,
         RocksDatabase::CfOptionsOverride cf_override = nullptr);
     void reset(const std::string& db_path);
+
+    /// Databases this process has opened so far, counting each reopen.
+    std::uint64_t opens() const { return opens_.load(); }
     void shutdown();
 
    private:
@@ -56,6 +61,7 @@ class RocksDBManager {
     RetainedList retained_;
     StringViewMap<RetainedList::iterator> retained_index_;
     std::size_t retain_cap_ = 0;  ///< 0 until first read from env
+    std::atomic<std::uint64_t> opens_{0};
 };
 
 /// Register a callback invoked by RocksDBManager::reset(db_path) with that

@@ -1,12 +1,12 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_FILE_DECOMPRESSOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_DECOMPRESSOR_UTILITY_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/streaming_file_writer_utility.h>
 #include <fcntl.h>
@@ -126,7 +126,7 @@ class FileDecompressorUtility {
             // Validate input file exists
             if (!fs::exists(input.input_path)) {
                 co_return make_error(
-                    ErrorCode::NOT_FOUND,
+                    ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
@@ -136,21 +136,23 @@ class FileDecompressorUtility {
             ssize_t fd_result =
                 co_await io::open(input.input_path.c_str(), O_RDONLY);
             if (fd_result < 0) {
-                co_return make_error(ErrorCode::IO,
+                co_return make_error(ErrorCode::Io,
                                      "Cannot open file: " + input.input_path);
             }
             ScopedFd fd(static_cast<int>(fd_result));
 
             struct stat st;
             if (::fstat(fd.get(), &st) != 0) {
-                co_return make_error(ErrorCode::IO,
+                co_return make_error(ErrorCode::Io,
                                      "Cannot stat file: " + input.input_path);
             }
 
             fileio::StreamingFileWriterUtility writer(input.output_path);
             auto gen = fileio::compress::decode_gzip_members(
                 fd.get(), static_cast<std::uint64_t>(st.st_size));
-            while (auto chunk = co_await gen.next()) {
+            for (;;) {
+                auto chunk = co_await gen.next();
+                if (!chunk) break;
                 co_await writer.process(ByteView(chunk->data(), chunk->size()));
             }
 
@@ -164,7 +166,7 @@ class FileDecompressorUtility {
             remove_file_quietly(input.output_path);
 
             co_return make_error(
-                ErrorCode::COMPRESSION,
+                ErrorCode::Compression,
                 std::string("Decompression failed: ") + e.what());
         }
 

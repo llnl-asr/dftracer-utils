@@ -1,15 +1,15 @@
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/platform_compat.h>
-#include <dftracer/utils/core/common/string_arena.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/string_arena.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
@@ -55,7 +55,8 @@ void ViewSession::attach_fold(
 }
 
 void ViewSession::attach_fold_factory(
-    std::function<std::unique_ptr<detail::Fold>(dftracer::utils::StringIntern&)>
+    std::function<
+        std::unique_ptr<detail::Fold>(dftracer::utils::dstd::StringIntern&)>
         make,
     std::function<void()> finalize) {
     detail::add_fold_factory(*state_, std::move(make), std::move(finalize));
@@ -129,13 +130,13 @@ Deferred<dataframe::DataFrame> ViewSession::join(
     if (!left.value_ || !right.value_ || left.executed_ != executed_ ||
         right.executed_ != executed_)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::join: both handles must be collect() results of "
             "this session");
     if (n_key < 0) n_key = key_count_of(left.value_.get());
     if (n_key < 0)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::join: cannot infer n_key; pass it explicitly");
     auto out = std::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
@@ -151,13 +152,13 @@ Deferred<dataframe::DataFrame> ViewSession::compare(
     if (!baseline.value_ || !variant.value_ ||
         baseline.executed_ != executed_ || variant.executed_ != executed_)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::compare: both handles must be collect() results of "
             "this session");
     if (n_key < 0) n_key = key_count_of(baseline.value_.get());
     if (n_key < 0)
         throw DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "ViewSession::compare: cannot infer n_key; pass it explicitly");
     auto out = std::make_shared<dataframe::DataFrame>();
     combines_.emplace_back(
@@ -211,7 +212,7 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
     // each worker interns its own strings, so build_row_frame resolves them per
     // worker.
     struct Slot {
-        dftracer::utils::StringIntern intern;
+        dftracer::utils::dstd::StringIntern intern;
         detail::FoldEventBuffer events;
     };
     auto slots = std::make_shared<std::vector<std::shared_ptr<Slot>>>();
@@ -237,8 +238,8 @@ Deferred<dataframe::DataFrame> ViewSession::collect_events(
             else
                 detail::extract_fold_event_into(fe, jv.element(), slot->intern,
                                                 /*needs_args=*/true);
-            if (fe.phase == RecordPhase::UNKNOWN ||
-                (!keep_metadata && fe.phase == RecordPhase::METADATA))
+            if (fe.phase == RecordPhase::Unknown ||
+                (!keep_metadata && fe.phase == RecordPhase::Metadata))
                 slot->events.discard_last();
         };
     };
@@ -282,7 +283,7 @@ void ViewSession::add_containment_branch(
     std::shared_ptr<dataframe::DataFrame> out_fg,
     std::shared_ptr<std::string> out_partial) {
     const auto& bp = *branch;
-    auto intern = std::make_shared<dftracer::utils::StringIntern>();
+    auto intern = std::make_shared<dftracer::utils::dstd::StringIntern>();
     auto spec =
         std::make_shared<detail::ContainmentSpec>(detail::make_containment_spec(
             *intern, partition, ts, dur, name, group,
@@ -388,7 +389,7 @@ coro::CoroTask<ExportStats> ViewSession::execute() {
 void TraceSession::add(const std::vector<dataframe::LazyFrame>& plans,
                        Resolve resolve) {
     if (*executed_)
-        throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                      "TraceSession::collect after execute()");
     plans_.insert(plans_.end(), plans.begin(), plans.end());
     pending_.push_back(Pending{plans.size(), std::move(resolve)});
@@ -467,7 +468,7 @@ View View::reshape(
     const std::function<scan::ScanPlan(const scan::ScanPlan&)>& step) const {
     auto refuse = [&](const std::string& why) {
         return DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             std::string("View::") + builder + " " + why);
     };
     if (std::optional<std::string> op =
@@ -514,7 +515,7 @@ bool View::aggregates() const {
 scan::ScanPlan View::absorbed(const char* method, Need need) const {
     auto fail = [&](const std::string& why) {
         return DFTUtilsException::cat(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             std::string("View::") + method + " " + why);
     };
     dataframe::LazyFrame planned = dataframe::detail::optimize_plan(lf_);
@@ -600,9 +601,9 @@ coro::CoroTask<ExportStats> scan_batches(
         cap && limit ? std::min(cap, limit) : (cap ? cap : limit));
 }
 
-coro::CoroTask<ExportStats> scan_folds(scan::ScanPlan v,
-                                       std::span<detail::Fold* const> folds,
-                                       dftracer::utils::StringIntern& intern) {
+coro::CoroTask<ExportStats> scan_folds(
+    scan::ScanPlan v, std::span<detail::Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern) {
     co_return co_await scan::run_folds(v, folds, intern);
 }
 
@@ -622,7 +623,7 @@ dataframe::LazyFrame View::call_tree(std::vector<std::string> partition,
                                      std::string ts, std::string dur,
                                      std::string name) const {
     scan::ScanPlan v = absorbed("call_tree", Need::Events);
-    detail::require_role(*v, "call_tree", detail::TraceRole::DURATION);
+    detail::require_role(*v, "call_tree", detail::TraceRole::Duration);
     v = scan::timed(v);
     return terminal_plan(v, TraceOutput::CallTree,
                          {std::move(partition),
@@ -637,7 +638,7 @@ dataframe::LazyFrame View::flamegraph(std::vector<std::string> partition,
                                       std::string name,
                                       std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("flamegraph", Need::Events);
-    detail::require_role(*v, "flamegraph", detail::TraceRole::DURATION);
+    detail::require_role(*v, "flamegraph", detail::TraceRole::Duration);
     v = scan::timed(v);
     return terminal_plan(v, TraceOutput::Flamegraph,
                          {std::move(partition), std::move(ts), std::move(dur),
@@ -648,7 +649,7 @@ dataframe::LazyResult<ContainmentResult> View::containment(
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name, std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("containment", Need::Events);
-    detail::require_role(*v, "containment", detail::TraceRole::DURATION);
+    detail::require_role(*v, "containment", detail::TraceRole::Duration);
     v = scan::timed(v);
     ContainmentArgs tree{std::move(partition), std::move(ts), std::move(dur),
                          std::move(name), std::move(group)};
@@ -664,7 +665,7 @@ dataframe::LazyResult<std::string> View::flamegraph_partial(
     std::vector<std::string> partition, std::string ts, std::string dur,
     std::string name, std::vector<std::string> group) const {
     scan::ScanPlan v = absorbed("flamegraph_partial", Need::EventsHead);
-    detail::require_role(*v, "flamegraph", detail::TraceRole::DURATION);
+    detail::require_role(*v, "flamegraph", detail::TraceRole::Duration);
     v = scan::timed(v);
     return partial_result(
         terminal_plan(v, TraceOutput::FlamegraphPartial,
@@ -761,7 +762,7 @@ coro::CoroTask<ExportStats> View::for_each_batch(
 
 coro::CoroTask<ExportStats> View::run_folds(
     std::span<detail::Fold* const> folds,
-    dftracer::utils::StringIntern& intern) const {
+    dftracer::utils::dstd::StringIntern& intern) const {
     return scan_folds(absorbed("run_folds", Need::EventsHead), folds, intern);
 }
 

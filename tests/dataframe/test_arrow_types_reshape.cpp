@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -11,14 +11,11 @@
 // sort_by_multi, unique, to_dummies, pivot, unpivot and explode. Table-driven
 // with a default-less switch, so a new TypeId with no row here fails.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
-// clang-format on
-
-#include "builders_arrow_types.h"
+#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;

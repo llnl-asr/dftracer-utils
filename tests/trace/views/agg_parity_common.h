@@ -5,14 +5,13 @@
 // scan, the two collection paths, and the row-for-row comparisons. Split over
 // two binaries so each fits its own Valgrind budget.
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregator.h>
 #include <dftracer/utils/index/store/column_families.h>
 #include <dftracer/utils/index/store/database.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -22,6 +21,8 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <trace/views/groupmap_oracle.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <array>
@@ -29,9 +30,6 @@
 #include <functional>
 #include <map>
 #include <utility>
-
-#include "groupmap_oracle.h"
-#include "test_view_common.h"
 
 namespace aggparity {
 

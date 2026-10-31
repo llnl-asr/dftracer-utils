@@ -3,7 +3,7 @@
 // integer still fails.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -16,15 +16,13 @@
 #include <vector>
 
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
-// clang-format on
+#include <dftracer/utils/runtime/runtime.h>
+#include <nanoarrow/nanoarrow.h>
 
 using dftracer::utils::dataframe::DataFrame;
 using dftracer::utils::dataframe::InMemorySource;

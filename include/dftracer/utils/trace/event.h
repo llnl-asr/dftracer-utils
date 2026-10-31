@@ -156,8 +156,8 @@ struct DFTracerEvent {
     std::uint64_t id = 0;
     std::string_view name;
     std::string_view cat;
-    RecordPhase phase = RecordPhase::UNKNOWN;
-    EventType type = EventType::UNKNOWN;
+    RecordPhase phase = RecordPhase::Unknown;
+    EventType type = EventType::Unknown;
     std::uint64_t pid = 0;
     std::uint64_t tid = 0;
     std::uint64_t ts = 0;
@@ -169,17 +169,17 @@ struct DFTracerEvent {
 
     ArgsMap args;
 
-    bool is_metadata() const { return phase == RecordPhase::METADATA; }
-    bool is_counter() const { return phase == RecordPhase::COUNTER; }
-    bool is_aggregated() const { return phase == RecordPhase::AGGREGATED; }
+    bool is_metadata() const { return phase == RecordPhase::Metadata; }
+    bool is_counter() const { return phase == RecordPhase::Counter; }
+    bool is_aggregated() const { return phase == RecordPhase::Aggregated; }
     bool is_profile() const {
-        return phase == RecordPhase::COUNTER && cat != "sys";
+        return phase == RecordPhase::Counter && cat != "sys";
     }
     bool is_system() const {
-        return phase == RecordPhase::COUNTER && cat == "sys";
+        return phase == RecordPhase::Counter && cat == "sys";
     }
     bool is_event() const { return !is_metadata() && !is_counter(); }
-    bool is_complete() const { return phase == RecordPhase::COMPLETE; }
+    bool is_complete() const { return phase == RecordPhase::Complete; }
     static bool parse(const JsonValue& json, DFTracerEvent& out) {
         simdjson::dom::element unused_args{};
         bool unused_has_args = false;

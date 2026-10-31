@@ -53,8 +53,9 @@ function(_dftracer_utils_version_line file key pattern out)
 endfunction()
 
 # Reads VERSION and writes the interface versions into two generated headers:
-# core/common/versions.h for the library and plugins/abi_version.h, which the
-# plain-C plugin ABI includes.
+# common/versions.h for the library and plugins/abi_version.h, which the
+# plain-C plugin ABI includes. Also sets DFTRACER_UTILS_API_VERSION and
+# DFTRACER_UTILS_ABI_VERSION in the caller's scope for create_library.
 function(dftracer_utils_interface_versions version_file out_include_dir)
   set_property(
     DIRECTORY
@@ -104,10 +105,10 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
 #endif  // DFTRACER_UTILS_PLUGINS_ABI_VERSION_H
 ")
   file(
-    WRITE "${out_include_dir}/dftracer/utils/core/common/versions.h.tmp"
+    WRITE "${out_include_dir}/dftracer/utils/common/versions.h.tmp"
     "// Generated from VERSION by cmake/modules/Versions.cmake. Do not edit.
-#ifndef DFTRACER_UTILS_CORE_COMMON_VERSIONS_H
-#define DFTRACER_UTILS_CORE_COMMON_VERSIONS_H
+#ifndef DFTRACER_UTILS_COMMON_VERSIONS_H
+#define DFTRACER_UTILS_COMMON_VERSIONS_H
 
 #include <dftracer/utils/plugins/abi_version.h>
 
@@ -120,14 +121,20 @@ function(dftracer_utils_interface_versions version_file out_include_dir)
 #define DFTRACER_UTILS_DUQL_VERSION_MINOR ${_duql_minor}
 #define DFTRACER_UTILS_DUQL_VERSION_STRING \"${_duql}\"
 
-#endif  // DFTRACER_UTILS_CORE_COMMON_VERSIONS_H
+#endif  // DFTRACER_UTILS_COMMON_VERSIONS_H
 ")
   # Copy only on change, so an unchanged VERSION rebuilds nothing.
-  foreach(_h plugins/abi_version.h core/common/versions.h)
+  foreach(_h plugins/abi_version.h common/versions.h)
     configure_file("${out_include_dir}/dftracer/utils/${_h}.tmp"
                    "${out_include_dir}/dftracer/utils/${_h}" COPYONLY)
     file(REMOVE "${out_include_dir}/dftracer/utils/${_h}.tmp")
   endforeach()
+  set(DFTRACER_UTILS_API_VERSION
+      "${_api}"
+      PARENT_SCOPE)
+  set(DFTRACER_UTILS_ABI_VERSION
+      "${_abi}"
+      PARENT_SCOPE)
   dftracer_utils_item("Interface      "
                       "api=${_api} abi=${_abi} index=${_index} duql=${_duql}")
 endfunction()

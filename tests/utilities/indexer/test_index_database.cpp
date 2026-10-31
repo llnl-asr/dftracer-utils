@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -19,6 +20,7 @@ using dftracer::utils::index::schemas::dft::ChunkStatistics;
 using dftracer::utils::index::store::ColumnType;
 using dftracer::utils::index::store::IndexDatabase;
 namespace layout = dftracer::utils::index::store::layout;
+using dftracer::utils::append_u32_be;
 
 namespace {
 
@@ -35,10 +37,10 @@ void register_files(IndexDatabase& db, const std::vector<std::string>& paths) {
 
 void set_format_version(IndexDatabase& db, std::uint32_t version) {
     std::string body;
-    layout::append_u32(body, version);
+    append_u32_be(body, version);
     db.db()->put(
         layout::format_key(),
-        layout::with_header(layout::Ext::HOST, layout::host::FORMAT, body));
+        layout::with_header(layout::Ext::Host, layout::host::FORMAT, body));
 }
 
 }  // namespace
@@ -104,19 +106,19 @@ TEST_SUITE("IndexDatabase") {
             dftu_utils_test::put_file_bloom(*writer, file_id, "name",
                                             std::span(blob), 4);
             dftu_utils_test::index_records::put_path(
-                *writer, dftu_utils_test::IndexExtension::BLOOM, file_id,
+                *writer, dftu_utils_test::IndexExtension::Bloom, file_id,
                 "name");
             dftu_utils_test::index_records::put_rowset(*writer, file_id,
                                                        "files", "frame");
             dftu_utils_test::index_records::put_manifest(
                 *writer, file_id,
-                dftracer::utils::index::store::IndexExtension::ROWSET, 0);
+                dftracer::utils::index::store::IndexExtension::Rowset, 0);
             dftu_utils_test::mark_built(*writer, file_id);
             writer->commit();
         }
 
         CHECK(db.extension_current(
-            file_id, dftracer::utils::index::store::IndexExtension::BLOOM));
+            file_id, dftracer::utils::index::store::IndexExtension::Bloom));
         CHECK(dftu_utils_test::has_file_bloom(db, file_id, "name"));
         CHECK(db.rowset(file_id, "files") == "frame");
 
@@ -126,14 +128,14 @@ TEST_SUITE("IndexDatabase") {
             rebuilt_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xBBBB);
             dftu_utils_test::index_records::clear_file(
-                *writer, dftracer::utils::index::store::IndexExtension::BLOOM,
+                *writer, dftracer::utils::index::store::IndexExtension::Bloom,
                 rebuilt_id);
             writer->commit();
         }
         CHECK(rebuilt_id == file_id);
 
         CHECK_FALSE(db.extension_current(
-            file_id, dftracer::utils::index::store::IndexExtension::BLOOM));
+            file_id, dftracer::utils::index::store::IndexExtension::Bloom));
         CHECK_FALSE(dftu_utils_test::has_file_bloom(db, file_id, "name"));
         CHECK(dftu_utils_test::bloom_chunks(db, file_id, "name") == 0);
         CHECK(db.rowset(file_id, "files") == "frame");
@@ -347,17 +349,17 @@ TEST_SUITE("IndexDatabase") {
                                                      0x2222);
             namespace rec = dftu_utils_test::index_records;
             rec::put_catalog_path(*writer, f1, "cat",
-                                  stat({PathType::STRING}, 5));
+                                  stat({PathType::String}, 5));
             rec::put_catalog_path(*writer, f1, "args.mhost",
-                                  stat({PathType::INT, PathType::BOOL}, 5));
+                                  stat({PathType::Int, PathType::Bool}, 5));
             rec::put_catalog_path(*writer, f2, "args.mhost",
-                                  stat({PathType::DOUBLE}, 2));
+                                  stat({PathType::Double}, 2));
             rec::put_catalog_path(*writer, f2, "args.fhash",
-                                  stat({PathType::STRING}, 2));
+                                  stat({PathType::String}, 2));
             rec::put_catalog_path(*writer, f2, "args.io.off",
-                                  stat({PathType::UINT}, 1));
+                                  stat({PathType::Uint}, 1));
             rec::put_catalog_path(*writer, f2, "args.gone",
-                                  stat({PathType::NULL_VALUE}, 0));
+                                  stat({PathType::NullValue}, 0));
             writer->commit();
         }
 
@@ -373,7 +375,7 @@ TEST_SUITE("IndexDatabase") {
         auto one = db.catalog(f1);
         REQUIRE(one.size() == 2);
         CHECK(one[0].first == "args.mhost");
-        CHECK(one[0].second.type == PathType::MIXED);
+        CHECK(one[0].second.type == PathType::Mixed);
         CHECK(one[0].second.count == 5);
         CHECK(one[1].first == "cat");
     }
@@ -562,6 +564,54 @@ TEST_SUITE("IndexDatabase staleness") {
         auto result = db.find_stale_files({a});
         CHECK(result.format_outdated);
         CHECK(result.stale());
+    }
+}
+
+TEST_SUITE("IndexDatabase manifest") {
+    TEST_CASE("only a decoded, ready manifest at this version is current") {
+        using dftracer::utils::index::store::IndexExtension;
+        auto root = dftu_utils_test::make_unique_test_path("manifest_current");
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        int file_id;
+        {
+            auto writer = db.begin_write();
+            file_id = dftu_utils_test::register_test_file(
+                *writer, "trace.pfw.gz", 0xAAAA);
+            writer->commit();
+        }
+
+        CHECK_FALSE(
+            db.extension_state(file_id, IndexExtension::Zonemap).has_value());
+        CHECK_FALSE(db.extension_current(file_id, IndexExtension::Zonemap));
+
+        {
+            auto writer = db.begin_write();
+            dftu_utils_test::mark_built(*writer, file_id);
+            writer->commit();
+        }
+        CHECK(db.extension_current(file_id, IndexExtension::Zonemap));
+
+        db.db()->put(layout::manifest_key(static_cast<std::uint32_t>(file_id),
+                                          IndexExtension::Zonemap),
+                     std::string("not a manifest"));
+        CHECK_FALSE(
+            db.extension_state(file_id, IndexExtension::Zonemap).has_value());
+        CHECK_FALSE(db.extension_current(file_id, IndexExtension::Zonemap));
+        CHECK(db.extension_current(file_id, IndexExtension::Members));
+    }
+
+    TEST_CASE("an index with no stored format is outdated") {
+        auto root = dftu_utils_test::make_unique_test_path("format_missing");
+        IndexDatabase db((root / ".dftindex").string());
+        db.init_schema();
+        CHECK(db.get_format_version() == IndexDatabase::FORMAT_VERSION);
+        CHECK_FALSE(db.format_outdated());
+        db.db()->del(layout::format_key());
+        CHECK_FALSE(db.get_format_version().has_value());
+        CHECK(db.format_outdated());
+        db.db()->put(layout::format_key(), std::string("garbage"));
+        CHECK(db.format_outdated());
     }
 }
 

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 _T = TypeVar("_T")
 
 # The suffixes directory discovery lists as traces: .pfw, .jsonl and
-# .ndjson, plain or gzip.
+# .ndjson, plain or gzip. An index reads the gzip ones only.
 TRACE_FILE_PATTERNS: Tuple[str, ...]
 # The plugin ABI version this extension accepts: (major << 16) | (minor << 8) | patch.
 PLUGIN_ABI_VERSION: int
@@ -449,7 +449,7 @@ class SstArtifactRegistry:
     """Thread-safe collector for SST artifact paths produced by workers."""
 
     def __init__(self) -> None: ...
-    def append(self, artifacts_dict: Dict[str, Optional[str]]) -> None:
+    def append(self, artifacts_dict: Dict[str, List[str]]) -> None:
         """Add a per-batch Artifacts dict as returned by `build_sst_batch`."""
         ...
 
@@ -469,7 +469,7 @@ def build_sst_batch(
     aggregation_config: Optional[object] = None,
     file_slices: Optional[List[Optional[Tuple[int, int, bool, List[Tuple[int, int]]]]]] = None,
     progress: Optional[Callable[[int, int], None]] = None,
-) -> Tuple[List[Dict[str, Optional[str]]], bytes]:
+) -> Tuple[List[Dict[str, List[str]]], bytes]:
     """Run the indexer pipeline with an SST sink. Returns
     `(artifact_dicts, tracker_blob)`. `tracker_blob` is the serialized
     merged AssociationTracker for the batch (empty bytes when
@@ -1043,7 +1043,7 @@ def enable_aggregation_deterministic_ids() -> None:
     so the same string maps to the same 32-bit id in every worker process."""
     ...
 
-def move_artifacts(artifacts: Dict[str, Optional[str]], dest_dir: str) -> Dict[str, Optional[str]]:
+def move_artifacts(artifacts: Dict[str, List[str]], dest_dir: str) -> Dict[str, List[str]]:
     """Move every populated SST in `artifacts` into `dest_dir` via the
     C++ rename/copy helper, returning a fresh dict with the new paths."""
     ...

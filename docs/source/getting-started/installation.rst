@@ -49,7 +49,7 @@ build dirs land under ``build/build-<preset>/``).
 
 The build produces five layered component libraries, each as shared and static:
 
-- ``dftracer_utils_core``, the async runtime (coroutines, tasks, I/O backend,
+- ``dftracer_utils_runtime``, the async runtime (coroutines, tasks, I/O backend,
   pipelines, RocksDB wrappers, common primitives).
 - ``dftracer_utils_json``, JSON parsing (simdjson-backed).
 - ``dftracer_utils_duql``, the duql filter language (predicate IR, string codec, evaluator).
@@ -72,13 +72,17 @@ Prerequisites
 
          sudo apt-get install cmake ninja-build build-essential pkg-config zlib1g-dev
 
+      The system zlib (``zlib1g-dev``) is needed only to build the tests.
+      The library bundles zlib-ng as a static archive with hidden symbols.
+
    .. tab-item:: macOS
 
       .. code-block:: bash
 
          brew install cmake ninja pkg-config
 
-      The Apple SDK provides zlib. On Linux the I/O backend uses io_uring, on
+      The Apple SDK provides the zlib that the tests use, and the library
+      bundles zlib-ng as a static archive with hidden symbols. On Linux the I/O backend uses io_uring, on
       macOS it uses kqueue, selected automatically at configure time.
 
 Presets
@@ -124,6 +128,10 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_BUILD_STATIC``
      - ``ON``
      - Build the static libraries.
+   * - ``DFTRACER_UTILS_SINGLE_LIBRARY``
+     - ``OFF``
+     - Build one ``libdftracer_utils`` from every area, and install only that library and its ``dftracer_utils`` package.
+       The per-area packages such as ``dftracer_utils_runtime`` are not built or installed.
    * - ``DFTRACER_UTILS_BUILD_BINARIES``
      - ``ON``
      - Build the ``dftracer_*`` command-line tools.
@@ -171,9 +179,6 @@ Pass with ``-D`` at configure time, for example
    * - ``DFTRACER_UTILS_ENABLE_PCH``
      - ``OFF``
      - Precompiled headers (faster cold builds). ccache cannot cache GCC's, so leave it off when using ccache.
-   * - ``DFTRACER_USE_ZLIB_NG``
-     - ``ON``
-     - Use zlib-ng instead of madler/zlib (falls back on failure).
 
 **Packaging and dev**
 

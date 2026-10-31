@@ -1,0 +1,3 @@
+# tool	set	threads	rc	reason, as measured on b33cabbc+wip; each reason names the commit that fixed it
+stats	minife_tuolumne	*	139	AsyncMutex::unlock resumed each same-executor waiter inside the previous one's unlock and overflowed the stack (gdb: unlock_contended -> process_compressed -> unlock); fixed by 24a8201e
+comparator	minife_tuolumne	*	139	AsyncMutex::unlock resumed each same-executor waiter inside the previous one's unlock and overflowed the stack (gdb: unlock_contended -> process_compressed -> unlock); fixed by 24a8201e

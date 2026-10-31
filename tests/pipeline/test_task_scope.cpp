@@ -1,12 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/generator.h>
-#include <dftracer/utils/core/pipeline/executor.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/scheduler.h>
-#include <dftracer/utils/core/pipeline/thread_pool_executor.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/generator.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/pipeline/scheduler.h>
+#include <dftracer/utils/runtime/scheduler/task_executor.h>
+#include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -280,11 +280,11 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
     // Using an executor that gets shut down immediately to force failure.
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
     executor.shutdown();
-    CoroScope scope(&executor);
+    auto scope = CoroScope::long_lived(&executor);
     coro::Channel<int> channel(4);
 
     CHECK_THROWS_AS(
-        scope.spawn_producer(
+        scope->spawn_producer(
             channel, [](CoroScope&) -> coro::Generator<int> { co_yield 1; }),
         std::runtime_error);
 
@@ -295,11 +295,11 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
 TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 1});
     executor.shutdown();
-    CoroScope scope(&executor);
+    auto scope = CoroScope::long_lived(&executor);
     coro::Channel<int> input(4);
     coro::Channel<int> output(4);
 
-    CHECK_THROWS_AS(scope.spawn_transforms(
+    CHECK_THROWS_AS(scope->spawn_transforms(
                         input, output, 3,
                         [](CoroScope&, int value) -> coro::CoroTask<int> {
                             co_return value;

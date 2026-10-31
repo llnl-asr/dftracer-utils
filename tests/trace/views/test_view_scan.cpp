@@ -7,13 +7,12 @@
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <atomic>
 #include <limits>
 #include <map>
-
-#include "test_view_common.h"
 
 TEST_SUITE("View") {
     TEST_CASE(
@@ -820,14 +819,14 @@ TEST_SUITE("View scan string columns") {
         std::vector<std::uint32_t> cat_ids, path_ids;
         df::Series cat, path;
         {
-            dftracer::utils::StringIntern intern;
+            dftracer::utils::dstd::StringIntern intern;
             for (int i = 0; i < 1000; ++i) {
                 cat_ids.push_back(
                     intern.get_or_insert("category-" + std::to_string(i % 3)));
                 path_ids.push_back(intern.get_or_insert(
                     "/data/dir/file-" + std::to_string(i % 900)));
             }
-            cat_ids[7] = dftracer::utils::StringIntern::NO_ID;
+            cat_ids[7] = dftracer::utils::dstd::StringIntern::NO_ID;
             cat = detail::interned_column(cat_ids, intern);
             path = detail::interned_column(path_ids, intern);
         }

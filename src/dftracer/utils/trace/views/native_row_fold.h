@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_NATIVE_ROW_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_NATIVE_ROW_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 
@@ -79,8 +79,9 @@ bool is_clip_token(std::string_view sel);
 /// a dictionary over a view child when at most a quarter as many distinct
 /// values as rows, else a view column. Values are views into intern chunks
 /// the column keeps alive, so it may outlive `intern`.
-dataframe::Series interned_column(std::span<const std::uint32_t> ids,
-                                  const dftracer::utils::StringIntern& intern);
+dataframe::Series interned_column(
+    std::span<const std::uint32_t> ids,
+    const dftracer::utils::dstd::StringIntern& intern);
 
 /// Build one native DataFrame from `events`: top-level columns plus every arg
 /// (empty `select`) or a projected subset. Arg columns infer their type per key
@@ -89,7 +90,7 @@ dataframe::Series interned_column(std::span<const std::uint32_t> ids,
 /// named by its exact path, with no fixed columns. Shared by the materialized
 /// collect and the streaming chunk builder.
 dataframe::DataFrame build_row_frame(
-    EventRows events, const dftracer::utils::StringIntern& intern,
+    EventRows events, const dftracer::utils::dstd::StringIntern& intern,
     const std::vector<std::string>& select, double time_scale = 1.0,
     bool by_path = false);
 
@@ -103,7 +104,7 @@ dataframe::DataFrame build_row_frame(
 /// window contribute.
 std::vector<std::pair<std::string, dataframe::Series>>
 build_dyn_numeric_columns(EventRows events,
-                          const dftracer::utils::StringIntern& intern,
+                          const dftracer::utils::dstd::StringIntern& intern,
                           const std::vector<std::string>& select);
 
 /// The non-scalar fields a `select` needs the scan to capture: nested paths and
@@ -139,19 +140,19 @@ dataframe::TypeId row_column_type(std::string_view sel, bool by_path = false);
 /// `arg_full` up first and `arg_bare` (empty for none) as its fallback.
 struct RowKeySource {
     enum class Kind : std::uint8_t {
-        REFUSED,
-        NAME,
-        CAT,
-        FHASH,
-        HHASH,
-        PID,
-        TID,
-        TS,
-        DUR,
-        PH,
-        ARG,
+        Refused,
+        Name,
+        Cat,
+        Fhash,
+        Hhash,
+        Pid,
+        Tid,
+        Ts,
+        Dur,
+        Ph,
+        Arg,
     };
-    Kind kind = Kind::REFUSED;
+    Kind kind = Kind::Refused;
     std::string arg_full;
     std::string arg_bare;
 };
@@ -174,7 +175,7 @@ RowKeySource row_key_source(std::string_view sel, bool by_path = false);
 /// value forces String (numbers stringified).
 class NativeRowFold : public Fold {
    public:
-    NativeRowFold(const dftracer::utils::StringIntern& intern,
+    NativeRowFold(const dftracer::utils::dstd::StringIntern& intern,
                   std::vector<std::string> select, double time_scale = 1.0,
                   bool keep_metadata = false, bool by_path = false)
         : intern_(&intern),
@@ -198,8 +199,8 @@ class NativeRowFold : public Fold {
 
     void step(const FoldBatch& batch) override {
         for (const FoldEvent& ev : batch.events) {
-            if (ev.phase == RecordPhase::UNKNOWN ||
-                (!keep_metadata_ && ev.phase == RecordPhase::METADATA))
+            if (ev.phase == RecordPhase::Unknown ||
+                (!keep_metadata_ && ev.phase == RecordPhase::Metadata))
                 continue;
             events_.push_back(ev);
         }
@@ -224,7 +225,7 @@ class NativeRowFold : public Fold {
     dataframe::DataFrame build();
 
    private:
-    const dftracer::utils::StringIntern* intern_;
+    const dftracer::utils::dstd::StringIntern* intern_;
     std::vector<std::string> select_;  // empty = every column
     double time_scale_;                // ts/dur multiplier (1.0 = none)
     bool keep_metadata_;               // phase("metadata"): keep ph=M records

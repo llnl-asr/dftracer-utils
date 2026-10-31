@@ -3,14 +3,13 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <map>
 #include <set>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 

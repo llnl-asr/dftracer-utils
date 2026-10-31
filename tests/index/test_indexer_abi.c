@@ -5,10 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 #include <unity.h>
-
-#include "testing_utilities.h"
 
 static test_environment_handle_t g_env = NULL;
 

@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PYTHON_GZIP_SINK_H
 #define DFTRACER_UTILS_PYTHON_GZIP_SINK_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 

@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_SYSTEM_METRICS_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
 
 #include <cstdint>

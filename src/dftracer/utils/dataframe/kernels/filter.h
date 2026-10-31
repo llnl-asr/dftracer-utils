@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_KERNELS_FILTER_H
 #define DFTRACER_UTILS_DATAFRAME_KERNELS_FILTER_H
 
-#include <dftracer/utils/dataframe/buffer.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/scalar.h>
 
 #include <cstdint>
@@ -27,14 +27,13 @@ Series filter(const Series& v, const Series& mask);
 
 /// The row indices of the set bits of `bits` as an Int64 buffer, `count`
 /// of them.
-std::shared_ptr<Buffer> mask_to_indices(const std::uint8_t* bits,
-                                        std::int64_t n, std::int64_t& count);
+BufferView mask_to_indices(const std::uint8_t* bits, std::int64_t n,
+                           std::int64_t& count);
 /// The same as an Int64 index column, for take().
 Series mask_index_column(const std::uint8_t* bits, std::int64_t n);
 /// The rows where a Bool `mask` in any layout (CHUNKED masks per chunk) is
 /// set, in order.
-std::shared_ptr<Buffer> mask_to_indices(const dftu_series& mask,
-                                        std::int64_t& count);
+BufferView mask_to_indices(const dftu_series& mask, std::int64_t& count);
 Series mask_index_column(const Series& mask);
 
 /// Resolve any encoding to a new FLAT column (gather through the indirection).

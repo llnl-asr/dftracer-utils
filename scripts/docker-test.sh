@@ -13,6 +13,7 @@
 #   --monitor <mode>   set DFTRACER_UTILS_MONITOR (e.g. tree, 1, trace)
 #   --mpi <on|off>     build/run the MPI C++ tests       (default: on)
 #   --no-mpi           shorthand for --mpi off
+#   --tests <regex>    run only the ctest tests that match (ctest -R)
 #   -j, --jobs <n>     build parallelism                 (default: 4)
 #   -h, --help         show this help
 #
@@ -29,7 +30,7 @@
 # incremental. The toolchain is baked into the image (no apt per run).
 set -euo pipefail
 
-usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # Defaults (env overrides built-in; flags override env).
 variant="gcc12"
@@ -37,6 +38,7 @@ scope="cpp"
 monitor="${DFTRACER_UTILS_MONITOR:-}"
 mpi="${MPI:-ON}"
 jobs="${JOBS:-4}"
+tests=""
 
 positional=()
 while [ $# -gt 0 ]; do
@@ -46,6 +48,7 @@ while [ $# -gt 0 ]; do
         --monitor) monitor="$2"; shift 2 ;;
         --mpi) mpi="$2"; shift 2 ;;
         --no-mpi) mpi="OFF"; shift ;;
+        --tests) tests="$2"; shift 2 ;;
         -j | --jobs) jobs="$2"; shift 2 ;;
         -h | --help)
             usage
@@ -88,8 +91,12 @@ esac
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 builddir="build/build-docker-${variant}"
+ctest_filter=""
+[ -n "$tests" ] && ctest_filter="-R '${tests}'"
 
-docker build -t "$image" -f "$root/${dockerfile}" "$root"
+# The Dockerfiles copy no files, so the build gets no context; the repo
+# context would send build/ along.
+docker build -t "$image" - < "$root/${dockerfile}"
 
 # Run as the invoking user, not root: tests that make a file unreadable expect
 # the read to fail, and root reads it anyway.
@@ -114,7 +121,7 @@ docker run --rm \
             # Skip install/discovery tests: they need an installed package plus
             # pkg-config/CMake config on the system (FIXTURES_REQUIRED
             # installed_package), which the container does not set up.
-            ( cd '${builddir}' && ctest --output-on-failure -E 'discovery|test_target_' )
+            ( cd '${builddir}' && ctest --output-on-failure -E 'discovery|test_target_' ${ctest_filter} )
         fi
 
         if [ \"\$scope\" = python ] || [ \"\$scope\" = both ]; then

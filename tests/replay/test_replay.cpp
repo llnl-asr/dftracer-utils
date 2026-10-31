@@ -1,16 +1,15 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <chrono>
 #include <fstream>
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "testing_utilities.h"
 
 namespace {
 /// Traces must be gzip. Drop-in for the std::ofstream these fixtures used:

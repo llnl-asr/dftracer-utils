@@ -1,18 +1,18 @@
-#include <dftracer/utils/core/common/base64.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/external_sort.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/memory_pool.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
-#include <dftracer/utils/core/common/spill_file.h>
-#include <dftracer/utils/core/common/str_format.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/coro/yield.h>
-#include <dftracer/utils/core/io/io.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/external_sort.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/common/spill_file.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/coro/yield.h>
+#include <dftracer/utils/runtime/io/io.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -44,11 +44,11 @@ namespace {
 using Sketch = dataframe::BasicDDSketch<2048>;
 using utilities::fileio::lines::sources::async_streaming_gz_lines;
 
-enum class Kind { DELTA, GAUGE };
-enum class Scope { PID, HOST };
+enum class Kind { Delta, Gauge };
+enum class Scope { Pid, Host };
 
 struct Series {
-    Kind kind = Kind::DELTA;
+    Kind kind = Kind::Delta;
     std::vector<std::pair<std::int64_t, double>> samples;
 };
 
@@ -169,42 +169,57 @@ constexpr std::uint64_t SERIES_SAMPLE_BYTES =
     sizeof(std::pair<std::int64_t, double>);
 
 struct GroupError {
-    ErrorCode code = ErrorCode::PARSE;
+    ErrorCode code = ErrorCode::Parse;
     std::string file;
     std::string reason;
     bool over_budget = false;
 };
 
 template <class T>
-using GResult = expected<T, GroupError>;
+using GResult = dstd::Expected<T, GroupError>;
 
-unexpected<GroupError> fail(std::string file, std::string reason,
-                            ErrorCode code = ErrorCode::PARSE) {
-    return unexpected<GroupError>(
+dstd::Unexpected<GroupError> fail(std::string file, std::string reason,
+                                  ErrorCode code = ErrorCode::Parse) {
+    return dstd::Unexpected<GroupError>(
         GroupError{code, std::move(file), std::move(reason)});
 }
 
-unexpected<GroupError> fail_from(const DFTUtilsError& e) {
-    return fail("", e.message, e.code);
+dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
+    ErrorCode legacy = errorcode_of(e.condition());
+    if (e.in_domain(dstd::CORE_ERROR_DOMAIN) && e.code() >= 0) {
+        const auto at = static_cast<std::size_t>(e.code());
+        if (at < std::size(dftracer::utils::CORE_ERROR_CODE_INFOS))
+            legacy = static_cast<ErrorCode>(at);
+    }
+    return fail("", std::string(e.message()), legacy);
 }
 
 // A group's memory is its share of the budget in four equal parts: the calls
 // kept in memory between reading and sorting, the sort buffer, the state
-// (counter series, path records), and the open readers (a semaphore).
+// (counter series, path records), and the open readers (a semaphore). The
+// calls and the state are pools below the group's own pool, each limited to
+// its part; the group pool has no limit, since its children reach it in
+// quanta of 1 MiB and a share of a few MiB would refuse them.
 struct GroupMem {
-    explicit GroupMem(std::uint64_t share_bytes)
+    GroupMem(std::uint64_t share_bytes, std::string_view name)
         : share(share_bytes),
-          calls(share_bytes / 4),
-          state(share_bytes / 4),
+          pool(memory::current_pool().child(name)),
+          calls(part(pool, "calls", share_bytes / 4)),
+          state(part(pool, "state", share_bytes / 4)),
           sort_budget(share_bytes / 4) {}
 
+    // Every pool opened; false when the pool table is full.
+    bool open() const { return pool && calls && state; }
+
     std::uint64_t share;
-    MemoryPool calls;
-    MemoryPool state;
+    // Declared first, so it closes after its children.
+    memory::PoolHandle pool;
+    memory::PoolHandle calls;
+    memory::PoolHandle state;
     std::uint64_t sort_budget;
     const BorrowFn* borrow = nullptr;
 
-    // Raises the state pool by memory the caller lends, at least
+    // Raises the state limit by memory the caller lends, at least
     // BORROW_STEP at a time so the lender is asked rarely; false when it
     // lends nothing.
     bool borrow_state(std::uint64_t need) {
@@ -213,7 +228,7 @@ struct GroupMem {
         std::uint64_t got = (*borrow)(ask);
         if (got == 0 && ask > need) got = (*borrow)(need);
         if (got == 0) return false;
-        state.add_capacity(got);
+        state->raise_limit(got);
         return true;
     }
 
@@ -230,18 +245,26 @@ struct GroupMem {
     }
 
     GroupError budget_error(std::string_view what) const {
-        return GroupError{ErrorCode::INVALID_ARGUMENT, "",
+        return GroupError{ErrorCode::InvalidArgument, "",
                           str_cat("memory budget exceeded by ", what,
                                   " (the share of this run group is ", share,
                                   " bytes); raise --memory-budget"),
                           true};
     }
 
-    unexpected<GroupError> over_budget(std::string_view what) const {
-        return unexpected<GroupError>(budget_error(what));
+    dstd::Unexpected<GroupError> over_budget(std::string_view what) const {
+        return dstd::Unexpected<GroupError>(budget_error(what));
     }
 
    private:
+    // A limit of zero means none, so a zero part still gets one byte.
+    static memory::PoolHandle part(const memory::PoolHandle& group,
+                                   std::string_view name, std::uint64_t bytes) {
+        if (!group) return {};
+        return group->child(name, memory::PoolKind::Scratch,
+                            memory::Limits{std::max<std::uint64_t>(bytes, 1)});
+    }
+
     std::mutex mu_;
     std::unique_ptr<SpillFile> file_;
 };
@@ -250,7 +273,8 @@ struct GroupMem {
 // every item.
 class Charge {
    public:
-    explicit Charge(GroupMem& mem) noexcept : mem_(&mem), res_(mem.state) {}
+    explicit Charge(GroupMem& mem) noexcept
+        : mem_(&mem), res_(mem.state->try_reserve(0)) {}
 
     // The budget error naming `what` when the state pool cannot take `n` more
     // bytes.
@@ -258,11 +282,12 @@ class Charge {
         used_ += n;
         if (used_ <= res_.bytes()) return {};
         const std::uint64_t need = used_ - res_.bytes();
-        if (res_.try_grow(std::max(need, CHARGE_STEP)) || res_.try_grow(need))
+        if (res_.try_grow(std::max(need, CHARGE_STEP)) == memory::Status::Ok ||
+            res_.try_grow(need) == memory::Status::Ok)
             return {};
         // Another task may take the borrowed bytes first; then ask again.
         for (int tries = 0; tries < 4 && mem_->borrow_state(need); ++tries)
-            if (res_.try_grow(need)) return {};
+            if (res_.try_grow(need) == memory::Status::Ok) return {};
         return mem_->over_budget(what);
     }
 
@@ -276,7 +301,7 @@ class Charge {
 
    private:
     GroupMem* mem_;
-    Reservation res_;
+    memory::Reservation res_;
     std::uint64_t used_ = 0;
 };
 
@@ -375,7 +400,7 @@ struct SeriesView {
     std::size_t n = 0;
     std::int64_t first = 0;
     std::int64_t last = 0;
-    Kind kind = Kind::DELTA;
+    Kind kind = Kind::Delta;
 };
 
 SeriesView view_of(const Series& s) {
@@ -496,7 +521,7 @@ class GroupReader {
    public:
     struct Chunk {
         std::vector<Call> mem;
-        Reservation res;
+        memory::Reservation res;
         std::uint64_t offset = 0;
         std::uint64_t count = 0;
         bool spilled = false;
@@ -517,7 +542,9 @@ class GroupReader {
             auto gen = async_streaming_gz_lines(file, 0, 0,
                                                 /*recover_truncated=*/false);
             std::size_t n = 0;
-            while (auto line = co_await gen.next()) {
+            for (;;) {
+                auto line = co_await gen.next();
+                if (!line) break;
                 auto st = handle_line(file, line->content);
                 if (!st) co_return st;
                 if (++n % 4096 == 0) co_await coro::maybe_yield();
@@ -602,7 +629,7 @@ class GroupReader {
                     auto& h = host_series(hh->second);
                     for (std::size_t k = 0; k < 3; ++k) {
                         auto& s = h[FIELDS[k] + std::string(cols[2])];
-                        s.kind = Kind::GAUGE;
+                        s.kind = Kind::Gauge;
                         if (auto st = add_sample(
                                 s, ts, std::stod(std::string(cols[3 + k])));
                             !st)
@@ -699,14 +726,14 @@ class GroupReader {
         Chunk c;
         c.count = cur_.size();
         const std::uint64_t bytes = c.count * sizeof(Call);
-        c.res = Reservation(mem_->calls);
-        if (c.res.try_grow(bytes)) {
+        c.res = mem_->calls->try_reserve(bytes);
+        if (c.res) {
             c.mem = std::move(cur_);
             if (last) c.mem.shrink_to_fit();
             cur_ = {};
         } else {
             auto file = mem_->spill_file();
-            if (!file) return unexpected(file.error());
+            if (!file) return dstd::Unexpected(file.error());
             auto at = (*file)->append(cur_.data(), bytes);
             if (!at) return fail_from(at.error());
             c.spilled = true;
@@ -746,7 +773,7 @@ class GroupReader {
         const std::int64_t ts = f.ts ? get_i64(*f.ts) : 0;
 
         switch (ph) {
-            case RecordPhase::COMPLETE: {
+            case RecordPhase::Complete: {
                 const std::uint32_t p = proc_index(hhash, pid);
                 if (cat == "dftracer") {
                     if (name == "start") procs_[p].start = ts;
@@ -766,7 +793,7 @@ class GroupReader {
                 if (cur_.size() >= CHUNK_CALLS) return seal();
                 return {};
             }
-            case RecordPhase::COUNTER:
+            case RecordPhase::Counter:
                 if (!has_args) return {};
                 if (pid == 0)
                     return handle_host(file, cat, name, hhash, ts, args);
@@ -791,7 +818,7 @@ class GroupReader {
                 }
                 return fail(file, "unknown per-process counter category " +
                                       std::string(cat));
-            case RecordPhase::METADATA:
+            case RecordPhase::Metadata:
                 if (name == "HH" && has_args)
                     host_hash_[std::string(get_sv(args, "name"))] =
                         std::string(get_sv(args, "value"));
@@ -823,8 +850,8 @@ class GroupReader {
             key += '.';
             key += k;
             auto& s = host[key];
-            s.kind = (net || (io && k != "ios_in_progress")) ? Kind::DELTA
-                                                             : Kind::GAUGE;
+            s.kind = (net || (io && k != "ios_in_progress")) ? Kind::Delta
+                                                             : Kind::Gauge;
             if (auto st = add_sample(s, ts, *num); !st) return st;
         }
         return {};
@@ -997,11 +1024,11 @@ class SetAcc {
             cb.append_key_value("name", name);
             cb.append_comma();
             cb.append_key_value("metric", std::string_view(counter_keys_[cid]));
-            cb.append_raw(acc.scope == Scope::PID ? R"(,"scope":"pid")"
+            cb.append_raw(acc.scope == Scope::Pid ? R"(,"scope":"pid")"
                                                   : R"(,"scope":"host")");
-            cb.append_raw(acc.kind == Kind::DELTA ? R"(,"kind":"delta","v":)"
+            cb.append_raw(acc.kind == Kind::Delta ? R"(,"kind":"delta","v":)"
                                                   : R"(,"kind":"gauge","v":)");
-            append_stats(cb, acc.stats, true, acc.kind == Kind::DELTA, buf);
+            append_stats(cb, acc.stats, true, acc.kind == Kind::Delta, buf);
             cb.append_raw("}\n");
         }
     }
@@ -1009,7 +1036,7 @@ class SetAcc {
    private:
     void append_run(string_builder& sb) const {
         const RunKeys& keys = spec_->keys;
-        sb.append_raw(R"({"gtype":"run","version":1,)");
+        sb.append_raw(R"({"gtype":"run","version":0,)");
         append_run_keys(sb, id_, keys);
         sb.append_comma();
         sb.append_key_value("method", std::string_view("prorate"));
@@ -1053,7 +1080,7 @@ class SetAcc {
         pop(s.ts);
         if (!stack_.empty() && end > stack_.back().first) {
             failed_ =
-                GroupError{ErrorCode::PARSE, spec_->keys.papi_set,
+                GroupError{ErrorCode::Parse, spec_->keys.papi_set,
                            str_cat("call ", r_->strings_[s.name], " at ts ",
                                    s.ts, " ends after its parent ",
                                    recs_[stack_.back().second]->path)};
@@ -1107,11 +1134,11 @@ class SetAcc {
         const Proc& p = r_->procs_[s.proc];
         for (const auto& [k, series] : p.papi)
             sources_.push_back(
-                {view_of(series), {}, counter_id(k), Scope::PID});
+                {view_of(series), {}, counter_id(k), Scope::Pid});
         if (const auto h = r_->hosts_.find(p.hhash); h != r_->hosts_.end())
             for (const auto& [k, series] : h->second)
                 sources_.push_back(
-                    {view_of(series), {}, counter_id(k), Scope::HOST});
+                    {view_of(series), {}, counter_id(k), Scope::Host});
     }
 
     // Parent index + 1 (0 at the root) and the name id identify a path.
@@ -1157,7 +1184,7 @@ class SetAcc {
             return std::nullopt;
         for (Source& src : sources_) {
             const SeriesView& series = src.series;
-            const auto v = series.kind == Kind::DELTA
+            const auto v = series.kind == Kind::Delta
                                ? prorate(series, s.ts, end, src.cursor)
                                : weighted_mean(series, s.ts, end, src.cursor);
             if (!v) continue;
@@ -1173,8 +1200,8 @@ class SetAcc {
                 acc = std::make_unique<CounterAcc>(
                     CounterAcc{src.scope, series.kind, {}});
             }
-            if (!charge_growth(acc->stats.add(src.scope == Scope::HOST &&
-                                                      series.kind == Kind::DELTA
+            if (!charge_growth(acc->stats.add(src.scope == Scope::Host &&
+                                                      series.kind == Kind::Delta
                                                   ? *v / ppn_
                                                   : *v),
                                "counter statistics"))
@@ -1271,10 +1298,10 @@ coro::CoroTask<ReaderSize> reader_size(const std::string& file) {
         co_return out;
     }
     unsigned char trailer[4];
-    if (co_await io::pread(guard.get(), trailer, sizeof trailer,
-                           st.st_size - static_cast<off_t>(sizeof trailer)) !=
-        static_cast<ssize_t>(sizeof trailer))
-        co_return out;
+    const auto trailer_read =
+        co_await io::pread(guard.get(), trailer, sizeof trailer,
+                           st.st_size - static_cast<off_t>(sizeof trailer));
+    if (trailer_read != static_cast<ssize_t>(sizeof trailer)) co_return out;
     const std::uint64_t isize = static_cast<std::uint64_t>(trailer[0]) |
                                 static_cast<std::uint64_t>(trailer[1]) << 8 |
                                 static_cast<std::uint64_t>(trailer[2]) << 16 |
@@ -1346,9 +1373,18 @@ using CallSorter = ExternalSorter<SortRec, SortLess>;
 
 // What a group keeps while its runs are written: the memory share, the strings
 // and processes the records name, and the sets' records.
+// "genesis/" and the end of the group's directory, which tells groups apart
+// within the 47 bytes a pool name keeps.
+std::string group_pool_name(const RunGroup& g) {
+    constexpr std::size_t KEEP = 39;
+    const std::string_view dir = g.dir;
+    return str_cat("genesis/",
+                   dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
+}
+
 struct GroupState {
     GroupState(RunGroup group, std::uint64_t share)
-        : g(std::move(group)), mem(share), r(mem) {}
+        : g(std::move(group)), mem(share, group_pool_name(g)), r(mem) {}
 
     RunGroup g;
     GroupMem mem;
@@ -1422,7 +1458,7 @@ GResult<void> replay_chunks(std::vector<FilePart>& parts,
         const Call* calls = chunk.mem.data();
         if (chunk.spilled) {
             auto file = mem.spill_file();
-            if (!file) return unexpected(file.error());
+            if (!file) return dstd::Unexpected(file.error());
             scratch.resize(chunk.count);
             auto got = (*file)->read(chunk.offset, scratch.data(),
                                      chunk.count * sizeof(Call));
@@ -1453,7 +1489,7 @@ GResult<void> replay_chunks(std::vector<FilePart>& parts,
             progress->updated();
         }
         chunk.mem = {};
-        chunk.res.reset();
+        chunk.res.release();
     }
     return {};
 }
@@ -1563,7 +1599,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
                                           GroupProgress* progress,
                                           const BorrowFn* borrow) {
     GroupResult result;
-    if (progress) progress->enter(GroupProgress::Phase::READ);
+    if (progress) progress->enter(GroupProgress::Phase::Read);
     auto state = std::make_shared<GroupState>(std::move(group), memory_share);
     RunGroup& g = state->g;
     GroupMem& mem = state->mem;
@@ -1574,6 +1610,10 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
             result.skips.push_back(
                 {g.dir, file, s.keys.papi_set + ": " + reason});
     };
+    if (!mem.open()) {
+        skip_all("", "no memory pool is free for the group");
+        co_return result;
+    }
 
     const std::uint64_t total_slots =
         std::max<std::uint64_t>(1, (memory_share / 4) / READER_BYTES);
@@ -1586,7 +1626,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
             return read_file(f, mem_ptr, slots_ptr, total_slots, progress);
         }));
     std::vector<FilePart> parts = co_await coro::when_all(std::move(reads));
-    if (progress) progress->enter(GroupProgress::Phase::SORT);
+    if (progress) progress->enter(GroupProgress::Phase::Sort);
 
     std::vector<GroupReader::IdMap> maps;
     maps.reserve(parts.size());
@@ -1638,9 +1678,9 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     }
     // The walk reads no files and keeps no calls of its own: the readers'
     // quarter and the calls pool, empty once replayed, go to its state.
-    mem.state.add_capacity(memory_share / 4 +
-                           (mem.calls.capacity() - mem.calls.used()));
-    if (progress) progress->enter(GroupProgress::Phase::WALK);
+    mem.state->raise_limit(memory_share / 4 +
+                           (mem.calls->limit() - mem.calls->reserved()));
+    if (progress) progress->enter(GroupProgress::Phase::Walk);
     std::vector<coro::SpawnFuture<Result<void>>> walks;
     walks.reserve(ways);
     for (std::size_t w = 0; w < ways; ++w)
@@ -1665,7 +1705,7 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     auto walked = co_await coro::when_all(std::move(walks));
     for (auto& st : walked) {
         if (!st) {
-            skip_all("", st.error().message);
+            skip_all("", std::string(st.error().message()));
             co_return result;
         }
     }

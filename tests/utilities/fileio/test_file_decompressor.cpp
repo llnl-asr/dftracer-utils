@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
 #include <doctest/doctest.h>
@@ -209,8 +209,8 @@ TEST_SUITE("FileDecompressor") {
             auto result = decompressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
-            CHECK(result.error().message.find("does not exist") !=
+            CHECK(result.error().is_code(dftracer::utils::ErrorCode::NotFound));
+            CHECK(result.error().message().find("does not exist") !=
                   std::string::npos);
         }
 
@@ -226,13 +226,13 @@ TEST_SUITE("FileDecompressor") {
             auto result = decompressor(input).get();
 
             REQUIRE(!result);
-            CHECK(result.error().code ==
-                  dftracer::utils::ErrorCode::COMPRESSION);
+            CHECK(result.error().is_code(
+                dftracer::utils::ErrorCode::Compression));
             bool has_decompression_error =
-                result.error().message.find("Decompression failed") !=
+                result.error().message().find("Decompression failed") !=
                 std::string::npos;
             bool has_header_error =
-                result.error().message.find("incorrect header") !=
+                result.error().message().find("incorrect header") !=
                 std::string::npos;
             CHECK((has_decompression_error || has_header_error));
         }
@@ -348,7 +348,7 @@ TEST_SUITE("FileDecompressor") {
             auto r = decompressed_size_via_dft_try(decompressor, input).get();
 
             REQUIRE(!r);
-            CHECK(r.error().code == dftracer::utils::ErrorCode::NOT_FOUND);
+            CHECK(r.error().is_code(dftracer::utils::ErrorCode::NotFound));
         }
     }
 }

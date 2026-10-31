@@ -1,7 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_TRACE_GEN_FAKE_TRACE_WRITER_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -93,23 +94,6 @@ inline std::uint64_t jitter(std::mt19937_64& rng, std::uint64_t base) {
     return static_cast<std::uint64_t>(static_cast<double>(base) * dist(rng));
 }
 
-/// Escape a JSON string value (no surrounding quotes)
-inline void json_escape(std::string& out, const std::string& s) {
-    for (char c : s) {
-        switch (c) {
-            case '"':
-                out += "\\\"";
-                break;
-            case '\\':
-                out += "\\\\";
-                break;
-            default:
-                out += c;
-                break;
-        }
-    }
-}
-
 namespace dft = trace;
 
 /// Metadata event: {"name":"HH"/"FH"/"SH","ph":4,"type":1,
@@ -119,9 +103,9 @@ inline void emit_metadata(TraceWriter& w, const std::string& kind,
                           const std::string& hhash,
                           const std::string& resolved_name,
                           const std::string& hash_value) {
-    static constexpr int PH_M = dft::phase_to_int(dft::RecordPhase::METADATA);
+    static constexpr int PH_M = dft::phase_to_int(dft::RecordPhase::Metadata);
     static constexpr int TY_DFT =
-        dft::event_type_to_int(dft::EventType::DFTRACER);
+        dft::event_type_to_int(dft::EventType::Dftracer);
     std::string buf;
     buf.reserve(256);
     buf += R"({"name":")";
@@ -131,11 +115,11 @@ inline void emit_metadata(TraceWriter& w, const std::string& kind,
     buf += R"(,"type":)";
     buf += std::to_string(TY_DFT);
     buf += R"(,"args":{"hhash":")";
-    json_escape(buf, hhash);
+    json::append_json_escaped(buf, hhash);
     buf += R"(","name":")";
-    json_escape(buf, resolved_name);
+    json::append_json_escaped(buf, resolved_name);
     buf += R"(","value":")";
-    json_escape(buf, hash_value);
+    json::append_json_escaped(buf, hash_value);
     buf += R"("}})";
     buf += '\n';
     w.write(buf);
@@ -155,7 +139,7 @@ struct EventArgs {
     std::string fhash;
     std::string cmd_hash;
     /// Instrumentation layer. Unknown lets emit_event infer it from cat.
-    dft::EventType type = dft::EventType::UNKNOWN;
+    dft::EventType type = dft::EventType::Unknown;
     /// Optional extra args appended verbatim (no leading comma)
     std::string extra;
 };
@@ -171,11 +155,11 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
     buf += num_buf;
 
     buf += R"(,"name":")";
-    json_escape(buf, a.name);
+    json::append_json_escaped(buf, a.name);
     buf += R"(","cat":")";
-    json_escape(buf, a.cat);
+    json::append_json_escaped(buf, a.cat);
 
-    dft::EventType ty = a.type != dft::EventType::UNKNOWN
+    dft::EventType ty = a.type != dft::EventType::Unknown
                             ? a.type
                             : dft::event_type_from_cat(a.cat);
     std::snprintf(
@@ -185,14 +169,14 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
         static_cast<unsigned long long>(a.tid),
         static_cast<unsigned long long>(a.ts),
         static_cast<unsigned long long>(a.dur),
-        dft::phase_to_int(dft::RecordPhase::COMPLETE),
+        dft::phase_to_int(dft::RecordPhase::Complete),
         dft::event_type_to_int(ty));
     buf += num_buf;
 
     buf += R"(,"args":{)";
 
     buf += R"("hhash":")";
-    json_escape(buf, a.hhash);
+    json::append_json_escaped(buf, a.hhash);
     buf += '"';
 
     std::snprintf(num_buf, sizeof(num_buf), R"(,"level":%d)", a.level);
@@ -200,12 +184,12 @@ inline void emit_event(TraceWriter& w, const EventArgs& a) {
 
     if (!a.fhash.empty()) {
         buf += R"(,"fhash":")";
-        json_escape(buf, a.fhash);
+        json::append_json_escaped(buf, a.fhash);
         buf += '"';
     }
     if (!a.cmd_hash.empty()) {
         buf += R"(,"cmd_hash":")";
-        json_escape(buf, a.cmd_hash);
+        json::append_json_escaped(buf, a.cmd_hash);
         buf += '"';
     }
     if (!a.extra.empty()) {

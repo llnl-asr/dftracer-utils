@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
@@ -12,19 +12,16 @@
 // eager sweep (6d2859fc..95f09311) never touched lazy/streaming or spill, so
 // a divergence found here is a lazy or spill bug, not eager's.
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
+#include <dataframe/builders_arrow_types.h>
 #include <dftracer/utils/dataframe/arrow.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
-#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
+#include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
-// clang-format on
-
-#include "builders_arrow_types.h"
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <nanoarrow/nanoarrow.h>
 
 using namespace dftracer::utils::dataframe;
 using namespace dftracer::utils::dataframe::test_types;

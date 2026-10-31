@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_BINARY_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_BINARY_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 
 #include <cstddef>
 #include <fstream>
@@ -23,7 +23,9 @@ namespace dftracer::utils::utilities::fileio {
  * Usage:
  * @code
  * auto gen = read_binary_file("/path/to/file.bin");
- * while (auto chunk = co_await gen.next()) {
+ * for (;;) {
+ *     auto chunk = co_await gen.next();
+ *     if (!chunk) break;
  *     process(chunk->as<char>(), chunk->size());
  * }
  * @endcode
@@ -31,13 +33,13 @@ namespace dftracer::utils::utilities::fileio {
 inline coro::AsyncGenerator<ByteView> read_binary_file(
     fs::path path, std::size_t chunk_size = 64 * 1024) {
     if (!fs::exists(path)) {
-        throw DFTUtilsException(ErrorCode::NOT_FOUND,
+        throw DFTUtilsException(ErrorCode::NotFound,
                                 "File does not exist: " + path.string());
     }
 
     std::ifstream file(path, std::ios::binary);
     if (!file) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 "Cannot open file: " + path.string());
     }
 
@@ -54,7 +56,7 @@ inline coro::AsyncGenerator<ByteView> read_binary_file(
     }
 
     if (file.bad()) {
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 "Error reading file: " + path.string());
     }
 }

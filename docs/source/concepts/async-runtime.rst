@@ -3,7 +3,7 @@
 Async runtime
 =============
 
-What this explains: why ``dftracer_utils_core`` is built on C++20 coroutines
+What this explains: why ``dftracer_utils_runtime`` is built on C++20 coroutines
 instead of a thread-per-request or callback model, and how the pieces
 (``CoroTask``, ``CoroScope``, the io backend, ``Runtime``/``Executor``) fit
 together.
@@ -35,13 +35,13 @@ sees a callback; it sees a function that looks like it blocked.
 ``CoroTask``: the unit of async work
 ---------------------------------------
 
-``coro::CoroTask<T>`` (``core/coro/task.h``) is the coroutine return type used
+``coro::CoroTask<T>`` (``runtime/coro/task.h``) is the coroutine return type used
 throughout the codebase. It is lazy: a ``CoroTask`` does not start running
 until it is awaited or spawned, which is what lets composition operators
 (``&&`` for concurrent ``when_all``, ``||`` for ``when_any``) build a graph of
-work before anything executes. ``core/coro/channel.h`` adds a
+work before anything executes. ``runtime/coro/channel.h`` adds a
 producer/consumer channel for streaming values between coroutines,
-and ``core/coro/async_mutex.h`` / ``async_generator.h`` round out the
+and ``runtime/coro/async_mutex.h`` / ``async_generator.h`` round out the
 primitives a coroutine-based pipeline needs that a plain thread-based one
 would reach for a blocking mutex or an iterator to get.
 
@@ -49,14 +49,14 @@ would reach for a blocking mutex or an iterator to get.
 ----------------------------------------
 
 A bare ``CoroTask`` has no notion of "who owns this work" beyond its caller.
-``CoroScope`` (``core/tasks/coro_scope.h``) is the context object task lambdas
+``CoroScope`` (``runtime/tasks/coro_scope.h``) is the context object task lambdas
 receive; it is what makes concurrency structured rather than fire-and-forget
 by default:
 
 - ``scope.spawn(...)`` launches a child coroutine and returns a
   ``SpawnFuture<T>`` - ignore it for fire-and-forget, or ``co_await`` it to
   join that specific child.
-- ``dftracer::utils::io::read``/``write``/``open``/``close`` (``core/io/ops.h``)
+- ``dftracer::utils::io::read``/``write``/``open``/``close`` (``runtime/io/ops.h``)
   are the async I/O surface: free functions that submit to the executor's io
   backend and suspend, rather than blocking. They need no ``CoroScope``
   argument - inside an executor worker they suspend on the configured
@@ -73,7 +73,7 @@ goes wrong when a coroutine's lifetime is not tracked this carefully.
 The io backend: one abstraction, several implementations
 ------------------------------------------------------------
 
-``core/io/io_backend.h`` defines ``IoBackend`` as the abstract surface async
+``runtime/io/io_backend.h`` defines ``IoBackend`` as the abstract surface async
 I/O suspends on, with a selectable concrete implementation
 (``IoBackendType``):
 
@@ -96,17 +96,17 @@ Runtime, Executor, and Pipeline
 
 Three levels of "run this coroutine" exist, for different callers:
 
-- ``Runtime`` (``core/runtime.h``) is the lightweight entry point: an
+- ``Runtime`` (``runtime/runtime.h``) is the lightweight entry point: an
   ``Executor`` plus a ``Watchdog``, with no DAG or scheduler overhead. It is
   what the Python bindings and other non-pipeline callers use to run
   coroutines on a thread pool. Its worker count is elastic when configured
   with a ``min_workers`` floor below the ``num_threads`` cap, so a
   mostly-idle process does not pin a full thread pool on a shared HPC login
   node.
-- ``Executor`` (``core/pipeline/executor.h``) is the thread pool and run
+- ``Executor`` (``runtime/executor/executor.h``) is the thread pool and run
   queue that actually resumes coroutine frames.
-- ``Pipeline`` and **task graphs** (``core/pipeline/pipeline.h``,
-  ``core/task_graph/``) sit above the executor for callers that need a DAG:
+- ``Pipeline`` and **task graphs** (``runtime/pipeline/pipeline.h``,
+  ``runtime/task_graph/``) sit above the executor for callers that need a DAG:
   fan-out/fan-in, map/reduce stages, dependency validation. They delegate
   execution back down to the same ``Executor``.
 

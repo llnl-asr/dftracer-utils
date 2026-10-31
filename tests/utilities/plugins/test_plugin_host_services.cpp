@@ -4,17 +4,17 @@
 // way a loaded plugin would.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 // fold_adapter.h transitively pulls nanoarrow (ArrowArray/ArrowSchema); it must
 // precede plugin.h so arrow_abi.h no-ops rather than tripping nanoarrow's outer
 // ARROW_FLAG_DICTIONARY_ORDERED sentinel.
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dirent.h>
 #include <doctest/doctest.h>
@@ -31,6 +31,8 @@
 #include <dftracer/utils/dataframe/series.h>
 #endif
 
+#include <testing_utilities.h>
+
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -40,11 +42,9 @@
 #include <string_view>
 #include <vector>
 
-#include "testing_utilities.h"
-
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 namespace coro = dftracer::utils::coro;
 

@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_WRITER_H
 #define DFTRACER_UTILS_UTILITIES_COMMON_ARROW_PARTITION_WRITER_H
 
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
 #include <dftracer/utils/utilities/common/arrow/ipc_writer.h>
 

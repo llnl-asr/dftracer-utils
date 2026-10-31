@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -9,11 +9,10 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <testing_utilities.h>
 
 #include <span>
 #include <string>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::extensions;
@@ -54,11 +53,11 @@ static void populate_test_idx(const std::string& index_path,
         dftu_utils_test::put_dimension_stats(*writer, fid, 0, dur_ds, 2);
 
         dftu_utils_test::index_records::put_path(
-            *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "cat");
+            *writer, dftu_utils_test::IndexExtension::Bloom, fid, "cat");
         dftu_utils_test::index_records::put_path(
-            *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "name");
+            *writer, dftu_utils_test::IndexExtension::Bloom, fid, "name");
         dftu_utils_test::index_records::put_path(
-            *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "dur");
+            *writer, dftu_utils_test::IndexExtension::Bloom, fid, "dur");
     }
 
     {

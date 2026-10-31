@@ -134,7 +134,7 @@ AggInputSpec make_agg_input_spec(const ViewPlan& plan);
 /// names, and `spec.dyn_prefix`.
 dftracer::utils::dataframe::DataFrame build_agg_input_frame(
     const std::vector<FoldEvent>& events,
-    const dftracer::utils::StringIntern& intern, const AggInputSpec& spec,
+    const dftracer::utils::dstd::StringIntern& intern, const AggInputSpec& spec,
     const dftracer::utils::index::plan::GroupResolver* resolver);
 
 /// The base trace field a group-agg value column name reduces over, inverting

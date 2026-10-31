@@ -84,11 +84,11 @@ void mask_tail(std::uint8_t* bits, std::int64_t length) {
 
 // Store `valid` as out's validity, or drop it when every row is valid.
 void set_validity(dftu_series* out,
-                  std::shared_ptr<dftracer::utils::dataframe::Buffer> valid,
+                  dftracer::utils::dataframe::BufferView valid,
                   std::size_t bytes) {
-    mask_tail(valid->data(), out->length);
+    mask_tail(dftracer::utils::dataframe::writable(valid), out->length);
     std::int64_t set = 0;
-    const std::uint8_t* pv = valid->data();
+    const std::uint8_t* pv = valid.data();
     for (std::size_t i = 0; i < bytes; ++i) set += std::popcount(pv[i]);
     out->null_count = out->length - set;
     if (out->null_count != 0) out->validity = std::move(valid);
@@ -99,14 +99,16 @@ void set_validity(dftu_series* out,
 // selection over data bits alone never keeps it.
 void kleene(const dftu_series* a, const dftu_series* b, bool is_and,
             dftu_series* out, std::size_t bytes) {
-    using dftracer::utils::dataframe::Buffer;
-    const std::uint8_t* pa = a->data->data();
-    const std::uint8_t* pb = b->data->data();
-    const std::uint8_t* va = a->validity ? a->validity->data() : nullptr;
-    const std::uint8_t* vb = b->validity ? b->validity->data() : nullptr;
-    std::shared_ptr<Buffer> valid = Buffer::allocate(bytes);
-    std::uint8_t* po = out->data->data();
-    std::uint8_t* pv = valid->data();
+    using dftracer::utils::dataframe::BufferView;
+    using dftracer::utils::dataframe::new_buffer;
+    using dftracer::utils::dataframe::writable;
+    const std::uint8_t* pa = a->data.data();
+    const std::uint8_t* pb = b->data.data();
+    const std::uint8_t* va = a->validity.block() ? a->validity.data() : nullptr;
+    const std::uint8_t* vb = b->validity.block() ? b->validity.data() : nullptr;
+    BufferView valid = new_buffer(bytes);
+    std::uint8_t* po = writable(out->data);
+    std::uint8_t* pv = writable(valid);
     for (std::size_t i = 0; i < bytes; ++i) {
         const std::uint8_t ma = va ? va[i] : 0xFF;
         const std::uint8_t mb = vb ? vb[i] : 0xFF;
@@ -129,11 +131,13 @@ dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
     DFTU_FLAT_OPERAND(b, flat_b, dftu_series_logical(a, flat_b, op));
 
     using namespace dftracer::utils::dataframe;
-    using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;
+    using dftracer::utils::dataframe::BufferView;
     using dftracer::utils::dataframe::Encoding;
     using dftracer::utils::dataframe::LogicalOp;
+    using dftracer::utils::dataframe::new_buffer;
     using dftracer::utils::dataframe::TypeId;
+    using dftracer::utils::dataframe::writable;
     if (a->encoding != Encoding::Flat || b->encoding != Encoding::Flat)
         return nullptr;
     if (a->type != TypeId::Bool || b->type != TypeId::Bool) return nullptr;
@@ -147,15 +151,15 @@ dftu_series* dftu_series_logical(const dftu_series* a, const dftu_series* b,
     out->encoding = Encoding::Flat;
     out->length = a->length;
     std::size_t bytes = buffer_bytes(TypeId::Bool, a->length);
-    out->data = Buffer::allocate(bytes);
+    out->data = new_buffer(bytes);
 
-    if (a->validity || b->validity) {
+    if (a->validity.block() || b->validity.block()) {
         kleene(a, b, op == static_cast<int32_t>(LogicalOp::And), out, bytes);
         return out;
     }
-    const std::uint8_t* pa = a->data->data();
-    const std::uint8_t* pb = b->data->data();
-    std::uint8_t* po = out->data->data();
+    const std::uint8_t* pa = a->data.data();
+    const std::uint8_t* pb = b->data.data();
+    std::uint8_t* po = writable(out->data);
     switch (static_cast<LogicalOp>(op)) {
         case LogicalOp::And:
             HWY_DYNAMIC_DISPATCH(AndBytes)(pa, pb, po, bytes);
@@ -171,10 +175,12 @@ dftu_series* dftu_series_logical_not(const dftu_series* a) {
     DFTU_FLAT_OPERAND(a, flat_a, dftu_series_logical_not(flat_a));
 
     using namespace dftracer::utils::dataframe;
-    using dftracer::utils::dataframe::Buffer;
     using dftracer::utils::dataframe::buffer_bytes;
+    using dftracer::utils::dataframe::BufferView;
     using dftracer::utils::dataframe::Encoding;
+    using dftracer::utils::dataframe::new_buffer;
     using dftracer::utils::dataframe::TypeId;
+    using dftracer::utils::dataframe::writable;
     if (a->encoding != Encoding::Flat || a->type != TypeId::Bool)
         return nullptr;
 
@@ -183,13 +189,13 @@ dftu_series* dftu_series_logical_not(const dftu_series* a) {
     out->encoding = Encoding::Flat;
     out->length = a->length;
     std::size_t bytes = buffer_bytes(TypeId::Bool, a->length);
-    out->data = Buffer::allocate(bytes);
+    out->data = new_buffer(bytes);
 
-    const std::uint8_t* pa = a->data->data();
-    std::uint8_t* po = out->data->data();
+    const std::uint8_t* pa = a->data.data();
+    std::uint8_t* po = writable(out->data);
     HWY_DYNAMIC_DISPATCH(NotBytes)(pa, po, bytes);
-    if (a->validity) {
-        const std::uint8_t* va = a->validity->data();
+    if (a->validity.block()) {
+        const std::uint8_t* va = a->validity.data();
         for (std::size_t i = 0; i < bytes; ++i)
             po[i] = static_cast<std::uint8_t>(po[i] & va[i]);
         out->validity = a->validity;

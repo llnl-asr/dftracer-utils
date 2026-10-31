@@ -26,11 +26,16 @@ WITH_ZSTD="${WITH_ZSTD:-ON}"
 # libzstd would otherwise be bundled into the wheel, or fail delocate on macOS.
 ZSTD_STATIC="${ZSTD_STATIC:-0}"
 ZSTD_VERSION=1.5.7
+# Marks a tree built without malloc_usable_size. The executables replace the
+# global operator new with our heap, so RocksDB must not size its blocks with
+# the C library; a tree without the stamp is rebuilt.
+NO_USABLE_SIZE_STAMP=share/dftracer_rocksdb_no_malloc_usable_size
 
 is_complete() {
 	{ [ -f "${PREFIX}/lib/cmake/rocksdb/RocksDBConfig.cmake" ] ||
 		[ -f "${PREFIX}/lib64/cmake/rocksdb/RocksDBConfig.cmake" ]; } &&
 		[ -x "${PREFIX}/bin/ldb" ] && [ -x "${PREFIX}/bin/sst_dump" ] &&
+		[ -f "${PREFIX}/${NO_USABLE_SIZE_STAMP}" ] &&
 		{ [ "${ZSTD_STATIC}" != 1 ] || [ -f "${PREFIX}/lib/libzstd.a" ] ||
 			[ -f "${PREFIX}/lib64/libzstd.a" ]; }
 }
@@ -96,10 +101,13 @@ cmake -S "${SRC_CACHE}/rocksdb-${VERSION}" -B "${BUILD_DIR}" -G Ninja \
 	-DWITH_BZ2=OFF \
 	-DUSE_RTTI=ON \
 	-DFAIL_ON_WARNINGS=OFF \
+	-DHAVE_MALLOC_USABLE_SIZE=OFF \
 	${rocksdb_zstd_args[@]+"${rocksdb_zstd_args[@]}"}
 
 cmake --build "${BUILD_DIR}" -j "${JOBS}"
 cmake --install "${BUILD_DIR}"
+mkdir -p "${PREFIX}/share"
+: >"${PREFIX}/${NO_USABLE_SIZE_STAMP}"
 
 # RocksDB's tools/CMakeLists.txt has no install() rule, but Dependencies.cmake
 # ships ldb and sst_dump, so lift them out of the build tree.
@@ -113,5 +121,8 @@ for tool in ldb sst_dump; do
 		exit 1
 	fi
 done
+
+# The runner disk is small and the wheel build and tests still need it.
+rm -rf "${BUILD_DIR}" "${BUILD_DIR}-zstd"
 
 echo "RocksDB ${VERSION} installed to ${PREFIX}"

@@ -1,13 +1,13 @@
-#include <dftracer/utils/core/common/field_ref.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/to_chars.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/field_ref.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_doc_guard.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/json_builder.h>
@@ -168,14 +168,16 @@ coro::CoroTask<HttpResponse> handle_viz_counters(const HttpRequest& req,
     if (view.query) v = v.filter(*view.query);
     if (!single_file || fields.by_path) v = v.time_range(begin, end);
 
+    auto fold_events = [begin, bucket_us, nb, &fields](
+                           CounterAcc& acc,
+                           const std::vector<std::string_view>& events) {
+        if (acc.ops.empty()) acc.init(nb);
+        fields.for_each_event(events, [&](std::string_view ev) {
+            fold_counter(ev, begin, bucket_us, nb, acc);
+        });
+    };
     auto r = co_await v.map_batches<CounterAcc>(
-        [begin, bucket_us, nb, &fields](
-            CounterAcc& acc, const std::vector<std::string_view>& events) {
-            if (acc.ops.empty()) acc.init(nb);
-            fields.for_each_event(events, [&](std::string_view ev) {
-                fold_counter(ev, begin, bucket_us, nb, acc);
-            });
-        },
+        fold_events,
         [](CounterAcc&& x, CounterAcc&& y) {
             if (y.ops.empty()) return std::move(x);
             if (x.ops.empty()) return std::move(y);

@@ -2,9 +2,6 @@
 // must hand it on in morsels that fit the memory budget, and the rows must be
 // the ones an unlimited run gives.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/grace_join.h>
@@ -12,6 +9,9 @@
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazy/frame_op.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>

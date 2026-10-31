@@ -148,6 +148,7 @@ runs:
       with:
         name: cibw-wheels-${{ runner.os }}-${{ runner.arch }}-cp${{ inputs.python }}
         path: ./wheelhouse/*.whl
+        retention-days: 1
 
     - name: sccache stats (macOS host)
       if: always() && runner.os == 'macOS'

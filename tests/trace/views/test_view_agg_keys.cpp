@@ -1,9 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/trace/views/result_join.h>
+#include <trace/views/agg_parity_common.h>
 
 #include <optional>
-
-#include "agg_parity_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
@@ -1001,7 +1000,7 @@ TEST_SUITE("View") {
             const dataframe::DataFrame r =
                 view({GroupKey::field("args.s")}).collect().get();
             const dataframe::DataFrame j =
-                join_batches(r, r, 1, JoinType::INNER);
+                join_batches(r, r, 1, JoinType::Inner);
             REQUIRE(j.num_rows() == 3);
             Groups got;
             for (std::int64_t i = 0; i < j.num_rows(); ++i) {

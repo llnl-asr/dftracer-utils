@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 
-#include <dftracer/utils/core/common/byte_view.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/types/streaming.h>
 
 #include <fstream>
@@ -49,7 +49,7 @@ class StreamingFileWriterUtility {
             fs::path parent = path_.parent_path();
             if (!fs::exists(parent)) {
                 throw DFTUtilsException(
-                    ErrorCode::NOT_FOUND,
+                    ErrorCode::NotFound,
                     "Parent directory does not exist: " + parent.string());
             }
         }
@@ -65,7 +65,7 @@ class StreamingFileWriterUtility {
         file_.open(path_, mode);
         if (!file_) {
             throw DFTUtilsException(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 "Cannot open file for writing: " + path_.string());
         }
 
@@ -105,7 +105,7 @@ class StreamingFileWriterUtility {
      */
     coro::CoroTask<StreamWriteResult> process(ByteView chunk) {
         if (!opened_) {
-            throw DFTUtilsException(ErrorCode::IO,
+            throw DFTUtilsException(ErrorCode::Io,
                                     "Cannot write to closed file");
         }
 
@@ -118,7 +118,7 @@ class StreamingFileWriterUtility {
                     static_cast<std::streamsize>(chunk.size()));
 
         if (!file_) {
-            throw DFTUtilsException(ErrorCode::IO,
+            throw DFTUtilsException(ErrorCode::Io,
                                     "Error writing to file: " + path_.string());
         }
 

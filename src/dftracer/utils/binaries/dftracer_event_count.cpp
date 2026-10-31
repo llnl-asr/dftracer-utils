@@ -1,16 +1,16 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -98,7 +98,7 @@ static coro::CoroTask<EventCountBatchResult> process_index_group_event_counts(
 int main(int argc, char** argv) {
     return cli::cli_main<EventCountArgParse>(
         argc, argv, "dftracer_event_count",
-        "Count valid events in DFTracer .pfw or .pfw.gz files using composable "
+        "Count valid events in DFTracer .pfw.gz files using composable "
         "utilities and pipeline processing",
         [](EventCountArgParse& cli) { return run_event_count(&cli); });
 }
@@ -110,20 +110,23 @@ static int run_event_count(const EventCountArgParse* cli) {
     const auto force_rebuild = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;
 
-    cli::ensure_indexes_fresh_blocking("DFTracer Event Count Index",
-                                       cli->pipeline, log_dir, {}, index_dir,
-                                       force_rebuild);
+    auto scanned = cli::ensure_indexes_fresh_blocking(
+        "DFTracer Event Count Index", cli->pipeline, log_dir, {}, index_dir,
+        force_rebuild);
 
     Resolver resolver;
     ResolverInput resolve_input;
-    resolve_input.directory = log_dir;
+    if (scanned.empty())
+        resolve_input.directory = log_dir;
+    else
+        resolve_input.entries = std::move(scanned);
     resolve_input.index_dir = index_dir;
     resolve_input.require_checkpoints = !force_rebuild;
 
     auto resolve_result = resolver(resolve_input).get();
 
     if (resolve_result.all_files.empty()) {
-        DFTRACER_UTILS_LOG_ERROR("No .pfw or .pfw.gz files found in: %s",
+        DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
                                  log_dir.c_str());
         return 1;
     }
@@ -139,6 +142,8 @@ static int run_event_count(const EventCountArgParse* cli) {
         std::move(resolve_result.cached);
     std::string index_path = resolve_result.index_path;
 
+    auto refresh_entries =
+        scanned_entries(resolve_result, resolve_result.needs_checkpoint);
     std::vector<FileWorkItem> needs_checkpoint =
         std::move(resolve_result.needs_checkpoint);
 
@@ -166,18 +171,14 @@ static int run_event_count(const EventCountArgParse* cli) {
         "BatchIndex");
 
     auto count_task = make_task(
-        [&needs_checkpoint, &indexed_entries, &direct_scan_items, &total_events,
-         &files_processed, &is_approximate, index_dir, index_path,
+        [&needs_checkpoint, &refresh_entries, &indexed_entries,
+         &direct_scan_items, &total_events, &files_processed, &is_approximate,
+         index_dir, index_path,
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
             if (!needs_checkpoint.empty()) {
                 Resolver re_resolver;
                 ResolverInput refresh_input;
-                std::vector<std::string> newly_indexed;
-                newly_indexed.reserve(needs_checkpoint.size());
-                for (const auto& item : needs_checkpoint) {
-                    newly_indexed.push_back(item.file_path);
-                }
-                refresh_input.files = std::move(newly_indexed);
+                refresh_input.entries = std::move(refresh_entries);
                 refresh_input.index_dir = index_dir;
                 refresh_input.require_checkpoints = true;
 

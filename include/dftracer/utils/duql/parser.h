@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_DUQL_PARSER_H
 #define DFTRACER_UTILS_DUQL_PARSER_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/expected.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 
 #include <cstddef>
@@ -41,13 +41,13 @@ using Params = StringViewMap<ParamValue>;
 
 /// Parse a duql filter into an AST. Throws nothing; a syntax error, or a
 /// construct this engine cannot evaluate yet, is the error value.
-dftracer::utils::expected<QueryNodePtr, DuqlError> parse(
+dftracer::utils::dstd::Expected<QueryNodePtr, DuqlError> parse(
     std::string_view input);
 
 /// parse with `$name` parameters bound to `params`; an unbound parameter is
 /// an error.
-dftracer::utils::expected<QueryNodePtr, DuqlError> parse(std::string_view input,
-                                                         const Params& params);
+dftracer::utils::dstd::Expected<QueryNodePtr, DuqlError> parse(
+    std::string_view input, const Params& params);
 
 }  // namespace dftracer::utils::duql
 

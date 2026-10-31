@@ -1,9 +1,9 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/json/record_parser.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/event_collector_utility.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -93,7 +93,9 @@ EventCollectorFromMetadataUtility::operator()(
             auto line_gen =
                 utilities::fileio::lines::sources::async_streaming_gz_lines(
                     file.file_path, file.start_line, file.end_line);
-            while (auto line_opt = co_await line_gen.next()) {
+            for (;;) {
+                auto line_opt = co_await line_gen.next();
+                if (!line_opt) break;
                 co_await collector.process(line_opt->content.data(),
                                            line_opt->content.length());
             }

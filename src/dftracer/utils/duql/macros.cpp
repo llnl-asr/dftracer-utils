@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/syntax/lexer.h>
 #include <dftracer/utils/duql/syntax/parser.h>
@@ -35,7 +35,7 @@ ExprPtr clone(const Expr& e) {
     auto tree = syntax::parse("where " + syntax::to_text(e));
     if (!tree || !tree->pipeline || tree->pipeline->stages.empty())
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "duql: a macro body does not print back: " + syntax::to_text(e));
     return std::move(
         std::get<Where>(tree->pipeline->stages.front().node).condition);
@@ -103,7 +103,7 @@ class Expander {
             auto tree = syntax::parse(syntax::to_text(**body));
             if (!tree || !tree->pipeline)
                 throw DFTUtilsException(
-                    ErrorCode::INVALID_ARGUMENT,
+                    ErrorCode::InvalidArgument,
                     "duql: a macro body does not print back: " +
                         syntax::to_text(**body));
             PipelinePtr copy = std::move(tree->pipeline);
@@ -194,7 +194,7 @@ class Expander {
     static void bind(ExprPtr& e, const Macro& m, const std::vector<Arg>& args) {
         if (!e) return;
         if (const auto* p = std::get_if<Path>(&e->node);
-            p && p->root == PathRoot::RECORD && p->steps.size() == 1 &&
+            p && p->root == PathRoot::Record && p->steps.size() == 1 &&
             !p->steps.front().index) {
             for (std::size_t i = 0; i < m.params.size(); ++i)
                 if (m.params[i] == p->steps.front().key) {
@@ -222,35 +222,35 @@ void load_file(PathRegistry& r, const std::filesystem::path& file) {
     std::ifstream in(file);
     if (!in)
         throw DFTUtilsException(
-            ErrorCode::IO, "duql: cannot read macro file " + file.string());
+            ErrorCode::Io, "duql: cannot read macro file " + file.string());
     std::stringstream ss;
     ss << in.rdbuf();
     const std::string text = ss.str();
     auto tree = syntax::parse(text);
     if (!tree)
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "duql macro file " + file.string() + ": " + tree.error().format());
     if (tree->pipeline)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "duql macro file " + file.string() +
                                     " holds a pipeline; it may hold only "
                                     "'def' declarations");
     for (const auto& d : tree->decls)
         if (!std::holds_alternative<Def>(d))
-            throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+            throw DFTUtilsException(ErrorCode::InvalidArgument,
                                     "duql macro file " + file.string() +
                                         " may hold only 'def' declarations");
     std::vector<Def> defs = take_defs(tree->decls);
     auto macros = macros_of(defs, text, file.string());
     if (!macros)
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "duql macro file " + file.string() + ": " +
                                     macros.error().format());
     for (auto& m : *macros) {
         for (const auto& old : r.macros)
             if (old.name == m.name)
-                throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+                throw DFTUtilsException(ErrorCode::InvalidArgument,
                                         "duql macro '" + m.name +
                                             "' is defined in " + old.origin +
                                             " and " + file.string());
@@ -277,7 +277,7 @@ void load_locked(PathRegistry& r, const std::string& path) {
 void load_env(PathRegistry& r) {
     if (r.env_loaded) return;
     r.env_loaded = true;
-    const auto env = Env::get("DFTRACER_DUQL_PATH");
+    const auto env = Env::get("DFTRACER_UTILS_DUQL_PATH");
     if (!env) return;
     std::string_view rest = *env;
     while (!rest.empty()) {
@@ -291,7 +291,7 @@ void load_env(PathRegistry& r) {
 
 }  // namespace
 
-dftracer::utils::expected<std::vector<Macro>, DuqlError> macros_of(
+dftracer::utils::dstd::Expected<std::vector<Macro>, DuqlError> macros_of(
     std::vector<syntax::Def>& defs, std::string_view text,
     const std::string& origin) {
     std::vector<Macro> out;
@@ -302,7 +302,7 @@ dftracer::utils::expected<std::vector<Macro>, DuqlError> macros_of(
             continue;
         for (const auto& m : out)
             if (m.name == def.name)
-                return dftracer::utils::unexpected(syntax::make_error(
+                return dftracer::utils::dstd::Unexpected(syntax::make_error(
                     text, expr ? (*expr)->span.offset : 0, 0,
                     "macro '" + def.name + "' is defined twice"));
         if (expr)
@@ -340,7 +340,7 @@ std::vector<syntax::Def> take_defs(std::vector<syntax::Decl>& decls) {
     return out;
 }
 
-dftracer::utils::expected<void, DuqlError> expand_macros(
+dftracer::utils::dstd::Expected<void, DuqlError> expand_macros(
     syntax::Pipeline& pipeline, const MacroScopes& scopes,
     std::string_view text,
     const std::function<bool(std::string_view)>& builtin) {
@@ -352,7 +352,7 @@ dftracer::utils::expected<void, DuqlError> expand_macros(
         if (!any) return {};
         each_slot(pipeline, [&](ExprPtr& e) { x.expand(e); });
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
     return {};
 }

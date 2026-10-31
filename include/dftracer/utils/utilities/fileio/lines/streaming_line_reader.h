@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_STREAMING_LINE_READER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_STREAMING_LINE_READER_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
@@ -75,7 +75,9 @@ class StreamingLineReader {
      * Returns an AsyncGenerator<Line> for non-blocking iteration:
      * @code
      * auto gen = StreamingLineReader::read_async(config);
-     * while (auto line = co_await gen.next()) {
+     * for (;;) {
+     *     auto line = co_await gen.next();
+     *     if (!line) break;
      *     co_await process(*line);
      * }
      * @endcode

@@ -1,9 +1,12 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/utils/timer.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_runner.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/common/statistics/distributions.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
@@ -31,9 +34,8 @@ namespace {
 
 class GenDlioConfigArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{
-        cli::DirMode::DEFAULT_DOT,
-        "Input directory containing .pfw or .pfw.gz traces"};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultDot,
+                                 "Input directory containing .pfw.gz traces"};
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
 
@@ -217,8 +219,8 @@ int main(int argc, char** argv) {
         "and aggregates the input directory automatically; no separate "
         "aggregation step is required.",
         [](GenDlioConfigArgParse& cli) -> int {
-            // --- Aggregation phase: produce / reuse the AGGREGATION CF
-            // ---------------
+            // --- Index phase: build or reuse the index with its aggregation
+            // partials ---------------
             agg::AggregationConfig agg_config;
             agg_config.time_interval_us =
                 static_cast<std::uint64_t>(cli.time_interval * 1000.0);
@@ -231,24 +233,21 @@ int main(int argc, char** argv) {
             agg_config.track_process_parents = true;
             agg_config.track_default_args = true;
 
-            agg::AggregationRunInput run_input;
-            run_input.log_dir = cli.directory.value;
-            run_input.index_dir = cli.indexing.index_dir;
-            run_input.agg_config = std::move(agg_config);
-            run_input.pipeline_config = cli::build_pipeline_config(
-                "DLIO Config Generator", cli.pipeline);
-            run_input.output_file =
-                std::nullopt;  // populate AGGREGATION CF only
-            run_input.force_rebuild = cli.indexing.force;
-            run_input.checkpoint_size = cli.indexing.checkpoint_size;
-            run_input.verbose = true;
+            const agg::AggregationConfig query_config = agg_config;
 
-            auto run_result = agg::run_aggregation(std::move(run_input)).get();
-            if (!run_result || run_result->index_path.empty()) {
+            const auto scanned = cli::ensure_indexes_fresh_blocking(
+                "DLIO Config Generator", cli.pipeline, cli.directory.value, {},
+                cli.indexing.index_dir, cli.indexing.force, agg_config,
+                cli.indexing.checkpoint_size);
+            if (scanned.empty()) {
                 DFTRACER_UTILS_LOG_ERROR(
-                    "Aggregation failed; cannot generate DLIO config");
+                    "No trace files found in %s; cannot generate DLIO config",
+                    cli.directory.value.c_str());
                 return 1;
             }
+            const std::string index_path =
+                trace::internal::determine_index_path(
+                    scanned.front().path.string(), cli.indexing.index_dir);
 
             // --- Load aggregated traces
             // ---------------------------------------------
@@ -266,10 +265,19 @@ int main(int argc, char** argv) {
             }
             dlio::AggregatedTraces traces;
             try {
-                traces = dlio::load_aggregated_traces(run_result->index_path,
-                                                      loader_opts);
+                index::build::ResolverInput resolver_input;
+                resolver_input.directory =
+                    fs::absolute(cli.directory.value).string();
+                resolver_input.index_dir = cli.indexing.index_dir;
+                resolver_input.require_checkpoints = false;
+                const auto resolved =
+                    index::build::Resolver{}(resolver_input).get();
+                dstd::Vector<dstd::String> files;
+                for (const auto& f : resolved.all_files) files.emplace_back(f);
+                traces = dlio::load_aggregated_traces(
+                    index_path, files, query_config, loader_opts);
             } catch (const std::exception& e) {
-                DFTRACER_UTILS_LOG_ERROR("Failed to load AGGREGATION CF: %s",
+                DFTRACER_UTILS_LOG_ERROR("Failed to query the aggregation: %s",
                                          e.what());
                 return 1;
             }
@@ -288,8 +296,7 @@ int main(int argc, char** argv) {
             std::printf("DLIO Config Generation\n");
             std::printf("==========================================\n");
             std::printf("  Loaded %d rank(s), %d step(s) from index at %s\n",
-                        traces.num_ranks, traces.num_steps,
-                        run_result->index_path.c_str());
+                        traces.num_ranks, traces.num_steps, index_path.c_str());
             std::printf(
                 "  computation_times: %zu samples (min %.6fs, max %.6fs)\n",
                 traces.computation_times.size(), traces.fetch_block_stats.min(),

@@ -261,13 +261,13 @@ filter pushes down like the expression it stands for.
    where slow(250us) and scratch(fhash -> files.path)
 
 To share macros, put ``def`` lines in ``.duql`` files and list the files or
-their directories in ``$DFTRACER_DUQL_PATH``, separated by ``:``. The CLI
+their directories in ``$DFTRACER_UTILS_DUQL_PATH``, separated by ``:``. The CLI
 tools also take ``--duql-path PATH`` (repeatable).
 
 .. code-block:: bash
 
    echo 'def slow(t) = dur > t;' > ~/duql/io.duql
-   export DFTRACER_DUQL_PATH=~/duql
+   export DFTRACER_UTILS_DUQL_PATH=~/duql
    dftracer_view --files trace.pfw.gz --duql 'where slow(250us)'
 
 A macro of the query hides one of the record schema's source, which hides one
@@ -286,7 +286,7 @@ A body that starts with a stage word, or with an expression followed by
 
 The call expands before planning, so a leading call pushes its ``where`` into
 the scan. A pipeline macro goes in a query, a source or a ``.duql`` file on
-``$DFTRACER_DUQL_PATH`` or ``--duql-path``, like an expression macro. Call it
+``$DFTRACER_UTILS_DUQL_PATH`` or ``--duql-path``, like an expression macro. Call it
 at a stage position: ``where io_rate(1ms)`` is an error.
 
 Shape the result with a pipeline

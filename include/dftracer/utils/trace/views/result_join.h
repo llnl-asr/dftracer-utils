@@ -11,7 +11,7 @@
 /// vec's take() (which fills nulls for OUTER rows via a negative index).
 namespace dftracer::utils::trace::views {
 
-enum class JoinType { INNER, LEFT, RIGHT, FULL, LEFT_SEMI, LEFT_ANTI };
+enum class JoinType { Inner, Left, Right, Full, LeftSemi, LeftAnti };
 
 /// Equi join `left` and `right` on their first `n_key` columns (the group key).
 /// Output columns: the key columns (kept by name), then each non-key left

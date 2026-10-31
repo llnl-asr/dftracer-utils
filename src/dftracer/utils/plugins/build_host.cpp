@@ -1,7 +1,7 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/fnv1a.h>
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/plugins/build_host.h>
 #include <dftracer/utils/plugins/fold_adapter/ext.h>
 #include <dftracer/utils/plugins/state_registry.h>
@@ -17,7 +17,7 @@ namespace {
 BuildHost& self_of(void* h) { return *static_cast<BuildHost*>(h); }
 
 ::dftu_error denied_error() {
-    return ::dftu_error{dftracer::utils::CORE_DOMAIN.id,
+    return ::dftu_error{dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
                         static_cast<std::int32_t>(DFTU_COND_UNSUPPORTED),
                         DFTU_COND_UNSUPPORTED,
                         "not available at load: the factory host offers "

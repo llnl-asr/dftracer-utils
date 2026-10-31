@@ -1,9 +1,9 @@
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <algorithm>
 #include <bit>
@@ -84,8 +84,8 @@ Series flat_temporal(TypeId type, TimeUnit unit, const std::string& timezone,
     col->set_time_unit(unit);
     if (type == TypeId::Timestamp) col->set_timezone(timezone);
     const std::size_t bytes = buffer_bytes(type, n);
-    col->data = Buffer::allocate(bytes);
-    if (bytes != 0) std::memcpy(col->data->data(), data, bytes);
+    col->data = new_buffer(bytes);
+    if (bytes != 0) std::memcpy(writable(col->data), data, bytes);
     return Series{col};
 }
 
@@ -104,11 +104,12 @@ Series bytes_key(TypeId type, const std::vector<std::string>& values) {
         Series::check_string_bytes(data.size());
         off[i + 1] = static_cast<std::int32_t>(data.size());
     }
-    col->offsets = Buffer::allocate(off.size() * sizeof(std::int32_t));
-    std::memcpy(col->offsets->data(), off.data(),
+    col->offsets = new_buffer(off.size() * sizeof(std::int32_t));
+    std::memcpy(writable(col->offsets), off.data(),
                 off.size() * sizeof(std::int32_t));
-    col->data = Buffer::allocate(data.size());
-    if (!data.empty()) std::memcpy(col->data->data(), data.data(), data.size());
+    col->data = new_buffer(data.size());
+    if (!data.empty())
+        std::memcpy(writable(col->data), data.data(), data.size());
     return Series{col};
 }
 
@@ -127,11 +128,12 @@ Series wide_bytes_key(TypeId type, const std::vector<std::string>& values) {
         data += values[i];
         off[i + 1] = static_cast<std::int64_t>(data.size());
     }
-    col->offsets = Buffer::allocate(off.size() * sizeof(std::int64_t));
-    std::memcpy(col->offsets->data(), off.data(),
+    col->offsets = new_buffer(off.size() * sizeof(std::int64_t));
+    std::memcpy(writable(col->offsets), off.data(),
                 off.size() * sizeof(std::int64_t));
-    col->data = Buffer::allocate(data.size());
-    if (!data.empty()) std::memcpy(col->data->data(), data.data(), data.size());
+    col->data = new_buffer(data.size());
+    if (!data.empty())
+        std::memcpy(writable(col->data), data.data(), data.size());
     return Series{col};
 }
 
@@ -153,9 +155,9 @@ Series bytes_flat_key(TypeId type, std::int32_t fixed_size,
     col->set_decimal(decimal_precision, decimal_scale);
     std::string bytes;
     for (const std::string& v : values) bytes += v;
-    col->data = Buffer::allocate(bytes.size());
+    col->data = new_buffer(bytes.size());
     if (!bytes.empty())
-        std::memcpy(col->data->data(), bytes.data(), bytes.size());
+        std::memcpy(writable(col->data), bytes.data(), bytes.size());
     return Series{col};
 }
 
@@ -210,9 +212,9 @@ static void mark_null_keys(Series& col,
     if (count == 0) return;
     dftu_series* h = col.handle();
     const std::size_t bytes = static_cast<std::size_t>((h->length + 7) / 8);
-    auto validity = Buffer::allocate(bytes);
-    std::memset(validity->data(), 0xFF, bytes);
-    auto* bits = validity->data();
+    auto validity = new_buffer(bytes);
+    std::memset(writable(validity), 0xFF, bytes);
+    auto* bits = writable(validity);
     for (std::int64_t g = 0; g < h->length; ++g)
         if (nulls[static_cast<std::size_t>(g)])
             bits[g >> 3] &= static_cast<std::uint8_t>(~(1u << (g & 7)));
@@ -820,30 +822,37 @@ static DataFrame finalize_impl(const AggState& st_in,
     if (st.has_dyn) {
         // Union of discovered argument names, sorted (std::set) so the dyn
         // column order is deterministic and matches the GroupMap path. Columns
-        // are laid out name-outer, reduction-inner.
+        // are laid out name-outer, reduction-inner. A name of the layout this
+        // state never saw still gets its (all-empty) columns.
         AggDynLayout own;
         if (!layout) {
             agg_dyn_layout_add(own, st);
             layout = &own;
         }
         for (const auto& [name, dom] : *layout) {
+            const std::uint32_t id = st.dyn_id_of(name);
+            const bool have = id != AggState::NO_DYN_ID;
             for (const AggDynSpec& d : st.dyn_specs) {
                 out.names.push_back(d.out_prefix + name);
+                FieldStat cell;
                 auto fs_of = [&](std::int64_t g) -> const FieldStat* {
-                    const std::map<std::string, FieldStat>& gmap =
-                        st.dyn_fs[static_cast<std::size_t>(g)];
-                    const auto it = gmap.find(name);
-                    return it != gmap.end() ? &it->second : nullptr;
+                    if (!have) return nullptr;
+                    if (st.dyn_light_on) {
+                        const std::uint64_t* w = st.dyn_light_find(g, id);
+                        if (w == nullptr) return nullptr;
+                        cell = st.dyn_light_stat_of(g, id, w);
+                        return &cell;
+                    }
+                    return dyn_find_cell(st.dyn_fs[static_cast<std::size_t>(g)],
+                                         id);
                 };
                 if (d.op == AggOp::Pct) {
                     std::vector<double> v(static_cast<std::size_t>(ng), 0.0);
-                    for (std::int64_t g = 0; g < ng; ++g) {
-                        const std::map<std::string, DDSketch>& gsk =
-                            st.dyn_sketch[static_cast<std::size_t>(g)];
-                        const auto it = gsk.find(name);
-                        if (it != gsk.end())
+                    for (std::int64_t g = 0; have && g < ng; ++g) {
+                        if (const DDSketch* sk = dyn_find_sketch(
+                                st.dyn_sketch[static_cast<std::size_t>(g)], id))
                             v[static_cast<std::size_t>(g)] =
-                                it->second.quantile(d.param);
+                                sk->quantile(d.param);
                     }
                     out.columns.push_back(Series::flat_f64(v.data(), ng));
                 } else if (d.op == AggOp::Count) {
@@ -946,13 +955,12 @@ DataFrame agg_finalize(const AggState& st,
 void agg_dyn_layout_add(AggDynLayout& layout, const AggState& in) {
     if (!in.has_dyn) return;
     const AggState& state = settled(in);
-    for (const std::map<std::string, FieldStat>& gmap : state.dyn_fs)
-        for (const auto& [name, fs] : gmap) {
-            const auto dit = state.dyn_domain.find(name);
-            layout.emplace(name, dit != state.dyn_domain.end()
-                                     ? dit->second
-                                     : FieldStatDomain::I64);
-        }
+    for (std::int64_t g = 0; g < state.ngroups(); ++g)
+        state.dyn_each_cell(g, [&](std::uint32_t id, const FieldStat&) {
+            layout.emplace(std::string(state.dyn_name(id)),
+                           id < state.dyn_domain.size() ? state.dyn_domain[id]
+                                                        : FieldStatDomain::I64);
+        });
 }
 
 DataFrame agg_finalize(const AggState& st,

@@ -2,11 +2,15 @@
 #define DFTRACER_UTILS_DATAFRAME_AGG_DETAIL_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/hash/hash_combine.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <bit>
@@ -210,6 +214,98 @@ inline void space_saving_offer(SpaceSavingMap& m, std::size_t k,
     m.emplace(value, inherited + count);
 }
 
+/// One dyn cell of a group: a name's running statistic, under that name's id.
+/// A group keeps its cells sorted by id, so a lookup is a binary search and the
+/// whole group's dyn storage is one block with no name in it.
+struct DynCell {
+    FieldStat stat;
+    std::uint32_t id = 0;
+};
+
+/// The Pct reduction's per-name sketch, beside its cell.
+struct DynSketchCell {
+    DDSketch sketch{};
+    std::uint32_t id = 0;
+};
+
+/// One dyn input of an accumulate call: the name's id and the domain of this
+/// call's column for it (a batch may hold the same name in another domain).
+struct DynSlot {
+    std::uint32_t id = 0;
+    FieldStatDomain domain = FieldStatDomain::F64;
+};
+
+/// One group's dyn cells in the light form: `dyn_light_stride` words a cell -
+/// the id word (bit `DYN_LIGHT_PRESENT` when the name has a value and the mask
+/// keeps no count word) then the cells its mask keeps, in the static light
+/// row's order - and, beside them, an {id, net wrap} pair per cell whose
+/// integer sum overflowed (a light word holds only the wrapped sum).
+struct DynLightCells {
+    dstd::Vector<std::uint64_t> words;
+    dstd::Vector<std::pair<std::uint32_t, std::int64_t>> carry;
+};
+
+/// The id word's "this cell has a value" bit, where the static light row keeps
+/// a field's presence bit. Ids stay below it.
+constexpr std::uint64_t DYN_LIGHT_PRESENT = std::uint64_t{1} << 31;
+constexpr std::uint64_t DYN_LIGHT_ID = DYN_LIGHT_PRESENT - 1;
+constexpr std::uint8_t DYN_LIGHT_PRESENT_BIT = 31;
+
+inline bool dyn_stat_before(const DynCell& c, std::uint32_t id) {
+    return c.id < id;
+}
+
+inline bool dyn_sketch_before(const DynSketchCell& c, std::uint32_t id) {
+    return c.id < id;
+}
+
+/// The cell of `cells` (sorted by id) for `id`, adding a zero cell in place
+/// when the group has not seen that name yet.
+inline FieldStat& dyn_cell_of(dstd::Vector<DynCell>& cells, std::uint32_t id) {
+    // A call's dyn inputs come in the same order in every row, so the id
+    // usually extends the vector.
+    if (cells.empty() || cells.back().id < id) {
+        cells.emplace_back();
+        cells.back().id = id;
+        return cells.back().stat;
+    }
+    auto it = std::lower_bound(cells.begin(), cells.end(), id, dyn_stat_before);
+    if (it != cells.end() && it->id == id) return it->stat;
+    it = cells.insert(it, DynCell{});
+    it->id = id;
+    return it->stat;
+}
+
+inline DDSketch& dyn_sketch_cell_of(dstd::Vector<DynSketchCell>& cells,
+                                    std::uint32_t id) {
+    if (cells.empty() || cells.back().id < id) {
+        cells.emplace_back();
+        cells.back().id = id;
+        return cells.back().sketch;
+    }
+    auto it =
+        std::lower_bound(cells.begin(), cells.end(), id, dyn_sketch_before);
+    if (it != cells.end() && it->id == id) return it->sketch;
+    it = cells.insert(it, DynSketchCell{});
+    it->id = id;
+    return it->sketch;
+}
+
+/// The stat of `id` in `cells`, or null when the group has not seen the name.
+inline const FieldStat* dyn_find_cell(const dstd::Vector<DynCell>& cells,
+                                      std::uint32_t id) {
+    const auto it =
+        std::lower_bound(cells.begin(), cells.end(), id, dyn_stat_before);
+    return it != cells.end() && it->id == id ? &it->stat : nullptr;
+}
+
+inline const DDSketch* dyn_find_sketch(const dstd::Vector<DynSketchCell>& cells,
+                                       std::uint32_t id) {
+    const auto it =
+        std::lower_bound(cells.begin(), cells.end(), id, dyn_sketch_before);
+    return it != cells.end() && it->id == id ? &it->sketch : nullptr;
+}
+
 // Groups fold by distinct value column, not by spec: sum(dur), mean(dur) and
 // var(dur) share one FieldStat per group (accumulated once). Count is
 // field-independent (group rows).
@@ -356,12 +452,7 @@ class AggState {
             // The presence word holds 64 fields; a later one keeps a count.
             if (f >= 64) light_mask[f] |= LIGHT_N;
             light_off[f] = static_cast<std::uint32_t>(light_stride);
-            light_stride +=
-                static_cast<std::size_t>((light_mask[f] & LIGHT_N) != 0) +
-                static_cast<std::size_t>((light_mask[f] & LIGHT_SUM) != 0) +
-                static_cast<std::size_t>((light_mask[f] & LIGHT_MIN) != 0) +
-                static_cast<std::size_t>((light_mask[f] & LIGHT_MAX) != 0) +
-                3 * static_cast<std::size_t>((light_mask[f] & LIGHT_MOM) != 0);
+            light_stride += light_words(light_mask[f]);
         }
         light.clear();
     }
@@ -525,15 +616,364 @@ class AggState {
     // reduction is configured, one DDSketch) per auto-discovered argument name.
     // The name set is data-dependent (grows during accumulate) and merges by
     // name-union, so a single streaming pass builds per-argument aggregates
-    // without a name pre-scan. `dyn_domain` fixes each name's finalized column
-    // type once (the domain of the first input column seen for it), so a group
-    // missing a name still lands in that name's stable column type.
+    // without a name pre-scan. A name is interned once and named by id from
+    // then on: `dyn_names` is id -> name, `dyn_ids` the reverse lookup
+    // (transparent, so a string_view finds its id without a copy) and
+    // `dyn_domain` the domain a name's finalized column keeps (the domain of
+    // the first input column seen for it, so a group missing a name still lands
+    // in that name's stable column type).
     bool has_dyn = false;
     bool dyn_has_sketch = false;
     std::vector<AggDynSpec> dyn_specs;
-    std::vector<std::map<std::string, FieldStat>> dyn_fs;     // ngroups
-    std::vector<std::map<std::string, DDSketch>> dyn_sketch;  // ngroups
-    std::map<std::string, FieldStatDomain> dyn_domain;
+    dstd::Vector<dstd::String> dyn_names;
+    dstd::HashMap<std::string, std::uint32_t, TransparentStringHash,
+                  TransparentStringEqual>
+        dyn_ids;
+    dstd::Vector<FieldStatDomain> dyn_domain;
+    dstd::Vector<dstd::Vector<DynCell>> dyn_fs;            // ngroups
+    dstd::Vector<dstd::Vector<DynSketchCell>> dyn_sketch;  // ngroups
+    // The cells the light form holds instead, when `dyn_light_on` (the two
+    // are never both populated). One mask for every name - a dyn spec applies
+    // to every name - so a group's cells are fixed-size word records and no
+    // cell holds a FieldStat.
+    dstd::Vector<DynLightCells> dyn_light;  // ngroups
+    std::size_t dyn_light_stride = 0;  // words a cell, the id word included
+    bool dyn_light_ok = false;  // every dyn spec reads what the light row keeps
+    bool dyn_light_on = false;
+    std::uint8_t dyn_light_mask = 0;
+    // The current accumulate call's dyn inputs, resolved once before its row
+    // loop so no row touches a name.
+    dstd::Vector<DynSlot> dyn_slots;
+
+    /// The id no dyn name has.
+    static constexpr std::uint32_t NO_DYN_ID = 0xFFFFFFFFu;
+
+    std::string_view dyn_name(std::uint32_t id) const {
+        const dstd::String& n = dyn_names[static_cast<std::size_t>(id)];
+        return std::string_view(n.data(), n.size());
+    }
+    /// The id of a dyn name, or NO_DYN_ID when this state has not seen it.
+    std::uint32_t dyn_id_of(std::string_view name) const {
+        const auto it = dyn_ids.find(name);
+        return it == dyn_ids.end() ? NO_DYN_ID : it->second;
+    }
+    /// The id of a dyn name, interning the name with `domain` on first use.
+    std::uint32_t dyn_intern(std::string_view name, FieldStatDomain domain) {
+        const auto it = dyn_ids.find(name);
+        if (it != dyn_ids.end()) return it->second;
+        const auto id = static_cast<std::uint32_t>(dyn_names.size());
+        dyn_names.emplace_back(name.data(), name.size());
+        dyn_domain.push_back(domain);
+        dyn_ids.emplace(std::string(name), id);
+        return id;
+    }
+    /// Intern every name of `other`, returning other's id -> this state's id.
+    /// Mutates the name table, so call it before a parallel merge.
+    dstd::Vector<std::uint32_t> dyn_remap(const AggState& other) {
+        dstd::Vector<std::uint32_t> out;
+        out.reserve(other.dyn_names.size());
+        for (std::size_t i = 0; i < other.dyn_names.size(); ++i)
+            out.push_back(
+                dyn_intern(other.dyn_name(static_cast<std::uint32_t>(i)),
+                           other.dyn_domain[i]));
+        return out;
+    }
+
+    /// The light cells a dyn spec reads out of a name's cell, by the same rules
+    /// init_light uses for a field. `fits` is false for an op the light row
+    /// cannot hold (the higher moments, the raw value, the collections).
+    static std::uint8_t dyn_light_bits(AggOp op, bool& fits) {
+        fits = true;
+        switch (op) {
+            case AggOp::Count:
+            case AggOp::CountValid:
+                return LIGHT_N;  // the reduction reads the cell's own count
+            case AggOp::Sum:
+                return LIGHT_SUM;
+            case AggOp::Mean:
+                return static_cast<std::uint8_t>(LIGHT_SUM | LIGHT_N);
+            case AggOp::Min:
+                return LIGHT_MIN;
+            case AggOp::Max:
+                return LIGHT_MAX;
+            case AggOp::Var:
+            case AggOp::Std:
+                return static_cast<std::uint8_t>(LIGHT_MOM | LIGHT_N);
+            case AggOp::Pct:
+                return 0;  // the reduction reads its sketch, not the cell
+            default:
+                fits = false;
+                return 0;
+        }
+    }
+
+    /// The cells a light field of `mask` keeps, the presence word aside.
+    static std::size_t light_words(std::uint8_t mask) {
+        return static_cast<std::size_t>((mask & LIGHT_N) != 0) +
+               static_cast<std::size_t>((mask & LIGHT_SUM) != 0) +
+               static_cast<std::size_t>((mask & LIGHT_MIN) != 0) +
+               static_cast<std::size_t>((mask & LIGHT_MAX) != 0) +
+               3 * static_cast<std::size_t>((mask & LIGHT_MOM) != 0);
+    }
+
+    /// The light dyn mask and record size this state's specs need, or
+    /// `dyn_light_ok` false for the specs the light row cannot hold.
+    void dyn_light_layout() {
+        bool fits = has_dyn;
+        std::uint8_t mask = 0;
+        for (const AggDynSpec& d : dyn_specs) {
+            bool op_fits = true;
+            const std::uint8_t bits = dyn_light_bits(d.op, op_fits);
+            if (!op_fits) fits = false;
+            mask = static_cast<std::uint8_t>(mask | bits);
+        }
+        dyn_light_ok = fits;
+        dyn_light_mask = fits ? mask : 0;
+        dyn_light_stride = 1 + light_words(dyn_light_mask);
+    }
+
+    /// The light cell of `id` in group `g`, or null when the group has none.
+    const std::uint64_t* dyn_light_find(std::int64_t g,
+                                        std::uint32_t id) const {
+        const dstd::Vector<std::uint64_t>& w =
+            dyn_light[static_cast<std::size_t>(g)].words;
+        const std::size_t at = dyn_light_lower(w, id);
+        return at < w.size() && (w[at] & DYN_LIGHT_ID) == id ? &w[at] : nullptr;
+    }
+
+    /// The light cell of `id` in group `g`, adding one in id order when the
+    /// group has not seen that name yet.
+    std::uint64_t* dyn_light_cell(std::int64_t g, std::uint32_t id) {
+        dstd::Vector<std::uint64_t>& w =
+            dyn_light[static_cast<std::size_t>(g)].words;
+        const std::size_t at = dyn_light_lower(w, id);
+        if (at == w.size() || (w[at] & DYN_LIGHT_ID) != id) {
+            w.insert(w.begin() + static_cast<std::ptrdiff_t>(at),
+                     dyn_light_stride, 0);
+            w[at] = id;
+        }
+        return &w[at];
+    }
+
+    /// The word index of `id`'s cell in a group's `words`, or its size when the
+    /// cell is absent: the cells sit at a fixed stride in id order.
+    std::size_t dyn_light_lower(const dstd::Vector<std::uint64_t>& w,
+                                std::uint32_t id) const {
+        std::size_t lo = 0, hi = w.size() / dyn_light_stride;
+        // A call's dyn inputs come in the same order in every row, so the id
+        // usually extends the block.
+        if (hi != 0 && (w[(hi - 1) * dyn_light_stride] & DYN_LIGHT_ID) < id)
+            lo = hi;
+        else
+            while (lo < hi) {
+                const std::size_t m = (lo + hi) / 2;
+                if ((w[m * dyn_light_stride] & DYN_LIGHT_ID) < id)
+                    lo = m + 1;
+                else
+                    hi = m;
+            }
+        return lo * dyn_light_stride;
+    }
+
+    /// The net wrap of `id`'s sum in group `g`, 0 when it never overflowed.
+    std::int64_t dyn_light_carry_of(std::int64_t g, std::uint32_t id) const {
+        const dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
+            dyn_light[static_cast<std::size_t>(g)].carry;
+        const auto it =
+            std::lower_bound(c.begin(), c.end(), id,
+                             [](const std::pair<std::uint32_t, std::int64_t>& p,
+                                std::uint32_t v) { return p.first < v; });
+        return it != c.end() && it->first == id ? it->second : 0;
+    }
+
+    /// Note `wrap` more on `id`'s sum in group `g`.
+    void dyn_light_carry_add(std::int64_t g, std::uint32_t id,
+                             std::int64_t wrap) {
+        dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
+            dyn_light[static_cast<std::size_t>(g)].carry;
+        const auto it =
+            std::lower_bound(c.begin(), c.end(), id,
+                             [](const std::pair<std::uint32_t, std::int64_t>& p,
+                                std::uint32_t v) { return p.first < v; });
+        if (it != c.end() && it->first == id)
+            it->second += wrap;
+        else
+            c.insert(it, std::make_pair(id, wrap));
+    }
+
+    /// Set `id`'s wrap in group `g`, dropping the entry at zero.
+    void dyn_light_carry_set(std::int64_t g, std::uint32_t id,
+                             std::int64_t wrap) {
+        dstd::Vector<std::pair<std::uint32_t, std::int64_t>>& c =
+            dyn_light[static_cast<std::size_t>(g)].carry;
+        const auto it =
+            std::lower_bound(c.begin(), c.end(), id,
+                             [](const std::pair<std::uint32_t, std::int64_t>& p,
+                                std::uint32_t v) { return p.first < v; });
+        if (it != c.end() && it->first == id) {
+            if (wrap == 0)
+                c.erase(it);
+            else
+                it->second = wrap;
+        } else if (wrap != 0) {
+            c.insert(it, std::make_pair(id, wrap));
+        }
+    }
+
+    /// The running stat `id`'s light cell holds, its exact sum included.
+    FieldStat dyn_light_stat_of(std::int64_t g, std::uint32_t id,
+                                const std::uint64_t* cell) const {
+        FieldStat f =
+            light_words_stat(cell, 1, dyn_light_mask, DYN_LIGHT_PRESENT_BIT,
+                             dyn_domain[static_cast<std::size_t>(id)]);
+        f.ecarry = dyn_light_carry_of(g, id);
+        return f;
+    }
+
+    /// The stat of dyn name `id` in group `g`, false when the group has no cell
+    /// for it.
+    bool dyn_stat_at(std::int64_t g, std::uint32_t id, FieldStat& out) const {
+        if (dyn_light_on) {
+            const std::uint64_t* cell = dyn_light_find(g, id);
+            if (cell == nullptr) return false;
+            out = dyn_light_stat_of(g, id, cell);
+            return true;
+        }
+        const FieldStat* f =
+            dyn_find_cell(dyn_fs[static_cast<std::size_t>(g)], id);
+        if (f == nullptr) return false;
+        out = *f;
+        return true;
+    }
+
+    /// Visit a group's dyn cells in id order. The stat is only valid for the
+    /// call: the light form builds it from the cell's words.
+    template <class F>
+    void dyn_each_cell(std::int64_t g, F&& f) const {
+        if (dyn_light_on) {
+            const dstd::Vector<std::uint64_t>& w =
+                dyn_light[static_cast<std::size_t>(g)].words;
+            for (std::size_t off = 0; off < w.size(); off += dyn_light_stride) {
+                const auto id =
+                    static_cast<std::uint32_t>(w[off] & DYN_LIGHT_ID);
+                FieldStat st = light_words_stat(
+                    w.data() + off, 1, dyn_light_mask, DYN_LIGHT_PRESENT_BIT,
+                    dyn_domain[static_cast<std::size_t>(id)]);
+                st.ecarry = dyn_light_carry_of(g, id);
+                f(id, st);
+            }
+            return;
+        }
+        for (const DynCell& c : dyn_fs[static_cast<std::size_t>(g)])
+            f(c.id, c.stat);
+    }
+
+    /// Merge `o` into `id`'s light cell in group `g`: the cell's own stat is
+    /// unpacked, so the moments combine exactly as FieldStat::merge does.
+    /// `o`'s domain must be the one the name keeps.
+    void dyn_light_merge(std::int64_t g, std::uint32_t id, const FieldStat& o) {
+        if (o.n == 0) return;
+        std::uint64_t* cell = dyn_light_cell(g, id);
+        FieldStat dst =
+            light_words_stat(cell, 1, dyn_light_mask, DYN_LIGHT_PRESENT_BIT,
+                             dyn_domain[static_cast<std::size_t>(id)]);
+        dst.ecarry = dyn_light_carry_of(g, id);
+        dst.merge(o);
+        dyn_light_store(g, id, cell, dst);
+    }
+
+    /// Whether this state's light form can hold every cell `other` brings: a
+    /// cell's words are read in its name's domain, so a cell of another domain
+    /// needs the full form.
+    bool dyn_light_holds(const AggState& other,
+                         const dstd::Vector<std::uint32_t>* map) const {
+        const auto my_id = [&](std::uint32_t id) {
+            return map == nullptr ? id : (*map)[static_cast<std::size_t>(id)];
+        };
+        if (other.dyn_light_on) {
+            for (std::size_t i = 0; i < other.dyn_names.size(); ++i)
+                if (other.dyn_domain[i] !=
+                    dyn_domain[my_id(static_cast<std::uint32_t>(i))])
+                    return false;
+            return true;
+        }
+        for (const dstd::Vector<DynCell>& cells : other.dyn_fs)
+            for (const DynCell& c : cells)
+                if (c.stat.n != 0 && c.stat.domain != dyn_domain[my_id(c.id)])
+                    return false;
+        return true;
+    }
+
+    /// Take the light dyn form for a merge destination that holds no group
+    /// yet, when it can hold every cell `other` brings. A destination already
+    /// light keeps it, or settles back to full cells for `other`.
+    bool dyn_light_open_for_merge(const AggState& other,
+                                  const dstd::Vector<std::uint32_t>* map) {
+        if (!dyn_light_ok) return false;
+        if (dyn_light_on) {
+            if (!other.has_dyn || dyn_light_holds(other, map)) return true;
+            dyn_settle();
+            return false;
+        }
+        if (other.has_dyn && !dyn_light_holds(other, map)) return false;
+        for (const dstd::Vector<DynCell>& cells : dyn_fs)
+            if (!cells.empty()) return false;
+        dyn_light_on = true;
+        dyn_light.assign(static_cast<std::size_t>(ngroups()), DynLightCells{});
+        dyn_fs.clear();
+        dyn_fs.shrink_to_fit();
+        return true;
+    }
+
+    /// The light cells as full DynCells (a representation change only).
+    void dyn_settle() {
+        if (!dyn_light_on) return;
+        dyn_fs.resize(static_cast<std::size_t>(ngroups()));
+        for (std::int64_t g = 0; g < ngroups(); ++g) {
+            dstd::Vector<DynCell>& cells = dyn_fs[static_cast<std::size_t>(g)];
+            // Read the light cells before dropping them.
+            dyn_each_cell(g, [&](std::uint32_t id, const FieldStat& f) {
+                cells.push_back(DynCell{f, id});
+            });
+        }
+        dyn_light_on = false;
+        dyn_light.clear();
+        dyn_light.shrink_to_fit();
+    }
+
+    /// `f`'s cells into a light cell's words, its net wrap beside them.
+    void dyn_light_store(std::int64_t g, std::uint32_t id, std::uint64_t* cell,
+                         const FieldStat& f) {
+        const std::uint8_t mask = dyn_light_mask;
+        std::size_t pos = 1;
+        if ((mask & LIGHT_N) != 0) {
+            cell[pos++] = f.n;
+        } else {
+            cell[0] = (cell[0] & DYN_LIGHT_ID) |
+                      (f.n != 0 ? DYN_LIGHT_PRESENT : std::uint64_t{0});
+        }
+        if (dyn_domain[static_cast<std::size_t>(id)] == FieldStatDomain::F64) {
+            if ((mask & LIGHT_SUM) != 0)
+                cell[pos++] = std::bit_cast<std::uint64_t>(f.sum);
+            if ((mask & LIGHT_MIN) != 0)
+                cell[pos++] = std::bit_cast<std::uint64_t>(f.min);
+            if ((mask & LIGHT_MAX) != 0)
+                cell[pos++] = std::bit_cast<std::uint64_t>(f.max);
+        } else {
+            if ((mask & LIGHT_SUM) != 0)
+                cell[pos++] = std::bit_cast<std::uint64_t>(f.esum);
+            if ((mask & LIGHT_MIN) != 0)
+                cell[pos++] = std::bit_cast<std::uint64_t>(f.emin);
+            if ((mask & LIGHT_MAX) != 0)
+                cell[pos++] = std::bit_cast<std::uint64_t>(f.emax);
+        }
+        if ((mask & LIGHT_MOM) != 0) {
+            cell[pos++] = std::bit_cast<std::uint64_t>(f.shift);
+            cell[pos++] = std::bit_cast<std::uint64_t>(f.cmean);
+            cell[pos++] = std::bit_cast<std::uint64_t>(f.cm2);
+        }
+        dyn_light_carry_set(g, id, f.ecarry);
+    }
 
     std::size_t nspecs() const { return specs.size(); }
     std::int64_t ngroups() const {
@@ -828,6 +1268,7 @@ class AggState {
         dyn_has_sketch = false;
         for (const AggDynSpec& d : dyn_specs)
             if (d.op == AggOp::Pct) dyn_has_sketch = true;
+        dyn_light_layout();
     }
 
     // The groups a state is expected to hold (an estimate from a probe of the
@@ -850,6 +1291,7 @@ class AggState {
             light.reserve(h * light_stride);
         else
             fstats.reserve(h * nf);
+        if (dyn_light_on) dyn_light.reserve(h);
     }
     void grow_group() {
         counts.push_back(0);
@@ -887,36 +1329,53 @@ class AggState {
             occ_te.resize(occ_te.size() + n_occ, 0);
         }
         if (has_dyn) {
-            dyn_fs.emplace_back();
+            if (dyn_light_on)
+                dyn_light.emplace_back();
+            else
+                dyn_fs.emplace_back();
             if (dyn_has_sketch) dyn_sketch.emplace_back();
         }
     }
     // The field stat of slot i (group * nf + field) from its light cells.
     FieldStat light_stat(std::size_t i) const {
         const std::size_t fld = i % nf;
-        const std::uint64_t* row = light.data() + (i / nf) * light_stride;
-        const std::uint64_t* c = row + light_off[fld];
-        const std::uint8_t m = light_mask[fld];
+        FieldStat f = light_words_stat(
+            light.data() + (i / nf) * light_stride, light_off[fld],
+            light_mask[fld], static_cast<std::uint8_t>(fld), field_domain[fld]);
+        if (!light_carry.empty())
+            if (const auto it = light_carry.find(i); it != light_carry.end())
+                f.ecarry = it->second;
+        return f;
+    }
+
+    // The stat a light row's cell holds: `row` is the group's row, `off` the
+    // cell's word offset in it, `bit` the presence bit (the field's index, or
+    // the id word's bit for a dyn cell) and `domain` the accumulation domain.
+    static FieldStat light_words_stat(const std::uint64_t* row,
+                                      std::uint32_t off, std::uint8_t mask,
+                                      std::uint8_t bit,
+                                      FieldStatDomain domain) {
+        const std::uint64_t* c = row + off;
         FieldStat f;
         std::size_t pos = 0;
-        if (m & LIGHT_N)
+        if (mask & LIGHT_N)
             f.n = c[pos++];
         else
-            f.n = (row[0] >> fld) & 1;
+            f.n = (row[0] >> bit) & 1;
         if (f.n == 0) return f;
         struct Cells {
             std::uint64_t sum = 0, lo = 0, hi = 0;
         } l;
-        if (m & LIGHT_SUM) l.sum = c[pos++];
-        if (m & LIGHT_MIN) l.lo = c[pos++];
-        if (m & LIGHT_MAX) l.hi = c[pos++];
-        if (m & LIGHT_MOM) {
+        if (mask & LIGHT_SUM) l.sum = c[pos++];
+        if (mask & LIGHT_MIN) l.lo = c[pos++];
+        if (mask & LIGHT_MAX) l.hi = c[pos++];
+        if (mask & LIGHT_MOM) {
             f.shift = std::bit_cast<double>(c[pos++]);
             f.cmean = std::bit_cast<double>(c[pos++]);
             f.cm2 = std::bit_cast<double>(c[pos++]);
         }
-        f.domain = field_domain[fld];
-        switch (f.domain) {
+        f.domain = domain;
+        switch (domain) {
             case FieldStatDomain::F64:
                 f.sum = std::bit_cast<double>(l.sum);
                 f.min = std::bit_cast<double>(l.lo);
@@ -939,9 +1398,6 @@ class AggState {
                 f.max = static_cast<double>(l.hi);
                 break;
         }
-        if (!light_carry.empty())
-            if (const auto it = light_carry.find(i); it != light_carry.end())
-                f.ecarry = it->second;
         return f;
     }
     // The field stat of slot i, wherever it is kept.
@@ -1123,7 +1579,10 @@ class AggState {
     // Merge group `j` of `other` into this state's group `g` (already located).
     // Shared by agg_merge (1:1 keys) and agg_regroup (projected keys); assumes
     // this state adopted `other`'s spec/field layout.
-    void merge_group(std::int64_t g, const AggState& other, std::int64_t j) {
+    /// `dyn_map` maps other's dyn ids to this state's; null when the two
+    /// states share one name table.
+    void merge_group(std::int64_t g, const AggState& other, std::int64_t j,
+                     const dstd::Vector<std::uint32_t>* dyn_map = nullptr) {
         counts[static_cast<std::size_t>(g)] +=
             other.counts[static_cast<std::size_t>(j)];
         if (static_cast<std::size_t>(j) < other.group_first_row.size()) {
@@ -1137,8 +1596,12 @@ class AggState {
         }
         const std::size_t db = static_cast<std::size_t>(g) * nf;
         const std::size_t sb = static_cast<std::size_t>(j) * nf;
-        for (std::size_t fj = 0; fj < nf; ++fj)
-            fstats[db + fj].merge(other.fstats[sb + fj]);
+        for (std::size_t fj = 0; fj < nf; ++fj) {
+            FieldStat unpacked;
+            fstats[db + fj].merge(other.light_on
+                                      ? (unpacked = other.light_stat(sb + fj))
+                                      : other.fstats[sb + fj]);
+        }
         if (has_fl) {
             for (std::size_t fj = 0; fj < nf; ++fj) {
                 const std::size_t d = db + fj, s = sb + fj;
@@ -1257,13 +1720,29 @@ class AggState {
             }
         }
         if (has_dyn) {
-            for (const auto& [name, sm] :
-                 other.dyn_fs[static_cast<std::size_t>(j)])
-                dyn_fs[static_cast<std::size_t>(g)][name].merge(sm);
-            if (dyn_has_sketch)
-                for (const auto& [name, sk] :
+            auto other_id = [&](std::uint32_t id) {
+                return dyn_map ? (*dyn_map)[static_cast<std::size_t>(id)] : id;
+            };
+            if (dyn_light_on) {
+                other.dyn_each_cell(j,
+                                    [&](std::uint32_t id, const FieldStat& f) {
+                                        dyn_light_merge(g, other_id(id), f);
+                                    });
+            } else {
+                dstd::Vector<DynCell>& cells =
+                    dyn_fs[static_cast<std::size_t>(g)];
+                other.dyn_each_cell(
+                    j, [&](std::uint32_t id, const FieldStat& f) {
+                        dyn_cell_of(cells, other_id(id)).merge(f);
+                    });
+            }
+            if (dyn_has_sketch) {
+                dstd::Vector<DynSketchCell>& sk =
+                    dyn_sketch[static_cast<std::size_t>(g)];
+                for (const DynSketchCell& c :
                      other.dyn_sketch[static_cast<std::size_t>(j)])
-                    dyn_sketch[static_cast<std::size_t>(g)][name].merge(sk);
+                    dyn_sketch_cell_of(sk, other_id(c.id)).merge(c.sketch);
+            }
         }
     }
 
@@ -1336,7 +1815,10 @@ class AggState {
         has_dyn = other.has_dyn;
         dyn_has_sketch = other.dyn_has_sketch;
         dyn_specs = other.dyn_specs;
+        dyn_names = other.dyn_names;
+        dyn_ids = other.dyn_ids;
         dyn_domain = other.dyn_domain;
+        dyn_light_layout();
     }
 };
 

@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_TESTS_TESTING_UTILITIES_H
 
 #ifdef __cplusplus
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -165,6 +165,12 @@ inline fs::path make_unique_test_path(const std::string& name) {
 /// must be gzip, so fixtures that used to be written as plain .pfw go
 /// through this.
 std::string write_gz_trace(const std::string& path, const std::string& content);
+
+/// Like write_gz_trace, but in stored (uncompressed) deflate blocks written
+/// here, so the file has the same bytes whichever zlib the process loads. For
+/// tests that compare an index with recorded digests.
+std::string write_stored_gz_trace(const std::string& path,
+                                  const std::string& content);
 
 bool compress_file_to_gzip(const std::string& input_file,
                            const std::string& output_file);

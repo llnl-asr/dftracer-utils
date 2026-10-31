@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/error.h>
@@ -7,14 +7,13 @@
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 
 #include <fstream>
 #include <memory>
 #include <random>
 #include <string>
 #include <vector>
-
-#include "testing_utilities.h"
 
 using namespace dftu_utils_test;
 using namespace dftracer::utils;

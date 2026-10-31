@@ -1,12 +1,7 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/io/io_backend.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/pipeline/pipeline_config.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/rowsets.h>
@@ -16,6 +11,12 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/io/io_backend.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/pipeline/pipeline_config.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/server/router.h>
 #include <dftracer/utils/server/trace_index.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -46,7 +47,7 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
     const dftracer::utils::index::store::IndexDatabase& db, int fid,
     const dftracer::utils::index::RecordSchema& schema) {
     namespace ix = dftracer::utils::index;
-    if (schema.decoder == ix::Decoder::PATH) {
+    if (schema.decoder == ix::Decoder::Path) {
         ix::gzip::TimeBounds bounds;
         const auto& roles = schema.roles;
         if (roles.time.empty()) return bounds;
@@ -89,7 +90,7 @@ namespace {
 // Bump VERSION when the on-disk layout below changes; the loader then ignores
 // the stale cache.
 constexpr std::uint32_t VIZ_SUMMARY_MAGIC = 0x315A5644;  // "DVZ1"
-constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 1;
+constexpr std::uint32_t VIZ_SUMMARY_FORMAT_VERSION = 0;
 
 struct BufWriter {
     std::string b;
@@ -229,8 +230,15 @@ void serialize_summary(BufWriter& w, const VizSummary& s) {
         w.u64(lv.nbuckets);
         w.dbl(lv.bucket_us);
         auto wvec_lvl = [&](const std::vector<double>& v) {
+            std::uint64_t nonzero = 0;
+            for (double x : v) nonzero += x != 0.0;
             w.u64(v.size());
-            for (double x : v) w.dbl(x);
+            w.u64(nonzero);
+            for (std::size_t i = 0; i < v.size(); ++i) {
+                if (v[i] == 0.0) continue;
+                w.u32(static_cast<std::uint32_t>(i));
+                w.dbl(v[i]);
+            }
         };
         wvec_lvl(lv.read_bytes);
         wvec_lvl(lv.write_bytes);
@@ -341,9 +349,19 @@ bool deserialize_summary(BufReader& r, VizSummary& s) {
         lv.bucket_us = r.dbl();
         auto rvec_lvl = [&](std::vector<double>& v) -> bool {
             std::uint64_t n = r.u64();
-            if (!r.fits(n, 8)) return false;
-            v.resize(n);
-            for (auto& x : v) x = r.dbl();
+            std::uint64_t nonzero = r.u64();
+            constexpr std::uint64_t MAX_BUCKETS =
+                VizSummary::MAX_BUCKETS_PER_LANE
+                << (2 * VizSummary::EXTRA_LEVELS);
+            if (n != lv.nbuckets || n > MAX_BUCKETS || !r.fits(nonzero, 4 + 8))
+                return false;
+            v.assign(n, 0.0);
+            for (std::uint64_t i = 0; i < nonzero; ++i) {
+                std::uint32_t at = r.u32();
+                double x = r.dbl();
+                if (at >= n) return false;
+                v[at] = x;
+            }
             return r.ok;
         };
         if (!rvec_lvl(lv.read_bytes) || !rvec_lvl(lv.write_bytes) ||
@@ -516,6 +534,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 index::store::RocksDBManager::instance().reset(root);
                 std::error_code ec;
                 fs::remove_all(root, ec);
+                forget_input(root);
             }
         }
     }
@@ -551,7 +570,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 .with_watchdog(false)
                 .with_global_timeout(std::chrono::seconds(0))
                 .with_task_timeout(std::chrono::seconds(0))
-                .with_io_backend(io::IoBackendType::THREADPOOL)
+                .with_io_backend(io::IoBackendType::Threadpool)
                 .with_io_batch_size(1);
 
         Pipeline pipeline(pipeline_config);
@@ -632,16 +651,17 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     auto meta_chan =
                         coro::make_channel<std::size_t>(max_concurrent * 2);
 
-                    co_await ctx.scope([&meta_chan, files_ptr, large_files_ptr,
-                                        schemas_ptr,
-                                        max_concurrent](CoroScope& scope)
-                                           -> coro::CoroTask<void> {
+                    auto meta_scope =
+                        [&meta_chan, files_ptr, large_files_ptr, schemas_ptr,
+                         max_concurrent](
+                            CoroScope& scope) -> coro::CoroTask<void> {
                         scope.spawn(
                             [ch = meta_chan->producer(), large_files_ptr](
                                 CoroScope&) mutable -> coro::CoroTask<void> {
                                 auto guard = ch.guard();
                                 for (auto idx : *large_files_ptr) {
-                                    if (!co_await ch.send(idx)) co_return;
+                                    const auto send_ok = co_await ch.send(idx);
+                                    if (!send_ok) co_return;
                                 }
                                 co_return;
                             });
@@ -650,7 +670,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             scope.spawn([ch = meta_chan->consumer(), files_ptr,
                                          schemas_ptr](CoroScope&)
                                             -> coro::CoroTask<void> {
-                                while (auto fi_opt = co_await ch.receive()) {
+                                for (;;) {
+                                    auto fi_opt = co_await ch.receive();
+                                    if (!fi_opt) break;
                                     std::size_t fi = *fi_opt;
                                     auto* info = &(*files_ptr)[fi];
 
@@ -701,9 +723,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                         MetadataCollectorUtilityInput::
                                             from_file(info->path)
                                                 .with_index(info->index_path);
+                                    MetadataCollectorUtility collector;
                                     auto metadata =
-                                        co_await MetadataCollectorUtility{}(
-                                            meta_input);
+                                        co_await collector(meta_input);
                                     if (metadata.success) {
                                         info->uncompressed_size =
                                             metadata.uncompressed_size;
@@ -721,7 +743,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                             });
                         }
                         co_return;
-                    });
+                    };
+                    co_await ctx.scope(meta_scope);
 
                     for (auto fi : *large_files_ptr) {
                         const auto& info = (*files_ptr)[fi];
@@ -754,7 +777,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
             DFTRACER_UTILS_LOG_WARN(
                 "TraceIndex: failed to resolve time_metric: %s", e.what());
         }
-        if (time_metric_ != TimeMetric::US) {
+        if (time_metric_ != TimeMetric::Us) {
             DFTRACER_UTILS_LOG_INFO(
                 "TraceIndex: trace time unit is %s (scaling viz to us)",
                 std::string(time_metric_to_string(time_metric_)).c_str());

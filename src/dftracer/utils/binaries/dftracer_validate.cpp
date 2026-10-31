@@ -1,15 +1,16 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
@@ -30,8 +31,8 @@ using dftracer::utils::utilities::fileio::lines::sources::
 
 class ValidateArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
-    cli::FilesArgs files_args{"Trace files to validate (.pfw, .pfw.gz)"};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
+    cli::FilesArgs files_args{"Trace files to validate (.pfw.gz)"};
     cli::PipelineArgs pipeline;
 
     explicit ValidateArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
@@ -59,7 +60,7 @@ coro::CoroTask<std::vector<std::string>> collect_files(
     for (auto& f : cli_files) {
         if (cli::is_trace_file(f)) files.push_back(std::move(f));
     }
-    if (!directory.empty() && fs::exists(directory)) {
+    if (!directory.empty() && dftracer::utils::input_exists(directory)) {
         auto scanned = co_await cli::scan_directory_trace_files(
             ctx, directory, /*recursive=*/true);
         files.insert(files.end(), std::make_move_iterator(scanned.begin()),
@@ -80,7 +81,7 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // validate would read no lines and still count the file as passing
         // without ever decompressing it.
         if (CheckpointIndexerFactory::detect_format(result->path) !=
-            ArchiveFormat::GZIP) {
+            ArchiveFormat::Gzip) {
             throw std::runtime_error(
                 "not a gzip trace (dftracer traces must be gzip-compressed)");
         }
@@ -91,7 +92,9 @@ coro::CoroTask<void> validate_file(std::string path, FileValResult* result) {
         // A cut trace is invalid here, not recovered.
         auto gen = async_streaming_gz_lines(result->path, 0, 0,
                                             /*recover_truncated=*/false);
-        while (auto line_opt = co_await gen.next()) {
+        for (;;) {
+            auto line_opt = co_await gen.next();
+            if (!line_opt) break;
             const auto& line = *line_opt;
             const char* start = nullptr;
             std::size_t trimmed = 0;
@@ -142,8 +145,9 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
             if (files->empty()) co_return;
             results.resize(files->size());
-            co_await ctx.scope([files, &results, executor_threads](
-                                   CoroScope& scope) -> coro::CoroTask<void> {
+            auto validate_scope =
+                [files, &results,
+                 executor_threads](CoroScope& scope) -> coro::CoroTask<void> {
                 cli::parallel_for_each(
                     scope, std::views::iota(std::size_t{0}, files->size()),
                     executor_threads,
@@ -151,7 +155,8 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
                         co_await validate_file((*files)[idx], &results[idx]);
                     });
                 co_return;
-            });
+            };
+            co_await ctx.scope(validate_scope);
             co_return;
         },
         "Validate");
@@ -204,7 +209,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
 int main(int argc, char** argv) {
     return cli::cli_main<ValidateArgParse>(
         argc, argv, "dftracer_validate",
-        "Validate DFTracer .pfw / .pfw.gz trace files: every non-wrapper line "
+        "Validate DFTracer .pfw.gz trace files: every non-wrapper line "
         "must be valid JSON. Parallel C++ equivalent of the dftracer_validate "
         "script.",
         [](ValidateArgParse& cli) { return run_validate(&cli).get(); });

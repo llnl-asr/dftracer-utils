@@ -1,6 +1,6 @@
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
 #include <unistd.h>
@@ -46,13 +46,18 @@ const std::string& SpillDir::path() {
     return dir_->path();
 }
 
+void SpillDir::charge(std::uint64_t bytes) noexcept {
+    if (dir_) dir_->charge().add(bytes);
+}
+
 const std::string& StateAccum::dir_path() {
     if (!dir_) dir_ = std::make_shared<SpillDir>();
     return dir_->path();
 }
 
 StateAccum::StateAccum(const RegisteredState& reg, std::uint64_t budget)
-    : reg_(&reg), budget_(dftracer::utils::resolve_spill_budget(budget)) {
+    : reg_(&reg),
+      budget_(dftracer::utils::memory::resolve_spill_budget(budget)) {
     state_ = reg.desc.init(reg.self);
     if (!state_)
         DFTRACER_UTILS_LOG_ERROR("Plugin state '%s' init returned null",
@@ -75,7 +80,7 @@ void StateAccum::update(const ::dftu_dataframe* df) {
 }
 
 void StateAccum::maybe_spill() {
-    if (!state_ || budget_ == dftracer::utils::NO_SPILL_BUDGET) return;
+    if (!state_ || budget_ == dftracer::utils::memory::NO_SPILL_BUDGET) return;
     // Without a size hook the host has no measure of the state at all, so it
     // cannot claim the state is over budget, let alone bound it.
     if (!reg_->desc.bytes) return;
@@ -112,6 +117,7 @@ void StateAccum::maybe_spill() {
                  static_cast<std::streamsize>(out.len));
         os.close();
         if (os) {
+            dir_->charge(out.len);
             runs_.push_back(path);
             written = true;
         }

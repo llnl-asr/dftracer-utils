@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -109,6 +109,14 @@ TEST_SUITE("shard_manifest") {
         write_shard_manifest(dir.path().string(), sample());
         CHECK(resolve_shard_set_root(dir.path().string()) ==
               dir.path().string());
+    }
+
+    TEST_CASE("a manifest with no format version has none, not 0") {
+        auto m = parse_manifest(R"({"shards":[]})");
+        CHECK_FALSE(m.format_version.has_value());
+        auto written = parse_manifest(to_json(sample()));
+        REQUIRE(written.format_version.has_value());
+        CHECK(*written.format_version == 8);
     }
 
     TEST_CASE("malformed JSON throws") {

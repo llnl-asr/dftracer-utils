@@ -42,7 +42,7 @@
 
 .cpmsource
 .direnv
-build
+/build/
 dict_analyzer*
 *.pfw.gz
 *.pfw.gz.idx
@@ -59,7 +59,7 @@ coverage/
 _skbuild
 *.pyd
 __pycache__
-build
+/build/
 .vscode
 .vs
 /dist

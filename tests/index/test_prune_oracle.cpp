@@ -3,11 +3,10 @@
 // consumer is `gather_units`, the path every View scan plans through. Dynamic
 // narrowing is not recorded: it races the running scan, and it prunes through
 // ChunkPruner, which is. Set
-// DFTRACER_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
+// DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -18,6 +17,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -54,6 +54,12 @@ constexpr const char* FHASH[] = {"1a2b3c4d5e6f7081", "92a3b4c5d6e7f809",
 constexpr const char* HHASH[] = {"c0ffee00c0ffee00", "deadbeefdeadbeef"};
 constexpr const char* EXECS[] = {"/usr/bin/python", "/usr/bin/ior"};
 constexpr const char* SHASH[] = {"5a5a5a5a00000001", "5a5a5a5a00000002"};
+
+constexpr std::size_t MEMBER_BYTES = 32 * 1024;
+constexpr std::size_t LARGE_MEMBER_BYTES = 256 * 1024;
+// A scan reads through a buffer of one small member, so it crosses buffers
+// within a member; the 4 MB default would zero-fill per scan unit for no gain.
+constexpr std::size_t SCAN_BUFFER_BYTES = MEMBER_BYTES;
 
 // Deterministic linear congruential generator; the corpus must not change
 // between the recording and the check.
@@ -128,7 +134,7 @@ std::string write_trace(const std::string& dir, int seed, int events) {
     const auto plain = dir + "/trace" + std::to_string(seed) + ".pfw";
     std::ofstream(plain) << out.str();
     const auto gz = plain + ".gz";
-    const std::size_t member = seed == 3 ? 256 * 1024 : 32 * 1024;
+    const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
     fs::remove(plain);
@@ -289,6 +295,7 @@ std::size_t count_json(const std::string& trace, const std::string& index_dir,
         utilities::reader::ReadConfig cfg;
         cfg.query = text;
         cfg.skip_pruning = skip_pruning;
+        cfg.buffer_size = SCAN_BUFFER_BYTES;
         auto gen = reader.read_json(cfg);
         std::size_t n = 0;
         while (auto line = co_await gen.next()) ++n;
@@ -297,6 +304,19 @@ std::size_t count_json(const std::string& trace, const std::string& index_dir,
     return run().get();
 }
 
+coro::CoroTask<std::uint64_t> scan_unit(
+    const trace::views::detail::ScanUnit& u,
+    const trace::views::ViewDefinition& vdef) {
+    auto sin = trace::views::detail::make_scanner_input(u, vdef, vdef.query);
+    sin.with_batch_size(SCAN_BUFFER_BYTES);
+    trace::views::ViewScannerUtility scanner;
+    auto gen = scanner(sin);
+    std::uint64_t n = 0;
+    while (auto b = co_await gen.next()) n += b->events_matched;
+    co_return n;
+}
+
+// The View scan: the units `gather_units` plans, each scanned.
 std::uint64_t count_view(const std::string& trace,
                          const std::string& index_path,
                          const std::string& text) {
@@ -304,11 +324,15 @@ std::uint64_t count_view(const std::string& trace,
     vp.files.push_back({trace, index_path, 0, 0, 0});
     vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
-    return trace::views::detail::for_each_scanned_batch(
-               vp, vdef, 1, 0,
-               [](std::size_t, const std::vector<std::string_view>&) {})
-        .get()
-        .events_matched;
+    auto run = [&]() -> coro::CoroTask<std::uint64_t> {
+        std::uint64_t skipped = 0;
+        const auto units =
+            co_await trace::views::detail::gather_units(vp, vdef, skipped);
+        std::uint64_t n = 0;
+        for (const auto& u : units) n += co_await scan_unit(u, vdef);
+        co_return n;
+    };
+    return run().get();
 }
 
 // The View scan without pruning: the whole file as one unit.
@@ -327,16 +351,7 @@ std::uint64_t count_view_unpruned(const std::string& trace,
         trace, index_path, trace::views::detail::checkpoint_size_or_default(0),
         0,     0,          spans.back().uc_offset + spans.back().uc_size,
         0,     q};
-    auto run = [&]() -> coro::CoroTask<std::uint64_t> {
-        const auto sin =
-            trace::views::detail::make_scanner_input(u, vdef, vdef.query);
-        trace::views::ViewScannerUtility scanner;
-        auto gen = scanner(sin);
-        std::uint64_t n = 0;
-        while (auto b = co_await gen.next()) n += b->events_matched;
-        co_return n;
-    };
-    return run().get();
+    return scan_unit(u, vdef).get();
 }
 
 }  // namespace
@@ -345,7 +360,7 @@ TEST_CASE("prune decisions match the recording") {
     Corpus corpus;
     const auto lines = run_oracle(corpus);
 
-    if (const char* out = std::getenv("DFTRACER_PRUNE_ORACLE_RECORD")) {
+    if (const char* out = std::getenv("DFTRACER_UTILS_PRUNE_ORACLE_RECORD")) {
         std::ofstream f(out);
         for (const auto& l : lines) f << l << "\n";
         MESSAGE("recorded " << lines.size() << " lines to "
@@ -508,7 +523,7 @@ TEST_CASE("one extension is rebuilt or dropped without the others") {
             ix.drop_extension(bad);
             FAIL("expected an error");
         } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::INVALID_ARGUMENT);
+            CHECK(e.code() == ErrorCode::InvalidArgument);
         }
         CHECK_THROWS_AS(ix.rebuild_extension(bad), DFTUtilsException);
     }

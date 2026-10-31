@@ -4,13 +4,12 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace {
 
@@ -127,7 +126,7 @@ bool has_catalog(const std::string& gz) {
                              st::IndexOpenMode::ReadOnly);
         const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
         return fid >= 0 &&
-               db.extension_current(fid, st::IndexExtension::CATALOG);
+               db.extension_current(fid, st::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }

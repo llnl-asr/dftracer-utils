@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_PLAN_VIEW_RESOLVER_H
 #define DFTRACER_UTILS_INDEX_PLAN_VIEW_RESOLVER_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 
 #include <string>

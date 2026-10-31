@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -13,7 +13,7 @@
 #include <span>
 #include <vector>
 
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::trace::RecordPhase;
 namespace df = dftracer::utils::dataframe;
 namespace detail = dftracer::utils::trace::views::detail;
@@ -33,7 +33,7 @@ FoldEvent ev(StringIntern& in, std::uint64_t pid, std::uint64_t ts,
     e.tid = 1;
     e.ts = ts;
     e.dur = dur;
-    e.phase = RecordPhase::COMPLETE;
+    e.phase = RecordPhase::Complete;
     e.has_dur = true;
     return e;
 }
@@ -104,7 +104,7 @@ TEST_SUITE("VectorizedFold") {
         StringIntern in;
         auto fold = make_fold(in);
         FoldEvent m = ev(in, 1, 1, 0);
-        m.phase = RecordPhase::METADATA;
+        m.phase = RecordPhase::Metadata;
         std::vector<FoldEvent> evs = {m};
         ScanUnit unit{};
         fold.step(FoldBatch{std::span<const FoldEvent>(evs), unit, {}});

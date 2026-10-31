@@ -2,8 +2,8 @@
 #define DFTRACER_UTILS_PYTHON_SERIES_DETAIL_H
 
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 

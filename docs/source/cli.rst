@@ -51,7 +51,7 @@ repeated in each tool's section.
 - ``--duql <duql>`` (alias ``--query``) - duql filter
   (e.g., ``'cat == "POSIX" and dur > 1000'``)
 - ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH
-  (repeatable), after ``$DFTRACER_DUQL_PATH``
+  (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 
 **Watchdog** (``WatchdogArgs``)
 
@@ -72,8 +72,8 @@ repeated in each tool's section.
 **Inputs** (``DirectoryArgs`` / ``FilesArgs``)
 
 - ``-d, --directory <path>`` - Directory containing trace files
-- ``--files <files...>`` - Trace files (``.pfw``, ``.jsonl``, ``.ndjson``
-  or ``.json``, plain or gzip)
+- ``--files <files...>`` - Gzip trace files (``.pfw.gz``, ``.jsonl.gz``,
+  ``.ndjson.gz`` or ``.json.gz``)
 
 **Logging**
 
@@ -136,7 +136,7 @@ dftracer_info
 **Options:**
 
 - ``--files <files...>`` - Compressed files to inspect (GZIP, TAR.GZ)
-- ``-d, --directory <path>`` - Directory containing files to inspect
+- ``-d, --directory <path>`` - Directory containing files to inspect, read with all of its subfolders
 - ``--query <type>`` - Query type: ``summary`` (aggregate all files, default) or ``detailed`` (per-file output including detailed statistics)
 - ``-f, --force-rebuild`` - Force rebuild index files
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
@@ -173,16 +173,18 @@ dftracer_split
 **Options:**
 
 - ``-n, --app-name <name>`` - Application name for output files (default: app)
-- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
+- ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
 - ``-s, --chunk-size <MB>`` - Output file size in MB, approximate **compressed** on-disk size (default: 4)
-- ``-f, --force`` - Override existing files and force index recreation
 - ``-c, --compress`` - Compress output files with gzip (a value-less flag;
   output is gzip-compressed by default)
-- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes; also
-  the gzip member size (default: 33554432 B / 32 MB)
+- ``--checkpoint-size <bytes>`` - Gzip member size of the output files in
+  uncompressed bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
-- ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
+- ``--memory-budget <bytes>`` - Most memory the chunk writers hold, with units
+  (e.g. 64GB). Chunk files are written in groups at once, and a group is
+  admitted only while the budget holds its writer; one group always runs.
+  0 means a third of the available memory (default: 0)
 - ``--verify`` - Verify output chunks match input by comparing event IDs
 
 .. note::
@@ -192,6 +194,13 @@ dftracer_split
    granularity). They are orthogonal: a 32 MB compressed chunk holds ~300 MB
    uncompressed, so at an 8 MB checkpoint size it contains ~37 members. See
    :ref:`multi-member-gzip`.
+
+   ``dftracer_split`` reads each input file once and writes no index. It
+   estimates the compression ratio of a file from its first megabyte of gzip
+   data, so the size of a chunk file is approximate. A chunk file ends at the
+   member end nearest to its size, so it is within about half a member of
+   ``--chunk-size``. The last chunk file of a group of input files is
+   usually shorter.
 
 **Example:**
 
@@ -222,7 +231,7 @@ dftracer_event_count
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing .pfw.gz files (default: .)
+- ``-d, --directory <path>`` - Directory containing .pfw.gz files, read with all of its subfolders (default: .)
 - ``-f, --force`` - Force index recreation
 - ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
@@ -372,14 +381,14 @@ dftracer_stats
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
+- ``-d, --directory <path>`` - Directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``--files <files...>`` - Explicit list of trace files
 - ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
 - ``--report <type>`` - Report type: summary, categories, names, pid_tids, time_range, duration, top-names, top-categories, detailed (default: summary)
 - ``--top-n <count>`` - Number of results for top-N queries (0=show all, default: 0)
 - ``--top-n-pid-tid <count>`` - Max PID:TID pairs to display (0=show all, default: 10)
 - ``--duql <duql>`` (alias ``--query``) - duql filter (e.g., ``'cat == "POSIX" and dur > 1000'``)
-- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 - ``--group-by <dims...>`` - Group-by dimensions: name, cat, pid, tid, fhash, hhash, pid_tid (default: name for detailed)
 - ``--filter-names <names...>`` - Filter by event names
 - ``--filter-cats <cats...>`` - Filter by event categories
@@ -418,7 +427,7 @@ dftracer_view
 **Options:**
 
 - ``--files <files...>`` - Trace files to process (.pfw.gz)
-- ``-d, --directory <path>`` - Directory scanned recursively for trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip)
+- ``-d, --directory <path>`` - Directory scanned recursively for gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``)
 - ``--preset <name>`` - Predefined view: io, compute, dlio
 - ``--recipe <path>`` - Custom view JSON file path
 - ``--save-recipe <path>`` - Save the constructed view to a JSON file
@@ -429,7 +438,7 @@ dftracer_view
 - ``--min-duration <us>`` - Minimum event duration in microseconds
 - ``--max-duration <us>`` - Maximum event duration in microseconds
 - ``-o, --output <path>`` - Output file path (default: stdout)
-- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--no-auto-index`` - Disable automatic index building for files missing ``.dftindex``
 - ``--checkpoint-size <bytes>`` - Checkpoint size for auto-indexing in bytes (default: 33554432 B / 32 MB)
@@ -512,10 +521,10 @@ dftracer_index
 
 **Options:**
 
-- ``-d, --directory <path>`` - Input directory containing trace files (``.pfw``, ``.jsonl`` or ``.ndjson``, plain or gzip) (default: .)
+- ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``--dimensions <dims>`` - Comma-separated args fields to index by name, nested ones included (e.g., level,mode,io.size)
 - ``--schema <id>`` - Record schema of every trace: a registered id, such as ``dftracer`` or ``generic`` (default: detected per file from its first lines)
-- ``--memory-budget <bytes>`` - Bytes the build may hold at once; past it large files are indexed fewer at a time and spill to disk (default: 0 = about a third of available memory; accepts units such as 512MB)
+- ``--memory-budget <bytes>`` - Bytes the build may hold at once; a file starts when its expected bytes fit, so past the budget fewer files run at a time, and large files spill to disk; each worker holds at least 8 MiB of the output it has not committed, in half of the budget, so a budget of 64 MB or less runs at most 4 workers (default: 0 = about a third of available memory; accepts units such as 512MB)
 - ``--stats-share <fraction>`` - Also index each file's other paths, most frequent first, while their evidence fits this fraction of the file's compressed size, at least 8 MiB: numbers get a per-chunk min/max, strings a per-chunk bloom up to 256 distinct values (default: 0.05; must be in (0, 1])
 - ``--path-budget <n>`` - Ceiling on how many other paths get evidence (default: 0, no count limit)
 - ``-f, --force`` - Force index recreation even if already built
@@ -557,7 +566,7 @@ plugins run, unless ``--no-auto-index`` is given.
 
 **Options:**
 
-- ``-d, --directory <path>`` - Directory containing trace files
+- ``-d, --directory <path>`` - Directory containing trace files, read with all of its subfolders
 - ``--files <files...>`` - Trace files (.pfw.gz)
 - ``--index-dir <path>`` - Directory where ``.dftindex`` stores are created
 - ``--checkpoint-size <bytes>`` - Checkpoint size for gzip indexing in bytes (default: 33554432 B / 32 MB)
@@ -707,12 +716,11 @@ dftracer_replay
 
 **Options:**
 
-- ``inputs`` - Trace files (.pfw.gz) or directories containing trace files [required]
+- ``inputs`` - Trace files (.pfw.gz) or directories, read with all of their subfolders [required]
 - ``--no-timing`` - Ignore original timing and execute as fast as possible
 - ``--dry-run`` - Parse and analyze traces without executing operations
 - ``--dftracer-mode`` - Use DFTracer sleep-based replay (sleep for operation duration instead of doing actual I/O)
 - ``--no-sleep`` - When used with --dftracer-mode, disable sleep calls for maximum speed
-- ``-r, --recursive`` - Recursively search directories for trace files
 - ``--use-call-tree`` - Build and use call tree structure for hierarchical replay
 - ``--hierarchical-replay`` - Replay operations respecting parent-child call hierarchy (requires --use-call-tree)
 - ``--respect-call-hierarchy`` - Replay child nodes immediately after parent (requires --use-call-tree and --hierarchical-replay)
@@ -745,7 +753,7 @@ dftracer_replay
     dftracer_replay ./traces/rank_0.pfw.gz --dry-run --log-level debug
 
     # Replay only POSIX read operations
-    dftracer_replay -d ./traces -r --filter-category POSIX --filter-function read
+    dftracer_replay ./traces --filter-category POSIX --filter-function read
 
 For detailed usage, see :doc:`utilities/replay`.
 
@@ -807,7 +815,7 @@ dftracer_comparator
 - ``--config <path>`` - JSON config file for hierarchical comparison (replaces ``--baseline``/``--variant``)
 - ``--preset <name>`` - Built-in comparison preset (see **Presets** below). Requires ``--baseline`` and ``--variant``
 - ``--duql <duql>`` (alias ``--query``) - duql filter. With ``--preset``, ANDed into every top-level node query to narrow results without replacing the preset structure (default: ``'cat == "POSIX" OR cat == "STDIO"'`` for plain mode)
-- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_DUQL_PATH``
+- ``--duql-path PATH`` - Load the ``.duql`` macro file or directory PATH (repeatable), after ``$DFTRACER_UTILS_DUQL_PATH``
 - ``--group-by <keys>`` - Comma-separated group keys (default: cat,name)
 - ``--format <fmt>`` - Output format: ``table`` (default) or ``json``
 - ``-t, --time-interval <ms>`` - Time interval in milliseconds for bucketing (default: 5000)
@@ -866,7 +874,10 @@ there are no regressions.
 
 **Output columns:**
 
-- **baseline / variant** - Metric values for each side (with +/-stdev when multiple time windows)
+- **baseline / variant** - Metric values for each side (with +/-stdev when multiple time windows).
+  ``count``, the ``dur`` and ``size`` means, ``transfer_size`` and ``bandwidth`` are per time
+  window (``--time-interval``) and use the busiest (pid, tid) pair of each window; the
+  shown value is the mean of those window peaks. The percentiles and the totals cover every event.
 - **delta** - Absolute difference (variant - baseline)
 - **change** - Percentage change
 - **sig** - Cohen's d significance marker: ``~`` negligible, ``*`` small, ``**`` medium, ``***`` large

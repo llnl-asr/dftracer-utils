@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_PLUGINS_PLUGINS_H
 #define DFTRACER_UTILS_PLUGINS_PLUGINS_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/plugins/result_registry.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/view.h>
 
 #include <cstddef>

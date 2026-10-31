@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
 #include <doctest/doctest.h>
@@ -156,10 +156,10 @@ TEST_CASE("line_format - run-time parse errors") {
     for (const char* bad : {"a\n", "\n", "a\r", "{}\n{}"}) {
         auto r = LineFormat::parse(bad);
         REQUIRE_FALSE(r.has_value());
-        CHECK(r.error().code == ErrorCode::INVALID_ARGUMENT);
+        CHECK(r.error().is_code(ErrorCode::InvalidArgument));
         auto j = JsonLineFormat::parse(bad);
         REQUIRE_FALSE(j.has_value());
-        CHECK(j.error().code == ErrorCode::INVALID_ARGUMENT);
+        CHECK(j.error().is_code(ErrorCode::InvalidArgument));
     }
     CHECK(LineFormat::parse("a {\n}").has_value() == false);
     CHECK(LineFormat::parse("a { } {x}").has_value());
@@ -167,8 +167,9 @@ TEST_CASE("line_format - run-time parse errors") {
 
 TEST_CASE("line_format - writer output equals hand-built lines") {
     namespace fs = std::filesystem;
-    const auto dir = fs::temp_directory_path() / "dftu_line_format_test";
-    fs::create_directories(dir);
+    // A unique folder: two test processes must not share and remove it.
+    dftu_utils_test::ScopedTestDir scoped("dftu_line_format_test");
+    const fs::path& dir = scoped.path();
     const std::string p1 = (dir / "ordered.gz").string();
     const std::string p2 = (dir / "producer.gz").string();
     auto lf = JsonLineFormat::parse(R"({"id":{},"n":"{}","v":{}})");
@@ -196,10 +197,10 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         }
         auto r = co_await w->append_json(*lf, 1, 2);
         bad_count =
-            !r.has_value() && r.error().code == ErrorCode::INVALID_ARGUMENT;
+            !r.has_value() && r.error().is_code(ErrorCode::InvalidArgument);
         auto r2 = co_await w->append_json<"{}">((const char*)nullptr);
         null_arg =
-            !r2.has_value() && r2.error().code == ErrorCode::INVALID_ARGUMENT;
+            !r2.has_value() && r2.error().is_code(ErrorCode::InvalidArgument);
         REQUIRE(co_await w->close());
 
         GzipWriterOptions u;
@@ -229,5 +230,4 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
         return out;
     };
     CHECK(lines(gunzip_all(p2)) == lines(want));
-    fs::remove_all(dir);
 }

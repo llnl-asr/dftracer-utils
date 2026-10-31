@@ -2,16 +2,9 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/hash/hash.h>
-#include <dftracer/utils/core/common/hash/partition.h>
-#include <dftracer/utils/core/common/int128.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>  // compute_memory_budget
-#include <dftracer/utils/core/coro/task_abi.h>                   // task_to_abi
-#include <dftracer/utils/core/coro/when_all.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
 #include <dftracer/utils/dataframe/batch_ops.h>  // concat_columns, take, concat
 #include <dftracer/utils/dataframe/field_stat.h>  // FieldStat (describe)
@@ -28,7 +21,6 @@
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/internal/node_registry.h>  // find_node
-#include <dftracer/utils/dataframe/internal/reclaim_registry.h>
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/internal/schema_types.h>   // dftu_schema
 #include <dftracer/utils/dataframe/internal/spill.h>  // external-merge spill
@@ -37,6 +29,14 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/parallel.h>  // parallel_for (parallel sinks)
 #include <dftracer/utils/dataframe/types.h>     // byte_width, buffer_bytes
+#include <dftracer/utils/dstd/hash/hash.h>
+#include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/coro/task_abi.h>         // task_to_abi
+#include <dftracer/utils/runtime/coro/when_all.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
 #include <cmath>
@@ -136,15 +136,15 @@ inline Morsel slice_morsel(const Morsel& m, std::int64_t off,
 // ---- output morsels within the budget ----
 
 // Whether `budget` limits anything: it does not when it is 0 (unset) or
-// NO_SPILL_BUDGET.
+// memory::NO_SPILL_BUDGET.
 inline bool has_cap(std::uint64_t budget) {
-    return budget != NO_SPILL_BUDGET && budget > 0;
+    return budget != memory::NO_SPILL_BUDGET && budget > 0;
 }
 
 // The bytes one output morsel may take of `budget`.
 inline std::uint64_t output_share(std::uint64_t budget) {
     return has_cap(budget) ? std::max<std::uint64_t>(budget / share::OUTPUT, 1)
-                           : NO_SPILL_BUDGET;
+                           : memory::NO_SPILL_BUDGET;
 }
 
 // How many rows of `bytes_per_row` bytes fit `byte_share`, between 1 and
@@ -152,7 +152,7 @@ inline std::uint64_t output_share(std::uint64_t budget) {
 inline std::int64_t rows_within(std::uint64_t byte_share,
                                 std::uint64_t bytes_per_row,
                                 std::int64_t max_rows) {
-    if (byte_share == NO_SPILL_BUDGET) return max_rows;
+    if (byte_share == memory::NO_SPILL_BUDGET) return max_rows;
     const std::uint64_t fit =
         byte_share / std::max<std::uint64_t>(bytes_per_row, 1);
     return std::clamp<std::int64_t>(
@@ -247,7 +247,7 @@ class ExpansionGovernor {
     explicit ExpansionGovernor(std::uint64_t byte_share) : share_(byte_share) {}
 
     std::int64_t rows(std::int64_t max_rows) const {
-        if (share_ == NO_SPILL_BUDGET) return max_rows;
+        if (share_ == memory::NO_SPILL_BUDGET) return max_rows;
         const double out_rows =
             static_cast<double>(share_) / static_cast<double>(row_bytes_);
         const double in_rows = out_rows / std::max(expansion_, 1.0);
@@ -346,7 +346,7 @@ inline constexpr std::size_t MAX_ACCUMULATE_BATCH = 32;
 inline std::size_t accumulate_batch(std::uint64_t budget,
                                     std::uint64_t partial_bytes) {
     if (partial_bytes == 0) return 2;
-    if (budget == NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
+    if (budget == memory::NO_SPILL_BUDGET) return MAX_ACCUMULATE_BATCH;
     return std::clamp<std::size_t>(budget / share::CHUNK / (2 * partial_bytes),
                                    1, MAX_ACCUMULATE_BATCH);
 }
@@ -357,12 +357,13 @@ inline std::size_t accumulate_batch(std::uint64_t budget,
 // states in parallel (the mergeable agg IR) that are then merged, so the batch
 // size follows the size of a partial and memory stays near the budget.
 // `accumulate(state, morsel, row_base)` folds one morsel, `make()` makes a
-// fresh state, and `active()` says whether folding is still wanted (a caller
-// that gave up on `state` only wants its batches).
-template <class Make, class Accumulate, class After, class Active>
+// fresh state, `active()` says whether folding is still wanted (a caller
+// that gave up on `state` only wants its batches), and `cut(batch)`, called
+// at each morsel the batch takes, ends the batch early when it returns true.
+template <class Make, class Accumulate, class After, class Active, class Cut>
 inline coro::CoroTask<void> accumulate_batches(
     Cursor& in, std::int64_t max_rows, std::uint64_t budget, AggStatePtr& state,
-    Make make, Accumulate accumulate, After after, Active active) {
+    Make make, Accumulate accumulate, After after, Active active, Cut cut) {
     std::size_t cap = accumulate_batch(budget, 0);
     std::vector<Morsel> batch;
     batch.reserve(MAX_ACCUMULATE_BATCH);
@@ -378,6 +379,7 @@ inline coro::CoroTask<void> accumulate_batches(
                 break;
             }
             batch.push_back(std::move(*m));
+            if (cut(batch)) break;
         }
         if (batch.empty()) break;
         row_base.clear();

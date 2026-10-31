@@ -1,10 +1,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
-#include <dftracer/utils/core/utils/timer.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
@@ -21,6 +18,10 @@
 #include <dftracer/utils/index/store/queries.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/json_value.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
@@ -69,13 +70,13 @@ struct StatsConfig {
     std::vector<std::string> filter_names;
     std::vector<std::string> filter_cats;
     std::vector<std::string> group_by;
-    StatisticsQueryType report_type = StatisticsQueryType::SUMMARY;
+    StatisticsQueryType report_type = StatisticsQueryType::Summary;
 };
 
 class StatsArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
-    cli::FilesArgs files_args{"Trace files to inspect (.pfw, .pfw.gz)"};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
+    cli::FilesArgs files_args{"Trace files to inspect (.pfw.gz)"};
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
     cli::DuqlArgs duql_args;
@@ -122,7 +123,7 @@ class StatsArgParse : public cli::ArgParse {
 
         config.report_type = parse_report_type_str(report_str);
 
-        if (config.report_type == StatisticsQueryType::DETAILED &&
+        if (config.report_type == StatisticsQueryType::Detailed &&
             config.group_by.empty()) {
             config.group_by.push_back("name");
         }
@@ -225,16 +226,16 @@ class StatsArgParse : public cli::ArgParse {
 
    private:
     static StatisticsQueryType parse_report_type_str(const std::string& s) {
-        if (s == "summary") return StatisticsQueryType::SUMMARY;
-        if (s == "categories") return StatisticsQueryType::CATEGORIES;
-        if (s == "names") return StatisticsQueryType::NAMES;
-        if (s == "pid_tids") return StatisticsQueryType::PID_TIDS;
-        if (s == "time_range") return StatisticsQueryType::TIME_RANGE;
-        if (s == "duration") return StatisticsQueryType::DURATION_STATS;
-        if (s == "top-names") return StatisticsQueryType::TOP_N_NAMES;
-        if (s == "top-categories") return StatisticsQueryType::TOP_N_CATEGORIES;
-        if (s == "detailed") return StatisticsQueryType::DETAILED;
-        return StatisticsQueryType::SUMMARY;
+        if (s == "summary") return StatisticsQueryType::Summary;
+        if (s == "categories") return StatisticsQueryType::Categories;
+        if (s == "names") return StatisticsQueryType::Names;
+        if (s == "pid_tids") return StatisticsQueryType::PidTids;
+        if (s == "time_range") return StatisticsQueryType::TimeRange;
+        if (s == "duration") return StatisticsQueryType::DurationStats;
+        if (s == "top-names") return StatisticsQueryType::TopNNames;
+        if (s == "top-categories") return StatisticsQueryType::TopNCategories;
+        if (s == "detailed") return StatisticsQueryType::Detailed;
+        return StatisticsQueryType::Summary;
     }
 };
 
@@ -772,7 +773,8 @@ static void run_detailed_query_workers(
                  files_ptr](CoroScope&) mutable -> coro::CoroTask<void> {
         auto guard = ch.guard();
         for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
-            if (!co_await ch.send(fi)) {
+            const auto send_ok = co_await ch.send(fi);
+            if (!send_ok) {
                 co_return;
             }
         }
@@ -783,7 +785,9 @@ static void run_detailed_query_workers(
         scope.spawn([ch = file_chan->consumer(), files_ptr, index_dir_ptr,
                      needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
                      ad, am, om, jr](CoroScope&) -> coro::CoroTask<void> {
-            while (auto fi_opt = co_await ch.receive()) {
+            for (;;) {
+                auto fi_opt = co_await ch.receive();
+                if (!fi_opt) break;
                 std::size_t fi = *fi_opt;
                 std::string file_path = (*files_ptr)[fi];
                 co_await process_file_detailed(
@@ -806,20 +810,20 @@ static void print_text_query_output(const TraceStatistics& stats,
                 (unsigned long long)output.total_events);
 
     switch (
-        output.query_type_name == "categories" ? StatisticsQueryType::CATEGORIES
-        : output.query_type_name == "names"    ? StatisticsQueryType::NAMES
-        : output.query_type_name == "pid_tids" ? StatisticsQueryType::PID_TIDS
+        output.query_type_name == "categories" ? StatisticsQueryType::Categories
+        : output.query_type_name == "names"    ? StatisticsQueryType::Names
+        : output.query_type_name == "pid_tids" ? StatisticsQueryType::PidTids
         : output.query_type_name == "time_range"
-            ? StatisticsQueryType::TIME_RANGE
+            ? StatisticsQueryType::TimeRange
         : output.query_type_name == "duration_stats"
-            ? StatisticsQueryType::DURATION_STATS
+            ? StatisticsQueryType::DurationStats
         : output.query_type_name == "top_n_names"
-            ? StatisticsQueryType::TOP_N_NAMES
+            ? StatisticsQueryType::TopNNames
         : output.query_type_name == "top_n_categories"
-            ? StatisticsQueryType::TOP_N_CATEGORIES
-            : StatisticsQueryType::SUMMARY) {
-        case StatisticsQueryType::CATEGORIES:
-        case StatisticsQueryType::TOP_N_CATEGORIES:
+            ? StatisticsQueryType::TopNCategories
+            : StatisticsQueryType::Summary) {
+        case StatisticsQueryType::Categories:
+        case StatisticsQueryType::TopNCategories:
             std::printf("\n  Categories (%zu):\n", output.results.size());
             for (const auto& [name, count] : output.results) {
                 std::printf("    %-40s %llu\n", name.c_str(),
@@ -827,8 +831,8 @@ static void print_text_query_output(const TraceStatistics& stats,
             }
             break;
 
-        case StatisticsQueryType::NAMES:
-        case StatisticsQueryType::TOP_N_NAMES:
+        case StatisticsQueryType::Names:
+        case StatisticsQueryType::TopNNames:
             std::printf("\n  Names (%zu):\n", output.results.size());
             for (const auto& [name, count] : output.results) {
                 std::printf("    %-40s %llu\n", name.c_str(),
@@ -836,7 +840,7 @@ static void print_text_query_output(const TraceStatistics& stats,
             }
             break;
 
-        case StatisticsQueryType::PID_TIDS:
+        case StatisticsQueryType::PidTids:
             std::printf("\n  Process/Thread Pairs (%zu):\n",
                         output.results.size());
             for (const auto& [name, count] : output.results) {
@@ -845,7 +849,7 @@ static void print_text_query_output(const TraceStatistics& stats,
             }
             break;
 
-        case StatisticsQueryType::TIME_RANGE:
+        case StatisticsQueryType::TimeRange:
             std::printf("\n  Time Span: %.6f seconds\n",
                         output.time_span_seconds);
             std::printf("  Min Timestamp: %llu us\n",
@@ -854,7 +858,7 @@ static void print_text_query_output(const TraceStatistics& stats,
                         (unsigned long long)output.max_timestamp_us);
             break;
 
-        case StatisticsQueryType::DURATION_STATS:
+        case StatisticsQueryType::DurationStats:
             std::printf("\n  Duration (all events):\n");
             std::printf("    Count: %llu   Mean: %.1f us   Stddev: %.1f us\n",
                         (unsigned long long)output.duration_count,
@@ -864,8 +868,8 @@ static void print_text_query_output(const TraceStatistics& stats,
                         (unsigned long long)output.duration_max_us);
             break;
 
-        case StatisticsQueryType::SUMMARY:
-        case StatisticsQueryType::DETAILED:
+        case StatisticsQueryType::Summary:
+        case StatisticsQueryType::Detailed:
             break;
     }
 }
@@ -874,14 +878,14 @@ static coro::CoroTask<std::vector<std::string>> collect_files(
     CoroScope& ctx, const std::vector<std::string>& cli_files,
     std::string directory) {
     if (!directory.empty()) {
-        if (!fs::exists(directory)) {
+        if (!dftracer::utils::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
             co_return std::vector<std::string>{};
         }
 
         auto files = co_await cli::scan_directory_trace_files(
-            ctx, directory, /*recursive=*/false);
+            ctx, directory, /*recursive=*/true);
 
         if (files.empty()) {
             DFTRACER_UTILS_LOG_ERROR("No trace files found in: %s",
@@ -956,7 +960,7 @@ static coro::CoroTask<IndexPartition> resolve_index_state(
     ResolverInput input;
     input.files = std::move(files);
     input.index_dir = std::move(index_dir);
-    input.require_bloom = report_type == StatisticsQueryType::DETAILED;
+    input.require_bloom = report_type == StatisticsQueryType::Detailed;
     auto result = co_await resolver(input);
     co_return build_partition(std::move(result));
 }
@@ -1099,22 +1103,23 @@ static coro::CoroTask<int> run_detailed_stats(
     bool json_output_for_detailed = config_ptr->json_output;
     std::size_t top_n_for_detailed = config_ptr->top_n;
 
-    co_await ctx.scope(
+    auto detailed_scope =
         [files_ptr, executor_threads_for_detailed, index_dir_for_detailed_ptr,
          needs_hash_resolution_for_detailed, json_output_for_detailed,
          top_n_for_detailed, query_ptr, filter_names_ptr, filter_cats_ptr,
          group_by_ptr, aggregate_detailed_ptr, aggregate_mutex_ptr,
          output_mutex_ptr,
          json_results_ptr](CoroScope& scope) -> coro::CoroTask<void> {
-            run_detailed_query_workers(
-                scope, files_ptr, executor_threads_for_detailed,
-                index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
-                json_output_for_detailed, top_n_for_detailed, query_ptr,
-                filter_names_ptr, filter_cats_ptr, group_by_ptr,
-                aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
-                json_results_ptr);
-            co_return;
-        });
+        run_detailed_query_workers(
+            scope, files_ptr, executor_threads_for_detailed,
+            index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
+            json_output_for_detailed, top_n_for_detailed, query_ptr,
+            filter_names_ptr, filter_cats_ptr, group_by_ptr,
+            aggregate_detailed_ptr, aggregate_mutex_ptr, output_mutex_ptr,
+            json_results_ptr);
+        co_return;
+    };
+    co_await ctx.scope(detailed_scope);
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
@@ -1179,12 +1184,11 @@ static coro::CoroTask<void> process_index_group(
         };
 
         stats_ns::StatNeeds needs;
-        needs.names =
-            report_type_for_reader == StatisticsQueryType::NAMES ||
-            report_type_for_reader == StatisticsQueryType::TOP_N_NAMES;
+        needs.names = report_type_for_reader == StatisticsQueryType::Names ||
+                      report_type_for_reader == StatisticsQueryType::TopNNames;
         needs.pid_tids =
-            report_type_for_reader == StatisticsQueryType::SUMMARY ||
-            report_type_for_reader == StatisticsQueryType::PID_TIDS;
+            report_type_for_reader == StatisticsQueryType::Summary ||
+            report_type_for_reader == StatisticsQueryType::PidTids;
 
         if (!needs_per_file_results) {
             // Whole-group total: one View aggregation over every file at once.
@@ -1352,7 +1356,7 @@ static coro::CoroTask<int> output_aggregate_stats(
         std::printf("Consolidated (%zu files, %zu successful, %zu failed)\n",
                     displayed_files, agg->successful_count, agg->failed_count);
         std::printf("==========================================\n");
-        if (config_ptr->report_type == StatisticsQueryType::SUMMARY) {
+        if (config_ptr->report_type == StatisticsQueryType::Summary) {
             auto detailed = to_detailed(agg->total);
             std::unordered_map<std::string, std::string> no_resolutions;
             print_text_detailed(agg->total.file_path, detailed,
@@ -1406,7 +1410,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
                                               config.index_dir);
         }
         if (!config.directory.empty() &&
-            config.report_type != StatisticsQueryType::DETAILED) {
+            config.report_type != StatisticsQueryType::Detailed) {
             auto trusted_index_path = trace::internal::determine_index_path(
                 config.directory, config.index_dir);
             const bool trusted_index_exists = fs::exists(trusted_index_path);
@@ -1461,7 +1465,7 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
                                   config.executor_threads);
     }
 
-    if (config.report_type == StatisticsQueryType::DETAILED) {
+    if (config.report_type == StatisticsQueryType::Detailed) {
         if (stages) stages->print_stages();
         co_return co_await run_detailed_stats(ctx, &config, &files);
     }

@@ -1,7 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/base64.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -681,8 +682,8 @@ TEST_CASE("the run record carries keys, settings and the summary") {
     REQUIRE(r.runs.size() == 1);
     const auto first = lines_of(r.runs[0].lines()).at(0);
     CHECK(str(first, "/gtype") == "run");
-    CHECK(num(first, "/version") == 1);
-    CHECK(first.rfind(R"({"gtype":"run","version":1,)", 0) == 0);
+    CHECK(num(first, "/version") == 0);
+    CHECK(first.rfind(R"({"gtype":"run","version":0,)", 0) == 0);
     CHECK(num(first, "/sketch_accuracy") == doctest::Approx(0.01));
     CHECK(str(first, "/method") == "prorate");
     CHECK(str(first, "/papi_set") == "set1");
@@ -830,6 +831,51 @@ TEST_CASE("a share that keeps nothing in memory gives the same output") {
     CHECK(tiny.sort_runs > 1);
     CHECK(big.spilled_bytes == 0);
     CHECK(big.sort_runs == 0);
+}
+
+namespace {
+
+// The open pools of genesis groups and their parts.
+std::vector<memory::PoolStats> genesis_pools() {
+    std::vector<memory::PoolStats> out;
+    for (memory::PoolStats& p : memory::pool_stats())
+        if (p.path.find("/genesis/") != std::string::npos)
+            out.push_back(std::move(p));
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("a tiny share spills on its group pools and closes them clean") {
+    ScopedTestDir d("genesis_pools");
+    ScopedTestDir spill("genesis_pools_spill");
+    SpillDirGuard guard(spill.str());
+    matrix_run(d, 2, busy_trace());
+    auto disc = discover_dir(d);
+    REQUIRE(disc.groups.size() == 1);
+    REQUIRE(genesis_pools().empty());
+    std::string big_lines;
+    {
+        auto big = process(disc.groups[0], TEST_SHARE);
+        REQUIRE(big.runs.size() == 1);
+        big_lines = big.runs[0].lines();
+    }
+    {
+        auto tiny = process(disc.groups[0], TINY_SHARE);
+        REQUIRE(tiny.runs.size() == 1);
+        CHECK(tiny.spilled_bytes > 0);
+        // The runs hold the group until they are written: its pool, the
+        // calls and the state stay open, with nothing allocated in them.
+        const std::vector<memory::PoolStats> open = genesis_pools();
+        CHECK(open.size() == 3);
+        for (const memory::PoolStats& p : open) {
+            CAPTURE(p.path);
+            CHECK(p.live == 0);
+        }
+        CHECK(tiny.runs[0].lines() == big_lines);
+    }
+    CHECK(genesis_pools().empty());
+    CHECK_FALSE(memory::Manager::get().leaked());
 }
 
 TEST_CASE("a group that must spill names the spill directory when it fails") {

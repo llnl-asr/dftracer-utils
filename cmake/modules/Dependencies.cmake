@@ -353,6 +353,50 @@ endfunction()
 # ==============================================================================
 
 
+# The executables replace the global operator new with our heap. A RocksDB built
+# with ROCKSDB_MALLOC_USABLE_SIZE calls malloc_usable_size on blocks it got from
+# new, which crashes, so refuse such a library at configure time. The build
+# leaves an undefined malloc_usable_size (malloc_size on macOS) in that case.
+function(_check_rocksdb_malloc_usable_size TARGET_NAME)
+  if(NOT TARGET ${TARGET_NAME} OR NOT CMAKE_NM)
+    return()
+  endif()
+  get_target_property(_aliased ${TARGET_NAME} ALIASED_TARGET)
+  if(_aliased)
+    set(TARGET_NAME ${_aliased})
+  endif()
+  set(_location "")
+  foreach(_prop IMPORTED_LOCATION IMPORTED_LOCATION_RELEASE
+                IMPORTED_LOCATION_RELWITHDEBINFO IMPORTED_LOCATION_NOCONFIG
+                IMPORTED_LOCATION_DEBUG)
+    get_target_property(_value ${TARGET_NAME} ${_prop})
+    if(_value)
+      set(_location "${_value}")
+      break()
+    endif()
+  endforeach()
+  if(NOT _location OR NOT EXISTS "${_location}")
+    return()
+  endif()
+  set(_nm_flags -u)
+  if(_location MATCHES "\\.(so|dylib)")
+    set(_nm_flags -D -u)
+  endif()
+  execute_process(
+    COMMAND ${CMAKE_NM} ${_nm_flags} "${_location}"
+    OUTPUT_VARIABLE _undefined
+    ERROR_QUIET)
+  if(_undefined MATCHES "(^|[ \n])_?(malloc_usable_size|malloc_size)(@|[ \n]|$)")
+    message(
+      FATAL_ERROR
+        "RocksDB at ${_location} was built with ROCKSDB_MALLOC_USABLE_SIZE. "
+        "The executables replace operator new with the dftracer-utils heap and "
+        "RocksDB would call malloc_usable_size on its blocks. Rebuild RocksDB "
+        "with -DHAVE_MALLOC_USABLE_SIZE=OFF (scripts/ci/build_rocksdb.sh does) "
+        "or build it from source with DFTRACER_UTILS_LOCAL_PACKAGES=OFF.")
+  endif()
+endfunction()
+
 # Consume a RocksDB install tree built by scripts/ci/build_rocksdb.sh.
 function(_use_prebuilt_rocksdb PREFIX)
   list(PREPEND CMAKE_PREFIX_PATH "${PREFIX}")
@@ -364,6 +408,8 @@ function(_use_prebuilt_rocksdb PREFIX)
     PATHS
     "${PREFIX}"
     NO_DEFAULT_PATH)
+  _check_rocksdb_malloc_usable_size(RocksDB::rocksdb)
+  _check_rocksdb_malloc_usable_size(RocksDB::rocksdb-shared)
   dftracer_utils_ok("Using prebuilt RocksDB from ${PREFIX}")
 
   foreach(tool ldb sst_dump)
@@ -456,6 +502,7 @@ function(need_rocksdb)
           "need_rocksdb: RocksDB was found but no usable target could be created."
       )
     endif()
+    _check_rocksdb_malloc_usable_size(RocksDB::rocksdb)
 
     set(RocksDB_FOUND
         ${RocksDB_FOUND}
@@ -525,6 +572,9 @@ function(need_rocksdb)
         target_compile_definitions(rocksdb PUBLIC ROCKSDB_USE_RTTI)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
           target_compile_options(rocksdb PRIVATE -frtti)
+          # The executables replace operator new with our heap, so a block that
+          # RocksDB got from new is not the C library's to size.
+          target_compile_options(rocksdb PRIVATE -UROCKSDB_MALLOC_USABLE_SIZE)
           target_compile_options(rocksdb PUBLIC -Wno-conversion)
         endif()
         # -Wrestrict is a gcc-12 false positive in rocksdb's std::string code.
@@ -548,6 +598,9 @@ function(need_rocksdb)
         target_compile_definitions(rocksdb-shared PUBLIC ROCKSDB_USE_RTTI)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
           target_compile_options(rocksdb-shared PRIVATE -frtti)
+          # The executables replace operator new with our heap, so a block that
+          # RocksDB got from new is not the C library's to size.
+          target_compile_options(rocksdb-shared PRIVATE -UROCKSDB_MALLOC_USABLE_SIZE)
           target_compile_options(rocksdb-shared PUBLIC -Wno-conversion)
         endif()
         # -Wrestrict is a gcc-12 false positive in rocksdb's std::string code.
@@ -855,11 +908,15 @@ function(need_lz4)
   endif()
 endfunction()
 
-function(_try_zlib_ng OUT_VAR)
-  set(${OUT_VAR}
-      FALSE
-      PARENT_SCOPE)
-
+# zlib-ng in its native API (zng_ names) as one static PIC archive with hidden
+# visibility. The utilities library links it privately, so no library of ours
+# exports a zlib symbol and a process that also loads the system zlib binds no
+# call of its own to ours. No zlib header is installed: no public header
+# includes one.
+function(need_zlib)
+  if(TARGET dftracer::zlib)
+    return()
+  endif()
   cpmaddpackage(
     NAME
     zlib-ng
@@ -870,8 +927,9 @@ function(_try_zlib_ng OUT_VAR)
     GIT_TAG
     2.3.3
     OPTIONS
-    "ZLIB_COMPAT ON"
-    "ZLIB_ENABLE_TESTS OFF"
+    "ZLIB_COMPAT OFF"
+    "ZLIB_ALIASES OFF"
+    "BUILD_TESTING OFF"
     "ZLIBNG_ENABLE_TESTS OFF"
     "WITH_GTEST OFF"
     "WITH_OPTIM ON"
@@ -879,476 +937,57 @@ function(_try_zlib_ng OUT_VAR)
     "WITH_NATIVE_INSTRUCTIONS OFF"
     "INSTALL_UTILS OFF"
     "SKIP_INSTALL_ALL ON")
-
-  if(NOT zlib-ng_ADDED)
-    # CPM reports ADDED=NO when zlib-ng was already added earlier (src/ adds it,
-    # then tests/ asks again) OR on a reconfigure of an existing build dir. Not
-    # a failure: the zlib-ng targets are still defined. Re-expose the dirs and
-    # report success, and ensure the dftracer_zlib_* aliases exist here too -
-    # the one-time property/install setup below is skipped, but the aliases must
-    # be (re)created idempotently because on a reconfigure the first (src/) call
-    # also takes this branch, so nothing else creates them and link_zlib() would
-    # otherwise find no zlib. add_library(ALIAS) name-collides globally, so the
-    # NOT TARGET guard makes each a no-op once it exists.
-    if(TARGET zlib-ng OR TARGET zlib-ng-static)
-      set(ZLIB_SOURCE_DIR
-          ${zlib-ng_SOURCE_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_BINARY_DIR
-          ${zlib-ng_BINARY_DIR}
-          PARENT_SCOPE)
-      if(DFTRACER_UTILS_BUILD_SHARED
-         AND TARGET zlib-ng
-         AND NOT TARGET dftracer_zlib_shared)
-        get_target_property(_zng_a zlib-ng ALIASED_TARGET)
-        if(NOT _zng_a)
-          set(_zng_a zlib-ng)
-        endif()
-        add_library(dftracer_zlib_shared ALIAS ${_zng_a})
-        if(NOT TARGET dftracer::zlib)
-          add_library(dftracer::zlib ALIAS ${_zng_a})
-        endif()
-      endif()
-      if(DFTRACER_UTILS_BUILD_STATIC
-         AND TARGET zlib-ng-static
-         AND NOT TARGET dftracer_zlib_static)
-        get_target_property(_zngs_a zlib-ng-static ALIASED_TARGET)
-        if(NOT _zngs_a)
-          set(_zngs_a zlib-ng-static)
-        endif()
-        add_library(dftracer_zlib_static ALIAS ${_zngs_a})
-        if(NOT TARGET dftracer::zlibstatic)
-          add_library(dftracer::zlibstatic ALIAS ${_zngs_a})
-        endif()
-        if(NOT TARGET dftracer::zlib)
-          add_library(dftracer::zlib ALIAS ${_zngs_a})
-        endif()
-      endif()
-      set(${OUT_VAR}
-          TRUE
-          PARENT_SCOPE)
-      return()
-    endif()
-    message(WARNING "zlib-ng CPM add failed; will fall back to madler/zlib")
-    return()
+  if(NOT TARGET zlib-ng-static)
+    message(FATAL_ERROR "need_zlib: zlib-ng made no zlib-ng-static target")
   endif()
-
-  # zlib-ng compat mode: real targets are `zlib-ng` (shared) and
-  # `zlib-ng-static` (static); `zlib`/`zlibstatic` are ALIAS-only and cannot
-  # have properties or further aliases set on them.
-  set(ZLIB_NG_TARGETS)
-  if(DFTRACER_UTILS_BUILD_SHARED AND TARGET zlib-ng)
-    # zlib-ng may be an ALIAS (compat mode) - resolve to the real target before
-    # mutating/aliasing, and guard the alias-adds against reconfigure.
-    get_target_property(_zng_shared_alias zlib-ng ALIASED_TARGET)
-    if(_zng_shared_alias)
-      set(_zng_shared ${_zng_shared_alias})
-    else()
+  get_target_property(_zng zlib-ng-static ALIASED_TARGET)
+  if(NOT _zng)
+    set(_zng zlib-ng-static)
+  endif()
+  get_target_property(_zng_type ${_zng} TYPE)
+  if(NOT _zng_type STREQUAL "STATIC_LIBRARY")
+    message(FATAL_ERROR "need_zlib: zlib-ng-static is a ${_zng_type}")
+  endif()
+  if(TARGET zlib-ng AND NOT _zng STREQUAL "zlib-ng")
+    get_target_property(_zng_shared zlib-ng ALIASED_TARGET)
+    if(NOT _zng_shared)
       set(_zng_shared zlib-ng)
     endif()
-    get_target_property(_zng_type ${_zng_shared} TYPE)
-    if(_zng_type STREQUAL "SHARED_LIBRARY")
-      set_target_properties(
-        ${_zng_shared}
-        PROPERTIES OUTPUT_NAME dftracer_zlib LIBRARY_OUTPUT_DIRECTORY
-                                             ${CMAKE_BINARY_DIR}/lib)
-      target_include_directories(
-        ${_zng_shared} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-      if(NOT TARGET dftracer_zlib_shared)
-        add_library(dftracer_zlib_shared ALIAS ${_zng_shared})
-      endif()
-      if(NOT TARGET dftracer::zlib)
-        add_library(dftracer::zlib ALIAS ${_zng_shared})
-      endif()
-      list(APPEND ZLIB_NG_TARGETS ${_zng_shared})
-      dftracer_utils_ok("Using zlib-ng (compat, shared) as dftracer_zlib")
-    endif()
+    set_target_properties(${_zng_shared} PROPERTIES EXCLUDE_FROM_ALL ON)
   endif()
-
-  if(DFTRACER_UTILS_BUILD_STATIC AND TARGET zlib-ng-static)
-    # In ZLIB_COMPAT mode zlib-ng-static can itself be an ALIAS (to zlibstatic);
-    # set_target_properties/target_include_directories/install all reject alias
-    # targets, so resolve to the real one. Guard the alias-adds so a reconfigure
-    # (which rebuilds the target graph) does not redefine them.
-    get_target_property(_zng_static_alias zlib-ng-static ALIASED_TARGET)
-    if(_zng_static_alias)
-      set(_zng_static ${_zng_static_alias})
-    else()
-      set(_zng_static zlib-ng-static)
-    endif()
-    # PIC: link_zlib falls back to this archive for a shared library when
-    # zlib-ng made no shared target (BUILD_SHARED_LIBS off).
-    set_target_properties(
-      ${_zng_static}
-      PROPERTIES OUTPUT_NAME dftracer_zlib
-                 ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                 POSITION_INDEPENDENT_CODE ON)
-    target_include_directories(
-      ${_zng_static} PUBLIC $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-    if(NOT TARGET dftracer_zlib_static)
-      add_library(dftracer_zlib_static ALIAS ${_zng_static})
-    endif()
-    if(NOT TARGET dftracer::zlibstatic)
-      add_library(dftracer::zlibstatic ALIAS ${_zng_static})
-    endif()
-    if(NOT TARGET dftracer::zlib)
-      add_library(dftracer::zlib ALIAS ${_zng_static})
-    endif()
-    list(APPEND ZLIB_NG_TARGETS ${_zng_static})
-    dftracer_utils_ok("Using zlib-ng (compat, static) as dftracer_zlib")
+  set_target_properties(
+    ${_zng}
+    PROPERTIES OUTPUT_NAME dftracer_zlib
+               ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+               POSITION_INDEPENDENT_CODE ON
+               C_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN ON)
+  add_library(dftracer::zlib ALIAS ${_zng})
+  # A static library of ours that links the archive needs it at install.
+  if(DFTRACER_UTILS_BUILD_STATIC)
+    install(
+      TARGETS ${_zng}
+      EXPORT ZlibTargets
+      ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(
+      EXPORT ZlibTargets
+      FILE ZlibTargets.cmake
+      NAMESPACE dftracer::
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
   endif()
-
-  if(NOT ZLIB_NG_TARGETS)
-    message(WARNING "zlib-ng targets not found after CPM add; falling back")
-    return()
-  endif()
-
-  install(
-    TARGETS ${ZLIB_NG_TARGETS}
-    EXPORT ZlibTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-  install(
-    EXPORT ZlibTargets
-    FILE ZlibTargets.cmake
-    NAMESPACE dftracer::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
-
-  # Compat headers: zlib-ng generates zlib.h/zconf.h in its binary dir when
-  # ZLIB_COMPAT=ON, and zlib_name_mangling.h (which zlib.h includes) is always
-  # generated into the binary dir. Fall back to source dir if a generated copy
-  # is absent.
-  foreach(hdr zlib.h zconf.h zlib_name_mangling.h)
-    if(EXISTS "${zlib-ng_BINARY_DIR}/${hdr}")
-      install(FILES "${zlib-ng_BINARY_DIR}/${hdr}"
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    elseif(EXISTS "${zlib-ng_SOURCE_DIR}/${hdr}")
-      install(FILES "${zlib-ng_SOURCE_DIR}/${hdr}"
-              DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-    endif()
-  endforeach()
-
-  set(ZLIB_SOURCE_DIR
-      ${zlib-ng_SOURCE_DIR}
-      PARENT_SCOPE)
-  set(ZLIB_BINARY_DIR
-      ${zlib-ng_BINARY_DIR}
-      PARENT_SCOPE)
-  set(${OUT_VAR}
-      TRUE
-      PARENT_SCOPE)
+  dftracer_utils_ok("Using zlib-ng ${CPM_PACKAGE_zlib-ng_VERSION} (native, static, hidden)")
 endfunction()
 
-function(need_zlib)
-  if(DFTRACER_USE_ZLIB_NG)
-    _try_zlib_ng(_ZLIB_NG_OK)
-    if(_ZLIB_NG_OK)
-      set(ZLIB_CPM
-          TRUE
-          PARENT_SCOPE)
-      set(ZLIB_SOURCE_DIR
-          ${ZLIB_SOURCE_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_BINARY_DIR
-          ${ZLIB_BINARY_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_FOUND
-          FALSE
-          PARENT_SCOPE)
-      return()
-    endif()
-  endif()
-
-  find_package(ZLIB 1.2 QUIET)
-
-  if(ZLIB_FOUND)
-    dftracer_utils_ok("Found system ZLIB: ${ZLIB_LIBRARIES}")
-
-    # Set variables in parent scope so they persist outside the function
-    set(ZLIB_FOUND
-        ${ZLIB_FOUND}
-        PARENT_SCOPE)
-    set(ZLIB_LIBRARIES
-        ${ZLIB_LIBRARIES}
-        PARENT_SCOPE)
-    set(ZLIB_INCLUDE_DIRS
-        ${ZLIB_INCLUDE_DIRS}
-        PARENT_SCOPE)
-    set(ZLIB_CPM
-        FALSE
-        PARENT_SCOPE)
-  else()
-    set(ZLIB_CPM
-        FALSE
-        PARENT_SCOPE)
-    # Build with CPM
-    cpmaddpackage(
-      NAME
-      ZLIB
-      GITHUB_REPOSITORY
-      madler/zlib
-      VERSION
-      1.3.1
-      OPTIONS
-      "ZLIB_BUILD_STATIC OFF"
-      "ZLIB_BUILD_SHARED ON"
-      "ZLIB_INSTALL OFF"
-      "ZLIB_BUILD_EXAMPLES OFF"
-      DOWNLOAD_ONLY
-      YES)
-
-    if(ZLIB_ADDED)
-      dftracer_utils_ok("Built ZLIB with CPM")
-      set(ZLIB_CPM
-          TRUE
-          PARENT_SCOPE)
-
-      # Make sure the source and binary directories are available in parent
-      # scope
-      set(ZLIB_SOURCE_DIR
-          ${ZLIB_SOURCE_DIR}
-          PARENT_SCOPE)
-      set(ZLIB_BINARY_DIR
-          ${ZLIB_BINARY_DIR}
-          PARENT_SCOPE)
-
-      # Create our own zlib targets with proper install interface and fix macOS
-      # issues
-      set(ZLIB_TARGETS)
-
-      if(APPLE)
-        # Create patched source files for macOS to fix type conflicts
-        set(ZLIB_SOURCES_PATCHED "")
-        foreach(src_file adler32.c crc32.c)
-          file(READ "${ZLIB_SOURCE_DIR}/${src_file}" SRC_CONTENT)
-          # Replace z_off64_t parameter with z_off_t in function definitions to
-          # match declarations
-          string(REGEX REPLACE "z_off64_t len2\\)" "z_off_t len2)"
-                               SRC_CONTENT_FIXED "${SRC_CONTENT}")
-          string(REGEX REPLACE "z_off64_t len2\\s*\\{" "z_off_t len2 {"
-                               SRC_CONTENT_FIXED "${SRC_CONTENT_FIXED}")
-          file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/${src_file}"
-               "${SRC_CONTENT_FIXED}")
-          list(APPEND ZLIB_SOURCES_PATCHED
-               "${CMAKE_CURRENT_BINARY_DIR}/${src_file}")
-        endforeach()
-
-        # Add the rest of the files normally
-        foreach(
-          src_file
-          compress.c
-          deflate.c
-          gzclose.c
-          gzlib.c
-          gzread.c
-          gzwrite.c
-          inflate.c
-          infback.c
-          inftrees.c
-          inffast.c
-          trees.c
-          uncompr.c
-          zutil.c)
-          list(APPEND ZLIB_SOURCES_PATCHED "${ZLIB_SOURCE_DIR}/${src_file}")
-        endforeach()
-
-        if(DFTRACER_UTILS_BUILD_SHARED)
-          add_library(dftracer_zlib_shared SHARED ${ZLIB_SOURCES_PATCHED})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_shared)
-        endif()
-        if(DFTRACER_UTILS_BUILD_STATIC)
-          add_library(dftracer_zlib_static STATIC ${ZLIB_SOURCES_PATCHED})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_static)
-        endif()
-      else()
-        set(ZLIB_SOURCES
-            ${ZLIB_SOURCE_DIR}/adler32.c
-            ${ZLIB_SOURCE_DIR}/compress.c
-            ${ZLIB_SOURCE_DIR}/crc32.c
-            ${ZLIB_SOURCE_DIR}/deflate.c
-            ${ZLIB_SOURCE_DIR}/gzclose.c
-            ${ZLIB_SOURCE_DIR}/gzlib.c
-            ${ZLIB_SOURCE_DIR}/gzread.c
-            ${ZLIB_SOURCE_DIR}/gzwrite.c
-            ${ZLIB_SOURCE_DIR}/inflate.c
-            ${ZLIB_SOURCE_DIR}/infback.c
-            ${ZLIB_SOURCE_DIR}/inftrees.c
-            ${ZLIB_SOURCE_DIR}/inffast.c
-            ${ZLIB_SOURCE_DIR}/trees.c
-            ${ZLIB_SOURCE_DIR}/uncompr.c
-            ${ZLIB_SOURCE_DIR}/zutil.c)
-
-        if(DFTRACER_UTILS_BUILD_SHARED)
-          add_library(dftracer_zlib_shared SHARED ${ZLIB_SOURCES})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_shared)
-        endif()
-        if(DFTRACER_UTILS_BUILD_STATIC)
-          add_library(dftracer_zlib_static STATIC ${ZLIB_SOURCES})
-          list(APPEND ZLIB_TARGETS dftracer_zlib_static)
-        endif()
-      endif()
-
-      # Fix type mismatch issues on macOS by ensuring consistent type
-      # definitions
-      foreach(zlib_target ${ZLIB_TARGETS})
-        if(APPLE)
-          target_compile_definitions(
-            ${zlib_target} PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64)
-        else()
-          target_compile_definitions(
-            ${zlib_target} PRIVATE _LARGEFILE64_SOURCE=1 _FILE_OFFSET_BITS=64
-                                   Z_HAVE_STDARG_H=1)
-        endif()
-
-        # Set proper include directories for build and install
-        target_include_directories(
-          ${zlib_target}
-          PUBLIC $<BUILD_INTERFACE:${ZLIB_SOURCE_DIR}>
-                 $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-
-        # Copy the generated zconf.h from the original zlib build
-        if(EXISTS "${ZLIB_BINARY_DIR}/zconf.h")
-          configure_file("${ZLIB_BINARY_DIR}/zconf.h"
-                         "${CMAKE_CURRENT_BINARY_DIR}/zconf.h" COPYONLY)
-          target_include_directories(
-            ${zlib_target}
-            PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
-        endif()
-      endforeach()
-
-      # Set output names and create aliases
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        set_target_properties(
-          dftracer_zlib_shared
-          PROPERTIES OUTPUT_NAME dftracer_zlib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(dftracer::zlib ALIAS dftracer_zlib_shared)
-        dftracer_utils_ok("Added dftracer_zlib shared library")
-      endif()
-
-      if(DFTRACER_UTILS_BUILD_STATIC)
-        set_target_properties(
-          dftracer_zlib_static
-          PROPERTIES OUTPUT_NAME dftracer_zlib
-                     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
-                     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
-        add_library(dftracer::zlibstatic ALIAS dftracer_zlib_static)
-        dftracer_utils_ok("Added dftracer_zlib static library")
-        # If only static is built, make it the default alias
-        if(NOT DFTRACER_UTILS_BUILD_SHARED)
-          add_library(dftracer::zlib ALIAS dftracer_zlib_static)
-        endif()
-      endif()
-
-      # Install our custom zlib targets
-      if(ZLIB_TARGETS)
-        install(
-          TARGETS ${ZLIB_TARGETS}
-          EXPORT ZlibTargets
-          ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-          RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-      endif()
-
-      install(
-        EXPORT ZlibTargets
-        FILE ZlibTargets.cmake
-        NAMESPACE dftracer::
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/zlib)
-
-      # Install zlib headers manually
-      if(ZLIB_SOURCE_DIR AND ZLIB_BINARY_DIR)
-        if(EXISTS "${ZLIB_SOURCE_DIR}/zlib.h")
-          install(FILES "${ZLIB_SOURCE_DIR}/zlib.h"
-                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-        endif()
-
-        if(EXISTS "${ZLIB_BINARY_DIR}/zconf.h")
-          install(FILES "${ZLIB_BINARY_DIR}/zconf.h"
-                  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-        endif()
-      endif()
-
-      # Make zlib available in parent scope for Arrow - let Arrow build its own
-      if(DFTRACER_UTILS_BUILD_SHARED)
-        set(ZLIB_LIBRARIES
-            dftracer_zlib_shared
-            PARENT_SCOPE)
-      elseif(DFTRACER_UTILS_BUILD_STATIC)
-        set(ZLIB_LIBRARIES
-            dftracer_zlib_static
-            PARENT_SCOPE)
-      endif()
-      set(ZLIB_INCLUDE_DIRS
-          ${ZLIB_SOURCE_DIR} ${ZLIB_BINARY_DIR}
-          PARENT_SCOPE)
-      # Don't set ZLIB_FOUND to let Arrow build its own zlib
-      set(ZLIB_FOUND
-          FALSE
-          PARENT_SCOPE)
-    endif()
-  endif()
-endfunction()
-
-function(link_zlib TARGET_NAME LIBRARY_TYPE)
-  # Validate parameters
-  if(NOT TARGET_NAME)
-    message(FATAL_ERROR "link_zlib: TARGET_NAME is required")
-  endif()
-
-  if(NOT LIBRARY_TYPE MATCHES "^(STATIC|SHARED)$")
-    message(
-      FATAL_ERROR "link_zlib: LIBRARY_TYPE must be either STATIC or SHARED")
-  endif()
-
+# Links the zlib-ng archive into TARGET_NAME privately: its headers reach only
+# TARGET_NAME's own sources, and a shared library keeps its symbols hidden.
+function(link_zlib TARGET_NAME)
   if(NOT TARGET ${TARGET_NAME})
     message(FATAL_ERROR "link_zlib: Target '${TARGET_NAME}' does not exist")
   endif()
-
-  # Check if any zlib variant is available
-  set(ZLIB_AVAILABLE FALSE)
-  if(TARGET dftracer_zlib_static
-     OR TARGET dftracer_zlib_shared
-     OR ZLIB_FOUND)
-    set(ZLIB_AVAILABLE TRUE)
+  if(NOT TARGET dftracer::zlib)
+    message(FATAL_ERROR "link_zlib: call need_zlib() first")
   endif()
-
-  if(NOT ZLIB_AVAILABLE)
-    message(
-      FATAL_ERROR
-        "link_zlib: No zlib found! Call need_zlib() first or ensure system zlib is available."
-    )
-  endif()
-
-  # Link appropriate zlib variant Use PUBLIC linkage since zlib headers may be
-  # included in public headers
-  if(LIBRARY_TYPE STREQUAL "STATIC")
-    # For static libraries, prefer static zlib if available
-    if(TARGET dftracer_zlib_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlibstatic)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlibstatic")
-    elseif(TARGET dftracer_zlib_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlib)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlib (shared)")
-    elseif(ZLIB_FOUND)
-      target_link_libraries(${TARGET_NAME} PUBLIC ZLIB::ZLIB)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to system ZLIB::ZLIB")
-    endif()
-  else() # SHARED
-    # For shared libraries, prefer shared zlib if available
-    if(TARGET dftracer_zlib_shared)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlib)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlib (shared)")
-    elseif(TARGET dftracer_zlib_static)
-      target_link_libraries(${TARGET_NAME} PUBLIC dftracer::zlibstatic)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to dftracer zlibstatic")
-    elseif(ZLIB_FOUND)
-      target_link_libraries(${TARGET_NAME} PUBLIC ZLIB::ZLIB)
-      dftracer_utils_ok("Linked ${TARGET_NAME} to system ZLIB::ZLIB")
-    endif()
-  endif()
+  target_link_libraries(${TARGET_NAME} PRIVATE dftracer::zlib)
 endfunction()
 
 function(need_zstd)
@@ -2286,30 +1925,7 @@ function(add_stdfs_if_needed TARGET)
   endif()
 endfunction()
 
-# Report which ObjectPool atomics path object_pool.h auto-selects under the
-# active -march (DWCAS if the 16-byte CAS is lock-free, else the packed 64-bit
-# CAS). We add no ISA flags on purpose: forcing -mcx16/+lse would raise the
-# binary's CPU floor and could SIGILL on older hardware. Both paths are
-# lock-free and correct everywhere; the fast path turns on automatically when
-# the toolchain already targets a capable baseline (Apple Silicon,
-# -march=native).
-macro(check_dwcas)
-  if(NOT DEFINED DFTRACER_UTILS_HAS_DWCAS)
-    try_compile(_dftracer_has_dwcas "${CMAKE_BINARY_DIR}/temp"
-                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_dwcas.cpp")
-    set(DFTRACER_UTILS_HAS_DWCAS
-        ${_dftracer_has_dwcas}
-        CACHE INTERNAL
-              "ObjectPool: 16-byte CAS is lock-free under active flags")
-  endif()
-
-  dftracer_utils_section("ObjectPool atomics")
-  if(DFTRACER_UTILS_HAS_DWCAS)
-    dftracer_utils_ok("DWCAS fast path (lock-free 16-byte CAS)")
-  else()
-    dftracer_utils_ok("Packed fallback (lock-free 64-bit CAS, portable)")
-  endif()
-
+macro(link_libatomic)
   # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit;
   # every 64-bit target we ship is inline lock-free and does not need it). Only
   # apply the directory-scope link when dftracer-utils owns the build, never

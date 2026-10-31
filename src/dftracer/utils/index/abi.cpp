@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/abi.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-using dftracer::utils::Condition;
 using dftracer::utils::DFTUtilsException;
+using dftracer::utils::dstd::Condition;
 using dftracer::utils::index::IndexedFile;
 using dftracer::utils::index::Indexer;
 using dftracer::utils::index::IndexerOptions;
@@ -47,20 +47,23 @@ dftu_error current_error(std::string& storage) {
         return fill_error(storage, e.condition(), e.domain(), e.code_int(),
                           e.what());
     } catch (const std::exception& e) {
-        return fill_error(
-            storage, Condition::Internal, dftracer::utils::CORE_DOMAIN.id,
-            static_cast<std::int32_t>(Condition::Internal), e.what());
+        return fill_error(storage, Condition::Internal,
+                          dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+                          static_cast<std::int32_t>(Condition::Internal),
+                          e.what());
     } catch (...) {
-        return fill_error(
-            storage, Condition::Internal, dftracer::utils::CORE_DOMAIN.id,
-            static_cast<std::int32_t>(Condition::Internal), "unknown error");
+        return fill_error(storage, Condition::Internal,
+                          dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+                          static_cast<std::int32_t>(Condition::Internal),
+                          "unknown error");
     }
 }
 
 dftu_error invalid(std::string& storage, const char* message) {
-    return fill_error(
-        storage, Condition::InvalidArgument, dftracer::utils::CORE_DOMAIN.id,
-        static_cast<std::int32_t>(Condition::InvalidArgument), message);
+    return fill_error(storage, Condition::InvalidArgument,
+                      dftracer::utils::dstd::CORE_ERROR_DOMAIN.id,
+                      static_cast<std::int32_t>(Condition::InvalidArgument),
+                      message);
 }
 
 dftu_indexer_report to_c(const IndexStatus& s) {

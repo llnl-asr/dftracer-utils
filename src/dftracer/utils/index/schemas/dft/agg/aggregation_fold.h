@@ -1,8 +1,13 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/ptr_hash.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
@@ -12,6 +17,7 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -33,13 +39,13 @@ namespace dftracer::utils::index::schemas::dft::agg {
 class PodAccessor {
    public:
     PodAccessor(const trace::views::detail::FoldEvent& ev,
-                const dftracer::utils::StringIntern& intern)
+                const dftracer::utils::dstd::StringIntern& intern)
         : ev_(ev), intern_(intern) {}
 
     bool is_metadata() const {
-        return ev_.phase == trace::RecordPhase::METADATA;
+        return ev_.phase == trace::RecordPhase::Metadata;
     }
-    bool is_counter() const { return ev_.phase == trace::RecordPhase::COUNTER; }
+    bool is_counter() const { return ev_.phase == trace::RecordPhase::Counter; }
     bool is_profile() const { return is_counter() && cat() != "sys"; }
     bool is_system() const { return is_counter() && cat() == "sys"; }
     std::string_view name() const { return resolve(ev_.name_id); }
@@ -106,7 +112,8 @@ class PodAccessor {
     }
 
    private:
-    static constexpr std::uint32_t NO_ID = dftracer::utils::StringIntern::NO_ID;
+    static constexpr std::uint32_t NO_ID =
+        dftracer::utils::dstd::StringIntern::NO_ID;
 
     const trace::views::detail::FoldEvent::ArgValue* find(
         std::string_view key) const {
@@ -126,19 +133,19 @@ class PodAccessor {
     }
 
     const trace::views::detail::FoldEvent& ev_;
-    const dftracer::utils::StringIntern& intern_;
+    const dftracer::utils::dstd::StringIntern& intern_;
 };
 
-/// Builds the aggregation index tier (AGGREGATION + SYSTEM_METRICS records) as
-/// a fold on the fused scan, so it rides the same single parse as BloomFold /
-/// DictFold. `build_intern` is the fused-scan intern that produced the events
-/// (resolves the POD's ids); `agg_intern` is the per-index aggregation intern
-/// table whose ids the serialized keys embed. write emits merge
-/// operands + the intern dictionary; the tracker / observed-key / time-bound
-/// outputs are returned out-of-band (they are not column-family records).
+/// Builds the system metric rows and the chunk partials of a file (when the
+/// fold has a file id) as a fold on the fused scan, so it rides the same single
+/// parse as BloomFold / DictFold. `build_intern` is the fused-scan intern that
+/// produced the events (resolves the POD's ids); `agg_intern` is the per-index
+/// aggregation intern table whose ids the partial keys embed. write emits the
+/// system merge operands, the partials and the intern dictionary; the tracker
+/// and time-bound outputs are returned out-of-band.
 class AggregationFold : public trace::views::detail::Fold {
    public:
-    AggregationFold(dftracer::utils::StringIntern& build_intern,
+    AggregationFold(dftracer::utils::dstd::StringIntern& build_intern,
                     index::schemas::dft::agg::AggInternPtr agg_intern,
                     index::schemas::dft::agg::AggregationConfig config,
                     int file_id = -1)
@@ -169,8 +176,14 @@ class AggregationFold : public trace::views::detail::Fold {
             // aggregate).
             if (acc.is_metadata()) continue;
             if (tracker_) tracker_->extract(acc, config_);
-            index::schemas::dft::agg::aggregate_event(acc, state_, config_,
-                                                      agg_intern_->intern);
+            index::schemas::dft::agg::aggregate_event(acc, state_, config_);
+            if (file_id_ >= 0) {
+                if (batch.unit.checkpoint_idx != chunk_) {
+                    close_chunk();
+                    chunk_ = batch.unit.checkpoint_idx;
+                }
+                add_to_partial(ev, acc);
+            }
         }
     }
 
@@ -183,20 +196,11 @@ class AggregationFold : public trace::views::detail::Fold {
         co_return false;
     }
 
-    /// Emit the accumulated aggregation + system-metrics merge operands and the
+    /// Emit the accumulated system-metrics merge operands, the partials and the
     /// intern dictionary into `w`, with the dftracer.agg manifest entry of the
-    /// fold's file when it has one. Aggregation keys are file-independent.
+    /// fold's file when it has one.
     void write(index::store::IndexWrite& w);
 
-    const StringViewSet& observed_extra_keys() const {
-        return state_.observed_extra_keys;
-    }
-    const StringViewSet& observed_custom_metrics() const {
-        return state_.observed_custom_metrics;
-    }
-    const StringViewSet& observed_system_metrics() const {
-        return state_.observed_system_metrics;
-    }
     std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
     std::uint64_t max_time_bucket() const { return state_.max_time_bucket; }
     std::size_t events_processed() const { return state_.events_processed; }
@@ -210,12 +214,92 @@ class AggregationFold : public trace::views::detail::Fold {
     }
 
    private:
-    dftracer::utils::StringIntern* build_intern_;
+    static constexpr std::uint32_t NO_ID =
+        dftracer::utils::dstd::StringIntern::NO_ID;
+
+    /// The root-dictionary ids of the category, name and host hash text of a
+    /// partial.
+    struct SlotKey {
+        std::uint32_t cat;
+        std::uint32_t name;
+        std::uint32_t host;
+        std::uint32_t extra;
+        PartialKind kind;
+
+        bool operator==(const SlotKey&) const = default;
+    };
+
+    struct SlotKeyHash {
+        using is_avalanching = void;
+        std::size_t operator()(const SlotKey& k) const noexcept {
+            using dftracer::utils::hash::splitmix64;
+            return static_cast<std::size_t>(splitmix64(
+                splitmix64(splitmix64((std::uint64_t{k.cat} << 32) | k.name) ^
+                           ((std::uint64_t{k.host} << 32) | k.extra)) ^
+                static_cast<std::uint64_t>(k.kind)));
+        }
+    };
+
+    /// The partial being built for one (category, name, host) of the current
+    /// chunk; a slot is reused by every chunk and holds nothing until `used`.
+    struct Slot {
+        AggPartial partial;
+        SlotKey key;
+        bool used = false;
+
+        Slot(double accuracy, SlotKey k) : partial(accuracy), key(k) {}
+    };
+
+    /// A serialized partial of a closed chunk, in `arena_`.
+    struct Closed {
+        std::uint64_t chunk;
+        std::size_t offset;
+        std::size_t size;
+        SlotKey key;
+    };
+
+    struct ArgId {
+        std::uint32_t length;
+        std::uint32_t id;
+    };
+
+    void add_to_partial(const trace::views::detail::FoldEvent& ev,
+                        const PodAccessor& acc);
+    /// The root-dictionary id of the string with `build_id` (lower-cased for
+    /// `lower`), cached by that id.
+    std::uint32_t root_id(dstd::Vector<std::uint32_t>& cache,
+                          std::uint32_t build_id, bool lower);
+    std::uint32_t arg_id(std::string_view key);
+    /// Serializes the partials of the current chunk into `arena_` and clears
+    /// them, keeping their capacity.
+    void close_chunk();
+
+    dftracer::utils::dstd::StringIntern* build_intern_;
     index::schemas::dft::agg::AggInternPtr agg_intern_;
     index::schemas::dft::agg::AggregationConfig config_;
     int file_id_;
     index::schemas::dft::agg::AggState state_;
     std::shared_ptr<index::schemas::dft::agg::AssociationTracker> tracker_;
+
+    std::uint64_t chunk_ = UINT64_MAX;
+    dftracer::utils::dstd::Vector<Slot> slots_;
+    dftracer::utils::dstd::HashMap<SlotKey, std::uint32_t, SlotKeyHash>
+        slot_of_;
+    std::uint32_t last_slot_ = NO_ID;
+    std::uint32_t last_cat_ = NO_ID;
+    std::uint32_t last_name_ = NO_ID;
+    std::uint32_t last_host_ = NO_ID;
+    PartialKind last_kind_ = PartialKind::Event;
+    std::uint32_t empty_id_ = NO_ID;
+    std::string extra_buf_;
+    dftracer::utils::dstd::Vector<std::uint32_t> cat_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> name_ids_;
+    dftracer::utils::dstd::Vector<std::uint32_t> host_ids_;
+    dftracer::utils::dstd::HashMap<const void*, ArgId, dftracer::utils::PtrHash,
+                                   std::equal_to<const void*>>
+        arg_ids_;
+    dftracer::utils::dstd::Vector<std::uint8_t> arena_;
+    dftracer::utils::dstd::Vector<Closed> closed_;
 };
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

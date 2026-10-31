@@ -1,7 +1,8 @@
+#include <dftracer/utils/common/config.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/common/string_arena.h>
+#include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -36,7 +37,7 @@ using common::arrow::RecordBatchBuilder;
 struct ArrowKeyHint {
     std::string key;
     std::size_t col_idx = 0;
-    ColumnType type = ColumnType::INT64;
+    ColumnType type = ColumnType::Int64;
     bool valid = false;
 };
 
@@ -96,15 +97,15 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
             auto num = num_r.value();
             if (num.is_int64()) {
                 auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
-                                           ColumnType::INT64);
+                                           ColumnType::Int64);
                 builder.append_int64(idx, num.get_int64());
             } else if (num.is_uint64()) {
                 auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
-                                           ColumnType::UINT64);
+                                           ColumnType::Uint64);
                 builder.append_uint64(idx, num.get_uint64());
             } else {
                 auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
-                                           ColumnType::DOUBLE);
+                                           ColumnType::Double);
                 builder.append_double(idx, num.get_double());
             }
             break;
@@ -113,7 +114,7 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
             auto str_r = val.get_string();
             if (str_r.error()) break;
             auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
-                                       ColumnType::STRING);
+                                       ColumnType::String);
             builder.append_string(idx, str_r.value());
             break;
         }
@@ -121,7 +122,7 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
             auto b_r = val.get_bool();
             if (b_r.error()) break;
             auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
-                                       ColumnType::BOOL);
+                                       ColumnType::Bool);
             builder.append_bool(idx, b_r.value());
             break;
         }
@@ -135,7 +136,7 @@ void append_scalar_or_json(RecordBatchBuilder& builder,
         case simdjson::ondemand::json_type::array: {
             auto raw_r = val.raw_json();
             auto idx = resolve_col_idx(builder, hints, pos++, key_sv,
-                                       ColumnType::STRING);
+                                       ColumnType::String);
             if (!raw_r.error()) {
                 auto sv = raw_r.value();
                 builder.append_string(idx, sv);
@@ -316,7 +317,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         StringArena arena;
         std::vector<ArrowKeyHint> hints;
         builder.reserve(batch_size);
-        while (auto opt = co_await json_gen.next()) {
+        for (;;) {
+            auto opt = co_await json_gen.next();
+            if (!opt) break;
             if (!arrow_row_from_doc(builder, hints,
                                     simdjson::ondemand::document_reference(
                                         opt->parser->raw_document()),
@@ -380,7 +383,9 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     };
 
     bool first_chunk = true;
-    while (auto chunk_opt = co_await chunk_gen.next()) {
+    for (;;) {
+        auto chunk_opt = co_await chunk_gen.next();
+        if (!chunk_opt) break;
         auto chunk = *chunk_opt;
         if (chunk.empty()) continue;
 

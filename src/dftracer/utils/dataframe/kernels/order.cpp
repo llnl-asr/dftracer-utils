@@ -59,13 +59,13 @@ ColumnView::ColumnView(const Series& column)
     physical_ = physical_type(type_);
     const dftu_series& h = *column_.handle();
     length_ = h.length;
-    data_ = h.data ? h.data->data() : nullptr;
-    validity_ = h.validity ? h.validity->data() : nullptr;
+    data_ = h.data.block() ? h.data.data() : nullptr;
+    validity_ = h.validity.block() ? h.validity.data() : nullptr;
     if (kind_ == Kind::Bytes) {
         if (h.wide_offsets())
-            off64_ = reinterpret_cast<const std::int64_t*>(h.offsets->data());
+            off64_ = reinterpret_cast<const std::int64_t*>(h.offsets.data());
         else
-            off32_ = reinterpret_cast<const std::int32_t*>(h.offsets->data());
+            off32_ = reinterpret_cast<const std::int32_t*>(h.offsets.data());
     }
 }
 

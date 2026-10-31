@@ -4,13 +4,12 @@
 // filter/with_column expr's col(i) refers to the i-th column of the frame at
 // that point, so the Python wrapper resolves names to indices against schema().
 
-#include <dftracer/utils/core/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
-#include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/config.h>  // DFTRACER_UTILS_ENABLE_ARROW
+#include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/lazyframe.h>
@@ -25,6 +24,8 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/series.h>
 #include <dftracer/utils/python/streaming_iterator.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstdint>
 #include <new>
@@ -823,7 +824,9 @@ dftracer::utils::coro::CoroTask<void> drain_stream(
     LazyFrame lf, std::int64_t morsel_rows) {
     try {
         auto gen = lf.stream(morsel_rows);
-        while (auto df = co_await gen.next()) {
+        for (;;) {
+            auto df = co_await gen.next();
+            if (!df) break;
             if (state->cancelled()) break;
             const std::size_t bytes =
                 static_cast<std::size_t>(df->num_rows()) *

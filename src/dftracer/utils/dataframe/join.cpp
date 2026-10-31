@@ -1,4 +1,3 @@
-#include <dftracer/utils/core/common/hash/hash_combine.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
@@ -6,6 +5,7 @@
 #include <dftracer/utils/dataframe/join.h>
 #include <dftracer/utils/dataframe/kernels/filter.h>
 #include <dftracer/utils/dataframe/parallel.h>
+#include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/duql/vectorize.h>
 
 #include <algorithm>
@@ -90,18 +90,16 @@ struct KeyView {
             throw std::invalid_argument(std::string("join: key column type '") +
                                         type_name(h.type) +
                                         "' has no per-row value to key on");
-        data = h.data ? h.data->data() : nullptr;
-        validity = h.validity ? h.validity->data() : nullptr;
+        data = h.data.block() ? h.data.data() : nullptr;
+        validity = h.validity.block() ? h.validity.data() : nullptr;
         const TypeId narrow = narrow_varwidth_type(h.type);
         if (narrow == TypeId::String || narrow == TypeId::Binary) {
             if (h.wide_offsets()) {
                 kind = Str64;
-                off64 =
-                    reinterpret_cast<const std::int64_t*>(h.offsets->data());
+                off64 = reinterpret_cast<const std::int64_t*>(h.offsets.data());
             } else {
                 kind = Str32;
-                off32 =
-                    reinterpret_cast<const std::int32_t*>(h.offsets->data());
+                off32 = reinterpret_cast<const std::int32_t*>(h.offsets.data());
             }
         } else if (h.type == TypeId::Bool) {
             kind = Bool;

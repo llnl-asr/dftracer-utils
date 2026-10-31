@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_MULTI_LINE_STREAM_H
 #define DFTRACER_UTILS_UTILITIES_READER_INTERNAL_STREAMS_MULTI_LINE_STREAM_H
 
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
 
 #include <cstdio>
@@ -72,7 +72,8 @@ class MultiLineStream : public ReaderStream {
 
         // Read and accumulate multiple lines into output_buffer_
         while (!reached_end_of_range() && !reached_max_lines(max_lines)) {
-            if (!co_await refill_if_needed()) {
+            const auto refill_if_needed_ok = co_await refill_if_needed();
+            if (!refill_if_needed_ok) {
                 break;
             }
 

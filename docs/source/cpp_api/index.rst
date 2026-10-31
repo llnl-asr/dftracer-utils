@@ -11,7 +11,7 @@ stable C ABI, see :doc:`../c_api/index`.
 Architecture
 ------------
 
-The five layered libraries and how they build on one another. ``core`` is the
+The five layered libraries and how they build on one another. ``runtime`` is the
 foundation; each arrow points to the library built on top, up to the top domain
 layer that composes all below it.
 

@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_INDEXED_FILE_BYTES_GENERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_SOURCES_ASYNC_INDEXED_FILE_BYTES_GENERATOR_H
 
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/coro/async_generator.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream.h>
@@ -21,7 +21,9 @@ namespace dftracer::utils::utilities::fileio::lines::sources {
  * @code
  * auto reader = ReaderFactory::create("file.gz", "file.gz.idx");
  * auto gen = async_indexed_file_bytes(reader, 1000, 5000);
- * while (auto line = co_await gen.next()) {
+ * for (;;) {
+ *     auto line = co_await gen.next();
+ *     if (!line) break;
  *     process(*line);
  * }
  * @endcode
@@ -30,23 +32,23 @@ inline coro::AsyncGenerator<Line> async_indexed_file_bytes(
     std::shared_ptr<reader::internal::Reader> reader, std::size_t start_byte,
     std::size_t end_byte, std::size_t buffer_size = 1024 * 1024) {
     if (!reader) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "Reader cannot be null");
     }
     if (start_byte >= end_byte) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "Invalid byte range");
     }
 
-    auto stream = reader->stream(
-        reader::internal::StreamConfig()
-            .stream_type(reader::internal::StreamType::LINE_BYTES)
-            .range_type(reader::internal::RangeType::BYTE_RANGE)
-            .from(start_byte)
-            .to(end_byte));
+    auto stream =
+        reader->stream(reader::internal::StreamConfig()
+                           .stream_type(reader::internal::StreamType::LineBytes)
+                           .range_type(reader::internal::RangeType::ByteRange)
+                           .from(start_byte)
+                           .to(end_byte));
 
     if (!stream) {
-        throw DFTUtilsException(ErrorCode::IO, "Failed to create stream");
+        throw DFTUtilsException(ErrorCode::Io, "Failed to create stream");
     }
 
     std::string stream_buffer;

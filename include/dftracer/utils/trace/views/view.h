@@ -1,13 +1,15 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_H
 
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field.h>
 #include <dftracer/utils/dataframe/lazy_ops.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/result_join.h>
 #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
@@ -27,7 +29,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 class StringIntern;
 }
 
@@ -187,6 +189,10 @@ struct ViewFile {
     std::uint64_t uncompressed_size = 0;
     std::size_t num_checkpoints = 0;
     std::size_t checkpoint_size = 0;  ///< 0 = indexer default
+    /// An open read-only descriptor of the file, if the caller holds one. The
+    /// first build or schema probe reads through it instead of opening the
+    /// file again; the view shares it, and it closes with the last copy.
+    dstd::SharedPtr<ScopedFd> fd = nullptr;
 };
 
 struct ExportStats {
@@ -387,7 +393,7 @@ class ViewSession {
     Deferred<dftracer::utils::dataframe::DataFrame> join(
         Deferred<dftracer::utils::dataframe::DataFrame> left,
         Deferred<dftracer::utils::dataframe::DataFrame> right,
-        JoinType how = JoinType::INNER, std::int64_t n_key = -1);
+        JoinType how = JoinType::Inner, std::int64_t n_key = -1);
 
     /// FULL-join two collect branches on their shared leading group keys and
     /// append `delta_<m>`/`pct_<m>` per metric, after the one scan. `baseline`
@@ -431,11 +437,11 @@ class ViewSession {
     }
 
     /// Attach an externally-built Fold to the shared scan. `make` constructs it
-    /// with the scan's StringIntern so ids agree and per-worker slices merge;
-    /// `finalize` runs after the scan while the fold is still alive. Forces a
-    /// scan (a plugin cannot be served from a rollup).
+    /// with the scan's dstd::StringIntern so ids agree and per-worker slices
+    /// merge; `finalize` runs after the scan while the fold is still alive.
+    /// Forces a scan (a plugin cannot be served from a rollup).
     void attach_fold_factory(std::function<std::unique_ptr<detail::Fold>(
-                                 dftracer::utils::StringIntern&)>
+                                 dftracer::utils::dstd::StringIntern&)>
                                  make,
                              std::function<void()> finalize);
 
@@ -883,7 +889,7 @@ class View : public dataframe::LazyOps<View> {
     /// `intern` so their ids agree and per-worker slices merge.
     coro::CoroTask<ExportStats> run_folds(
         std::span<detail::Fold* const> folds,
-        dftracer::utils::StringIntern& intern) const;
+        dftracer::utils::dstd::StringIntern& intern) const;
 
     /// The trace self-description, one entry per process, from each file's
     /// "end" event (TraceConfig). Ignores this view's filters.

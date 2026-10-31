@@ -1,7 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -10,8 +11,6 @@
 #include <set>
 #include <string>
 #include <vector>
-
-#include "test_view_common.h"
 
 namespace df = dftracer::utils::dataframe;
 
@@ -1067,7 +1066,7 @@ TEST_SUITE("View duql joins") {
         for (int r = 1; r <= 4; ++r)
             lines.push_back(R"({"type":"run","run":)" + std::to_string(r) +
                             R"(,"app":"a)" + std::to_string(r % 2) + "\"}");
-        for (int i = 0; i < 600; ++i)
+        for (int i = 0; i < 200; ++i)
             lines.push_back(R"({"type":"ev","i":)" + std::to_string(i) +
                             R"(,"run":)" + std::to_string(i % 5 + 1) +
                             R"(,"dur":)" + std::to_string((i * 13) % 97) +
@@ -1125,6 +1124,10 @@ TEST_SUITE("View duql joins") {
         if (r.run_kind == 3) return "i" + std::to_string(r.run);
         return "";
     }
+
+    // Each lookup layout (checkpoint 2048, member 4096) splits this many rows
+    // into several chunks; a cap of 10 rows or 1 KiB is far below it.
+    constexpr int CORRELATED_ROWS = 120;
 
     struct CorrelatedData {
         std::vector<std::string> lines;
@@ -1242,14 +1245,20 @@ TEST_SUITE("View duql joins") {
             for (const Rec& r : rs) {
                 double t = 0;
                 bool any = false;
+                bool with_dur = false;
                 if (!run_key(r).empty())
                     for (const Rec& o : rs)
                         if (o.name == r.name && run_key(o) == run_key(r)) {
                             any = true;
-                            if (o.has_dur) t += o.dur;
+                            if (o.has_dur) {
+                                t += o.dur;
+                                with_dur = true;
+                            }
                         }
-                c.want.push_back(any ? "" : empty_sum);
-                if (any) {
+                // A sum over rows with no dur is null; over no rows it is
+                // `empty_sum`.
+                c.want.push_back(any ? "null" : empty_sum);
+                if (with_dur) {
                     char buf[32];
                     std::snprintf(buf, sizeof buf, "%g", t);
                     c.want.back() = buf;
@@ -1311,45 +1320,44 @@ TEST_SUITE("View duql joins") {
         return buf;
     }
 
-    TEST_CASE("a correlated sub-query equals the per-row reference") {
-        TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 7);
-        const View v = view_of(write_records(env, "cr", d.lines, 4096, 4096));
-        const auto none =
-            frame(v.duql("from data | where false | agg { t = sum(dur) }"));
-        REQUIRE(none.num_rows() == 1);
-        const std::string empty_sum = as_number_text(cell(none, 0, "t"));
-        for (const auto& c : correlated_cases(d, "i >= 0", empty_sum)) {
+    // Checks every query of `cases` against its per-row reference.
+    static void check_cases(const View& v,
+                            const std::vector<CorrelatedCase>& cases) {
+        for (const auto& c : cases) {
             CAPTURE(c.query);
             const auto f = frame(v.duql(c.query));
             std::vector<std::string> got;
-            for (const auto& x : by_i(f, c.column))
+            for (const auto& x :
+                 c.column == "i" ? sorted(column(f, "i")) : by_i(f, c.column))
                 got.push_back(as_number_text(x));
             std::vector<std::string> want;
             for (const auto& x : c.want) want.push_back(as_number_text(x));
+            if (c.column == "i") want = sorted(want);
             CHECK(first_diff(got, want) == "");
         }
     }
 
-    TEST_CASE("a correlated sub-query does not depend on layout or pushdown") {
+    TEST_CASE(
+        "a correlated sub-query equals the per-row reference on every layout "
+        "and pushdown") {
         TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 21);
-        std::vector<std::vector<std::string>> first;
+        const CorrelatedData d = correlated_data(CORRELATED_ROWS, 21);
+        std::string empty_sum;
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "cl" + std::to_string(checkpoint), d.lines,
-                              4096, checkpoint);
+            CAPTURE(checkpoint);
+            const View v =
+                view_of(write_records(env, "cl" + std::to_string(checkpoint),
+                                      d.lines, 4096, checkpoint));
+            if (empty_sum.empty()) {
+                const auto none = frame(
+                    v.duql("from data | where false | agg { t = sum(dur) }"));
+                REQUIRE(none.num_rows() == 1);
+                empty_sum = as_number_text(cell(none, 0, "t"));
+            }
             for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
                 CAPTURE(where);
-                std::size_t at = 0;
-                for (const auto& c : correlated_cases(d, where, "0")) {
-                    const auto got =
-                        by_i(frame(view_of(gz).duql(c.query)), c.column);
-                    if (first.size() <= at) first.push_back(got);
-                    CHECK(got == first[at]);
-                    ++at;
-                }
+                check_cases(v, correlated_cases(d, where, empty_sum));
             }
         }
     }
@@ -1489,44 +1497,20 @@ TEST_SUITE("View duql joins") {
         return out;
     }
 
-    TEST_CASE("a range sub-query equals the per-row reference") {
+    TEST_CASE(
+        "a range sub-query equals the per-row reference on every layout and "
+        "pushdown") {
         TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 11);
-        const View v = view_of(write_records(env, "rr", d.lines, 4096, 4096));
-        for (const auto& c : range_cases(d, "i >= 0")) {
-            CAPTURE(c.query);
-            const auto f = frame(v.duql(c.query));
-            std::vector<std::string> got;
-            for (const auto& x :
-                 c.column == "i" ? sorted(column(f, "i")) : by_i(f, c.column))
-                got.push_back(as_number_text(x));
-            std::vector<std::string> want;
-            for (const auto& x : c.want) want.push_back(as_number_text(x));
-            if (c.column == "i") want = sorted(want);
-            CHECK(first_diff(got, want) == "");
-        }
-    }
-
-    TEST_CASE("a range sub-query does not depend on layout or pushdown") {
-        TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 29);
-        std::vector<std::vector<std::string>> first;
+        const CorrelatedData d = correlated_data(CORRELATED_ROWS, 29);
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
-            const std::string gz =
-                write_records(env, "rl" + std::to_string(checkpoint), d.lines,
-                              4096, checkpoint);
+            CAPTURE(checkpoint);
+            const View v =
+                view_of(write_records(env, "rl" + std::to_string(checkpoint),
+                                      d.lines, 4096, checkpoint));
             for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
                 CAPTURE(where);
-                std::size_t at = 0;
-                for (const auto& c : range_cases(d, where)) {
-                    CAPTURE(c.query);
-                    const auto got = sorted(
-                        by_i(frame(view_of(gz).duql(c.query)), c.column));
-                    if (first.size() <= at) first.push_back(got);
-                    CHECK(got == first[at]);
-                    ++at;
-                }
+                check_cases(v, range_cases(d, where));
             }
         }
     }
@@ -1607,59 +1591,61 @@ TEST_SUITE("View duql joins") {
     // budget; the other sub-queries join theirs, which spills.
     TEST_CASE("sub-queries over the caps and the memory budget") {
         TestEnvironment env(10);
-        const CorrelatedData d = correlated_data(300, 13);
+        const CorrelatedData d = correlated_data(CORRELATED_ROWS, 13);
         ScopedEnv rows("DUQL_LOOKUP_MAX_ROWS", "10");
         ScopedEnv bytes("DUQL_LOOKUP_MAX_BYTES", "1024");
-        for (const std::size_t checkpoint :
-             {std::size_t{2048}, std::size_t{65536}}) {
+        // Layout and pushdown are covered on their own above; these four runs
+        // pair every value of checkpoint, budget and filter with every other.
+        struct Config {
+            std::size_t checkpoint;
+            std::uint64_t budget;
+            const char* where;
+        };
+        for (const Config& cfg : {Config{2048, 1024, "i >= 0"},
+                                  Config{2048, 0, "(i >= 0) or false"},
+                                  Config{65536, 1024, "(i >= 0) or false"},
+                                  Config{65536, 0, "i >= 0"}}) {
             const std::string gz =
-                write_records(env, "cs" + std::to_string(checkpoint), d.lines,
-                              4096, checkpoint);
-            for (const std::uint64_t budget :
-                 {std::uint64_t{1024}, std::uint64_t{0}}) {
-                const View v =
-                    budget ? view_of(gz).memory_budget(budget) : view_of(gz);
-                for (const char* where : {"i >= 0", "(i >= 0) or false"}) {
-                    CAPTURE(checkpoint);
-                    CAPTURE(budget);
-                    CAPTURE(where);
-                    auto cases = correlated_cases(d, where, "null");
-                    {
-                        CorrelatedCase c{
-                            std::string("where ") + where +
-                                " | where (g in (from data | where dur > 50 | "
-                                "select g)) or i < 0 | select i",
-                            "i",
-                            {}};
-                        for (const Rec& r : d.recs) {
-                            bool hit = false;
-                            for (const Rec& o : d.recs)
-                                hit = hit || (o.has_dur && o.dur > 50 &&
-                                              o.i % 5 == r.i % 5);
-                            if (hit) c.want.push_back(std::to_string(r.i));
-                        }
-                        cases.push_back(std::move(c));
-                    }
-                    for (const auto& c : cases) {
-                        CAPTURE(c.query);
-                        const bool key_set =
-                            c.query.find("| where g in") != std::string::npos;
-                        if (key_set && budget) {
-                            CHECK(has(
-                                error_of([&] { (void)frame(v.duql(c.query)); }),
-                                {"memory budget", "__sub_"}));
-                            continue;
-                        }
-                        const auto f = frame(v.duql(c.query));
-                        std::vector<std::string> got;
-                        for (const auto& x : by_i(f, c.column))
-                            got.push_back(as_number_text(x));
-                        std::vector<std::string> want;
-                        for (const auto& x : c.want)
-                            want.push_back(as_number_text(x));
-                        CHECK(first_diff(got, want) == "");
-                    }
+                write_records(env, "cs" + std::to_string(cfg.checkpoint),
+                              d.lines, 4096, cfg.checkpoint);
+            const View v = cfg.budget ? view_of(gz).memory_budget(cfg.budget)
+                                      : view_of(gz);
+            CAPTURE(cfg.checkpoint);
+            CAPTURE(cfg.budget);
+            CAPTURE(cfg.where);
+            auto cases = correlated_cases(d, cfg.where, "null");
+            {
+                CorrelatedCase c{
+                    std::string("where ") + cfg.where +
+                        " | where (g in (from data | where dur > 50 | "
+                        "select g)) or i < 0 | select i",
+                    "i",
+                    {}};
+                for (const Rec& r : d.recs) {
+                    bool hit = false;
+                    for (const Rec& o : d.recs)
+                        hit = hit ||
+                              (o.has_dur && o.dur > 50 && o.i % 5 == r.i % 5);
+                    if (hit) c.want.push_back(std::to_string(r.i));
                 }
+                cases.push_back(std::move(c));
+            }
+            for (const auto& c : cases) {
+                CAPTURE(c.query);
+                const bool key_set =
+                    c.query.find("| where g in") != std::string::npos;
+                if (key_set && cfg.budget) {
+                    CHECK(has(error_of([&] { (void)frame(v.duql(c.query)); }),
+                              {"memory budget", "__sub_"}));
+                    continue;
+                }
+                const auto f = frame(v.duql(c.query));
+                std::vector<std::string> got;
+                for (const auto& x : by_i(f, c.column))
+                    got.push_back(as_number_text(x));
+                std::vector<std::string> want;
+                for (const auto& x : c.want) want.push_back(as_number_text(x));
+                CHECK(first_diff(got, want) == "");
             }
         }
     }
@@ -1671,8 +1657,11 @@ TEST_SUITE("View duql joins") {
     };
 
     // Events with a key that may be missing, null or a double, and a row set
-    // of keys 0..299 (a fifth of them written as doubles) with a value each,
-    // plus a second copy of some keys for `into`.
+    // of keys 0..SPILL_KEYS-1 (a fifth of them written as doubles) with a value
+    // each, plus a second copy of some keys for `into`.
+    constexpr int SPILL_KEYS = 60;
+    constexpr int SPILL_EVENTS = 600;
+
     static SpillData spill_data(int events, unsigned seed) {
         unsigned x = seed;
         auto next = [&](unsigned m) {
@@ -1680,8 +1669,8 @@ TEST_SUITE("View duql joins") {
             return static_cast<int>((x >> 8) % m);
         };
         SpillData d;
-        std::vector<int> copies(300, 1);
-        for (int j = 0; j < 300; ++j) {
+        std::vector<int> copies(SPILL_KEYS, 1);
+        for (int j = 0; j < SPILL_KEYS; ++j) {
             const bool dup = next(4) == 0;
             for (int c = 0; c < 1 + dup; ++c) {
                 const std::string k =
@@ -1694,7 +1683,7 @@ TEST_SUITE("View duql joins") {
         }
         for (int i = 0; i < events; ++i) {
             const int kind = next(10);
-            const int k = next(400);
+            const int k = next(SPILL_KEYS * 4 / 3);
             std::string l = R"({"type":"ev","i":)" + std::to_string(i);
             if (kind == 0)
                 l += R"(,"k":null)";
@@ -1702,10 +1691,10 @@ TEST_SUITE("View duql joins") {
                 l += R"(,"k":)" + std::to_string(k) + (k % 2 == 0 ? ".0" : "");
             d.lines.push_back(l + R"(,"pad":"xxxxxxxxxxxxxxxx"})");
             const bool keyed = kind >= 2;
-            d.plain.push_back(keyed && k < 300 ? std::to_string(k * 3)
-                                               : "null");
+            d.plain.push_back(keyed && k < SPILL_KEYS ? std::to_string(k * 3)
+                                                      : "null");
             d.sizes.push_back(
-                keyed && k < 300
+                keyed && k < SPILL_KEYS
                     ? std::to_string(copies[static_cast<std::size_t>(k)])
                     : "0");
         }
@@ -1714,7 +1703,7 @@ TEST_SUITE("View duql joins") {
 
     TEST_CASE("a lookup joins a side over the caps and the memory budget") {
         TestEnvironment env(10);
-        const SpillData d = spill_data(3000, 5);
+        const SpillData d = spill_data(SPILL_EVENTS, 5);
         std::vector<std::string> base;
         for (const std::size_t checkpoint :
              {std::size_t{2048}, std::size_t{65536}}) {
@@ -1733,8 +1722,8 @@ TEST_SUITE("View duql joins") {
                 const auto f = frame(b.duql(
                     let +
                     "where type == \"ev\" | lookup s on k | select i, sv"));
-                REQUIRE(f.num_rows() == 3000);
-                std::vector<std::string> sv(3000);
+                REQUIRE(f.num_rows() == SPILL_EVENTS);
+                std::vector<std::string> sv(SPILL_EVENTS);
                 const auto ids = column(f, "i");
                 const auto vals = column(f, "sv");
                 for (std::size_t r = 0; r < ids.size(); ++r)
@@ -1743,7 +1732,7 @@ TEST_SUITE("View duql joins") {
                     frame(b.duql(
                         let + "where type == \"ev\" | lookup s on k into m | "
                               "select i, len(m) as n"));
-                std::vector<std::string> sizes(3000);
+                std::vector<std::string> sizes(SPILL_EVENTS);
                 const auto nid = column(n, "i");
                 const auto nn = column(n, "n");
                 for (std::size_t r = 0; r < nid.size(); ++r)

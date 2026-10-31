@@ -33,9 +33,8 @@ in Python.
 
 DFTracer traces are line-delimited JSON, usually gzip-compressed
 (``.pfw.gz``). The Python ``Indexer`` and ``TraceViewer`` read gzip files only,
-whether the file has one member or many. ``dftracer_index``, ``dftracer_view``
-and ``dftracer_run`` also accept a plain ``.pfw``, ``.jsonl`` or ``.ndjson``
-file. They write a gzip copy under ``split/`` and read that. Write a tiny
+whether the file has one member or many. A plain ``.pfw``, ``.jsonl`` or
+``.ndjson`` file has to be gzipped first. Write a tiny
 gzip trace so the rest of the lesson has something to read:
 
 .. code-block:: python

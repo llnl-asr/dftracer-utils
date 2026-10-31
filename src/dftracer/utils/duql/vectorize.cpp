@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/duql/lookup.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/pattern_engine.h>
@@ -17,8 +18,6 @@
 #include <variant>
 #include <vector>
 
-#include "../dataframe/batch_ops.h"
-
 namespace dftracer::utils::duql {
 
 namespace {
@@ -32,28 +31,28 @@ using df::TypeId;
 // ANY: a column whose type the plan does not know (no catalog); each batch
 // gives it its own, and the kernels dispatch on that.
 enum class K : std::uint8_t {
-    INT,
-    UINT,
-    FLOAT,
-    STR,
-    BOOL,
-    LIST,
-    NUL,
-    OTHER,
-    ANY
+    Int,
+    Uint,
+    Float,
+    Str,
+    Bool,
+    List,
+    Nul,
+    Other,
+    Any
 };
 
 struct V {
     Expr e;
-    K k = K::NUL;
+    K k = K::Nul;
     const TConst* constant = nullptr;
-    K elem = K::OTHER;  ///< The element kind of a LIST.
+    K elem = K::Other;  ///< The element kind of a LIST.
 };
 
-bool numeric(K k) { return k == K::INT || k == K::UINT || k == K::FLOAT; }
+bool numeric(K k) { return k == K::Int || k == K::Uint || k == K::Float; }
 
 // A value an arithmetic or comparison may take: numeric, or decided per batch.
-bool number_like(K k) { return numeric(k) || k == K::ANY; }
+bool number_like(K k) { return numeric(k) || k == K::Any; }
 
 K kind_of(TypeId t) {
     switch (t) {
@@ -64,39 +63,39 @@ K kind_of(TypeId t) {
         case TypeId::Uint8:
         case TypeId::Uint16:
         case TypeId::Uint32:
-            return K::INT;
+            return K::Int;
         case TypeId::Uint64:
-            return K::UINT;
+            return K::Uint;
         case TypeId::Float16:
         case TypeId::Float32:
         case TypeId::Float64:
-            return K::FLOAT;
+            return K::Float;
         case TypeId::String:
         case TypeId::LargeString:
-            return K::STR;
+            return K::Str;
         case TypeId::Bool:
-            return K::BOOL;
+            return K::Bool;
         case TypeId::List:
         case TypeId::LargeList:
         case TypeId::FixedSizeList:
-            return K::LIST;
+            return K::List;
         default:
-            return K::OTHER;
+            return K::Other;
     }
 }
 
 // The kind of a column of type `t`; Unknown is decided per batch.
-K column_kind(TypeId t) { return t == TypeId::Unknown ? K::ANY : kind_of(t); }
+K column_kind(TypeId t) { return t == TypeId::Unknown ? K::Any : kind_of(t); }
 
 TypeId type_of(K k) {
     switch (k) {
-        case K::UINT:
+        case K::Uint:
             return TypeId::Uint64;
-        case K::FLOAT:
+        case K::Float:
             return TypeId::Float64;
-        case K::STR:
+        case K::Str:
             return TypeId::String;
-        case K::BOOL:
+        case K::Bool:
             return TypeId::Bool;
         default:
             return TypeId::Int64;
@@ -130,12 +129,12 @@ class Vectorizer {
     }
 
     static V null() { return {}; }
-    static V boolean(bool b) { return {df::expr_lit_bool(b), K::BOOL}; }
+    static V boolean(bool b) { return {df::expr_lit_bool(b), K::Bool}; }
     static Expr as(const V& v, K k) {
-        return v.k == K::NUL ? df::expr_lit_null(type_of(k)) : v.e;
+        return v.k == K::Nul ? df::expr_lit_null(type_of(k)) : v.e;
     }
     static Expr as_bool(const V& v) {
-        return v.k == K::BOOL ? v.e : df::expr_lit_null(TypeId::Bool);
+        return v.k == K::Bool ? v.e : df::expr_lit_null(TypeId::Bool);
     }
 
     std::optional<std::size_t> column(std::string_view name) const {
@@ -150,7 +149,7 @@ class Vectorizer {
     std::optional<std::size_t> field_column(const TField& f,
                                             std::size_t& consumed) const {
         consumed = f.steps.size();
-        const bool element = f.root == FieldRoot::ELEMENT;
+        const bool element = f.root == FieldRoot::Element;
         std::string key = element ? "." : "";
         std::optional<std::size_t> best;
         if (element)
@@ -181,19 +180,19 @@ class Vectorizer {
                 if constexpr (std::is_same_v<T, TNull>)
                     return null();
                 else if constexpr (std::is_same_v<T, bool>)
-                    return {df::expr_lit_bool(v), K::BOOL, &c};
+                    return {df::expr_lit_bool(v), K::Bool, &c};
                 else if constexpr (std::is_same_v<T, std::int64_t>)
-                    return {df::expr_lit(v), K::INT, &c};
+                    return {df::expr_lit(v), K::Int, &c};
                 else if constexpr (std::is_same_v<T, std::uint64_t>) {
                     if (v > static_cast<std::uint64_t>(
                                 std::numeric_limits<std::int64_t>::max()))
                         no_kernel("an integer literal above int64");
-                    return {df::expr_lit(static_cast<std::int64_t>(v)), K::INT,
+                    return {df::expr_lit(static_cast<std::int64_t>(v)), K::Int,
                             &c};
                 } else if constexpr (std::is_same_v<T, double>)
-                    return {df::expr_lit(v), K::FLOAT, &c};
+                    return {df::expr_lit(v), K::Float, &c};
                 else
-                    return {df::expr_lit_str(v), K::STR, &c};
+                    return {df::expr_lit_str(v), K::Str, &c};
             },
             c.value);
     }
@@ -209,18 +208,18 @@ class Vectorizer {
         const df::DataType* type = &col.type;
         v.elem = element(*type);
         for (std::size_t i = consumed; i < f.steps.size(); ++i) {
-            if (v.k != K::LIST || !f.steps[i].index) return null();
+            if (v.k != K::List || !f.steps[i].index) return null();
             v.e = df::expr_list_get(v.e, *f.steps[i].index);
             type = &type->fields.front().type;
             v.k = kind_of(type->id);
             v.elem = element(*type);
         }
-        if (v.k == K::OTHER) return null();
+        if (v.k == K::Other) return null();
         return v;
     }
 
     static K element(const df::DataType& t) {
-        if (kind_of(t.id) != K::LIST || t.fields.empty()) return K::OTHER;
+        if (kind_of(t.id) != K::List || t.fields.empty()) return K::Other;
         return kind_of(t.fields.front().type.id);
     }
 
@@ -235,34 +234,34 @@ class Vectorizer {
         if (!columns_[*c].record) return boolean(true);
         return {df::expr_is_null(df::expr_col(static_cast<std::int32_t>(*c)),
                                  false),
-                K::BOOL};
+                K::Bool};
     }
 
     V node(const TUnary& u) {
         const V v = (*this)(*u.operand);
-        if (u.op == TermOp::NOT)
-            return v.k == K::BOOL ? V{df::expr_not(v.e), K::BOOL} : null();
+        if (u.op == TermOp::Not)
+            return v.k == K::Bool ? V{df::expr_not(v.e), K::Bool} : null();
         if (!number_like(v.k)) return null();
-        return {df::expr_neg(v.e), v.k == K::UINT ? K::INT : v.k};
+        return {df::expr_neg(v.e), v.k == K::Uint ? K::Int : v.k};
     }
 
     static K arith_kind(TermOp op, K a, K b) {
-        if (op == TermOp::DIV || a == K::FLOAT || b == K::FLOAT)
-            return K::FLOAT;
-        return K::INT;
+        if (op == TermOp::Div || a == K::Float || b == K::Float)
+            return K::Float;
+        return K::Int;
     }
 
     static df::ArithOp arith_op(TermOp op) {
         switch (op) {
-            case TermOp::ADD:
+            case TermOp::Add:
                 return df::ArithOp::Add;
-            case TermOp::SUB:
+            case TermOp::Sub:
                 return df::ArithOp::Sub;
-            case TermOp::MUL:
+            case TermOp::Mul:
                 return df::ArithOp::Mul;
-            case TermOp::DIV:
+            case TermOp::Div:
                 return df::ArithOp::Div;
-            case TermOp::IDIV:
+            case TermOp::Idiv:
                 return df::ArithOp::FloorDiv;
             default:
                 return df::ArithOp::Mod;
@@ -271,17 +270,17 @@ class Vectorizer {
 
     static std::optional<CmpOp> cmp_op(TermOp op) {
         switch (op) {
-            case TermOp::EQ:
+            case TermOp::Eq:
                 return CmpOp::Eq;
-            case TermOp::NE:
+            case TermOp::Ne:
                 return CmpOp::Ne;
-            case TermOp::LT:
+            case TermOp::Lt:
                 return CmpOp::Lt;
-            case TermOp::LE:
+            case TermOp::Le:
                 return CmpOp::Le;
-            case TermOp::GT:
+            case TermOp::Gt:
                 return CmpOp::Gt;
-            case TermOp::GE:
+            case TermOp::Ge:
                 return CmpOp::Ge;
             default:
                 return std::nullopt;
@@ -290,44 +289,44 @@ class Vectorizer {
 
     static bool comparable(K a, K b) {
         if (number_like(a) && number_like(b)) return true;
-        if ((a == K::ANY && (b == K::STR || b == K::BOOL)) ||
-            (b == K::ANY && (a == K::STR || a == K::BOOL)))
+        if ((a == K::Any && (b == K::Str || b == K::Bool)) ||
+            (b == K::Any && (a == K::Str || a == K::Bool)))
             return true;
-        return a == b && (a == K::STR || a == K::BOOL);
+        return a == b && (a == K::Str || a == K::Bool);
     }
 
     // `a op b` over values of one domain; null across domains.
     static V compare(CmpOp op, const V& a, const V& b) {
         if (!comparable(a.k, b.k)) return null();
-        if (b.constant && a.k == b.k && (a.k == K::INT || a.k == K::FLOAT)) {
+        if (b.constant && a.k == b.k && (a.k == K::Int || a.k == K::Float)) {
             const auto& c = b.constant->value;
             const dftu_scalar s =
-                a.k == K::FLOAT ? df::detail::expr_scalar_d(std::get<double>(c))
+                a.k == K::Float ? df::detail::expr_scalar_d(std::get<double>(c))
                                 : df::detail::expr_scalar_i(
                                       std::holds_alternative<std::int64_t>(c)
                                           ? std::get<std::int64_t>(c)
                                           : static_cast<std::int64_t>(
                                                 std::get<std::uint64_t>(c)));
-            return {df::expr_cmp(op, a.e, s), K::BOOL};
+            return {df::expr_cmp(op, a.e, s), K::Bool};
         }
-        return {df::expr_cmp_expr(op, a.e, b.e), K::BOOL};
+        return {df::expr_cmp_expr(op, a.e, b.e), K::Bool};
     }
 
     static V both(LogicalOp op, const V& a, const V& b) {
-        return {df::expr_logical(op, as_bool(a), as_bool(b)), K::BOOL};
+        return {df::expr_logical(op, as_bool(a), as_bool(b)), K::Bool};
     }
 
     // One kind for the operands of a value-choosing form, or a compile error.
     static K common(const std::vector<V>& vs, std::string_view what) {
-        K out = K::NUL;
+        K out = K::Nul;
         for (const V& v : vs) {
-            if (v.k == K::NUL) continue;
-            if (out == K::NUL || out == v.k) {
+            if (v.k == K::Nul) continue;
+            if (out == K::Nul || out == v.k) {
                 out = v.k;
-            } else if (out == K::ANY || v.k == K::ANY) {
-                out = K::ANY;
+            } else if (out == K::Any || v.k == K::Any) {
+                out = K::Any;
             } else if (numeric(out) && numeric(v.k)) {
-                out = out == K::FLOAT || v.k == K::FLOAT ? K::FLOAT : K::INT;
+                out = out == K::Float || v.k == K::Float ? K::Float : K::Int;
             } else {
                 fail(std::string(what) +
                      " chooses between values of different "
@@ -342,11 +341,11 @@ class Vectorizer {
         const V l = (*this)(*b.left);
         const V r = (*this)(*b.right);
         switch (b.op) {
-            case TermOp::AND:
+            case TermOp::And:
                 return both(LogicalOp::And, l, r);
-            case TermOp::OR:
+            case TermOp::Or:
                 return both(LogicalOp::Or, l, r);
-            case TermOp::COALESCE:
+            case TermOp::Coalesce:
                 return coalesce({l, r}, "the ?? operator");
             default:
                 break;
@@ -354,7 +353,7 @@ class Vectorizer {
         if (auto op = cmp_op(b.op)) return compare(*op, l, r);
         if (!number_like(l.k) || !number_like(r.k)) return null();
         return {df::expr_arith(arith_op(b.op), l.e, r.e),
-                l.k == K::ANY || r.k == K::ANY ? K::ANY
+                l.k == K::Any || r.k == K::Any ? K::Any
                                                : arith_kind(b.op, l.k, r.k)};
     }
 
@@ -362,7 +361,7 @@ class Vectorizer {
         const K k = common(vs, what);
         std::vector<Expr> args;
         for (const V& v : vs)
-            if (v.k != K::NUL) args.push_back(v.e);
+            if (v.k != K::Nul) args.push_back(v.e);
         if (args.empty()) return null();
         if (args.size() == 1) return {args.front(), k};
         return {df::expr_coalesce(args), k};
@@ -372,17 +371,17 @@ class Vectorizer {
         const V v = (*this)(*b.subject);
         const V t = both(LogicalOp::And, compare(CmpOp::Ge, v, (*this)(*b.low)),
                          compare(CmpOp::Le, v, (*this)(*b.high)));
-        return b.negated ? V{df::expr_not(t.e), K::BOOL} : t;
+        return b.negated ? V{df::expr_not(t.e), K::Bool} : t;
     }
 
     V node(const TIs& is) {
         if (is.missing) {
             const V p = present(*is.subject);
-            return is.negated ? p : V{df::expr_not(p.e), K::BOOL};
+            return is.negated ? p : V{df::expr_not(p.e), K::Bool};
         }
         const V v = (*this)(*is.subject);
-        if (v.k == K::NUL) return boolean(!is.negated);
-        return {df::expr_is_null(v.e, !is.negated), K::BOOL};
+        if (v.k == K::Nul) return boolean(!is.negated);
+        return {df::expr_is_null(v.e, !is.negated), K::Bool};
     }
 
     V node(const TIn& in) {
@@ -390,7 +389,7 @@ class Vectorizer {
         std::vector<V> items;
         for (const auto& item : in.list) {
             V x = (*this)(*item);
-            if (x.k != K::NUL && comparable(v.k, x.k)) items.push_back(x);
+            if (x.k != K::Nul && comparable(v.k, x.k)) items.push_back(x);
         }
         if (items.empty()) return null();
         // YES if any item equals, NO if any compares, else unknown.
@@ -412,7 +411,7 @@ class Vectorizer {
             any_equal, df::expr_lit_bool(true),
             df::expr_select(any_compared, df::expr_lit_bool(false),
                             df::expr_lit_null(TypeId::Bool)));
-        return {in.negated ? df::expr_not(t) : t, K::BOOL};
+        return {in.negated ? df::expr_not(t) : t, K::Bool};
     }
 
     V node(const TIndex& x) {
@@ -436,7 +435,7 @@ class Vectorizer {
     V node(const TQuant& q) {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].quant == &q)
-                return {df::expr_col(static_cast<std::int32_t>(i)), K::BOOL};
+                return {df::expr_col(static_cast<std::int32_t>(i)), K::Bool};
         fail(std::string(q.all ? "all" : "any") +
                  "() runs on a list column only through quantify()",
              true);
@@ -446,7 +445,7 @@ class Vectorizer {
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].lookup == &l) {
                 const K k = kind_of(columns_[i].type.id);
-                if (k == K::OTHER || k == K::LIST) return null();
+                if (k == K::Other || k == K::List) return null();
                 return {df::expr_col(static_cast<std::int32_t>(i)), k};
             }
         fail("a lookup into '" + l.name +
@@ -457,10 +456,10 @@ class Vectorizer {
     // The column of `t` when it is a parse_json() call.
     const V* json_call(const Term& t) {
         const auto* c = std::get_if<TCall>(&t.node);
-        if (!c || c->fn != Fn::PARSE_JSON) return nullptr;
+        if (!c || c->fn != Fn::ParseJson) return nullptr;
         for (std::size_t i = 0; i < columns_.size(); ++i)
             if (columns_[i].call == c) {
-                json_ = {df::expr_col(static_cast<std::int32_t>(i)), K::STR};
+                json_ = {df::expr_col(static_cast<std::int32_t>(i)), K::Str};
                 return &json_;
             }
         return nullptr;
@@ -485,7 +484,7 @@ class Vectorizer {
         V v{df::expr_col(static_cast<std::int32_t>(i)),
             kind_of(columns_[i].type.id)};
         v.elem = element(columns_[i].type);
-        if (v.k == K::OTHER) return null();
+        if (v.k == K::Other) return null();
         return v;
     }
 
@@ -500,35 +499,35 @@ class Vectorizer {
 
     V node(const TMatch& m) {
         const V v = (*this)(*m.subject);
-        if (v.k != K::STR || !m.compiled) return null();
+        if (v.k != K::Str || !m.compiled) return null();
         const Expr t = df::expr_str_pattern(v.e, m.compiled);
-        return {m.negated ? df::expr_not(t) : t, K::BOOL};
+        return {m.negated ? df::expr_not(t) : t, K::Bool};
     }
 
     // contains() over a list literal: whether `p` equals an item, unknown
     // when `p` is.
     V contains_item(const TList& l, const V& p) {
-        if (p.k == K::NUL) return null();
+        if (p.k == K::Nul) return null();
         Expr any;
         for (const auto& item : l.items) {
             const V x = (*this)(*item);
-            if (x.k == K::NUL || !comparable(p.k, x.k)) continue;
+            if (x.k == K::Nul || !comparable(p.k, x.k)) continue;
             const Expr hit = df::expr_coalesce(
                 {compare(CmpOp::Eq, p, x).e, df::expr_lit_bool(false)});
             any = any.valid() ? df::expr_logical(LogicalOp::Or, any, hit) : hit;
         }
         if (!any.valid()) any = df::expr_lit_bool(false);
-        if (p.constant) return {any, K::BOOL};
+        if (p.constant) return {any, K::Bool};
         return {df::expr_select(df::expr_is_null(p.e, true),
                                 df::expr_lit_null(TypeId::Bool), any),
-                K::BOOL};
+                K::Bool};
     }
 
     // A function runs on operands of known types only; one the plan types
     // per batch reaches it through a per-batch compile.
     V arg(const TCall& c, std::size_t i) {
         V v = (*this)(*c.args[i]);
-        if (v.k == K::ANY)
+        if (v.k == K::Any)
             fail(std::string(fn_name(c)) + "() reads '" +
                  term_text(*c.args[i]) + "', whose type only each batch gives");
         return v;
@@ -556,13 +555,13 @@ class Vectorizer {
 
     static V text(const V& v) {
         switch (v.k) {
-            case K::STR:
+            case K::Str:
                 return v;
-            case K::INT:
-            case K::UINT:
-            case K::FLOAT:
-            case K::BOOL:
-                return {df::expr_convert(df::ConvertOp::String, v.e), K::STR};
+            case K::Int:
+            case K::Uint:
+            case K::Float:
+            case K::Bool:
+                return {df::expr_convert(df::ConvertOp::String, v.e), K::Str};
             default:
                 return null();
         }
@@ -570,56 +569,56 @@ class Vectorizer {
 
     // `cond` as a Bool that is false where it is unknown.
     static Expr yes(const V& cond) {
-        if (cond.k != K::BOOL) return df::expr_lit_bool(false);
+        if (cond.k != K::Bool) return df::expr_lit_bool(false);
         return df::expr_coalesce({cond.e, df::expr_lit_bool(false)});
     }
 
     V choose(const V& cond, const V& a, const V& b) {
         const K k = common({a, b}, "if()");
-        if (k == K::NUL) return null();
+        if (k == K::Nul) return null();
         return {df::expr_select(yes(cond), as(a, k), as(b, k)), k};
     }
 
     V node(const TCall& c) {
         switch (c.fn) {
-            case Fn::EXISTS:
+            case Fn::Exists:
                 return present(*c.args[0]);
-            case Fn::COALESCE: {
+            case Fn::Coalesce: {
                 std::vector<V> vs;
                 for (const auto& a : c.args) vs.push_back((*this)(*a));
                 return coalesce(std::move(vs), "coalesce()");
             }
-            case Fn::IF:
+            case Fn::If:
                 return choose(arg(c, 0), arg(c, 1), arg(c, 2));
-            case Fn::CASE: {
+            case Fn::Case: {
                 V out = arg(c, c.args.size() - 1);
                 for (std::size_t i = c.args.size() - 1; i >= 2; i -= 2)
                     out = choose(arg(c, i - 2), arg(c, i - 1), out);
                 return out;
             }
-            case Fn::ABS: {
+            case Fn::Abs: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                if (v.k == K::FLOAT)
-                    return {df::expr_unary(df::UnaryOp::Abs, v.e), K::FLOAT};
-                if (v.k == K::UINT) return v;
+                if (v.k == K::Float)
+                    return {df::expr_unary(df::UnaryOp::Abs, v.e), K::Float};
+                if (v.k == K::Uint) return v;
                 return {
                     df::expr_select(df::expr_cmp(CmpOp::Lt, v.e,
                                                  df::detail::expr_scalar_i(0)),
                                     df::expr_neg(v.e), v.e),
-                    K::INT};
+                    K::Int};
             }
-            case Fn::FLOOR:
-            case Fn::CEIL: {
+            case Fn::Floor:
+            case Fn::Ceil: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                if (v.k != K::FLOAT) return v;
-                return {df::expr_unary(c.fn == Fn::FLOOR ? df::UnaryOp::Floor
+                if (v.k != K::Float) return v;
+                return {df::expr_unary(c.fn == Fn::Floor ? df::UnaryOp::Floor
                                                          : df::UnaryOp::Ceil,
                                        v.e),
-                        K::FLOAT};
+                        K::Float};
             }
-            case Fn::ROUND: {
+            case Fn::Round: {
                 const V v = arg(c, 0);
                 std::int64_t digits = 0;
                 if (c.args.size() > 1) {
@@ -629,132 +628,132 @@ class Vectorizer {
                     const auto n = const_int(d);
                     if (!n)
                         return {df::expr_round_col(v.e, d.e),
-                                v.k == K::FLOAT ? K::FLOAT : K::INT};
+                                v.k == K::Float ? K::Float : K::Int};
                     digits = *n;
                 }
                 if (!numeric(v.k)) return null();
                 return {df::expr_round(v.e, digits),
-                        v.k == K::FLOAT ? K::FLOAT : K::INT};
+                        v.k == K::Float ? K::Float : K::Int};
             }
-            case Fn::MIN:
-            case Fn::MAX: {
+            case Fn::Min:
+            case Fn::Max: {
                 if (c.args.size() == 1) {
-                    if (arg(c, 0).k == K::LIST)
+                    if (arg(c, 0).k == K::List)
                         no_kernel("min() and max() of a list");
                     return null();
                 }
                 std::vector<Expr> args;
-                K k = K::NUL;
+                K k = K::Nul;
                 for (const auto& a : c.args) {
                     const V v = (*this)(*a);
-                    if (v.k == K::NUL) return null();
-                    const bool same = k == K::NUL || comparable(k, v.k);
-                    if (!same || v.k == K::BOOL || v.k == K::LIST ||
-                        v.k == K::OTHER)
+                    if (v.k == K::Nul) return null();
+                    const bool same = k == K::Nul || comparable(k, v.k);
+                    if (!same || v.k == K::Bool || v.k == K::List ||
+                        v.k == K::Other)
                         return null();
-                    k = k == K::NUL || k == v.k ? v.k : K::FLOAT;
+                    k = k == K::Nul || k == v.k ? v.k : K::Float;
                     args.push_back(v.e);
                 }
-                return {df::expr_extreme(args, c.fn == Fn::MIN), k};
+                return {df::expr_extreme(args, c.fn == Fn::Min), k};
             }
-            case Fn::LOG:
-            case Fn::EXP: {
+            case Fn::Log:
+            case Fn::Exp: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                return {c.fn == Fn::LOG ? df::expr_log(v.e)
+                return {c.fn == Fn::Log ? df::expr_log(v.e)
                                         : df::expr_unary(df::UnaryOp::Exp, v.e),
-                        K::FLOAT};
+                        K::Float};
             }
-            case Fn::POW: {
+            case Fn::Pow: {
                 const V a = arg(c, 0);
                 const V b = arg(c, 1);
                 if (!numeric(a.k) || !numeric(b.k)) return null();
-                return {df::expr_pow(a.e, b.e), K::FLOAT};
+                return {df::expr_pow(a.e, b.e), K::Float};
             }
-            case Fn::LEN: {
+            case Fn::Len: {
                 const V v = arg(c, 0);
-                if (v.k == K::STR) return {df::expr_str_len(v.e, true), K::INT};
-                if (v.k == K::LIST) return {df::expr_list_len(v.e), K::INT};
+                if (v.k == K::Str) return {df::expr_str_len(v.e, true), K::Int};
+                if (v.k == K::List) return {df::expr_list_len(v.e), K::Int};
                 return null();
             }
-            case Fn::CONCAT: {
+            case Fn::Concat: {
                 std::vector<Expr> args;
                 for (const auto& a : c.args) {
                     const V t = text((*this)(*a));
-                    if (t.k == K::NUL) return null();
+                    if (t.k == K::Nul) return null();
                     args.push_back(t.e);
                 }
-                if (args.size() == 1) return {args.front(), K::STR};
-                return {df::expr_concat(args), K::STR};
+                if (args.size() == 1) return {args.front(), K::Str};
+                return {df::expr_concat(args), K::Str};
             }
-            case Fn::LOWER:
-            case Fn::UPPER:
-            case Fn::TRIM: {
+            case Fn::Lower:
+            case Fn::Upper:
+            case Fn::Trim: {
                 const V v = arg(c, 0);
-                if (v.k != K::STR) return null();
+                if (v.k != K::Str) return null();
                 return {
-                    df::expr_str_map(c.fn == Fn::LOWER   ? df::StrMapOp::Lower
-                                     : c.fn == Fn::UPPER ? df::StrMapOp::Upper
+                    df::expr_str_map(c.fn == Fn::Lower   ? df::StrMapOp::Lower
+                                     : c.fn == Fn::Upper ? df::StrMapOp::Upper
                                                          : df::StrMapOp::Strip,
                                      v.e),
-                    K::STR};
+                    K::Str};
             }
-            case Fn::STARTS_WITH:
-            case Fn::ENDS_WITH: {
+            case Fn::StartsWith:
+            case Fn::EndsWith: {
                 const V v = arg(c, 0);
                 const V p = arg(c, 1);
-                if (v.k != K::STR || p.k != K::STR) return null();
-                const auto op = c.fn == Fn::STARTS_WITH
+                if (v.k != K::Str || p.k != K::Str) return null();
+                const auto op = c.fn == Fn::StartsWith
                                     ? df::StrPredOp::StartsWith
                                     : df::StrPredOp::EndsWith;
                 if (const auto* n = const_str(p))
-                    return {df::expr_str_pred(op, v.e, *n), K::BOOL};
-                return {df::expr_str_pred_col(op, v.e, p.e), K::BOOL};
+                    return {df::expr_str_pred(op, v.e, *n), K::Bool};
+                return {df::expr_str_pred_col(op, v.e, p.e), K::Bool};
             }
-            case Fn::CONTAINS: {
+            case Fn::Contains: {
                 if (const auto* l = std::get_if<TList>(&c.args[0]->node))
                     return contains_item(*l, arg(c, 1));
                 const V v = arg(c, 0);
                 const V p = arg(c, 1);
-                if (p.k == K::NUL) return null();
-                if (v.k == K::STR) {
-                    if (p.k != K::STR) return null();
+                if (p.k == K::Nul) return null();
+                if (v.k == K::Str) {
+                    if (p.k != K::Str) return null();
                     if (const auto* n = const_str(p))
                         return {
                             df::expr_str_pred(df::StrPredOp::Contains, v.e, *n),
-                            K::BOOL};
+                            K::Bool};
                     return {df::expr_str_pred_col(df::StrPredOp::Contains, v.e,
                                                   p.e),
-                            K::BOOL};
+                            K::Bool};
                 }
-                if (v.k != K::LIST) return null();
+                if (v.k != K::List) return null();
                 if (const auto i = const_int(p))
                     return {df::expr_list_contains(
                                 v.e, df::detail::expr_scalar_i(*i)),
-                            K::BOOL};
-                if (p.constant && p.k == K::FLOAT)
+                            K::Bool};
+                if (p.constant && p.k == K::Float)
                     return {df::expr_list_contains(
                                 v.e, df::detail::expr_scalar_d(
                                          std::get<double>(p.constant->value))),
-                            K::BOOL};
+                            K::Bool};
                 no_kernel("contains() of a list with a non-numeric literal");
             }
-            case Fn::SUBSTR: {
+            case Fn::Substr: {
                 const V v = arg(c, 0);
                 const V s = arg(c, 1);
-                if (v.k != K::STR || s.k == K::NUL) return null();
+                if (v.k != K::Str || s.k == K::Nul) return null();
                 if (!numeric(s.k)) return null();
                 std::optional<V> l;
                 if (c.args.size() > 2) {
                     l = arg(c, 2);
-                    if (l->k == K::NUL || !numeric(l->k)) return null();
+                    if (l->k == K::Nul || !numeric(l->k)) return null();
                 }
                 const auto start = const_int(s);
                 const auto n = l ? const_int(*l) : std::nullopt;
                 if (!start || (l && !n)) {
                     return {
                         df::expr_str_substr_col(v.e, s.e, l ? &l->e : nullptr),
-                        K::STR};
+                        K::Str};
                 }
                 std::int64_t len = -1;
                 if (l) {
@@ -762,142 +761,142 @@ class Vectorizer {
                     len = *n;
                 }
                 if (*start < 0) return null();
-                return {df::expr_str_substr(v.e, *start, len), K::STR};
+                return {df::expr_str_substr(v.e, *start, len), K::Str};
             }
-            case Fn::REPLACE: {
+            case Fn::Replace: {
                 const V v = arg(c, 0);
                 const V from = arg(c, 1);
                 const V to = arg(c, 2);
-                if (v.k != K::STR || from.k != K::STR || to.k != K::STR)
+                if (v.k != K::Str || from.k != K::Str || to.k != K::Str)
                     return null();
                 const std::string* f = const_str(from);
                 const std::string* t = const_str(to);
                 if (!f || !t)
                     return {df::expr_str_replace_col(v.e, from.e, to.e),
-                            K::STR};
+                            K::Str};
                 if (f->empty()) return v;
-                return {df::expr_str_replace(v.e, *f, *t, true), K::STR};
+                return {df::expr_str_replace(v.e, *f, *t, true), K::Str};
             }
-            case Fn::FIRST:
-            case Fn::LAST: {
+            case Fn::First:
+            case Fn::Last: {
                 const V v = arg(c, 0);
-                if (v.k != K::LIST || v.elem == K::OTHER) return null();
-                return {df::expr_list_get(v.e, c.fn == Fn::FIRST ? 0 : -1),
+                if (v.k != K::List || v.elem == K::Other) return null();
+                return {df::expr_list_get(v.e, c.fn == Fn::First ? 0 : -1),
                         v.elem};
             }
-            case Fn::SUM: {
+            case Fn::Sum: {
                 const V v = arg(c, 0);
-                if (v.k != K::LIST || !numeric(v.elem)) return null();
+                if (v.k != K::List || !numeric(v.elem)) return null();
                 return {df::expr_list_sum(v.e),
-                        v.elem == K::FLOAT ? K::FLOAT : K::INT};
+                        v.elem == K::Float ? K::Float : K::Int};
             }
-            case Fn::JSON: {
+            case Fn::Json: {
                 if (const auto* j = json_call(*c.args[0])) return *j;
                 if (const auto* f = std::get_if<TField>(&c.args[0]->node)) {
                     std::size_t consumed = 0;
                     const auto i = field_column(*f, consumed);
                     if (i && consumed == f->steps.size() && columns_[*i].json)
                         return {df::expr_col(static_cast<std::int32_t>(*i)),
-                                K::STR};
+                                K::Str};
                 }
                 const V v = arg(c, 0);
-                if (v.k == K::NUL)
+                if (v.k == K::Nul)
                     return std::holds_alternative<TField>(c.args[0]->node)
                                ? null()
-                               : V{df::expr_lit_str("null"), K::STR};
-                if (v.k == K::LIST || v.k == K::OTHER)
+                               : V{df::expr_lit_str("null"), K::Str};
+                if (v.k == K::List || v.k == K::Other)
                     no_kernel("json() of a list");
-                return {df::expr_convert(df::ConvertOp::Json, v.e), K::STR};
+                return {df::expr_convert(df::ConvertOp::Json, v.e), K::Str};
             }
-            case Fn::TYPE: {
+            case Fn::Type: {
                 const V v = arg(c, 0);
                 std::string_view name;
                 switch (v.k) {
-                    case K::INT:
-                    case K::UINT:
-                    case K::FLOAT:
+                    case K::Int:
+                    case K::Uint:
+                    case K::Float:
                         name = "number";
                         break;
-                    case K::STR:
+                    case K::Str:
                         name = "string";
                         break;
-                    case K::BOOL:
+                    case K::Bool:
                         name = "bool";
                         break;
-                    case K::LIST:
+                    case K::List:
                         name = "array";
                         break;
                     default:
-                        return {df::expr_lit_str("null"), K::STR};
+                        return {df::expr_lit_str("null"), K::Str};
                 }
                 return {df::expr_select(df::expr_is_null(v.e),
                                         df::expr_lit_str("null"),
                                         df::expr_lit_str(name)),
-                        K::STR};
+                        K::Str};
             }
-            case Fn::INT:
-            case Fn::FLOAT: {
+            case Fn::Int:
+            case Fn::Float: {
                 const V v = arg(c, 0);
-                if (v.k == K::NUL || v.k == K::LIST || v.k == K::OTHER)
+                if (v.k == K::Nul || v.k == K::List || v.k == K::Other)
                     return null();
-                const bool i = c.fn == Fn::INT;
-                if (i && v.k == K::INT) return v;
-                if (!i && v.k == K::FLOAT) return v;
+                const bool i = c.fn == Fn::Int;
+                if (i && v.k == K::Int) return v;
+                if (!i && v.k == K::Float) return v;
                 return {df::expr_convert(
                             i ? df::ConvertOp::Int : df::ConvertOp::Float, v.e),
-                        i ? K::INT : K::FLOAT};
+                        i ? K::Int : K::Float};
             }
-            case Fn::STRING:
+            case Fn::String:
                 return text(arg(c, 0));
-            case Fn::SLICE:
-            case Fn::FLATTEN:
-            case Fn::KEYS:
-            case Fn::VALUES:
-            case Fn::SPLIT:
-            case Fn::PARSE_JSON:
-            case Fn::INDEX_OF:
-            case Fn::SORT:
-            case Fn::UNIQUE:
-            case Fn::JOIN:
+            case Fn::Slice:
+            case Fn::Flatten:
+            case Fn::Keys:
+            case Fn::Values:
+            case Fn::Split:
+            case Fn::ParseJson:
+            case Fn::IndexOf:
+            case Fn::Sort:
+            case Fn::Unique:
+            case Fn::Join:
                 return column_call(c);
-            case Fn::EXTRACT: {
+            case Fn::Extract: {
                 const V v = arg(c, 0);
-                if (v.k != K::STR || !c.pattern) return null();
+                if (v.k != K::Str || !c.pattern) return null();
                 std::int64_t group = 0;
                 if (c.args.size() > 2) {
                     const V g = arg(c, 2);
-                    if (g.k == K::NUL) return null();
+                    if (g.k == K::Nul) return null();
                     if (!numeric(g.k)) return null();
                     const auto n = const_int(g);
                     if (!n)
                         return {df::expr_str_extract_col(v.e, c.pattern, g.e),
-                                K::STR};
+                                K::Str};
                     if (*n < 0) return null();
                     group = *n;
                 }
-                return {df::expr_str_extract(v.e, c.pattern, group), K::STR};
+                return {df::expr_str_extract(v.e, c.pattern, group), K::Str};
             }
-            case Fn::REGEX_REPLACE: {
+            case Fn::RegexReplace: {
                 const V v = arg(c, 0);
-                if (v.k != K::STR || !c.pattern || !c.substitution)
+                if (v.k != K::Str || !c.pattern || !c.substitution)
                     return null();
                 return {
                     df::expr_str_regex_replace(v.e, c.pattern, *c.substitution),
-                    K::STR};
+                    K::Str};
             }
-            case Fn::DATE_PART: {
+            case Fn::DatePart: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
-                return {df::expr_date_part(v.e, c.part, c.ns_per_unit), K::INT};
+                return {df::expr_date_part(v.e, c.part, c.ns_per_unit), K::Int};
             }
-            case Fn::FORMAT_TIME: {
+            case Fn::FormatTime: {
                 const V v = arg(c, 0);
                 if (!numeric(v.k)) return null();
                 const auto* fmt = std::get_if<TConst>(&c.args[1]->node);
                 return {
                     df::expr_format_time(v.e, std::get<std::string>(fmt->value),
                                          c.ns_per_unit),
-                    K::STR};
+                    K::Str};
             }
         }
         return null();
@@ -906,22 +905,22 @@ class Vectorizer {
 
 }  // namespace
 
-dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize(
+dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError> vectorize(
     const Term& t, const std::vector<VectorColumn>& columns,
     bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback).whole(t);
-        if (v.k == K::NUL) return df::expr_lit_null(TypeId::Bool);
+        if (v.k == K::Nul) return df::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
 bool is_null_term(const Term& t, const std::vector<VectorColumn>& columns,
                   bool args_fallback) {
     try {
-        return Vectorizer(columns, args_fallback).whole(t).k == K::NUL;
+        return Vectorizer(columns, args_fallback).whole(t).k == K::Nul;
     } catch (const Failure&) {
         return false;
     }
@@ -937,7 +936,7 @@ std::vector<df::Series> key_columns(
     std::vector<df::Series> out;
     for (const auto& k : l.keys) {
         const V v = Vectorizer(columns, args_fallback)(*k);
-        out.push_back(v.k == K::NUL || v.k == K::OTHER || v.k == K::LIST
+        out.push_back(v.k == K::Nul || v.k == K::Other || v.k == K::List
                           ? df::Series::nulls(TypeId::Bool, rows)
                           : df::eval(v.e, inputs).materialize());
     }
@@ -952,7 +951,7 @@ const LookupTable& bound(const TLookup& l) {
 
 }  // namespace
 
-dftracer::utils::expected<dataframe::Series, VectorizeError> lookup(
+dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> lookup(
     const TLookup& l, const std::vector<const dataframe::Series*>& inputs,
     const std::vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
@@ -964,11 +963,11 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> lookup(
         for (const auto& k : keys) ptrs.push_back(&k);
         return lookup_column(l, ptrs, rows);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
-dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
+dftracer::utils::dstd::Expected<dataframe::Series, VectorizeError> quantify(
     const TQuant& q, const std::vector<const dataframe::Series*>& inputs,
     const std::vector<VectorColumn>& columns, bool args_fallback) {
     const std::int64_t rows = inputs.empty() ? 0 : inputs.front()->length();
@@ -996,7 +995,7 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
                     starts[static_cast<std::size_t>(r)];
         } else {
             const V subject = Vectorizer(columns, args_fallback)(*q.subject);
-            if (subject.k != K::LIST) return unknown.share();
+            if (subject.k != K::List) return unknown.share();
             df::Series list = df::eval(subject.e, inputs).materialize();
             const std::int32_t* off = list.offsets();
             if (!off) return unknown.share();
@@ -1055,7 +1054,7 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
         const V cond = Vectorizer(cols, args_fallback)(*q.cond);
         std::vector<std::uint8_t> yes(static_cast<std::size_t>(n), 0);
         std::vector<std::uint8_t> known(static_cast<std::size_t>(n), 0);
-        if (cond.k == K::BOOL && n > 0) {
+        if (cond.k == K::Bool && n > 0) {
             const df::Series t = df::eval(cond.e, frame).materialize();
             const auto* bits = t.data<std::uint8_t>();
             for (std::int64_t e = 0; e < n; ++e) {
@@ -1088,19 +1087,19 @@ dftracer::utils::expected<dataframe::Series, VectorizeError> quantify(
         }
         return df::Series::flat(TypeId::Bool, out.data(), rows, valid.data());
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
-dftracer::utils::expected<dataframe::Expr, VectorizeError> vectorize_condition(
-    const Term& t, const std::vector<VectorColumn>& columns,
-    bool args_fallback) {
+dftracer::utils::dstd::Expected<dataframe::Expr, VectorizeError>
+vectorize_condition(const Term& t, const std::vector<VectorColumn>& columns,
+                    bool args_fallback) {
     try {
         V v = Vectorizer(columns, args_fallback)(t);
-        if (v.k != K::BOOL) return df::expr_lit_null(TypeId::Bool);
+        if (v.k != K::Bool) return df::expr_lit_null(TypeId::Bool);
         return std::move(v.e);
     } catch (const Failure& f) {
-        return dftracer::utils::unexpected(f.error);
+        return dftracer::utils::dstd::Unexpected(f.error);
     }
 }
 
@@ -1330,7 +1329,7 @@ std::optional<int> cmp_cell(const Cell& a, const Cell& b) {
     return c < 0 ? -1 : (c > 0 ? 1 : 0);
 }
 
-bool scalar_kind(K k) { return numeric(k) || k == K::STR || k == K::BOOL; }
+bool scalar_kind(K k) { return numeric(k) || k == K::Str || k == K::Bool; }
 
 // The cells of a column of one scalar kind, read without converting a row.
 class Cells {
@@ -1342,13 +1341,13 @@ class Cells {
 
     Cell at(std::int64_t i) const {
         switch (k_) {
-            case K::INT:
+            case K::Int:
                 return Number{s_.data<std::int64_t>()[i]};
-            case K::UINT:
+            case K::Uint:
                 return Number{s_.data<std::uint64_t>()[i]};
-            case K::FLOAT:
+            case K::Float:
                 return Number{s_.data<double>()[i]};
-            case K::BOOL:
+            case K::Bool:
                 return ((s_.data<std::uint8_t>()[i >> 3] >> (i & 7)) & 1) != 0;
             default:
                 return s_.string_at(i);
@@ -1360,8 +1359,8 @@ class Cells {
     df::Series s_;
 
     static df::Series prepare(const df::Series& s, K k) {
-        if (k == K::INT) return flat_of(s.cast(TypeId::Int64));
-        if (k == K::FLOAT) return flat_of(s.cast(TypeId::Float64));
+        if (k == K::Int) return flat_of(s.cast(TypeId::Int64));
+        if (k == K::Float) return flat_of(s.cast(TypeId::Float64));
         return flat_of(s);
     }
 };
@@ -1494,7 +1493,7 @@ df::Series join_column(const df::Series& arg, const df::Series& sep_arg) {
     auto p = list_parts(arg);
     const std::int64_t n = arg.length();
     const df::Series elems = flat_of(p->child);
-    const bool strings = kind_of(elems.type()) == K::STR;
+    const bool strings = kind_of(elems.type()) == K::Str;
     const df::Series sep = flat_of(sep_arg);
     std::string buf;
     std::vector<std::pair<std::size_t, std::size_t>> spans(
@@ -1564,10 +1563,10 @@ df::Series list_column(const std::vector<df::Series>& items, std::int64_t n,
 }  // namespace
 
 bool is_column_call(Fn fn) {
-    return fn == Fn::SLICE || fn == Fn::FLATTEN || fn == Fn::KEYS ||
-           fn == Fn::VALUES || fn == Fn::PARSE_JSON || fn == Fn::SPLIT ||
-           fn == Fn::INDEX_OF || fn == Fn::SORT || fn == Fn::UNIQUE ||
-           fn == Fn::JOIN;
+    return fn == Fn::Slice || fn == Fn::Flatten || fn == Fn::Keys ||
+           fn == Fn::Values || fn == Fn::ParseJson || fn == Fn::Split ||
+           fn == Fn::IndexOf || fn == Fn::Sort || fn == Fn::Unique ||
+           fn == Fn::Join;
 }
 
 bool is_column_term(const Term& t) {
@@ -1580,7 +1579,7 @@ bool is_column_term(const Term& t) {
 std::optional<df::DataType> call_type(const Term& t,
                                       const std::vector<df::DataType>& args) {
     auto integer = [](const df::DataType& d) {
-        return kind_of(d.id) == K::INT || kind_of(d.id) == K::UINT;
+        return kind_of(d.id) == K::Int || kind_of(d.id) == K::Uint;
     };
     if (std::holds_alternative<TIndex>(t.node)) {
         if (!is_list_type(args[0]) || !integer(args[1])) return std::nullopt;
@@ -1588,24 +1587,24 @@ std::optional<df::DataType> call_type(const Term& t,
     }
     if (std::holds_alternative<TList>(t.node)) {
         if (args.empty()) return df::list_of(df::scalar(TypeId::Int64));
-        K k = K::NUL;
+        K k = K::Nul;
         for (const auto& a : args) {
             if (a.id == TypeId::Unknown) continue;
             const K x = kind_of(a.id);
             if (!scalar_kind(x) ||
-                (k != K::NUL && k != x && !(numeric(k) && numeric(x))))
+                (k != K::Nul && k != x && !(numeric(k) && numeric(x))))
                 throw std::invalid_argument(
                     "a list after the scan needs items of one type");
-            k = k == K::NUL || k == x ? x : K::FLOAT;
+            k = k == K::Nul || k == x ? x : K::Float;
         }
         switch (k) {
-            case K::INT:
+            case K::Int:
                 return df::list_of(df::scalar(TypeId::Int64));
-            case K::UINT:
+            case K::Uint:
                 return df::list_of(df::scalar(TypeId::Uint64));
-            case K::FLOAT:
+            case K::Float:
                 return df::list_of(df::scalar(TypeId::Float64));
-            case K::STR:
+            case K::Str:
                 return df::list_of(df::scalar(TypeId::String));
             default:
                 return df::list_of(df::scalar(TypeId::Bool));
@@ -1613,21 +1612,21 @@ std::optional<df::DataType> call_type(const Term& t,
     }
     const TCall& c = std::get<TCall>(t.node);
     switch (c.fn) {
-        case Fn::SLICE:
+        case Fn::Slice:
             if (!is_list_type(args[0])) return std::nullopt;
             for (std::size_t i = 1; i < args.size(); ++i)
                 if (!integer(args[i])) return std::nullopt;
             return df::list_of(args[0].fields.front().type);
-        case Fn::FLATTEN: {
+        case Fn::Flatten: {
             if (!is_list_type(args[0])) return std::nullopt;
             const df::DataType& elem = args[0].fields.front().type;
             return df::list_of(is_list_type(elem) ? elem.fields.front().type
                                                   : elem);
         }
-        case Fn::KEYS:
+        case Fn::Keys:
             if (args.empty()) return std::nullopt;
             return df::list_of(df::scalar(TypeId::String));
-        case Fn::VALUES: {
+        case Fn::Values: {
             std::vector<df::DataType> fields = args;
             if (args.size() == 1 && args[0].id == TypeId::Struct) {
                 fields.clear();
@@ -1639,41 +1638,41 @@ std::optional<df::DataType> call_type(const Term& t,
                 const K x = kind_of(f.id);
                 if (x == k) continue;
                 if (numeric(x) && numeric(k)) {
-                    k = K::FLOAT;
+                    k = K::Float;
                     continue;
                 }
                 throw std::invalid_argument(
                     "values() reads fields of different types; convert them "
                     "with int(), float() or string()");
             }
-            if (k == K::OTHER || k == K::LIST)
+            if (k == K::Other || k == K::List)
                 throw std::invalid_argument(
                     "values() reads a field that holds a list or object");
             return df::list_of(df::scalar(type_of(k)));
         }
-        case Fn::PARSE_JSON:
-            if (kind_of(args[0].id) != K::STR) return std::nullopt;
+        case Fn::ParseJson:
+            if (kind_of(args[0].id) != K::Str) return std::nullopt;
             return df::scalar(TypeId::String);
-        case Fn::SPLIT:
-            if (kind_of(args[0].id) != K::STR || kind_of(args[1].id) != K::STR)
+        case Fn::Split:
+            if (kind_of(args[0].id) != K::Str || kind_of(args[1].id) != K::Str)
                 return std::nullopt;
             return df::list_of(df::scalar(TypeId::String));
-        case Fn::INDEX_OF:
+        case Fn::IndexOf:
             if (!is_list_type(args[0]) ||
                 !scalar_kind(kind_of(args[0].fields.front().type.id)) ||
                 !scalar_kind(kind_of(args[1].id)))
                 return std::nullopt;
             return df::scalar(TypeId::Int64);
-        case Fn::SORT:
-        case Fn::UNIQUE:
+        case Fn::Sort:
+        case Fn::Unique:
             if (!is_list_type(args[0])) return std::nullopt;
             if (!scalar_kind(kind_of(args[0].fields.front().type.id)))
                 throw std::invalid_argument(
                     std::string(fn_info(c.fn).name) +
                     "() reads an array of arrays or objects");
             return df::list_of(args[0].fields.front().type);
-        case Fn::JOIN:
-            if (!is_list_type(args[0]) || kind_of(args[1].id) != K::STR)
+        case Fn::Join:
+            if (!is_list_type(args[0]) || kind_of(args[1].id) != K::Str)
                 return std::nullopt;
             return df::scalar(TypeId::String);
         default:
@@ -1688,25 +1687,25 @@ df::Series call_column(const Term& t, const std::vector<df::Series>& args,
     if (std::holds_alternative<TList>(t.node))
         return list_column(args, rows, type);
     switch (std::get<TCall>(t.node).fn) {
-        case Fn::SLICE:
+        case Fn::Slice:
             return slice_column(args);
-        case Fn::FLATTEN:
+        case Fn::Flatten:
             return flatten_column(args[0]);
-        case Fn::KEYS:
-        case Fn::VALUES:
+        case Fn::Keys:
+        case Fn::Values:
             return members_column(args, keys,
-                                  std::get<TCall>(t.node).fn == Fn::KEYS, type);
-        case Fn::PARSE_JSON:
+                                  std::get<TCall>(t.node).fn == Fn::Keys, type);
+        case Fn::ParseJson:
             return parse_column(args[0]);
-        case Fn::SPLIT:
+        case Fn::Split:
             return split_column(args[0], args[1]);
-        case Fn::INDEX_OF:
+        case Fn::IndexOf:
             return index_of_column(args[0], args[1]);
-        case Fn::SORT:
+        case Fn::Sort:
             return sort_column(args[0]);
-        case Fn::UNIQUE:
+        case Fn::Unique:
             return unique_column(args[0]);
-        case Fn::JOIN:
+        case Fn::Join:
             return join_column(args[0], args[1]);
         default:
             return df::Series::nulls(type.id, rows);

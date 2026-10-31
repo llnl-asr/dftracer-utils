@@ -3,8 +3,8 @@
 The task-graph model
 ======================
 
-What this explains: why ``dftracer_utils_core`` gives computations a DAG
-builder (``core/task_graph/``) instead of leaving callers to spawn and join
+What this explains: why ``dftracer_utils_runtime`` gives computations a DAG
+builder (``runtime/task_graph/``) instead of leaving callers to spawn and join
 coroutines by hand, and what shape that DAG takes.
 
 Why a DAG, not ad-hoc spawns
@@ -16,9 +16,9 @@ For a fixed computation shape - fan a source out to N workers, reduce them
 back to one result, maybe do that more than once - hand-written spawns mean
 re-deriving the same dependency wiring, the same "wait for my inputs before I
 run" bookkeeping, and the same tree-reduce fan-in every time. ``TaskGraph``
-(``core/task_graph/task_graph.h``) factors that wiring into a builder: nodes
+(``runtime/task_graph/task_graph.h``) factors that wiring into a builder: nodes
 declare their inputs, the graph derives the dependency edges, and a
-``Pipeline`` (``core/pipeline/``) runs the resulting DAG on the runtime.
+``Pipeline`` (``runtime/pipeline/``) runs the resulting DAG on the runtime.
 
 The shape
 ---------

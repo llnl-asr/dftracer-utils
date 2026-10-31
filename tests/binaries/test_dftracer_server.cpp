@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <arpa/inet.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/server/trace_index.h>
 #include <doctest/doctest.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -77,10 +78,10 @@ std::string create_ns_pfw_gz(const std::string& dir) {
     return path;
 }
 
-/// Find the dftracer_server binary. Checks DFTRACER_SERVER_PATH env first,
-/// then common build paths relative to the test binary.
+/// Find the dftracer_server binary. Checks DFTRACER_UTILS_SERVER_PATH env
+/// first, then common build paths relative to the test binary.
 std::string find_server_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_SERVER_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_SERVER_PATH",
                                                 "dftracer_server");
 }
 
@@ -321,7 +322,7 @@ struct ServerProcess {
         if (pid == 0) {
             ::execl(binary.c_str(), binary.c_str(), "-d", data_dir.c_str(),
                     "-p", port_str.c_str(), "--bind", "127.0.0.1",
-                    "--executor-threads", "2", nullptr);
+                    "--executor-threads", "2", "--io-threads", "2", nullptr);
             ::_exit(127);
         }
 
@@ -359,7 +360,7 @@ TEST_CASE("DFTracer Server - binary exists") {
     if (binary.empty()) {
         MESSAGE(
             "dftracer_server binary not found, skipping integration "
-            "tests. Set DFTRACER_SERVER_PATH env to specify location.");
+            "tests. Set DFTRACER_UTILS_SERVER_PATH env to specify location.");
         return;
     }
     CHECK(!binary.empty());
@@ -1075,9 +1076,17 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
         return;
     }
 
-    // 300 records stay in the cached text of every match; 400000 (about
-    // 24 MB of rows) pass its limit, so each page is streamed and cached alone.
-    for (const int UNTIMED : {300, 400000}) {
+    // 300 records stay in the cached text of every match. The other count is
+    // the fewest whose rows, each at least NAME_BYTES long, pass its limit
+    // (a sixteenth of the result cache), so each page is streamed and cached
+    // alone.
+    constexpr std::size_t NAME_BYTES = 8192;
+    const std::string name(NAME_BYTES, 'k');
+    constexpr int PAST_LIMIT =
+        static_cast<int>(dftracer::utils::server::VIZ_RESULT_CACHE_BYTES / 16 /
+                         NAME_BYTES) +
+        1;
+    for (const int UNTIMED : {300, PAST_LIMIT}) {
         CAPTURE(UNTIMED);
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
@@ -1089,10 +1098,10 @@ TEST_CASE("DFTracer Server - untimed pages of many records") {
                "{\"name\":\"read\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,"
                "\"ts\":5000,\"dur\":10,\"ph\":\"X\",\"args\":{}}\n");
         for (int i = 1; i <= UNTIMED; ++i) {
-            std::string ev =
-                "{\"name\":\"k\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
-                "\"ts\":0,\"dur\":" +
-                std::to_string(i) + ",\"ph\":\"X\",\"args\":{}}\n";
+            std::string ev = "{\"name\":\"" + name +
+                             "\",\"cat\":\"CUDA\",\"pid\":1,\"tid\":2,"
+                             "\"ts\":0,\"dur\":" +
+                             std::to_string(i) + ",\"ph\":\"X\",\"args\":{}}\n";
             gzputs(f, ev.c_str());
         }
         gzputs(f, "]\n");
@@ -1184,9 +1193,12 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
         CHECK(body.find("\"begin\":1000000,\"end\":1010000") !=
               std::string::npos);
     }
-    CHECK(fs::exists(cache));
+    REQUIRE(fs::exists(cache));
+    const auto cache_time = fs::last_write_time(cache);
+    const auto cache_size = fs::file_size(cache);
 
-    // Second run reuses the cache; the result is unchanged.
+    // Second run reuses the cache; the result is unchanged. A rejected cache
+    // is rebuilt and rewritten, so an untouched file shows the load worked.
     {
         int port = pick_port();
         ServerProcess server;
@@ -1197,6 +1209,9 @@ TEST_CASE("DFTracer Server - viz summary cache persists and invalidates") {
               std::string::npos);
         CHECK(body.find("\"begin\":2010000") == std::string::npos);
     }
+
+    CHECK(fs::last_write_time(cache) == cache_time);
+    CHECK(fs::file_size(cache) == cache_size);
 
     // A changed source invalidates the cache: the new run's gap must appear.
     auto v2 = env.create_dft_multirun_gzip_file(3, 1000000, 10000);

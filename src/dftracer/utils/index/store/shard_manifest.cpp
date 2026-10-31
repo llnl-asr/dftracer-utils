@@ -1,5 +1,5 @@
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <simdjson.h>
 #include <unistd.h>
@@ -50,7 +50,7 @@ void append_escaped(std::string& out, std::string_view s) {
 std::string to_json(const IndexShardManifest& manifest) {
     std::string out;
     out += "{\n  \"format_version\": ";
-    out += std::to_string(manifest.format_version);
+    out += std::to_string(manifest.format_version.value());
     out += ",\n  \"shards\": [";
     for (std::size_t i = 0; i < manifest.shards.size(); ++i) {
         const IndexShardEntry& e = manifest.shards[i];
@@ -76,7 +76,7 @@ IndexShardManifest parse_manifest(std::string_view json) {
     simdjson::dom::element doc;
     auto err = parser.parse(simdjson::padded_string(json)).get(doc);
     if (err) {
-        throw DFTUtilsException(ErrorCode::PARSE,
+        throw DFTUtilsException(ErrorCode::Parse,
                                 std::string("shard manifest parse failed: ") +
                                     simdjson::error_message(err));
     }
@@ -93,7 +93,7 @@ IndexShardManifest parse_manifest(std::string_view json) {
         IndexShardEntry e;
         std::string_view path;
         if (s["path"].get(path) != simdjson::SUCCESS) {
-            throw DFTUtilsException(ErrorCode::PARSE,
+            throw DFTUtilsException(ErrorCode::Parse,
                                     "shard manifest entry missing path");
         }
         e.path.assign(path);
@@ -127,7 +127,7 @@ void write_shard_manifest(const std::string& dir,
         if (!out) {
             fs::remove(tmp_path, ec);
             throw DFTUtilsException(
-                ErrorCode::IO,
+                ErrorCode::Io,
                 "failed to write shard manifest: " + tmp_path.string());
         }
     }
@@ -135,7 +135,7 @@ void write_shard_manifest(const std::string& dir,
     fs::rename(tmp_path, final_path, ec);
     if (ec) {
         fs::remove(tmp_path, ec);
-        throw DFTUtilsException(ErrorCode::IO,
+        throw DFTUtilsException(ErrorCode::Io,
                                 "failed to publish shard manifest to " +
                                     final_path.string() + ": " + ec.message());
     }
@@ -150,7 +150,7 @@ std::optional<IndexShardManifest> read_shard_manifest(const std::string& dir) {
     auto load_err = simdjson::padded_string::load(path.string()).get(contents);
     if (load_err) {
         throw DFTUtilsException(
-            ErrorCode::IO, "failed to read shard manifest " + path.string() +
+            ErrorCode::Io, "failed to read shard manifest " + path.string() +
                                ": " + simdjson::error_message(load_err));
     }
     return parse_manifest(std::string_view(contents.data(), contents.size()));

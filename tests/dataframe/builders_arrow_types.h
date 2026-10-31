@@ -5,12 +5,9 @@
 // (they only ever enter the engine through Arrow import). Header-only so a
 // doctest TU can use REQUIRE inside them.
 
-#include <doctest/doctest.h>
-
-// clang-format off
-#include <nanoarrow/nanoarrow.h>
 #include <dftracer/utils/dataframe/arrow.h>
-// clang-format on
+#include <doctest/doctest.h>
+#include <nanoarrow/nanoarrow.h>
 
 #include <cstdint>
 #include <string>

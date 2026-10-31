@@ -8,11 +8,10 @@
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <trace/views/test_view_common.h>
 
 #include <fstream>
 #include <string>
-
-#include "test_view_common.h"
 
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;
@@ -316,17 +315,17 @@ TEST_SUITE("View - metadata under pruning") {
             REQUIRE_FALSE(out->all_chunks);
             return out->candidates.size();
         };
-        const auto total = chunks("dur >= 0", ip::MetadataUse::ALL);
-        const auto open = chunks(R"(name == "open")", ip::MetadataUse::NONE);
+        const auto total = chunks("dur >= 0", ip::MetadataUse::All);
+        const auto open = chunks(R"(name == "open")", ip::MetadataUse::None);
         // No metadata record is named "open" or has a dur.
-        CHECK(chunks(R"(name == "open")", ip::MetadataUse::ALL) == open);
-        CHECK(chunks("dur > 5", ip::MetadataUse::RECORDS) == 0);
+        CHECK(chunks(R"(name == "open")", ip::MetadataUse::All) == open);
+        CHECK(chunks("dur > 5", ip::MetadataUse::Records) == 0);
         const auto named =
-            chunks(R"(name == "thread_name")", ip::MetadataUse::RECORDS);
+            chunks(R"(name == "thread_name")", ip::MetadataUse::Records);
         CHECK(named > 1);
         CHECK(named < total);
-        CHECK(chunks(R"(name == "FH")", ip::MetadataUse::RECORDS) <= 4);
-        CHECK(chunks(R"(args.name == "t37")", ip::MetadataUse::RECORDS) >= 1);
-        CHECK(chunks(R"(args.name == "t37")", ip::MetadataUse::ALL) >= 1);
+        CHECK(chunks(R"(name == "FH")", ip::MetadataUse::Records) <= 4);
+        CHECK(chunks(R"(args.name == "t37")", ip::MetadataUse::Records) >= 1);
+        CHECK(chunks(R"(args.name == "t37")", ip::MetadataUse::All) >= 1);
     }
 }

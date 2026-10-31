@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_ENGINE_AGG_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/trace/views/aggfold.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
@@ -32,7 +32,7 @@ namespace dftracer::utils::trace::views::detail {
 class EngineAggFold : public Fold {
    public:
     EngineAggFold(const ViewPlan& plan,
-                  const dftracer::utils::StringIntern& intern,
+                  const dftracer::utils::dstd::StringIntern& intern,
                   bool apply_query = false)
         : plan_(&plan),
           intern_(&intern),
@@ -76,10 +76,10 @@ class EngineAggFold : public Fold {
     void step(const FoldBatch& batch) override {
         std::vector<FoldEvent> keep =
             select_events(batch, [&](const FoldEvent& ev) {
-                if (ev.phase == RecordPhase::METADATA && !keep_metadata_ &&
-                    phase_target_ != RecordPhase::METADATA)
+                if (ev.phase == RecordPhase::Metadata && !keep_metadata_ &&
+                    phase_target_ != RecordPhase::Metadata)
                     return false;
-                if (phase_target_ != RecordPhase::UNKNOWN &&
+                if (phase_target_ != RecordPhase::Unknown &&
                     ev.phase != phase_target_)
                     return false;
                 return !apply_query_ ||
@@ -108,6 +108,11 @@ class EngineAggFold : public Fold {
     /// The merged partial; the caller finalizes, serializes, or merges it.
     dftracer::utils::dataframe::AggState& state() { return *state_; }
 
+    /// Hands the state over; the fold takes no more events afterwards.
+    dftracer::utils::dataframe::AggStatePtr take_state() {
+        return std::move(state_);
+    }
+
    private:
     static bool arg_free_field(const std::string& f) {
         return f.empty() || f == "ts" || f == "dur" || f == "te" ||
@@ -116,7 +121,7 @@ class EngineAggFold : public Fold {
     }
 
     const ViewPlan* plan_;
-    const dftracer::utils::StringIntern* intern_;
+    const dftracer::utils::dstd::StringIntern* intern_;
     AggInputSpec spec_;
     dftracer::utils::dataframe::LoweredGroupAggs lowered_;
     RecordPhase phase_target_;

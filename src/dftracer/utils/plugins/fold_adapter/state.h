@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 
-#include <dftracer/utils/core/common/spill_dir.h>
+#include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
@@ -22,6 +22,8 @@ class SpillDir {
 
     /// The directory, created on first use; empty if it could not be created.
     const std::string& path();
+    /// Charge `bytes` written to a file in the directory to the spill gauge.
+    void charge(std::uint64_t bytes) noexcept;
 
    private:
     std::optional<dftracer::utils::ScopedSpillSubdir> dir_;
@@ -35,8 +37,8 @@ class SpillDir {
 class StateAccum {
    public:
     /// `budget` is the scan's out-of-core budget in bytes, resolved through
-    /// resolve_spill_budget: 0 means auto and NO_SPILL_BUDGET disables
-    /// spilling.
+    /// memory::resolve_spill_budget: 0 means auto and memory::NO_SPILL_BUDGET
+    /// disables spilling.
     StateAccum(const RegisteredState& reg, std::uint64_t budget);
     ~StateAccum();
     StateAccum(const StateAccum&) = delete;

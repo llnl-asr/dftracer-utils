@@ -1,12 +1,13 @@
-#include <dftracer/utils/core/common/hash/partition.h>
-#include <dftracer/utils/core/common/hash/splitmix64.h>
-#include <dftracer/utils/core/common/to_chars.h>
 #include <dftracer/utils/dataframe/agg/detail.h>
+#include <dftracer/utils/dstd/hash/partition.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
 #include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace dftracer::utils::dataframe {
@@ -110,13 +111,31 @@ std::size_t agg_approx_bytes(const AggState& st) {
             total += d.size() * (sizeof(std::uint64_t) + sizeof(std::int64_t));
     }
     if (st.has_dyn) {
-        for (const std::map<std::string, FieldStat>& gmap : st.dyn_fs)
-            for (const auto& [name, fs] : gmap)
-                total += name.size() + sizeof(FieldStat) + 48;
-        if (st.dyn_has_sketch)
-            for (const std::map<std::string, DDSketch>& gsk : st.dyn_sketch)
-                for (const auto& [name, sk] : gsk)
-                    total += name.size() + sk.bins().size() * 24 + 64;
+        // The name table, then a vector header and a capacity of cells a
+        // group.
+        total += st.dyn_names.capacity() * sizeof(dstd::String) +
+                 st.dyn_domain.capacity() * sizeof(FieldStatDomain) +
+                 st.dyn_ids.values().capacity() *
+                     sizeof(std::pair<std::string, std::uint32_t>) +
+                 st.dyn_ids.bucket_count() * sizeof(std::uint32_t);
+        for (const dstd::String& n : st.dyn_names)
+            total += n.capacity() > SSO_CAPACITY ? n.capacity() + 1 : 0;
+        total += st.dyn_fs.capacity() * sizeof(dstd::Vector<DynCell>);
+        for (const dstd::Vector<DynCell>& cells : st.dyn_fs)
+            total += cells.capacity() * sizeof(DynCell);
+        total += st.dyn_light.capacity() * sizeof(DynLightCells);
+        for (const DynLightCells& cells : st.dyn_light)
+            total += cells.words.capacity() * sizeof(std::uint64_t) +
+                     cells.carry.capacity() *
+                         sizeof(std::pair<std::uint32_t, std::int64_t>);
+        if (st.dyn_has_sketch) {
+            total +=
+                st.dyn_sketch.capacity() * sizeof(dstd::Vector<DynSketchCell>);
+            for (const dstd::Vector<DynSketchCell>& cells : st.dyn_sketch)
+                for (const DynSketchCell& c : cells)
+                    total += sizeof(DynSketchCell) +
+                             c.sketch.bins().size() * 24 + 64;
+        }
     }
     return total;
 }

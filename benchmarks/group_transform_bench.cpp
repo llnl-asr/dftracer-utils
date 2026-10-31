@@ -9,11 +9,11 @@
 // With `op` (cumsum, cummax, cumcount, shift(1), diff, ffill) only that op
 // runs.
 
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/native_transform.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <chrono>
@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -49,10 +50,13 @@ double median_ms(std::vector<double> ms) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::int64_t n = argc > 1 ? std::atoll(argv[1]) : 2000000;
-    const std::int64_t groups = argc > 2 ? std::atoll(argv[2]) : 20000;
-    const int reps = argc > 3 ? std::atoi(argv[3]) : 5;
-    const std::string only = argc > 4 ? argv[4] : "";
+    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const std::int64_t n =
+        smoke ? 20000 : (argc > 1 ? std::atoll(argv[1]) : 2000000);
+    const std::int64_t groups =
+        smoke ? 200 : (argc > 2 ? std::atoll(argv[2]) : 20000);
+    const int reps = smoke ? 1 : (argc > 3 ? std::atoi(argv[3]) : 5);
+    const std::string only = !smoke && argc > 4 ? argv[4] : "";
 
     std::vector<std::int64_t> k(static_cast<std::size_t>(n));
     std::vector<std::int64_t> v(static_cast<std::size_t>(n));

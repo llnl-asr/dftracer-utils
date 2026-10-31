@@ -1,6 +1,7 @@
-#include <dftracer/utils/core/common/base64.h>
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/vectorize.h>
 
@@ -9,8 +10,6 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
-
-#include "../dataframe/batch_ops.h"
 
 namespace dftracer::utils::duql {
 
@@ -187,7 +186,7 @@ GroupFold::GroupFold(std::vector<df::DataType> key_types,
       sketches_(aggs_.size()) {
     std::vector<df::AggSpec> specs;
     for (std::size_t a = 0; a < aggs_.size(); ++a)
-        if (aggs_[a].op == FoldOp::ENGINE)
+        if (aggs_[a].op == FoldOp::Engine)
             specs.push_back({aggs_[a].engine, aggs_[a].in,
                              "__duql_fold_" + std::to_string(a), aggs_[a].param,
                              -1});
@@ -285,10 +284,10 @@ void GroupFold::add(df::DataFrame batch) {
     }
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
         const FoldAgg& f = aggs_[a];
-        if (f.op == FoldOp::ENGINE) continue;
+        if (f.op == FoldOp::Engine) continue;
         const df::Series& in = batch.columns[static_cast<std::size_t>(f.in)];
         switch (f.op) {
-            case FoldOp::COUNT_DISTINCT: {
+            case FoldOp::CountDistinct: {
                 auto& sets = distinct_[a];
                 sets.resize(groups);
                 std::string v;
@@ -316,7 +315,7 @@ void GroupFold::add(df::DataFrame batch) {
                 }
                 break;
             }
-            case FoldOp::COLLECT: {
+            case FoldOp::Collect: {
                 auto& members = members_[a];
                 members.resize(groups);
                 std::vector<std::int64_t> rows;
@@ -334,7 +333,7 @@ void GroupFold::add(df::DataFrame batch) {
                 part_rows_[a] += static_cast<std::int64_t>(rows.size());
                 break;
             }
-            case FoldOp::PLUGIN: {
+            case FoldOp::Plugin: {
                 auto& members = members_[a];
                 members.resize(groups);
                 const df::DataType want = df::scalar(
@@ -353,16 +352,16 @@ void GroupFold::add(df::DataFrame batch) {
                 part_rows_[a] += static_cast<std::int64_t>(rows.size());
                 break;
             }
-            case FoldOp::ARGMAX:
-            case FoldOp::ARGMIN:
+            case FoldOp::Argmax:
+            case FoldOp::Argmin:
                 arg(a, in, batch.columns[static_cast<std::size_t>(f.by)], gid);
                 break;
-            case FoldOp::SKETCH:
-            case FoldOp::MERGE:
-            case FoldOp::MERGE_QUANTILE:
+            case FoldOp::Sketch:
+            case FoldOp::Merge:
+            case FoldOp::MergeQuantile:
                 sketches(a, in, gid);
                 break;
-            case FoldOp::ENGINE:
+            case FoldOp::Engine:
                 break;
         }
     }
@@ -376,7 +375,7 @@ void GroupFold::arg(std::size_t a, const df::Series& in, const df::Series& by,
     const auto b = normal(by);
     if (!b) return;
     const bool boolean = by.type() == TypeId::Bool;
-    const int want = aggs_[a].op == FoldOp::ARGMAX ? 1 : -1;
+    const int want = aggs_[a].op == FoldOp::Argmax ? 1 : -1;
     std::vector<std::int64_t> touched;
     std::vector<std::int64_t> row_of(state.size(), -1);
     Ord o;
@@ -407,7 +406,7 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
     auto& state = sketches_[a];
     state.resize(static_cast<std::size_t>(num_groups_));
     const std::int64_t n = in.length();
-    if (aggs_[a].op == FoldOp::SKETCH) {
+    if (aggs_[a].op == FoldOp::Sketch) {
         const TypeId t = in.type();
         if (!is_signed(t) && !is_float(t) && t != TypeId::Uint64) return;
         const df::Series d = in.cast(TypeId::Float64);
@@ -464,11 +463,11 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
     for (std::size_t a = 0; a < aggs_.size(); ++a) {
         const FoldAgg& f = aggs_[a];
         switch (f.op) {
-            case FoldOp::ENGINE:
+            case FoldOp::Engine:
                 out.columns.push_back(
                     engine->columns[next_engine++].take(order));
                 break;
-            case FoldOp::COUNT_DISTINCT: {
+            case FoldOp::CountDistinct: {
                 std::vector<std::int64_t> v(count, 0);
                 for (std::size_t g = 0; g < distinct_[a].size(); ++g)
                     v[g] = static_cast<std::int64_t>(
@@ -477,7 +476,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                 out.columns.push_back(df::Series::flat_i64(v.data(), groups));
                 break;
             }
-            case FoldOp::COLLECT: {
+            case FoldOp::Collect: {
                 auto& members = members_[a];
                 members.resize(count);
                 std::vector<std::int32_t> offsets{0};
@@ -491,10 +490,10 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                     joined(parts_[a], f.type.fields.front().type).take(rows)));
                 break;
             }
-            case FoldOp::PLUGIN: {
+            case FoldOp::Plugin: {
                 const dftu_op_desc* op = dftu_op_find(f.plugin.c_str());
                 if (!op)
-                    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT,
+                    throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
                                                  "plugin function '", f.plugin,
                                                  "' is not registered");
                 const dftu_op_arg arg = plugin_arg(*op, f.params);
@@ -515,9 +514,8 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                             dftu_op_run_aggregate(op, part.handle(), &arg, &ok);
                         if (!ok)
                             throw DFTUtilsException::cat(
-                                ErrorCode::INVALID_ARGUMENT,
-                                "plugin function '", f.plugin,
-                                "' failed on a group; it takes ",
+                                ErrorCode::InvalidArgument, "plugin function '",
+                                f.plugin, "' failed on a group; it takes ",
                                 dftu_op_signature(op->sig));
                         valid[g] = true;
                         const bool from_f = r.kind == DFTU_SCALAR_TAG_F64;
@@ -550,21 +548,21 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                 }
                 break;
             }
-            case FoldOp::ARGMAX:
-            case FoldOp::ARGMIN: {
+            case FoldOp::Argmax:
+            case FoldOp::Argmin: {
                 std::vector<std::int64_t> rows(count, -1);
                 for (std::size_t g = 0; g < args_[a].size(); ++g)
                     rows[g] = args_[a][g].at;
                 out.columns.push_back(joined(parts_[a], f.type).take(rows));
                 break;
             }
-            case FoldOp::SKETCH:
-            case FoldOp::MERGE:
-            case FoldOp::MERGE_QUANTILE: {
+            case FoldOp::Sketch:
+            case FoldOp::Merge:
+            case FoldOp::MergeQuantile: {
                 auto& state = sketches_[a];
                 state.resize(count);
                 std::vector<bool> valid(count, false);
-                if (f.op == FoldOp::MERGE_QUANTILE) {
+                if (f.op == FoldOp::MergeQuantile) {
                     std::vector<double> v(count, 0);
                     for (std::size_t g = 0; g < count; ++g) {
                         if (!state[g]) continue;

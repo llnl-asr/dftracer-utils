@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>

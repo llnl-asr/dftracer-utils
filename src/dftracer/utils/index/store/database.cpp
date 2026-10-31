@@ -1,7 +1,8 @@
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/env.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
 #include <dftracer/utils/index/store/filesystem.h>
@@ -9,13 +10,17 @@
 #include <rocksdb/slice.h>
 #include <rocksdb/table.h>
 #include <rocksdb/write_buffer_manager.h>
+#include <sys/resource.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -132,8 +137,8 @@ namespace {
 /// One cache for the process. Left unset, every column family gets its own
 /// 8 MB default, which no realistic working set fits in.
 std::shared_ptr<::rocksdb::Cache>& shared_block_cache() {
-    static std::shared_ptr<::rocksdb::Cache> cache =
-        ::rocksdb::NewLRUCache(constants::rocksdb::BLOCK_CACHE_BYTES);
+    static std::shared_ptr<::rocksdb::Cache> cache = ::rocksdb::NewLRUCache(
+        g_block_cache_bytes.load(std::memory_order_relaxed));
     return cache;
 }
 
@@ -145,9 +150,8 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
             constants::rocksdb::WRITE_BUFFER_BYTES, shared_block_cache());
     return mgr;
 }
-}  // namespace
 
-::rocksdb::Options RocksDatabase::default_options() {
+::rocksdb::Options make_default_options() {
     ::rocksdb::Options options;
     options.create_if_missing = true;
     options.create_missing_column_families = true;
@@ -166,7 +170,7 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     return options;
 }
 
-::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
+::rocksdb::ColumnFamilyOptions make_default_column_family_options() {
     ::rocksdb::ColumnFamilyOptions options;
 
     ::rocksdb::BlockBasedTableOptions bbt;
@@ -180,11 +184,7 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
 
 #ifdef DFTRACER_UTILS_ENABLE_ZSTD
     options.compression = ::rocksdb::kZSTD;
-    options.compression_opts.level = constants::rocksdb::ZSTD_COMPRESSION_LEVEL;
-    options.compression_opts.max_dict_bytes =
-        constants::rocksdb::ZSTD_MAX_DICT_BYTES;
-    options.compression_opts.zstd_max_train_bytes =
-        constants::rocksdb::ZSTD_MAX_TRAIN_BYTES;
+    options.compression_opts.level = constants::rocksdb::ZSTD_UPPER_LEVEL;
     options.compression_opts.enabled = true;
     options.bottommost_compression = ::rocksdb::kZSTD;
     options.bottommost_compression_opts.level =
@@ -204,9 +204,8 @@ std::shared_ptr<::rocksdb::WriteBufferManager>& shared_write_buffer_manager() {
     return options;
 }
 
-::rocksdb::ColumnFamilyOptions
-RocksDatabase::point_lookup_column_family_options() {
-    auto options = default_column_family_options();
+::rocksdb::ColumnFamilyOptions make_point_lookup_column_family_options() {
+    auto options = make_default_column_family_options();
 
     // Without a filter a get searches every SST whose range covers the key,
     // and large blocks mean decompressing 32 KB to return a few dozen bytes.
@@ -223,10 +222,66 @@ RocksDatabase::point_lookup_column_family_options() {
     options.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
     return options;
 }
+}  // namespace
+
+// Each options value is built once and copied. Building one default-constructs
+// a table factory, and that factory makes its own block cache, so a build per
+// call maps and frees a cache each time; copies share the same factory.
+::rocksdb::Options RocksDatabase::default_options() {
+    static const ::rocksdb::Options options = make_default_options();
+    return options;
+}
+
+::rocksdb::ColumnFamilyOptions RocksDatabase::default_column_family_options() {
+    static const ::rocksdb::ColumnFamilyOptions options =
+        make_default_column_family_options();
+    return options;
+}
+
+::rocksdb::ColumnFamilyOptions
+RocksDatabase::point_lookup_column_family_options() {
+    static const ::rocksdb::ColumnFamilyOptions options =
+        make_point_lookup_column_family_options();
+    return options;
+}
 
 bool RocksDatabase::is_point_lookup_cf(std::string_view name) noexcept {
     return name == index::store::cf::DEFAULT || name == index::store::cf::BLOB;
 }
+
+namespace {
+
+int read_only_max_open_files() {
+    constexpr int MIN_OPEN_FILES = 16;
+    struct rlimit limit{};
+    if (::getrlimit(RLIMIT_NOFILE, &limit) != 0 ||
+        limit.rlim_cur == RLIM_INFINITY)
+        return -1;
+    const auto half = static_cast<std::uint64_t>(limit.rlim_cur) / 2;
+    return static_cast<int>(
+        std::clamp<std::uint64_t>(half, MIN_OPEN_FILES, INT32_MAX));
+}
+
+/// Unlinks the staged SSTs an ingest linked into the database. One unlink is a
+/// metadata round trip on a network file system, so many run at once.
+void unlink_staged(const std::vector<const std::vector<std::string>*>& lists) {
+    constexpr std::size_t MAX_UNLINKERS = 16;
+    std::vector<const std::string*> paths;
+    for (const auto* list : lists)
+        for (const auto& path : *list) paths.push_back(&path);
+    const std::size_t workers = std::min(MAX_UNLINKERS, paths.size());
+    std::vector<std::thread> threads;
+    threads.reserve(workers);
+    for (std::size_t w = 0; w < workers; ++w) {
+        threads.emplace_back([&paths, w, workers] {
+            for (std::size_t i = w; i < paths.size(); i += workers)
+                ::unlink(paths[i]->c_str());
+        });
+    }
+    for (auto& t : threads) t.join();
+}
+
+}  // namespace
 
 bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     close();
@@ -245,11 +300,11 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
         // Read paths do heavy point lookups (e.g. dfanalyzer hash resolution);
         // with a small table cache the SST readers get evicted and every lookup
         // re-opens the file to re-read its filter/index blocks, which thrashes.
-        // There is no write-side fd pressure here, so keep every SST open
-        // unless an explicit env cap is set.
+        // Keep as many SSTs open as half the descriptor limit allows, so an
+        // index with thousands of SSTs still opens. An env cap overrides it.
         if (!Env::get<int>("DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES")
                  .has_value()) {
-            db_options.max_open_files = -1;
+            db_options.max_open_files = read_only_max_open_files();
         }
     }
     file_system_ = make_dftracer_file_system();
@@ -263,7 +318,7 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     if (!list_status.ok()) {
         if (open_mode_ == OpenMode::ReadOnly) {
             throw DFTUtilsException(
-                ErrorCode::IO, "Failed to list RocksDB column families at '" +
+                ErrorCode::Io, "Failed to list RocksDB column families at '" +
                                    db_path_ + "': " + list_status.ToString());
         }
         column_family_names.reserve(default_column_families().size());
@@ -307,7 +362,7 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     if (!status.ok()) {
         ::rocksdb::DB* raw = opened.release();
         cleanup_failed_open(raw, handles);
-        throw DFTUtilsException(ErrorCode::IO, "Failed to open RocksDB at '" +
+        throw DFTUtilsException(ErrorCode::Io, "Failed to open RocksDB at '" +
                                                    db_path_ +
                                                    "': " + status.ToString());
     }
@@ -316,6 +371,25 @@ bool RocksDatabase::open(const std::string& db_path, OpenMode open_mode) {
     column_families_.clear();
     for (std::size_t i = 0; i < descriptors.size(); ++i) {
         column_families_.emplace(descriptors[i].name, handles[i]);
+    }
+
+    // An index of an earlier build still has the per-key aggregation column
+    // family, which nothing reads or writes now; its data is derived from the
+    // traces, so it is dropped.
+    if (open_mode_ == OpenMode::ReadWrite) {
+        const auto legacy = column_families_.find(
+            std::string(index::store::cf::LEGACY_AGGREGATION));
+        if (legacy != column_families_.end()) {
+            auto drop = db_->DropColumnFamily(legacy->second);
+            if (!drop.ok()) {
+                throw DFTUtilsException(
+                    ErrorCode::Io,
+                    "Failed to drop the legacy aggregation column family of '" +
+                        db_path_ + "': " + drop.ToString());
+            }
+            db_->DestroyColumnFamilyHandle(legacy->second);
+            column_families_.erase(legacy);
+        }
     }
 
     return true;
@@ -370,7 +444,7 @@ const std::string& RocksDatabase::path() const noexcept { return db_path_; }
                           : std::string(column_family);
     const auto it = column_families_.find(name);
     if (it == column_families_.end() || it->second == nullptr) {
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT,
+        throw DFTUtilsException(ErrorCode::InvalidArgument,
                                 "Unknown RocksDB column family: " + name);
     }
     return it->second;
@@ -471,6 +545,65 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
                              nullptr);
 }
 
+::rocksdb::Status RocksDatabase::set_auto_compactions_disabled(
+    std::string_view column_family, bool disabled, bool* previous) {
+    auto* handle = column_family_handle(column_family);
+    *previous = db_->GetOptions(handle).disable_auto_compactions;
+    return db_->SetOptions(
+        handle, {{"disable_auto_compactions", disabled ? "true" : "false"}});
+}
+
+::rocksdb::Status RocksDatabase::wait_for_compactions() {
+    ::rocksdb::WaitForCompactOptions opts;
+    opts.abort_on_pause = false;
+    opts.flush = false;
+    return db_->WaitForCompact(opts);
+}
+
+AutoCompactionPause::AutoCompactionPause(std::shared_ptr<RocksDatabase> db)
+    : db_(std::move(db)) {
+    for (const auto cf : RocksDatabase::default_column_families()) {
+        bool previous = false;
+        auto status = db_->set_auto_compactions_disabled(cf, true, &previous);
+        if (!status.ok()) {
+            resume();
+            throw DFTUtilsException(
+                ErrorCode::Io, "Failed to pause compaction of column family '" +
+                                   std::string(cf) + "': " + status.ToString());
+        }
+        previous_.emplace_back(cf, previous);
+    }
+}
+
+AutoCompactionPause::~AutoCompactionPause() {
+    try {
+        resume();
+    } catch (...) {
+    }
+}
+
+::rocksdb::Status AutoCompactionPause::resume() {
+    auto first = ::rocksdb::Status::OK();
+    for (const auto& [cf, was_disabled] : previous_) {
+        bool unused = false;
+        auto status =
+            db_->set_auto_compactions_disabled(cf, was_disabled, &unused);
+        if (!status.ok() && first.ok()) first = status;
+    }
+    previous_.clear();
+    return first;
+}
+
+std::size_t RocksDatabase::files_at_level(std::string_view column_family,
+                                          int level) const {
+    std::string value;
+    if (!db_->GetProperty(column_family_handle(column_family),
+                          "rocksdb.num-files-at-level" + std::to_string(level),
+                          &value))
+        return 0;
+    return static_cast<std::size_t>(std::strtoull(value.c_str(), nullptr, 10));
+}
+
 ::rocksdb::Status RocksDatabase::ingest_external_files(
     std::string_view column_family,
     const std::vector<std::string>& external_files, bool ingest_behind) {
@@ -478,8 +611,9 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
         return ::rocksdb::Status::OK();
     }
     ::rocksdb::IngestExternalFileOptions opts;
-    // Rename same-FS staged SSTs instead of copying; RocksDB copies on failure.
-    opts.move_files = true;
+    // Hard-link same-FS staged SSTs instead of copying; RocksDB copies on
+    // failure. The staged names go afterwards, in parallel (unlink_staged).
+    opts.link_files = true;
     // Offline bulk build with no live readers, so skip the snapshot/seqno sync.
     opts.snapshot_consistency = false;
     opts.allow_global_seqno = true;
@@ -488,19 +622,23 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
     opts.write_global_seqno = false;
     opts.allow_blocking_flush = true;
     opts.ingest_behind = ingest_behind;
-    return db_->IngestExternalFile(column_family_handle(column_family),
-                                   external_files, opts);
+    IngestReopenSkip skip_reopen(*file_system_);
+    auto status = db_->IngestExternalFile(column_family_handle(column_family),
+                                          external_files, opts);
+    if (status.ok()) unlink_staged({&external_files});
+    return status;
 }
 
 ::rocksdb::Status RocksDatabase::ingest_external_files_multi(
     const std::vector<
         std::pair<std::string_view, const std::vector<std::string>*>>& per_cf) {
     ::rocksdb::IngestExternalFileOptions opts;
-    opts.move_files = true;
+    opts.link_files = true;
     opts.snapshot_consistency = false;
     opts.allow_global_seqno = true;
     opts.write_global_seqno = false;
     opts.allow_blocking_flush = true;
+    IngestReopenSkip skip_reopen(*file_system_);
 
     std::vector<::rocksdb::IngestExternalFileArg> args;
     args.reserve(per_cf.size());
@@ -513,7 +651,13 @@ std::unique_ptr<::rocksdb::Iterator> RocksDatabase::new_iterator(
         args.push_back(std::move(arg));
     }
     if (args.empty()) return ::rocksdb::Status::OK();
-    return db_->IngestExternalFiles(args);
+    auto status = db_->IngestExternalFiles(args);
+    if (status.ok()) {
+        std::vector<const std::vector<std::string>*> lists;
+        for (const auto& arg : args) lists.push_back(&arg.external_files);
+        unlink_staged(lists);
+    }
+    return status;
 }
 
 }  // namespace dftracer::utils::index::store

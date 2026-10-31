@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -18,7 +18,7 @@ namespace {
 
 std::string binary() {
     static const std::string path = dftu_utils_test::find_binary_by_name(
-        "DFTRACER_GENESIS_GEN_DIST_PATH", "dftracer_genesis_gen_dist");
+        "DFTRACER_UTILS_GENESIS_GEN_DIST_PATH", "dftracer_genesis_gen_dist");
     return path;
 }
 

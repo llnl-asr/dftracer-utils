@@ -1,10 +1,12 @@
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <libdeflate.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <climits>
 #include <cstddef>
+#include <memory>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
@@ -30,6 +32,11 @@ void resolve_dispatch() {
 }
 
 }  // namespace
+
+std::uint32_t gzip_crc32(std::uint32_t crc, const void* data, std::size_t len) {
+    resolve_dispatch();
+    return libdeflate_crc32(crc, data, len);
+}
 
 GzipMemberDecompressor::GzipMemberDecompressor()
     : d_((resolve_dispatch(), libdeflate_alloc_decompressor())) {}
@@ -136,10 +143,19 @@ bool GzipMemberCompressor::compress_member_into(std::vector<std::uint8_t>& out,
                                                 const void* data,
                                                 std::size_t len) const {
     if (!c_) return false;
-    out.resize(bound(len));
-    auto n = compress(data, len, out.data(), out.size());
+    // The worst-case buffer is a member's size again, and a vector would zero
+    // fill and fault in all of it to keep a few percent. A per-thread scratch
+    // buffer is reused across members and only its used part is written.
+    const std::size_t cap = bound(len);
+    thread_local std::unique_ptr<std::uint8_t[]> scratch;
+    thread_local std::size_t scratch_cap = 0;
+    if (scratch_cap < cap) {
+        scratch.reset(new std::uint8_t[cap]);
+        scratch_cap = cap;
+    }
+    auto n = compress(data, len, scratch.get(), cap);
     if (!n) return false;
-    out.resize(*n);
+    out.assign(scratch.get(), scratch.get() + *n);
     return true;
 }
 
@@ -152,42 +168,41 @@ std::optional<std::vector<std::uint8_t>> GzipMemberCompressor::compress_member(
 
 std::optional<std::size_t> decode_truncated_member(
     const void* comp, std::size_t comp_len, std::vector<std::uint8_t>& out) {
-    z_stream zs{};
-    if (inflateInit2(&zs, 16 + MAX_WBITS) != Z_OK) return std::nullopt;
-    const auto* in = static_cast<const Bytef*>(comp);
+    GzipStreamInflater gz;
+    if (!gz.init(constants::indexer::ZLIB_GZIP_WINDOW_BITS))
+        return std::nullopt;
+    const auto* in = static_cast<const unsigned char*>(comp);
     std::size_t in_left = comp_len;
     std::size_t produced = 0;
     if (out.size() < (1u << 20)) out.resize(1u << 20);
     bool complete = false;
     bool ok = true;
     while (true) {
-        if (zs.avail_in == 0 && in_left > 0) {
+        if (gz.avail_in() == 0 && in_left > 0) {
             const std::size_t take = std::min<std::size_t>(in_left, UINT_MAX);
-            zs.next_in = const_cast<Bytef*>(in);
-            zs.avail_in = static_cast<uInt>(take);
+            gz.set_input(in, take);
             in += take;
             in_left -= take;
         }
         if (produced == out.size()) out.resize(out.size() * 2);
         const std::size_t room =
             std::min<std::size_t>(out.size() - produced, UINT_MAX);
-        zs.next_out = out.data() + produced;
-        zs.avail_out = static_cast<uInt>(room);
-        const int rc = inflate(&zs, Z_NO_FLUSH);
-        produced += room - zs.avail_out;
-        if (rc == Z_STREAM_END) {
+        gz.set_output(out.data() + produced, room);
+        const InflateStatus rc = gz.inflate();
+        produced += room - gz.avail_out();
+        if (rc == InflateStatus::StreamEnd) {
             complete = true;
             break;
         }
-        if (rc == Z_OK) continue;
-        if (rc == Z_BUF_ERROR) {
-            if (zs.avail_out == 0) continue;
-            if (zs.avail_in == 0 && in_left == 0) break;  // ran out: cut member
+        if (rc == InflateStatus::Ok) continue;
+        if (rc == InflateStatus::BufError) {
+            if (gz.avail_out() == 0) continue;
+            if (gz.avail_in() == 0 && in_left == 0)
+                break;  // ran out: cut member
         }
-        ok = false;  // Z_DATA_ERROR, Z_NEED_DICT, Z_MEM_ERROR
+        ok = false;     // DataError or any other failure
         break;
     }
-    inflateEnd(&zs);
     if (!ok) return std::nullopt;
     if (complete) return produced;
     std::size_t keep = produced;

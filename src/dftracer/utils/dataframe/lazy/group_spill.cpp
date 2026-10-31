@@ -1,3 +1,4 @@
+#include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
 
 namespace dftracer::utils::dataframe {
@@ -21,7 +22,8 @@ class SlicedRows : public Cursor {
         : in_(in), cap_(cap), taken_(taken) {}
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
-        if (!co_await feed_.fill(in_, max_rows)) co_return std::nullopt;
+        const auto fill_ok = co_await feed_.fill(in_, max_rows);
+        if (!fill_ok) co_return std::nullopt;
         Morsel m = feed_.take(std::min(max_rows, cap_));
         taken_ += m.rows;
         co_return m;
@@ -61,6 +63,8 @@ class GroupByCursor : public Cursor {
     std::optional<std::vector<std::string>> out_names() const override {
         return out_names_;
     }
+
+    std::uint64_t resident_bytes() const override { return gov_.reserved(); }
 
     coro::CoroTask<std::optional<Morsel>> next(std::int64_t max_rows) override {
         if (!built_) co_await build(max_rows);
@@ -162,6 +166,10 @@ class GroupByCursor : public Cursor {
         std::int64_t taken = 0;
         SlicedRows sliced(*in_, cap, taken);
         const std::uint64_t threshold = budget_ / share::SPILL_STATE;
+        // The state's size at the last batch and the bytes of the batch read
+        // so far: what the governor sees at each morsel.
+        std::uint64_t state_bytes = 0;
+        std::uint64_t batch_bytes = 0;
         co_await accumulate_batches(
             sliced, max_rows, budget_, state,
             [&] { return agg_new(specs_, dyn_specs_); }, accumulate,
@@ -173,13 +181,25 @@ class GroupByCursor : public Cursor {
                         bytes / static_cast<std::uint64_t>(taken), 1);
                     cap = rows_within(threshold / 8, per_row, max_rows);
                 }
-                if (bytes > threshold) {
+                state_bytes = bytes;
+                if (bytes > threshold || asked_ ||
+                    (has_cap(budget_) && gov_.check(bytes) != 0)) {
                     spill_state(*st);
                     st = agg_new(specs_, dyn_specs_);
                     taken = 0;
+                    asked_ = false;
+                    state_bytes = 0;
+                    gov_.spilled(0);
                 }
             },
-            [] { return true; });
+            [] { return true; },
+            [&](const std::vector<Morsel>& batch) {
+                if (!has_cap(budget_)) return false;
+                if (batch.size() == 1) batch_bytes = 0;
+                batch_bytes += spill::columns_bytes(batch.back().columns);
+                asked_ = gov_.check(state_bytes + batch_bytes) != 0;
+                return asked_;
+            });
 
         if (!spilled_) {
             DataFrame r = agg_finalize(*state, keys_);
@@ -191,7 +211,7 @@ class GroupByCursor : public Cursor {
                 part_out_[p].close();
                 if (!part_out_[p])
                     throw DFTUtilsException::cat(
-                        ErrorCode::IO,
+                        ErrorCode::Io,
                         "group_by spill: cannot write a part file");
                 if (part_bytes_[p])
                     todo_.push_back({part_paths_[p], part_bytes_[p], 0});
@@ -225,7 +245,7 @@ class GroupByCursor : public Cursor {
                 agg_serialize(*agg_extract_groups(state, split[p]), true);
             if (blob.size() > std::numeric_limits<std::uint32_t>::max())
                 throw DFTUtilsException::cat(
-                    ErrorCode::IO,
+                    ErrorCode::Io,
                     "group_by spill: a part holds over 4 GiB of group states");
             const auto len = static_cast<std::uint32_t>(blob.size());
             out[p].write(reinterpret_cast<const char*>(&len), sizeof len);
@@ -233,8 +253,9 @@ class GroupByCursor : public Cursor {
                          static_cast<std::streamsize>(blob.size()));
             if (!out[p])
                 throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: cannot write a part file");
+                    ErrorCode::Io, "group_by spill: cannot write a part file");
             bytes[p] += sizeof len + blob.size();
+            dir_.charge().add(sizeof len + blob.size());
         }
     }
 
@@ -246,12 +267,12 @@ class GroupByCursor : public Cursor {
         std::ifstream is(path, std::ios::binary);
         if (!is)
             throw DFTUtilsException::cat(
-                ErrorCode::IO, "group_by spill: cannot open part file ", path);
+                ErrorCode::Io, "group_by spill: cannot open part file ", path);
         std::error_code size_ec;
         const std::uint64_t file_size = fs::file_size(path, size_ec);
         if (size_ec)
             throw DFTUtilsException::cat(
-                ErrorCode::IO, "group_by spill: cannot stat part file ", path);
+                ErrorCode::Io, "group_by spill: cannot stat part file ", path);
         std::uint64_t consumed = 0;
         std::vector<std::string> raw;
         std::uint64_t have = 0;
@@ -274,12 +295,12 @@ class GroupByCursor : public Cursor {
             consumed += sizeof len;
             if (len > file_size - consumed)
                 throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: corrupt part file");
+                    ErrorCode::Io, "group_by spill: corrupt part file");
             consumed += len;
             std::string blob(len, '\0');
             if (!is.read(blob.data(), static_cast<std::streamsize>(len)))
                 throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: truncated part file");
+                    ErrorCode::Io, "group_by spill: truncated part file");
             have += len;
             raw.push_back(std::move(blob));
             if (have >= limit && !flush()) return;
@@ -314,26 +335,28 @@ class GroupByCursor : public Cursor {
             out.emplace_back(paths.back(), std::ios::binary);
         }
         AggStatePtr acc = agg_new(specs_, dyn_specs_);
-        read_batches(
-            part.path, batch_bytes(), [&](std::vector<AggStatePtr>& batch) {
-                acc = fold(std::move(acc), batch);
-                if (agg_approx_bytes(*acc) > budget_ / share::SPILL_STATE) {
-                    write_split(*acc, out, bytes, part.depth + 1);
-                    acc = agg_new(specs_, dyn_specs_);
-                }
-                return true;
-            });
+        read_batches(part.path, batch_bytes(),
+                     [&](std::vector<AggStatePtr>& batch) {
+                         acc = fold(std::move(acc), batch);
+                         const std::uint64_t held = agg_approx_bytes(*acc);
+                         if (held > budget_ / share::SPILL_STATE ||
+                             (has_cap(budget_) && gov_.check(held) != 0)) {
+                             write_split(*acc, out, bytes, part.depth + 1);
+                             acc = agg_new(specs_, dyn_specs_);
+                             gov_.spilled(0);
+                         }
+                         return true;
+                     });
         if (agg_num_groups(*acc) > 0)
             write_split(*acc, out, bytes, part.depth + 1);
         for (std::size_t p = 0; p < out.size(); ++p) {
             out[p].close();
             if (!out[p])
                 throw DFTUtilsException::cat(
-                    ErrorCode::IO, "group_by spill: cannot write a part file");
+                    ErrorCode::Io, "group_by spill: cannot write a part file");
             if (bytes[p]) todo_.push_back({paths[p], bytes[p], part.depth + 1});
         }
-        std::error_code ec;
-        fs::remove(part.path, ec);
+        dir_.remove_run(part.path);
     }
 
     // Merges one part of the spill at a time and emits its groups. With dyn
@@ -348,15 +371,18 @@ class GroupByCursor : public Cursor {
             todo_.pop_back();
             AggStatePtr merged = agg_new(specs_, dyn_specs_);
             bool too_big = false;
-            read_batches(part.path, batch_bytes(),
-                         [&](std::vector<AggStatePtr>& batch) {
-                             merged = fold(std::move(merged), batch);
-                             too_big = part.depth < GROUP_SPILL_MAX_DEPTH &&
-                                       agg_approx_bytes(*merged) > budget_;
-                             return !too_big;
-                         });
+            read_batches(
+                part.path, batch_bytes(), [&](std::vector<AggStatePtr>& batch) {
+                    merged = fold(std::move(merged), batch);
+                    const std::uint64_t held = agg_approx_bytes(*merged);
+                    too_big = part.depth < GROUP_SPILL_MAX_DEPTH &&
+                              (held > budget_ ||
+                               (has_cap(budget_) && gov_.check(held) != 0));
+                    return !too_big;
+                });
             if (too_big) {
                 merged.reset();
+                gov_.spilled(0);
                 split_part(part);
                 continue;
             }
@@ -389,6 +415,9 @@ class GroupByCursor : public Cursor {
     std::vector<std::uint64_t> part_bytes_;
     std::vector<Part> todo_;
     ResultChunks chunks_;
+    Governor gov_{"group_by"};
+    // The governor asked for bytes while a batch was read: spill after it.
+    bool asked_ = false;
 };
 
 // Tumbling/sliding time windows over an ascending Int64 time column, grid

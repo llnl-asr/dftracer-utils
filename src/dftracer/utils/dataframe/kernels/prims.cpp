@@ -3,14 +3,14 @@
 // scalar tail reuses the core bit/hash primitives so the SIMD body and the tail
 // stay in agreement with the JIT/plugin path (plugins/prims.h mirrors them).
 
-#include <dftracer/utils/core/common/bits.h>
-#include <dftracer/utils/core/common/hash/constants.h>
-#include <dftracer/utils/core/common/hash/splitmix64.h>
 #include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/dataframe/buffer.h>
+#include <dftracer/utils/dataframe/internal/buffers.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/kernels/prims.h>
 #include <dftracer/utils/dataframe/types.h>
+#include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/hash/constants.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -122,11 +122,11 @@ dftu_series* prim_col(const dftu_series* a, std::int32_t op) {
     out->length = a->length;
     out->null_count = a->null_count;
     out->validity = a->validity;
-    out->data = Buffer::allocate(static_cast<std::size_t>(a->length) *
-                                 sizeof(std::int64_t));
+    out->data =
+        new_buffer(static_cast<std::size_t>(a->length) * sizeof(std::int64_t));
 
-    const auto* in = reinterpret_cast<const std::uint64_t*>(a->data->data());
-    auto* o = reinterpret_cast<std::int64_t*>(out->data->data());
+    const auto* in = reinterpret_cast<const std::uint64_t*>(a->data.data());
+    auto* o = reinterpret_cast<std::int64_t*>(writable(out->data));
     HWY_DYNAMIC_DISPATCH(PrimImpl)(op, in, o,
                                    static_cast<std::size_t>(a->length));
     return out;

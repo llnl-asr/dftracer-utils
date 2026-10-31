@@ -1,12 +1,16 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/run_loop.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/executor/run_loop.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 
+#include <atomic>
+#include <chrono>
 #include <numeric>
+#include <thread>
 #include <vector>
 
 using namespace dftracer::utils;
@@ -88,6 +92,44 @@ TEST_SUITE("RunLoop") {
         };
         CHECK(rt.submit(task()).get() == 41);
         rt.shutdown();
+    }
+
+    TEST_CASE("A mutex waiter resumes on the thread of its own loop") {
+        coro::AsyncMutex mutex;
+        std::atomic<bool> holder_has_lock{false};
+        std::atomic<bool> release{false};
+        std::atomic<bool> waiter_started{false};
+        std::thread::id waiter_thread;
+        std::thread::id resumed_thread;
+
+        std::thread holder([&] {
+            auto task = [&]() -> coro::CoroTask<void> {
+                co_await mutex.lock();
+                holder_has_lock.store(true);
+                while (!release.load()) std::this_thread::yield();
+                mutex.unlock();
+            };
+            task().get();
+        });
+        while (!holder_has_lock.load()) std::this_thread::yield();
+
+        std::thread waiter([&] {
+            waiter_thread = std::this_thread::get_id();
+            auto task = [&]() -> coro::CoroTask<void> {
+                waiter_started.store(true);
+                co_await mutex.lock();
+                resumed_thread = std::this_thread::get_id();
+                mutex.unlock();
+            };
+            task().get();
+        });
+        while (!waiter_started.load()) std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        release.store(true);
+
+        holder.join();
+        waiter.join();
+        CHECK(resumed_thread == waiter_thread);
     }
 
     TEST_CASE("A stalled loop reports instead of hanging") {

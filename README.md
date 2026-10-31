@@ -71,7 +71,7 @@ See [docs/README.md](docs/README.md) for detailed documentation building instruc
 
 - CMake 3.20 or higher
 - C++20 compatible compiler (GCC 12 or later, Clang 14 or later)
-- zlib development library
+- zlib development library (only to build the tests; the library bundles zlib-ng)
 - pkg-config
 
 ### Build

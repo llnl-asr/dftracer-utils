@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/config.h>
+#include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -27,9 +27,9 @@ static int64_t child_null_count(const ArrowExportResult& r, int64_t i) {
 TEST_CASE("RecordBatchBuilder - Static schema mode") {
     SUBCASE("builds batch with int64, double, string columns") {
         RecordBatchBuilder b;
-        b.declare_schema({{"id", ColumnType::INT64},
-                          {"value", ColumnType::DOUBLE},
-                          {"name", ColumnType::STRING}});
+        b.declare_schema({{"id", ColumnType::Int64},
+                          {"value", ColumnType::Double},
+                          {"name", ColumnType::String}});
 
         std::string s0 = "alice", s1 = "bob", s2 = "carol";
 
@@ -67,7 +67,7 @@ TEST_CASE("RecordBatchBuilder - Static schema mode") {
     SUBCASE("reserve and reset cycle for streaming") {
         RecordBatchBuilder b;
         b.declare_schema(
-            {{"ts", ColumnType::INT64}, {"dur", ColumnType::DOUBLE}});
+            {{"ts", ColumnType::Int64}, {"dur", ColumnType::Double}});
         b.reserve(100);
 
         for (int i = 0; i < 5; ++i) {
@@ -99,13 +99,13 @@ TEST_CASE("RecordBatchBuilder - Dynamic schema mode") {
     SUBCASE("discovers columns from data") {
         RecordBatchBuilder b;
 
-        size_t x = b.add_or_get_column("x", ColumnType::INT64);
+        size_t x = b.add_or_get_column("x", ColumnType::Int64);
         CHECK(x == 0);
 
         b.append_int64(x, 42);
         b.end_row();
 
-        size_t y = b.add_or_get_column("y", ColumnType::STRING);
+        size_t y = b.add_or_get_column("y", ColumnType::String);
         CHECK(y == 1);
 
         std::string hello = "hello";
@@ -125,11 +125,11 @@ TEST_CASE("RecordBatchBuilder - Dynamic schema mode") {
     SUBCASE("backfills nulls for missing columns") {
         RecordBatchBuilder b;
 
-        size_t a = b.add_or_get_column("a", ColumnType::INT64);
+        size_t a = b.add_or_get_column("a", ColumnType::Int64);
         b.append_int64(a, 1);
         b.end_row();  // row 0: a=1, b not yet known
 
-        size_t bv = b.add_or_get_column("b", ColumnType::DOUBLE);
+        size_t bv = b.add_or_get_column("b", ColumnType::Double);
         b.append_int64(a, 2);
         b.append_double(bv, 3.14);
         b.end_row();  // row 1: a=2, b=3.14
@@ -146,7 +146,7 @@ TEST_CASE("RecordBatchBuilder - Dynamic schema mode") {
 
 TEST_CASE("RecordBatchBuilder - Null handling") {
     RecordBatchBuilder b;
-    b.declare_schema({{"v", ColumnType::INT64}});
+    b.declare_schema({{"v", ColumnType::Int64}});
 
     b.append_int64(0, 10);
     b.end_row();
@@ -169,8 +169,8 @@ TEST_CASE("RecordBatchBuilder - append_null under a locked schema") {
     // row detection. This exercises that mixed real/null appends after
     // lock_schema() still produce a well-formed batch.
     RecordBatchBuilder b;
-    b.add_or_get_column("a", ColumnType::INT64);
-    b.add_or_get_column("b", ColumnType::INT64);
+    b.add_or_get_column("a", ColumnType::Int64);
+    b.add_or_get_column("b", ColumnType::Int64);
     b.lock_schema();
     CHECK(b.is_schema_locked());
 
@@ -192,7 +192,7 @@ TEST_CASE("RecordBatchBuilder - append_null under a locked schema") {
 
 TEST_CASE("RecordBatchBuilder - Empty batch") {
     RecordBatchBuilder b;
-    b.declare_schema({{"a", ColumnType::INT64}, {"b", ColumnType::STRING}});
+    b.declare_schema({{"a", ColumnType::Int64}, {"b", ColumnType::String}});
 
     auto result = b.finish();
     REQUIRE(result.valid());
@@ -202,7 +202,7 @@ TEST_CASE("RecordBatchBuilder - Empty batch") {
 
 TEST_CASE("RecordBatchBuilder - Bool column") {
     RecordBatchBuilder b;
-    b.declare_schema({{"flag", ColumnType::BOOL}});
+    b.declare_schema({{"flag", ColumnType::Bool}});
 
     b.append_bool(0, true);
     b.end_row();
@@ -219,7 +219,7 @@ TEST_CASE("RecordBatchBuilder - Bool column") {
 
 TEST_CASE("RecordBatchBuilder - HIST list<struct> column") {
     RecordBatchBuilder b;
-    b.declare_schema({{"name", ColumnType::STRING}, {"h", ColumnType::HIST}});
+    b.declare_schema({{"name", ColumnType::String}, {"h", ColumnType::Hist}});
 
     b.append_string(0, "read");
     b.append_hist(1, {{0.0, 1.0, 3}, {1.0, 2.0, 5}});

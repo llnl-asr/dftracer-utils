@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_INDEXED_FILE_READER_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_INDEXED_FILE_READER_UTILITY_H
 
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 

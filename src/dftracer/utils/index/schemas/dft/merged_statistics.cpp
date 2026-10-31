@@ -18,7 +18,7 @@ ankerl::unordered_dense::map<int, MergedStatisticsResult> merged_statistics(
                 merged.stats.merge_from(row.stats);
             ++merged.num_chunks;
         }
-        if (!db.extension_current(fid, index::store::IndexExtension::COUNTS))
+        if (!db.extension_current(fid, index::store::IndexExtension::Counts))
             continue;
         const std::pair<const char*, StringViewMap<std::uint64_t>*> targets[] =
             {{"cat", &merged.stats.category_counts},
@@ -26,7 +26,7 @@ ankerl::unordered_dense::map<int, MergedStatisticsResult> merged_statistics(
              {"pid_tid", &merged.stats.pid_tid_counts}};
         for (const auto& [path, into] : targets) {
             for (const auto& [granule, bytes] : db.path_granules(
-                     fid, index::store::IndexExtension::COUNTS, path)) {
+                     fid, index::store::IndexExtension::Counts, path)) {
                 auto counts = index::extensions::kinds::decode_counts(bytes);
                 if (!counts || !counts->compressed) continue;
                 const auto values = index::extensions::ChunkDimensionStats::

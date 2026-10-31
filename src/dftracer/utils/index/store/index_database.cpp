@@ -1,7 +1,9 @@
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_merge_operator.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics_merge_operator.h>
 #include <dftracer/utils/index/store/database.h>
 #include <dftracer/utils/index/store/db_manager.h>
@@ -21,6 +23,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cstring>
 #include <limits>
@@ -209,8 +212,8 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::string_view key,
     if (body.size() >= 6 * sizeof(std::uint64_t) + 2) {
         const auto kind = cursor.u8();
         if (kind >
-            static_cast<std::uint8_t>(index::gzip::GzipRecordKind::RESTART))
-            throw DFTUtilsException::cat(ErrorCode::INDEXER,
+            static_cast<std::uint8_t>(index::gzip::GzipRecordKind::Restart))
+            throw DFTUtilsException::cat(ErrorCode::Indexer,
                                          "unknown gzip record kind ", kind);
         member.kind = static_cast<index::gzip::GzipRecordKind>(kind);
         member.bits = cursor.u8();
@@ -241,23 +244,22 @@ void scan_files(const rocks::RocksDatabase& db, Ext ext, std::uint8_t kind,
     const auto [lo, hi] = std::minmax_element(file_ids.begin(), file_ids.end());
     const auto kind_prefix = layout::kind_prefix(ext, kind);
     const auto start = layout::file_prefix(ext, kind, fid(*lo));
-    auto it =
-        db.new_iterator(layout::family_name(layout::family_of(ext, kind)));
-    for (it->Seek(::rocksdb::Slice(start.data(), start.size())); it->Valid();
-         it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(kind_prefix) ||
-            key.size() < layout::KEY_PREFIX_BYTES)
-            break;
-        const int file_id = static_cast<int>(tail_u32(key, 3));
-        if (file_id > *hi) break;
-        if (!wanted.contains(file_id)) continue;
-        const std::string_view value(it->value().data(), it->value().size());
-        if (auto body = layout::payload(value, ext, kind))
-            fn(file_id, key, *body);
-    }
-    if (!it->status().ok())
-        throw_db_error("Failed to scan index data", it->status());
+    scan_from(
+        "Failed to scan index data",
+        db.new_iterator(layout::family_name(layout::family_of(ext, kind))),
+        start, [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            if (!key.starts_with(kind_prefix) ||
+                key.size() < layout::KEY_PREFIX_BYTES)
+                return false;
+            const int file_id = static_cast<int>(tail_u32(key, 3));
+            if (file_id > *hi) return false;
+            if (!wanted.contains(file_id)) return true;
+            const std::string_view value(it.value().data(), it.value().size());
+            if (auto body = layout::payload(value, ext, kind))
+                fn(file_id, key, *body);
+            return true;
+        });
 }
 
 }  // namespace
@@ -274,29 +276,14 @@ namespace {
 #endif
 }
 
-// Every open registers the aggregation merge operators: RocksDBManager shares
-// one handle per path, and ingested aggregation SSTs hold merge operands.
+// Every open registers the system metrics merge operator: RocksDBManager shares
+// one handle per path, and ingested system metrics SSTs hold merge operands.
 rocks::RocksDatabase::CfOptionsOverride make_aggregation_cf_override() {
-    using index::schemas::dft::agg::AggregationMergeOperator;
     using index::schemas::dft::agg::SystemMetricsMergeOperator;
-    auto agg_merge_op = std::make_shared<AggregationMergeOperator>();
     auto sys_merge_op = std::make_shared<SystemMetricsMergeOperator>();
-    return [agg_merge_op, sys_merge_op](const std::string& cf_name,
-                                        ::rocksdb::ColumnFamilyOptions& opts) {
-        if (cf_name == cf::AGGREGATION) {
-            opts.merge_operator = agg_merge_op;
-            ::rocksdb::BlockBasedTableOptions bbt;
-            bbt.block_size = 32 * 1024;
-            bbt.format_version = 7;
-            bbt.index_block_restart_interval = 16;
-            bbt.whole_key_filtering = false;
-            bbt.separate_key_value_in_data_block = true;
-            opts.table_factory.reset(::rocksdb::NewBlockBasedTableFactory(bbt));
-            opts.level0_file_num_compaction_trigger = 2;
-            opts.max_bytes_for_level_multiplier = 20;
-            opts.compression = select_compression_type();
-            opts.bottommost_compression = select_compression_type();
-        } else if (cf_name == cf::SYSTEM_METRICS) {
+    return [sys_merge_op](const std::string& cf_name,
+                          ::rocksdb::ColumnFamilyOptions& opts) {
+        if (cf_name == cf::SYSTEM_METRICS) {
             opts.merge_operator = sys_merge_op;
             opts.compression = select_compression_type();
             opts.bottommost_compression = select_compression_type();
@@ -313,6 +300,14 @@ struct IndexDatabase::Impl {
     std::shared_ptr<rocks::RocksDatabase> db_;
 };
 
+namespace {
+std::atomic<std::uint64_t> read_write_open_count{0};
+}
+
+std::uint64_t IndexDatabase::read_write_opens() noexcept {
+    return read_write_open_count.load(std::memory_order_relaxed);
+}
+
 IndexDatabase::IndexDatabase(const std::string& index_path,
                              IndexOpenMode open_mode)
     : impl_(std::make_unique<Impl>()) {
@@ -323,6 +318,7 @@ IndexDatabase::IndexDatabase(const std::string& index_path,
     impl_->db_ = rocks::RocksDBManager::instance().get_or_open(
         impl_->db_path_, impl_->open_mode_, make_aggregation_cf_override());
     if (impl_->open_mode_ == rocks::RocksDatabase::OpenMode::ReadWrite) {
+        read_write_open_count.fetch_add(1, std::memory_order_relaxed);
         init_schema();
     }
 }
@@ -344,8 +340,8 @@ void IndexDatabase::bulk_ingest(const SstArtifactRegistry& registry,
                                 const StringViewSet& skip_cfs) {
     // One atomic multi-CF ingest: a single manifest edit, so the manifest
     // entries in the registry family commit together with their data.
-    // Overlapping index-wide SSTs (dictionaries) and aggregation SSTs are fine
-    // with allow_global_seqno, which assigns seqnos in list order.
+    // Overlapping index-wide SSTs (dictionaries) and system metrics SSTs are
+    // fine with allow_global_seqno, which assigns seqnos in list order.
     std::vector<std::pair<std::string_view, const std::vector<std::string>*>>
         per_cf;
     for (std::size_t f = 0; f < layout::FAMILY_COUNT; ++f) {
@@ -381,14 +377,14 @@ std::vector<int> IndexDatabase::assign_file_ids(
 namespace {
 std::string next_file_id_value(std::uint32_t next) {
     std::string body;
-    layout::append_u32(body, next);
-    return layout::with_header(Ext::HOST, layout::host::NEXT_FILE_ID, body);
+    append_u32_be(body, next);
+    return layout::with_header(Ext::Host, layout::host::NEXT_FILE_ID, body);
 }
 }  // namespace
 
 int IndexDatabase::reserve_file_id_range(std::size_t count) {
     std::uint32_t first = 1;
-    if (auto body = get(*impl_->db_, Ext::HOST, layout::host::NEXT_FILE_ID,
+    if (auto body = get(*impl_->db_, Ext::Host, layout::host::NEXT_FILE_ID,
                         layout::next_file_id_key()))
         first = layout::read_u32(*body);
     if (count == 0) return static_cast<int>(first);
@@ -404,9 +400,8 @@ void IndexDatabase::init_schema() {
     writer->init_schema();
     writer->commit();
     // Rollups moved to <index>/cache; drop the rows older builds left here.
-    auto it = impl_->db_->new_iterator(cf::ROLLUP);
-    it->SeekToFirst();
-    if (it->Valid()) {
+    if (any_key_with_prefix("Failed to scan the legacy rollup family",
+                            impl_->db_->new_iterator(cf::ROLLUP), {})) {
         auto status = impl_->db_->delete_range(
             std::string_view(), std::string(32, '\xFF'), cf::ROLLUP);
         if (!status.ok())
@@ -424,7 +419,7 @@ std::optional<ExtensionState> IndexDatabase::extension_state(
     auto entry = layout::decode_manifest(value);
     if (!entry) return std::nullopt;
     return ExtensionState{entry->version, entry->params_hash,
-                          entry->status == layout::ExtStatus::READY};
+                          entry->status == layout::ExtStatus::Ready};
 }
 
 std::optional<ExtensionState> IndexDatabase::plugin_extension_state(
@@ -437,30 +432,28 @@ std::optional<ExtensionState> IndexDatabase::plugin_extension_state(
     auto entry = layout::decode_manifest(value);
     if (!entry) return std::nullopt;
     return ExtensionState{entry->version, entry->params_hash,
-                          entry->status == layout::ExtStatus::READY};
+                          entry->status == layout::ExtStatus::Ready};
 }
 
 std::vector<std::pair<std::string, ExtensionState>>
 IndexDatabase::plugin_extension_states(int file_id) const {
     std::vector<std::pair<std::string, ExtensionState>> out;
-    const auto prefix = layout::manifest_key(fid(file_id), Ext::PLUGIN);
-    auto it = impl_->db_->new_iterator(cf::DEFAULT);
-    for (it->Seek(::rocksdb::Slice(prefix.data(), prefix.size())); it->Valid();
-         it->Next()) {
-        const std::string_view key(it->key().data(), it->key().size());
-        if (!key.starts_with(prefix)) break;
-        if (key.size() <= prefix.size() || key.back() != '\0') continue;
-        auto entry = layout::decode_manifest(
-            std::string_view(it->value().data(), it->value().size()));
-        if (!entry) continue;
-        out.emplace_back(
-            std::string(
-                key.substr(prefix.size(), key.size() - prefix.size() - 1)),
-            ExtensionState{entry->version, entry->params_hash,
-                           entry->status == layout::ExtStatus::READY});
-    }
-    if (!it->status().ok())
-        throw_db_error("Failed to read the manifest", it->status());
+    const auto prefix = layout::manifest_key(fid(file_id), Ext::Plugin);
+    scan_prefix_iterator(
+        "Failed to read the manifest", prefix,
+        [&] { return impl_->db_->new_iterator(cf::DEFAULT); },
+        [&](::rocksdb::Iterator& it) {
+            const std::string_view key(it.key().data(), it.key().size());
+            if (key.size() <= prefix.size() || key.back() != '\0') return;
+            auto entry = layout::decode_manifest(
+                std::string_view(it.value().data(), it.value().size()));
+            if (!entry) return;
+            out.emplace_back(
+                std::string(
+                    key.substr(prefix.size(), key.size() - prefix.size() - 1)),
+                ExtensionState{entry->version, entry->params_hash,
+                               entry->status == layout::ExtStatus::Ready});
+        });
     return out;
 }
 
@@ -470,7 +463,7 @@ bool IndexDatabase::extension_current(int file_id, IndexExtension ext) const {
 }
 
 bool IndexDatabase::pruning_tier_current(int file_id) const {
-    return extension_current(file_id, Ext::STATS);
+    return extension_current(file_id, Ext::Stats);
 }
 
 std::vector<std::string> IndexDatabase::extension_paths(
@@ -505,22 +498,16 @@ std::optional<std::string> IndexDatabase::path_file_value(
 
 bool IndexDatabase::has_postings(int file_id, std::string_view path) const {
     const auto prefix =
-        layout::path_prefix(Ext::POSTINGS, pk::IN_FILE, fid(file_id), path);
-    auto it = impl_->db_->new_iterator(cf::POSTINGS);
-    it->Seek(::rocksdb::Slice(prefix.data(), prefix.size()));
-    const bool found =
-        it->Valid() && std::string_view(it->key().data(), it->key().size())
-                           .starts_with(prefix);
-    if (!it->status().ok())
-        throw_db_error("Failed to read postings", it->status());
-    return found;
+        layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
+    return any_key_with_prefix("Failed to read postings",
+                               impl_->db_->new_iterator(cf::POSTINGS), prefix);
 }
 
 bool IndexDatabase::has_posting(int file_id, std::string_view path,
                                 std::uint64_t value_hash) const {
     auto key =
-        layout::path_prefix(Ext::POSTINGS, pk::IN_FILE, fid(file_id), path);
-    layout::append_u64(key, value_hash);
+        layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
+    append_u64_be(key, value_hash);
     std::string value;
     auto status = impl_->db_->get(key, &value, cf::POSTINGS);
     if (status.IsNotFound()) return false;
@@ -532,9 +519,9 @@ std::vector<std::uint64_t> IndexDatabase::posting_granules(
     int file_id, std::string_view path, std::uint64_t value_hash) const {
     std::vector<std::uint64_t> out;
     auto prefix =
-        layout::path_prefix(Ext::POSTINGS, pk::IN_GRANULE, fid(file_id), path);
-    layout::append_u64(prefix, value_hash);
-    scan_keys(*impl_->db_, Ext::POSTINGS, pk::IN_GRANULE, prefix,
+        layout::path_prefix(Ext::Postings, pk::IN_GRANULE, fid(file_id), path);
+    append_u64_be(prefix, value_hash);
+    scan_keys(*impl_->db_, Ext::Postings, pk::IN_GRANULE, prefix,
               [&](std::string_view key) {
                   if (key.size() == prefix.size() + 4)
                       out.push_back(tail_u32(key, prefix.size()));
@@ -573,18 +560,29 @@ std::optional<IndexDatabase::FileStat> IndexDatabase::get_file_stat(
     return FileStat{record->mtime, record->size};
 }
 
-std::uint32_t IndexDatabase::get_format_version() const {
+std::optional<std::uint32_t> IndexDatabase::get_format_version() const {
     auto body =
-        get(*impl_->db_, Ext::HOST, layout::host::FORMAT, layout::format_key());
-    return body ? layout::read_u32(*body) : 0;
+        get(*impl_->db_, Ext::Host, layout::host::FORMAT, layout::format_key());
+    if (!body) return std::nullopt;
+    return layout::read_u32(*body);
 }
 
 bool IndexDatabase::format_outdated() const {
-    return get_format_version() != FORMAT_VERSION;
+    const auto stored = get_format_version();
+    return !stored || *stored != FORMAT_VERSION;
 }
 
 IndexDatabase::Freshness IndexDatabase::check_freshness(
     const std::string& file_path) const {
+    dftracer::utils::InputFileStat st;
+    if (!dftracer::utils::stat_input(file_path, st))
+        return check_freshness(file_path, 0, 0);
+    return check_freshness(file_path, st.size, st.mtime);
+}
+
+IndexDatabase::Freshness IndexDatabase::check_freshness(
+    const std::string& file_path, std::uint64_t size,
+    std::int64_t mtime) const {
     // Stat-only by design: mtime + size are the only O(1) freshness signals,
     // and this runs on every index open and every stale scan, so it must not
     // read the file body. A same-size edit with a deliberately restored mtime
@@ -598,11 +596,8 @@ IndexDatabase::Freshness IndexDatabase::check_freshness(
     auto stored = get_file_stat(logical);
     if (!stored) return Freshness::Stale;  // record predates stat tracking
 
-    const auto current_mtime = static_cast<std::uint64_t>(
-        index::store::internal::get_file_modification_time(file_path));
-    const auto current_size =
-        index::store::internal::file_size_bytes(file_path);
-    if (stored->mtime != current_mtime || stored->size != current_size) {
+    if (stored->mtime != static_cast<std::uint64_t>(mtime) ||
+        stored->size != size) {
         return Freshness::Stale;
     }
     return Freshness::Fresh;
@@ -646,7 +641,7 @@ StringViewMap<FileRegistryEntry> IndexDatabase::query_all_file_registry()
     const {
     StringViewMap<FileRegistryEntry> results;
     const auto prefix =
-        layout::kind_prefix(Ext::HOST, layout::host::FILE_BY_PATH);
+        layout::kind_prefix(Ext::Host, layout::host::FILE_BY_PATH);
     scan_prefix_iterator(
         "Failed to scan the file registry", prefix,
         [&] { return impl_->db_->new_iterator(cf::DEFAULT); },
@@ -673,14 +668,14 @@ std::optional<ColumnType> schema_type(std::uint8_t seen) {
     auto has = [seen](PathType t) {
         return (seen >> static_cast<unsigned>(t)) & 1U;
     };
-    const bool other = has(PathType::UINT) || has(PathType::DOUBLE) ||
-                       has(PathType::BOOL) || has(PathType::INT);
-    if (has(PathType::MIXED) || (has(PathType::STRING) && other))
+    const bool other = has(PathType::Uint) || has(PathType::Double) ||
+                       has(PathType::Bool) || has(PathType::Int);
+    if (has(PathType::Mixed) || (has(PathType::String) && other))
         return ColumnType::Json;
-    if (has(PathType::STRING)) return ColumnType::String;
-    if (has(PathType::UINT) || has(PathType::DOUBLE))
+    if (has(PathType::String)) return ColumnType::String;
+    if (has(PathType::Uint) || has(PathType::Double))
         return ColumnType::Float64;
-    if (has(PathType::BOOL) || has(PathType::INT)) return ColumnType::Int64;
+    if (has(PathType::Bool) || has(PathType::Int)) return ColumnType::Int64;
     return std::nullopt;
 }
 
@@ -697,8 +692,8 @@ std::vector<std::pair<std::string, ColumnType>>
 IndexDatabase::query_all_column_types() const {
     constexpr std::string_view ARGS = "args.";
     ankerl::unordered_dense::map<std::string, ColumnType> cols;
-    scan(*impl_->db_, Ext::CATALOG, layout::catalog_kind::PATH,
-         layout::kind_prefix(Ext::CATALOG, layout::catalog_kind::PATH),
+    scan(*impl_->db_, Ext::Catalog, layout::catalog_kind::PATH,
+         layout::kind_prefix(Ext::Catalog, layout::catalog_kind::PATH),
          [&](std::string_view key, std::string_view body) {
              if (key.size() <= layout::KEY_PREFIX_BYTES) return;
              auto stat = layout::decode_path_stat(body);
@@ -727,9 +722,9 @@ IndexDatabase::file_column_types(int file_id) const {
 }
 
 std::optional<std::string> IndexDatabase::file_schema(int file_id) const {
-    if (!extension_current(file_id, Ext::PROFILE)) return std::nullopt;
-    auto body = get(*impl_->db_, Ext::PROFILE, layout::profile_kind::ID,
-                    layout::file_prefix(Ext::PROFILE, layout::profile_kind::ID,
+    if (!extension_current(file_id, Ext::Profile)) return std::nullopt;
+    auto body = get(*impl_->db_, Ext::Profile, layout::profile_kind::ID,
+                    layout::file_prefix(Ext::Profile, layout::profile_kind::ID,
                                         fid(file_id)));
     if (!body) return std::nullopt;
     return std::string(*body);
@@ -739,8 +734,8 @@ std::vector<std::pair<std::string, PathStat>> IndexDatabase::catalog(
     int file_id) const {
     std::vector<std::pair<std::string, PathStat>> out;
     const auto prefix = layout::file_prefix(
-        Ext::CATALOG, layout::catalog_kind::PATH, fid(file_id));
-    scan(*impl_->db_, Ext::CATALOG, layout::catalog_kind::PATH, prefix,
+        Ext::Catalog, layout::catalog_kind::PATH, fid(file_id));
+    scan(*impl_->db_, Ext::Catalog, layout::catalog_kind::PATH, prefix,
          [&](std::string_view key, std::string_view body) {
              if (auto stat = layout::decode_path_stat(body))
                  out.emplace_back(std::string(key.substr(prefix.size())),
@@ -752,8 +747,8 @@ std::vector<std::pair<std::string, PathStat>> IndexDatabase::catalog(
 std::vector<index::schemas::dft::ChunkStatisticsResult>
 IndexDatabase::query_chunk_statistics(int file_id) const {
     std::vector<index::schemas::dft::ChunkStatisticsResult> results;
-    scan(*impl_->db_, Ext::STATS, sk::CHUNK_STATS,
-         layout::file_prefix(Ext::STATS, sk::CHUNK_STATS, fid(file_id)),
+    scan(*impl_->db_, Ext::Stats, sk::CHUNK_STATS,
+         layout::file_prefix(Ext::Stats, sk::CHUNK_STATS, fid(file_id)),
          [&](std::string_view key, std::string_view body) {
              results.push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
                                 decode_chunk_statistics_value(body)});
@@ -763,10 +758,10 @@ IndexDatabase::query_chunk_statistics(int file_id) const {
 
 std::optional<ankerl::unordered_dense::map<std::uint64_t, ChunkMetadata>>
 IndexDatabase::chunk_metadata(int file_id) const {
-    if (!extension_current(file_id, Ext::METADATA)) return std::nullopt;
+    if (!extension_current(file_id, Ext::Metadata)) return std::nullopt;
     ankerl::unordered_dense::map<std::uint64_t, ChunkMetadata> out;
-    scan(*impl_->db_, Ext::METADATA, layout::metadata_kind::CHUNK,
-         layout::file_prefix(Ext::METADATA, layout::metadata_kind::CHUNK,
+    scan(*impl_->db_, Ext::Metadata, layout::metadata_kind::CHUNK,
+         layout::file_prefix(Ext::Metadata, layout::metadata_kind::CHUNK,
                              fid(file_id)),
          [&](std::string_view key, std::string_view body) {
              if (auto m = layout::decode_chunk_metadata(body))
@@ -784,7 +779,7 @@ IndexDatabase::query_chunk_statistics_batch(
         int, std::vector<index::schemas::dft::ChunkStatisticsResult>>
         results;
     scan_files(
-        *impl_->db_, Ext::STATS, sk::CHUNK_STATS, file_ids,
+        *impl_->db_, Ext::Stats, sk::CHUNK_STATS, file_ids,
         [&](int file_id, std::string_view key, std::string_view body) {
             results[file_id].push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
                                         decode_chunk_statistics_value(body)});
@@ -798,7 +793,7 @@ IndexDatabase::query_file_scalar_stats_batch(
     ankerl::unordered_dense::map<int,
                                  index::schemas::dft::MergedStatisticsResult>
         results;
-    scan_files(*impl_->db_, Ext::STATS, sk::FILE_SCALAR_STATS, file_ids,
+    scan_files(*impl_->db_, Ext::Stats, sk::FILE_SCALAR_STATS, file_ids,
                [&](int file_id, std::string_view, std::string_view body) {
                    results.emplace(file_id,
                                    decode_file_scalar_stats_value(body));
@@ -810,7 +805,7 @@ ankerl::unordered_dense::map<int, FileMetadataResult>
 IndexDatabase::query_file_metadata_batch(
     const std::vector<int>& file_ids) const {
     ankerl::unordered_dense::map<int, FileMetadataResult> results;
-    scan_files(*impl_->db_, Ext::MEMBERS, layout::members::METADATA, file_ids,
+    scan_files(*impl_->db_, Ext::Members, layout::members::METADATA, file_ids,
                [&](int file_id, std::string_view, std::string_view body) {
                    Cursor cursor(body);
                    auto& meta = results[file_id];
@@ -827,7 +822,7 @@ ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>>
 IndexDatabase::query_file_pid_tid_counts_batch(
     const std::vector<int>& file_ids) const {
     ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>> results;
-    scan_files(*impl_->db_, Ext::STATS, sk::FILE_PID_TID_COUNTS, file_ids,
+    scan_files(*impl_->db_, Ext::Stats, sk::FILE_PID_TID_COUNTS, file_ids,
                [&](int file_id, std::string_view, std::string_view body) {
                    results.emplace(file_id, decode_count_map_value(body));
                });
@@ -837,9 +832,9 @@ IndexDatabase::query_file_pid_tid_counts_batch(
 std::vector<index::gzip::GzipMemberRecord> IndexDatabase::query_gzip_members(
     int file_id) const {
     std::vector<index::gzip::GzipMemberRecord> members;
-    if (!extension_current(file_id, Ext::MEMBERS)) return members;
-    scan(*impl_->db_, Ext::MEMBERS, layout::members::MEMBER,
-         layout::file_prefix(Ext::MEMBERS, layout::members::MEMBER,
+    if (!extension_current(file_id, Ext::Members)) return members;
+    scan(*impl_->db_, Ext::Members, layout::members::MEMBER,
+         layout::file_prefix(Ext::Members, layout::members::MEMBER,
                              fid(file_id)),
          [&](std::string_view key, std::string_view body) {
              members.push_back(decode_gzip_member(key, body));
@@ -849,8 +844,8 @@ std::vector<index::gzip::GzipMemberRecord> IndexDatabase::query_gzip_members(
 
 std::optional<std::string> IndexDatabase::query_restart_window(
     int file_id, std::uint64_t member_idx) const {
-    return get(*impl_->db_, Ext::MEMBERS, layout::members::RESTART,
-               layout::granule_key(Ext::MEMBERS, layout::members::RESTART,
+    return get(*impl_->db_, Ext::Members, layout::members::RESTART,
+               layout::granule_key(Ext::Members, layout::members::RESTART,
                                    fid(file_id),
                                    static_cast<std::uint32_t>(member_idx)));
 }
@@ -890,8 +885,8 @@ ankerl::unordered_dense::set<std::uint64_t> pids_from_pid_tid_counts(
 ankerl::unordered_dense::set<std::uint64_t> IndexDatabase::query_file_pids(
     int file_id) const {
     auto body = get(
-        *impl_->db_, Ext::STATS, sk::FILE_PID_TID_COUNTS,
-        layout::file_prefix(Ext::STATS, sk::FILE_PID_TID_COUNTS, fid(file_id)));
+        *impl_->db_, Ext::Stats, sk::FILE_PID_TID_COUNTS,
+        layout::file_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS, fid(file_id)));
     if (!body) return {};
     return pids_from_pid_tid_counts(decode_count_map_value(*body));
 }
@@ -901,8 +896,8 @@ IndexDatabase::query_all_file_pids() const {
     ankerl::unordered_dense::map<int,
                                  ankerl::unordered_dense::set<std::uint64_t>>
         result;
-    scan(*impl_->db_, Ext::STATS, sk::FILE_PID_TID_COUNTS,
-         layout::kind_prefix(Ext::STATS, sk::FILE_PID_TID_COUNTS),
+    scan(*impl_->db_, Ext::Stats, sk::FILE_PID_TID_COUNTS,
+         layout::kind_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS),
          [&](std::string_view key, std::string_view body) {
              result[static_cast<int>(tail_u32(key, 3))] =
                  pids_from_pid_tid_counts(decode_count_map_value(body));
@@ -915,8 +910,8 @@ namespace {
 // Metadata record field `idx` for `file_id`, 0 when the record is absent.
 std::uint64_t get_metadata_field(const rocks::RocksDatabase& db, int file_id,
                                  std::size_t idx) {
-    auto body = get(db, Ext::MEMBERS, layout::members::METADATA,
-                    layout::file_prefix(Ext::MEMBERS, layout::members::METADATA,
+    auto body = get(db, Ext::Members, layout::members::METADATA,
+                    layout::file_prefix(Ext::Members, layout::members::METADATA,
                                         fid(file_id)));
     if (!body || body->size() < (idx + 1) * 8) return 0;
     return layout::read_u64(std::string_view(*body).substr(idx * 8));
@@ -938,9 +933,9 @@ std::uint64_t IndexDatabase::get_max_bytes(int file_id) const {
 
 std::optional<std::string> IndexDatabase::rowset(int file_id,
                                                  std::string_view name) const {
-    if (!extension_current(file_id, Ext::ROWSET)) return std::nullopt;
-    auto body = get(*impl_->db_, Ext::ROWSET, layout::rowset_kind::FRAME,
-                    layout::path_prefix(Ext::ROWSET, layout::rowset_kind::FRAME,
+    if (!extension_current(file_id, Ext::Rowset)) return std::nullopt;
+    auto body = get(*impl_->db_, Ext::Rowset, layout::rowset_kind::FRAME,
+                    layout::path_prefix(Ext::Rowset, layout::rowset_kind::FRAME,
                                         fid(file_id), name));
     if (!body) return std::nullopt;
     return std::string(*body);

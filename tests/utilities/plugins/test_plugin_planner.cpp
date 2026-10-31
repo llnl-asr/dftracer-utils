@@ -5,23 +5,22 @@
 // plugin's result.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <atomic>
 #include <cstdint>
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include "test_plugin_common.h"
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;

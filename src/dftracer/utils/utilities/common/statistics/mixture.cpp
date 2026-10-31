@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/utilities/common/statistics/mixture.h>
 
 #include <algorithm>
@@ -195,7 +195,7 @@ Sampler make_sampler(const FittedMixture& mix, std::optional<double> min_bound,
                      std::optional<double> max_bound) {
     if (!mix.valid) {
         throw DFTUtilsException(
-            ErrorCode::INVALID_ARGUMENT,
+            ErrorCode::InvalidArgument,
             "make_sampler called with invalid FittedMixture");
     }
 

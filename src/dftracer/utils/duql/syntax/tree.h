@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 #define DFTRACER_UTILS_DUQL_SYNTAX_TREE_H
 
-#include <dftracer/utils/core/common/versions.h>
+#include <dftracer/utils/common/versions.h>
 
 #include <cstdint>
 #include <memory>
@@ -55,12 +55,12 @@ struct PathStep {
     bool operator==(const PathStep&) const = default;
 };
 
-enum class PathRoot : std::uint8_t { RECORD, CURRENT, ENCLOSING };
+enum class PathRoot : std::uint8_t { Record, Current, Enclosing };
 
 /// `a.b[0]`, `.name` (current row) or `^.name` (enclosing row). A step with
 /// key `*` that is not quoted is a wildcard: the path is a pattern.
 struct Path {
-    PathRoot root = PathRoot::RECORD;
+    PathRoot root = PathRoot::Record;
     std::vector<PathStep> steps;
     bool operator==(const Path&) const = default;
 };
@@ -70,7 +70,7 @@ struct Param {
     bool operator==(const Param&) const = default;
 };
 
-enum class UnaryOp : std::uint8_t { NEG, NOT };
+enum class UnaryOp : std::uint8_t { Neg, Not };
 
 struct Unary {
     UnaryOp op;
@@ -78,25 +78,25 @@ struct Unary {
 };
 
 enum class BinaryOp : std::uint8_t {
-    OR,
-    AND,
-    EQ,
-    NE,
-    LT,
-    LE,
-    GT,
-    GE,
-    REGEX,
-    IREGEX,
-    NREGEX,
-    NIREGEX,
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-    IDIV,
-    MOD,
-    COALESCE,
+    Or,
+    And,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Regex,
+    Iregex,
+    Nregex,
+    Niregex,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Idiv,
+    Mod,
+    Coalesce,
 };
 
 struct Binary {
@@ -214,12 +214,12 @@ struct Item {
     std::string name;
 };
 
-enum class NullsOrder : std::uint8_t { DEFAULT, FIRST, LAST };
+enum class NullsOrder : std::uint8_t { Default, First, Last };
 
 struct SortKey {
     ExprPtr value;
     bool descending = false;
-    NullsOrder nulls = NullsOrder::DEFAULT;
+    NullsOrder nulls = NullsOrder::Default;
 };
 
 struct Where {
@@ -294,18 +294,18 @@ struct Expand {
     std::string with_index;
     bool keep_empty = false;
 };
-enum class LookupKind : std::uint8_t { LEFT, INNER, ANTI };
+enum class LookupKind : std::uint8_t { Left, Inner, Anti };
 
 /// `lookup side on k [== k2], ... [inner | anti] [into name]`; `side` is the
 /// inline `(from ...)` pipeline when `rowset` is empty.
 struct Lookup {
     std::string rowset;
     PipelinePtr side;
-    LookupKind kind = LookupKind::LEFT;
+    LookupKind kind = LookupKind::Left;
     std::vector<std::pair<ExprPtr, ExprPtr>> keys;
     std::string into;
 };
-enum class AsofDirection { BACKWARD, FORWARD, NEAREST };
+enum class AsofDirection { Backward, Forward, Nearest };
 
 /// `lookup rowset on k [== k2], ... asof t [== t2] [direction] [within d]`;
 /// `within` is a number, a duration or a parameter.
@@ -314,7 +314,7 @@ struct AsofLookup {
     PipelinePtr side;
     std::vector<std::pair<ExprPtr, ExprPtr>> keys;
     std::pair<ExprPtr, ExprPtr> time;
-    AsofDirection direction = AsofDirection::BACKWARD;
+    AsofDirection direction = AsofDirection::Backward;
     ExprPtr within;
 };
 /// `lookup rowset on k [== k2], ... overlap [into name]`.
@@ -341,7 +341,7 @@ struct CallTree {};
 struct Use {
     Call call;
 };
-enum class FillMode : std::uint8_t { ZERO, FORWARD, LINEAR };
+enum class FillMode : std::uint8_t { Zero, Forward, Linear };
 /// `bucket width [every step] [at origin] [fill [forward | linear] [from low to
 /// high]] [as name]`; the key column is `bucket` without a name.
 struct Bucket {
@@ -350,7 +350,7 @@ struct Bucket {
     ExprPtr at;
     ExprPtr low;
     ExprPtr high;
-    FillMode fill_mode = FillMode::ZERO;
+    FillMode fill_mode = FillMode::Zero;
     bool fill = false;
     std::string as;
 };

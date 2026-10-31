@@ -253,9 +253,10 @@ HWY_EXPORT(ProdU64);
 HWY_EXPORT(ProdF64);
 
 bool reduce(const dftu_series& v, std::int32_t op, dftu_scalar& out) {
-    if (v.validity) return false;  // null-skip breaks vectorization; use scalar
+    if (v.validity.block())
+        return false;  // null-skip breaks vectorization; use scalar
     if (v.length == 0) return false;
-    const void* p = v.data->data();
+    const void* p = v.data.data();
     std::int64_t n = v.length;
 
     if (op == DFTU_REDUCE_SUM) {
@@ -307,9 +308,10 @@ bool reduce(const dftu_series& v, std::int32_t op, dftu_scalar& out) {
 
 bool arg_extreme_simd(const dftu_series& v, bool is_min,
                       std::int64_t& out_idx) {
-    if (v.encoding != Encoding::Flat || v.validity != nullptr || v.length == 0)
+    if (v.encoding != Encoding::Flat || static_cast<bool>(v.validity.block()) ||
+        v.length == 0)
         return false;
-    const void* p = v.data->data();
+    const void* p = v.data.data();
     const std::int64_t n = v.length;
     switch (v.type) {
         case TypeId::Int64:
@@ -349,8 +351,8 @@ struct BitmapSplit {
 
 BitmapSplit split_bitmap(const dftu_series& v) {
     BitmapSplit s;
-    s.data = v.data->data();
-    s.valid = v.validity ? v.validity->data() : nullptr;
+    s.data = v.data.data();
+    s.valid = v.validity.block() ? v.validity.data() : nullptr;
     const std::int64_t length = v.length;
     s.nfull = static_cast<std::size_t>(length / 8);
     s.rem = static_cast<int>(length & 7);
@@ -385,8 +387,8 @@ bool all_bits(const dftu_series& v) {
 }
 
 bool product_simd(const dftu_series& v, dftu_scalar& out) {
-    if (v.validity) return false;  // null-skip stays on the scalar path
-    const void* p = v.data->data();
+    if (v.validity.block()) return false;  // null-skip stays on the scalar path
+    const void* p = v.data.data();
     const std::int64_t n = v.length;
     switch (v.type) {
         case TypeId::Int64:

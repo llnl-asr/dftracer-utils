@@ -5,8 +5,8 @@
 // threshold, viz-query (ViewDefinition) building from request params, and
 // target-file selection. Internal to the server.
 
-#include <dftracer/utils/core/common/expected.h>
-#include <dftracer/utils/core/common/to_chars.h>
+#include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/syntax/parser.h>
 #include <dftracer/utils/json/record_parser.h>
@@ -79,17 +79,17 @@ inline std::string normalize_event_ts(const std::string& event_json,
     using dftracer::utils::trace::scale_between;
     using TM = TraceIndex::TimeMetric;
     std::uint64_t new_ts =
-        scale_between(metric, TM::US, old_ts >= offset ? old_ts - offset : 0);
+        scale_between(metric, TM::Us, old_ts >= offset ? old_ts - offset : 0);
 
     std::string modified = event_json;
     if (!rewrite_uint_field(modified, "\"ts\":", new_ts)) return event_json;
 
-    if (metric != TM::US) {
+    if (metric != TM::Us) {
         auto dur_result = root["dur"];
         if (!dur_result.error() && dur_result.is_uint64()) {
             rewrite_uint_field(
                 modified, "\"dur\":",
-                scale_between(metric, TM::US, dur_result.get_uint64().value()));
+                scale_between(metric, TM::Us, dur_result.get_uint64().value()));
         }
     }
     return modified;
@@ -142,14 +142,15 @@ inline std::optional<HttpResponse> refuse_duql(std::string_view query,
     return HttpResponse::bad_request("Invalid duql: " + std::string(query));
 }
 
-inline dftracer::utils::expected<VizWindow, HttpResponse> parse_viz_window(
-    const QueryParams& params, TraceIndex& index, std::string_view endpoint) {
+inline dftracer::utils::dstd::Expected<VizWindow, HttpResponse>
+parse_viz_window(const QueryParams& params, TraceIndex& index,
+                 std::string_view endpoint) {
     double begin = params.get_double("begin", 0);
     double end = params.get_double("end", 0);
 
     auto query = params.get("duql");
     if (auto refused = refuse_duql(query, endpoint))
-        return dftracer::utils::unexpected(std::move(*refused));
+        return dftracer::utils::dstd::Unexpected(std::move(*refused));
 
     auto ts_norm_param = params.get("ts_normalize");
     bool normalize = ts_norm_param.empty() || ts_norm_param != "0";
@@ -161,7 +162,7 @@ inline dftracer::utils::expected<VizWindow, HttpResponse> parse_viz_window(
     }
     double original_begin = begin;
     double original_end = end;
-    if (index.time_metric() != TraceIndex::TimeMetric::US) {
+    if (index.time_metric() != TraceIndex::TimeMetric::Us) {
         begin = static_cast<double>(
             index.us_to_native(static_cast<std::uint64_t>(begin)));
         end = static_cast<double>(

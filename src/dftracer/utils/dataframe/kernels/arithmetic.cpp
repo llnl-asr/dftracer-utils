@@ -1,4 +1,4 @@
-#include <dftracer/utils/core/common/logging.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/decimal_arith.h>
@@ -241,11 +241,11 @@ dftu_series* temporal_scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     out->null_count = a->null_count;
     out->validity = a->validity;
     out->set_time_unit(res->unit);
-    out->data = Buffer::allocate(static_cast<std::size_t>(a->length) *
-                                 byte_width(TypeId::Int64).value_or(0));
+    out->data = new_buffer(static_cast<std::size_t>(a->length) *
+                           byte_width(TypeId::Int64).value_or(0));
     const std::int32_t t = static_cast<std::int32_t>(TypeId::Int64);
-    const void* pa = a->data->data();
-    void* po = out->data->data();
+    const void* pa = a->data.data();
+    void* po = writable(out->data);
     const std::size_t n = static_cast<std::size_t>(a->length);
     if (op == BinOp::Mul)
         HWY_DYNAMIC_DISPATCH(MulScalarKernel)(t, pa, s, po, n);
@@ -280,12 +280,12 @@ dftu_series* scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
     out->length = src->length;
     out->null_count = src->null_count;
     out->validity = src->validity;
-    out->data = Buffer::allocate(static_cast<std::size_t>(src->length) *
-                                 byte_width(src->type).value_or(0));
+    out->data = new_buffer(static_cast<std::size_t>(src->length) *
+                           byte_width(src->type).value_or(0));
 
     std::int32_t t = static_cast<std::int32_t>(src->type);
-    const void* pa = src->data->data();
-    void* po = out->data->data();
+    const void* pa = src->data.data();
+    void* po = writable(out->data);
     std::size_t n = static_cast<std::size_t>(src->length);
     switch (op) {
         case BinOp::Add:
@@ -310,12 +310,12 @@ dftu_series* scalar_op(const dftu_series* a, dftu_scalar s, BinOp op) {
 // of the two bitmaps (a missing bitmap means all valid), null_count recounted.
 void and_validity(const dftu_series* a, const dftu_series* b,
                   dftu_series* out) {
-    if (!a->validity && !b->validity) return;
+    if (!a->validity.block() && !b->validity.block()) return;
     const std::size_t bytes = buffer_bytes(TypeId::Bool, out->length);
-    auto v = Buffer::allocate(bytes);
-    std::uint8_t* dst = v->data();
-    const std::uint8_t* va = a->validity ? a->validity->data() : nullptr;
-    const std::uint8_t* vb = b->validity ? b->validity->data() : nullptr;
+    auto v = new_buffer(bytes);
+    std::uint8_t* dst = writable(v);
+    const std::uint8_t* va = a->validity.block() ? a->validity.data() : nullptr;
+    const std::uint8_t* vb = b->validity.block() ? b->validity.data() : nullptr;
     for (std::size_t i = 0; i < bytes; ++i)
         dst[i] = static_cast<std::uint8_t>((va ? va[i] : 0xFF) &
                                            (vb ? vb[i] : 0xFF));
@@ -341,9 +341,9 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
 
     std::vector<std::int64_t> tmp_a, tmp_b;
     const auto* pa = static_cast<const std::int64_t*>(
-        static_cast<const void*>(a->data->data()));
+        static_cast<const void*>(a->data.data()));
     const auto* pb = static_cast<const std::int64_t*>(
-        static_cast<const void*>(b->data->data()));
+        static_cast<const void*>(b->data.data()));
     const std::size_t n = static_cast<std::size_t>(a->length);
     if (a->time_unit() != res->unit) {
         auto rescaled = rescale_ticks_up(pa, n, a->time_unit(), res->unit);
@@ -372,9 +372,9 @@ dftu_series* temporal_binop(const dftu_series* a, const dftu_series* b,
     out->length = a->length;
     out->set_time_unit(res->unit);
     out->set_timezone(res->timezone);
-    out->data = Buffer::allocate(n * byte_width(TypeId::Int64).value_or(0));
+    out->data = new_buffer(n * byte_width(TypeId::Int64).value_or(0));
     const std::int32_t t = static_cast<std::int32_t>(TypeId::Int64);
-    void* po = out->data->data();
+    void* po = writable(out->data);
     if (op == BinOp::Add)
         HWY_DYNAMIC_DISPATCH(AddKernel)(t, pa, pb, po, n);
     else
@@ -427,10 +427,10 @@ dftu_series* decimal_binop_exact(const dftu_series* a, const dftu_series* b,
     out->set_decimal(result_precision, result_scale);
     const std::size_t width = is256 ? 32 : 16;
     const std::int64_t n = a->length;
-    out->data = Buffer::allocate(static_cast<std::size_t>(n) * width);
-    const auto* pa = static_cast<const std::uint8_t*>(a->data->data());
-    const auto* pb = static_cast<const std::uint8_t*>(b->data->data());
-    auto* po = static_cast<std::uint8_t*>(out->data->data());
+    out->data = new_buffer(static_cast<std::size_t>(n) * width);
+    const auto* pa = static_cast<const std::uint8_t*>(a->data.data());
+    const auto* pb = static_cast<const std::uint8_t*>(b->data.data());
+    auto* po = static_cast<std::uint8_t*>(writable(out->data));
 
     bool ok = true;
     if (!is256) {
@@ -545,13 +545,13 @@ dftu_series* binop(const dftu_series* a, const dftu_series* b, BinOp op) {
     out->type = pa_src->type;
     out->encoding = Encoding::Flat;
     out->length = pa_src->length;
-    out->data = Buffer::allocate(static_cast<std::size_t>(pa_src->length) *
-                                 byte_width(pa_src->type).value_or(0));
+    out->data = new_buffer(static_cast<std::size_t>(pa_src->length) *
+                           byte_width(pa_src->type).value_or(0));
 
     std::int32_t t = static_cast<std::int32_t>(pa_src->type);
-    const void* pa = pa_src->data->data();
-    const void* pb = pb_src->data->data();
-    void* po = out->data->data();
+    const void* pa = pa_src->data.data();
+    const void* pb = pb_src->data.data();
+    void* po = writable(out->data);
     std::size_t n = static_cast<std::size_t>(pa_src->length);
     switch (op) {
         case BinOp::Add:

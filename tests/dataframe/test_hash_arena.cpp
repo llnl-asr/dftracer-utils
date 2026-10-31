@@ -4,13 +4,15 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/runtime.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazy/hash_arena.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/memory/manager.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -79,6 +81,122 @@ TEST_SUITE("hash arena") {
                   want[static_cast<std::size_t>(i)].first);
             CHECK(out.column("b").string_at(i) ==
                   want[static_cast<std::size_t>(i)].second);
+        }
+    }
+
+    TEST_CASE("an arena charges its pool and frees all of it") {
+        dftracer::utils::memory::PoolHandle pool =
+            dftracer::utils::memory::Manager::get().root().child("arena");
+        REQUIRE(pool);
+        {
+            HashArena a(*pool);
+            for (int i = 0; i < 5000; ++i)
+                CHECK(put(a, static_cast<std::uint64_t>(i) * 2654435761u,
+                          "key" + std::to_string(i)));
+            CHECK(pool->live() >= a.bytes());
+            CHECK(a.bytes() > 0);
+        }
+        CHECK(pool->live() == 0);
+        CHECK(pool->blocks() == 0);
+    }
+
+    TEST_CASE("keys stay in place while the arena grows") {
+        dftracer::utils::memory::PoolHandle pool =
+            dftracer::utils::memory::Manager::get().root().child("grow");
+        REQUIRE(pool);
+        HashArena a(*pool);
+        // About 80 bytes a record: enough keys to fill the 64 KiB to 1 MiB
+        // chunks and start the next ones.
+        constexpr int KEYS = 40000;
+        auto key_of = [](int i) {
+            return "key-" + std::to_string(i) + std::string(56, 'x');
+        };
+        // One hash for two keys: the chain must keep them apart.
+        constexpr std::uint64_t SHARED = 99;
+        const std::string first = "shared-" + key_of(0);
+        const std::string second = "shared-" + key_of(1);
+        std::size_t key_bytes = first.size() + second.size();
+        std::size_t key_max = std::max(first.size(), second.size());
+        for (int i = 0; i < KEYS; ++i) {
+            key_bytes += key_of(i).size();
+            key_max = std::max(key_max, key_of(i).size());
+        }
+        const std::uint64_t bound = a.bytes_after(KEYS + 2, key_bytes, key_max);
+        REQUIRE(put(a, SHARED, first));
+        for (int i = 0; i < KEYS; ++i)
+            REQUIRE(put(a, static_cast<std::uint64_t>(i) * 2654435761u + 1,
+                        key_of(i)));
+        REQUIRE(put(a, SHARED, second));
+        CHECK(a.bytes() > (std::uint64_t{2} << 20));
+        CHECK(a.bytes() <= bound);
+        bool all = true;
+        for (int i = 0; i < KEYS; ++i)
+            all = all && has(a, static_cast<std::uint64_t>(i) * 2654435761u + 1,
+                             key_of(i));
+        CHECK(all);
+        CHECK(has(a, SHARED, first));
+        CHECK(has(a, SHARED, second));
+        CHECK_FALSE(has(a, SHARED, "shared-" + key_of(2)));
+        CHECK_FALSE(put(a, SHARED, first));
+    }
+
+    TEST_CASE("the table doubles while small and grows four times over after") {
+        HashArena a;
+        std::uint64_t at = 0;
+        int large = 0;
+        bool bounded = true;
+        while (large < 2) {
+            const std::size_t before = a.table_buckets();
+            const std::string key = "k" + std::to_string(at);
+            const std::uint64_t bound =
+                a.bytes_after(1, key.size(), key.size());
+            REQUIRE(put(a, ++at, key));
+            bounded = bounded && a.bytes() <= bound;
+            if (a.table_buckets() == before || before == 0) continue;
+            if (before < HashArena::GROWTH_FROM) {
+                CHECK(a.table_buckets() == 2 * before);
+            } else {
+                CHECK(a.table_buckets() == 4 * before);
+                ++large;
+            }
+        }
+        CHECK(bounded);
+        bool all = true;
+        for (std::uint64_t k = 1; k <= at; ++k)
+            all = all && has(a, k, "k" + std::to_string(k - 1));
+        CHECK(all);
+    }
+
+    TEST_CASE("a small key set reserves no table four times its size") {
+        // The keys unique() takes from one morsel before a 4 MiB budget
+        // spills: a table grown four times at once held 7.1 MiB here.
+        dftracer::utils::memory::PoolHandle pool =
+            dftracer::utils::memory::Manager::get().root().child("small");
+        REQUIRE(pool);
+        HashArena a(*pool);
+        for (std::uint64_t i = 0; i < 57000; ++i) {
+            const std::string key = std::to_string(i * 2654435761u);
+            REQUIRE(put(a, i * 0x9e3779b97f4a7c15ULL, key));
+        }
+        CHECK(a.bytes() < (std::uint64_t{5} << 20));
+        CHECK(pool->live() >= a.bytes());
+    }
+
+    TEST_CASE("bytes_after bounds what the inserts leave") {
+        HashArena a;
+        std::uint64_t at = 0;
+        for (int round = 0; round < 20; ++round) {
+            const std::size_t keys = 1u << (round % 12);
+            std::vector<std::string> batch;
+            std::size_t key_bytes = 0;
+            for (std::size_t k = 0; k < keys; ++k) {
+                batch.push_back("r" + std::to_string(round) + "k" +
+                                std::to_string(k));
+                key_bytes += batch.back().size();
+            }
+            const std::uint64_t bound = a.bytes_after(keys, key_bytes);
+            for (const std::string& key : batch) put(a, ++at, key);
+            CHECK(a.bytes() <= bound);
         }
     }
 }

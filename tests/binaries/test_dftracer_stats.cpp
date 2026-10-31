@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -28,7 +28,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 }
 
 std::string find_stats_binary() {
-    return dftu_utils_test::find_binary_by_name("DFTRACER_STATS_PATH",
+    return dftu_utils_test::find_binary_by_name("DFTRACER_UTILS_STATS_PATH",
                                                 "dftracer_stats");
 }
 
@@ -54,7 +54,7 @@ TEST_SUITE("DFTracerStats") {
         if (binary.empty()) {
             MESSAGE(
                 "dftracer_stats binary not found, skipping. "
-                "Set DFTRACER_STATS_PATH env to specify location.");
+                "Set DFTRACER_UTILS_STATS_PATH env to specify location.");
             return;
         }
         CHECK(!binary.empty());

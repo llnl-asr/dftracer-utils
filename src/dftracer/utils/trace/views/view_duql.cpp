@@ -1,11 +1,6 @@
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/hash/splitmix64.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/common/transparent_string_hash.h>
-#include <dftracer/utils/core/env.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -15,6 +10,9 @@
 #include <dftracer/utils/dataframe/internal/rest_column.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/fields.h>
 #include <dftracer/utils/duql/group_fold.h>
 #include <dftracer/utils/duql/overlap.h>
@@ -26,6 +24,8 @@
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
+#include <dftracer/utils/memory/budget.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -59,18 +59,18 @@ duql::PluginCatalog registry_plugins() {
     duql::PluginCatalog out;
     out.kind = [](std::string_view name) {
         const dftu_op_desc* op = dftu_op_find(std::string(name).c_str());
-        if (!op) return duql::PluginKind::NONE;
+        if (!op) return duql::PluginKind::None;
         const dftu_op_kind k = dftu_op_kind_of(op->sig);
         if (k == DFTU_OP_KIND_SERIES &&
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
-            return duql::PluginKind::COLUMN;
+            return duql::PluginKind::Column;
         if (k == DFTU_OP_KIND_FRAME &&
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_FRAME)
-            return duql::PluginKind::TABLE;
+            return duql::PluginKind::Table;
         if (k == DFTU_OP_KIND_AGGREGATE &&
             DFTU_OP_SIG_ARG(op->sig, 0) == DFTU_TOK_SERIES)
-            return duql::PluginKind::AGGREGATE;
-        return duql::PluginKind::OTHER;
+            return duql::PluginKind::Aggregate;
+        return duql::PluginKind::Other;
     };
     for (std::uint32_t k = 0; k < dftu_op_count(); ++k) {
         const std::string_view op = dftu_op_at(k)->name;
@@ -89,7 +89,7 @@ namespace df = dftracer::utils::dataframe;
 namespace ix = dftracer::utils::index;
 
 [[noreturn]] void refuse(const std::string& why) {
-    throw DFTUtilsException::cat(ErrorCode::INVALID_ARGUMENT, "View::duql ",
+    throw DFTUtilsException::cat(ErrorCode::InvalidArgument, "View::duql ",
                                  why);
 }
 
@@ -118,9 +118,9 @@ bool is_number(df::TypeId t) {
 // hands out: its own when it has every declared column, else the declared
 // ones by position, as the ops above read it, then its own. Columns past the
 // declared ones are those its input returned beyond its schema.
-std::vector<std::uint32_t> frame_ids(const df::DataFrame& f,
-                                     const std::vector<std::string>& declared,
-                                     dftracer::utils::StringIntern& intern) {
+std::vector<std::uint32_t> frame_ids(
+    const df::DataFrame& f, const std::vector<std::string>& declared,
+    dftracer::utils::dstd::StringIntern& intern) {
     const bool by_name =
         std::all_of(declared.begin(), declared.end(), [&](const auto& n) {
             return std::find(f.names.begin(), f.names.end(), n) !=
@@ -182,7 +182,8 @@ class FinishSource final : public df::Source {
                 df::DataFrame f =
                     finish_(co_await df::join_chunks(std::move(collected)));
                 if (!projection_.empty()) f = f.select(projection_);
-                intern_ = std::make_shared<dftracer::utils::StringIntern>();
+                intern_ =
+                    std::make_shared<dftracer::utils::dstd::StringIntern>();
                 ids_ = frame_ids(f, declared_, *intern_);
                 rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
             }
@@ -200,7 +201,7 @@ class FinishSource final : public df::Source {
         std::vector<std::string> projection_;
         std::vector<std::string> declared_;
         std::unique_ptr<df::Cursor> rows_;
-        std::shared_ptr<dftracer::utils::StringIntern> intern_;
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_;
         std::vector<std::uint32_t> ids_;
     };
 
@@ -246,12 +247,14 @@ class MapSource final : public df::Source {
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             for (;;) {
-                if (rows_)
-                    if (auto m = co_await rows_->next(max_rows)) {
+                if (rows_) {
+                    auto m = co_await rows_->next(max_rows);
+                    if (m) {
                         m->dyn_state().name_ids = ids_;
                         m->dyn->intern = intern_;
                         co_return m;
                     }
+                }
                 auto batch = co_await batches_.next();
                 if (!batch) co_return std::nullopt;
                 df::DataFrame f = map_(std::move(*batch));
@@ -262,8 +265,8 @@ class MapSource final : public df::Source {
         }
 
        private:
-        std::shared_ptr<dftracer::utils::StringIntern> intern_ =
-            std::make_shared<dftracer::utils::StringIntern>();
+        std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_ =
+            std::make_shared<dftracer::utils::dstd::StringIntern>();
         std::vector<std::uint32_t> ids_;
         coro::AsyncGenerator<df::DataFrame> batches_;
         Map map_;
@@ -349,8 +352,11 @@ class FoldSource final : public df::Source {
         coro::CoroTask<std::optional<df::Morsel>> next(
             std::int64_t max_rows) override {
             if (!rows_) {
-                while (auto batch = co_await batches_.next())
+                for (;;) {
+                    auto batch = co_await batches_.next();
+                    if (!batch) break;
                     fold_.add(aligned(std::move(*batch), in_));
+                }
                 df::DataFrame f = fold_.finish(std::move(names_));
                 if (!projection_.empty()) f = f.select(projection_);
                 rows_ = df::InMemorySource(std::move(f)).scan({}).cursor;
@@ -384,51 +390,51 @@ std::uint64_t fill_max_rows() {
 
 std::string agg_name(duql::AggFn fn) {
     switch (fn) {
-        case duql::AggFn::COUNT:
+        case duql::AggFn::Count:
             return "count";
-        case duql::AggFn::COUNT_IF:
+        case duql::AggFn::CountIf:
             return "count_if";
-        case duql::AggFn::SUM:
+        case duql::AggFn::Sum:
             return "sum";
-        case duql::AggFn::MIN:
+        case duql::AggFn::Min:
             return "min";
-        case duql::AggFn::MAX:
+        case duql::AggFn::Max:
             return "max";
-        case duql::AggFn::MEAN:
+        case duql::AggFn::Mean:
             return "mean";
-        case duql::AggFn::VAR:
+        case duql::AggFn::Var:
             return "var";
-        case duql::AggFn::STD:
+        case duql::AggFn::Std:
             return "std";
-        case duql::AggFn::FIRST:
+        case duql::AggFn::First:
             return "first";
-        case duql::AggFn::LAST:
+        case duql::AggFn::Last:
             return "last";
-        case duql::AggFn::QUANTILE:
+        case duql::AggFn::Quantile:
             return "quantile";
-        case duql::AggFn::HISTOGRAM:
+        case duql::AggFn::Histogram:
             return "histogram";
-        case duql::AggFn::BUSY:
+        case duql::AggFn::Busy:
             return "busy";
-        case duql::AggFn::CONCURRENCY:
+        case duql::AggFn::Concurrency:
             return "concurrency";
-        case duql::AggFn::UTILIZATION:
+        case duql::AggFn::Utilization:
             return "utilization";
-        case duql::AggFn::ACTIVE:
+        case duql::AggFn::Active:
             return "active";
-        case duql::AggFn::COUNT_DISTINCT:
+        case duql::AggFn::CountDistinct:
             return "count_distinct";
-        case duql::AggFn::COLLECT:
+        case duql::AggFn::Collect:
             return "collect";
-        case duql::AggFn::ARGMAX:
+        case duql::AggFn::Argmax:
             return "arg_max";
-        case duql::AggFn::ARGMIN:
+        case duql::AggFn::Argmin:
             return "arg_min";
-        case duql::AggFn::SKETCH:
+        case duql::AggFn::Sketch:
             return "sketch";
-        case duql::AggFn::MERGE:
+        case duql::AggFn::Merge:
             return "merge";
-        case duql::AggFn::PLUGIN:
+        case duql::AggFn::Plugin:
             return "plugin function";
     }
     return {};
@@ -436,44 +442,44 @@ std::string agg_name(duql::AggFn fn) {
 
 std::optional<AggOp> trace_op(const duql::PipelineAgg& a) {
     switch (a.fn) {
-        case duql::AggFn::COUNT:
+        case duql::AggFn::Count:
             if (a.arg) return std::nullopt;
             return AggOp::Count;
-        case duql::AggFn::SUM:
+        case duql::AggFn::Sum:
             return AggOp::Sum;
-        case duql::AggFn::MIN:
+        case duql::AggFn::Min:
             return AggOp::Min;
-        case duql::AggFn::MAX:
+        case duql::AggFn::Max:
             return AggOp::Max;
-        case duql::AggFn::MEAN:
+        case duql::AggFn::Mean:
             return AggOp::Mean;
-        case duql::AggFn::VAR:
+        case duql::AggFn::Var:
             return AggOp::Var;
-        case duql::AggFn::STD:
+        case duql::AggFn::Std:
             return AggOp::Std;
-        case duql::AggFn::QUANTILE:
+        case duql::AggFn::Quantile:
             if (a.merged || !(a.q > 0 && a.q < 1)) return std::nullopt;
             return AggOp::Pct;
-        case duql::AggFn::HISTOGRAM:
+        case duql::AggFn::Histogram:
             return AggOp::Hist;
-        case duql::AggFn::BUSY:
+        case duql::AggFn::Busy:
             return AggOp::Busy;
-        case duql::AggFn::CONCURRENCY:
+        case duql::AggFn::Concurrency:
             return AggOp::Concurrency;
-        case duql::AggFn::UTILIZATION:
+        case duql::AggFn::Utilization:
             return AggOp::Utilization;
-        case duql::AggFn::ACTIVE:
+        case duql::AggFn::Active:
             return AggOp::Active;
-        case duql::AggFn::COUNT_IF:
-        case duql::AggFn::FIRST:
-        case duql::AggFn::LAST:
-        case duql::AggFn::COUNT_DISTINCT:
-        case duql::AggFn::COLLECT:
-        case duql::AggFn::ARGMAX:
-        case duql::AggFn::ARGMIN:
-        case duql::AggFn::SKETCH:
-        case duql::AggFn::MERGE:
-        case duql::AggFn::PLUGIN:
+        case duql::AggFn::CountIf:
+        case duql::AggFn::First:
+        case duql::AggFn::Last:
+        case duql::AggFn::CountDistinct:
+        case duql::AggFn::Collect:
+        case duql::AggFn::Argmax:
+        case duql::AggFn::Argmin:
+        case duql::AggFn::Sketch:
+        case duql::AggFn::Merge:
+        case duql::AggFn::Plugin:
             return std::nullopt;
     }
     return std::nullopt;
@@ -483,7 +489,7 @@ std::optional<AggOp> trace_op(const duql::PipelineAgg& a) {
 const duql::TField* whole_field(const duql::Term* t) {
     if (!t) return nullptr;
     const auto* f = std::get_if<duql::TField>(&t->node);
-    if (!f || f->root != duql::FieldRoot::RECORD ||
+    if (!f || f->root != duql::FieldRoot::Record ||
         f->neg_at != f->steps.size())
         return nullptr;
     for (const auto& s : f->steps)
@@ -499,7 +505,7 @@ const duql::TField* whole_field(const duql::TermRef& t) {
 // without a negative index.
 const duql::TField* array_field(const duql::Term& t) {
     const auto* f = std::get_if<duql::TField>(&t.node);
-    if (!f || f->root != duql::FieldRoot::RECORD ||
+    if (!f || f->root != duql::FieldRoot::Record ||
         f->neg_at != f->steps.size())
         return nullptr;
     return f;
@@ -573,7 +579,7 @@ Reads referenced_fields(
         if (!t) return;
         duql::for_each_term(*t, [&](const duql::Term& x) {
             if (const auto* f = std::get_if<duql::TField>(&x.node);
-                f && f->root != duql::FieldRoot::ELEMENT)
+                f && f->root != duql::FieldRoot::Element)
                 field(f->base, false);
             if (const auto* q = std::get_if<duql::TQuant>(&x.node))
                 if (const auto* a = array_field(*q->subject))
@@ -858,8 +864,8 @@ std::string number_text(double v) {
 }
 
 bool is_count(duql::AggFn fn) {
-    return fn == duql::AggFn::COUNT || fn == duql::AggFn::COUNT_IF ||
-           fn == duql::AggFn::COUNT_DISTINCT;
+    return fn == duql::AggFn::Count || fn == duql::AggFn::CountIf ||
+           fn == duql::AggFn::CountDistinct;
 }
 
 std::uint64_t env_count(std::string_view name, std::uint64_t fallback) {
@@ -916,13 +922,13 @@ void reject_resolved(const duql::Program& p) {
 
 std::string input_text(const duql::Input& in, const duql::Program& program) {
     switch (in.kind) {
-        case duql::InputKind::SIDE:
+        case duql::InputKind::Side:
             return program.sides[in.side].name;
-        case duql::InputKind::ALL:
+        case duql::InputKind::All:
             return "all";
-        case duql::InputKind::DATA:
+        case duql::InputKind::Data:
             return "data";
-        case duql::InputKind::FILE:
+        case duql::InputKind::File:
             return "\"" + in.path + "\"";
     }
     return {};
@@ -931,7 +937,7 @@ std::string input_text(const duql::Input& in, const duql::Program& program) {
 // The sides `p` reads directly: its lookups', its `lookup` stages' and a
 // union's.
 void side_reads(const duql::Pipeline& p, std::vector<std::size_t>& out) {
-    if (p.input.kind == duql::InputKind::SIDE) out.push_back(p.input.side);
+    if (p.input.kind == duql::InputKind::Side) out.push_back(p.input.side);
     duql::for_each_pipeline_term(p, [&](const duql::Term& t) {
         if (const auto* l = std::get_if<duql::TLookup>(&t.node)) {
             out.push_back(l->side);
@@ -1012,7 +1018,7 @@ void each_pushed(
             const duql::Term* cond = nullptr;
             const duql::TLookup* l =
                 std::get_if<duql::TLookup>(&leaf->term->node);
-            if (l && (l->kind != duql::LookupKind::IN || l->negated))
+            if (l && (l->kind != duql::LookupKind::In || l->negated))
                 l = nullptr;
             if (const auto* q = std::get_if<duql::TQuant>(&leaf->term->node);
                 q && !q->all) {
@@ -1095,7 +1101,7 @@ Pushdown key_sets(const duql::Pipeline& p) {
         if (cond)
             duql::for_each_term(*cond, [&](const duql::Term& x) {
                 if (const auto* fx = std::get_if<duql::TField>(&x.node);
-                    fx && fx->root != duql::FieldRoot::ELEMENT)
+                    fx && fx->root != duql::FieldRoot::Element)
                     record = true;
                 if (std::holds_alternative<duql::TLookup>(x.node) ||
                     std::holds_alternative<duql::TQuant>(x.node))
@@ -1160,7 +1166,7 @@ std::optional<CacheKey> cache_key(const detail::ViewPlan& given,
     detail::plan_record_schema(plan);
     // A `data` side reads the View as given: its filters are part of it.
     std::string key = text;
-    if (input == duql::InputKind::DATA) {
+    if (input == duql::InputKind::Data) {
         key += "\n" + (plan.query ? plan.query->source() : std::string()) +
                "\n" + std::to_string(static_cast<int>(plan.phase)) +
                std::to_string(plan.all_records);
@@ -1305,8 +1311,9 @@ class Sides {
             } catch (const std::exception&) {
             }
         }
-        const std::uint64_t budget = dftracer::utils::resolve_spill_budget(
-            views[i]->memory_budget_bytes());
+        const std::uint64_t budget =
+            dftracer::utils::memory::resolve_spill_budget(
+                views[i]->memory_budget_bytes());
         dftracer::utils::StringViewSet seen;
         std::vector<df::DataFrame> parts;
         std::uint64_t bytes = 0;
@@ -1316,7 +1323,9 @@ class Sides {
             [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
                 auto gen = plan.stream();
                 std::string row_key;
-                while (auto f = co_await gen.next()) {
+                for (;;) {
+                    auto f = co_await gen.next();
+                    if (!f) break;
                     df::DataFrame part = duql::flat_frame(std::move(*f));
                     std::vector<std::int64_t> take;
                     for (std::int64_t r = 0; r < part.num_rows(); ++r) {
@@ -1385,7 +1394,7 @@ class Sides {
         if (keys[i]) try {
                 if (const auto db = ix::cache::open_lookup_db(
                         keys[i]->path,
-                        ix::store::RocksDatabase::OpenMode::ReadWrite))
+                        ix::store::RocksDatabase::OpenMode::ReadOnly))
                     if (auto bytes = ix::cache::read_lookup(*db, keys[i]->sig))
                         if (auto cached = df::frame_from_native(*bytes))
                             return std::make_shared<const df::DataFrame>(
@@ -1662,7 +1671,7 @@ class Applier {
 
     bool is_json(const std::string& name) const {
         for (const auto& spec : schema_.fields)
-            if (spec.type == ix::FieldType::JSON &&
+            if (spec.type == ix::FieldType::Json &&
                 (name == spec.name || name == spec.path ||
                  (schema_.args_fallback && name == "args." + spec.name)))
                 return true;
@@ -1850,7 +1859,7 @@ class Applier {
         // is a mistake, not a missing field.
         if (!scan_)
             duql::for_each_term_field(*t, [&](const duql::TField& f) {
-                if (f.root == duql::FieldRoot::RECORD &&
+                if (f.root == duql::FieldRoot::Record &&
                     !has_column_for(f.base))
                     refuse("has no column '" + f.base +
                            "'; the columns here are " + joined(names()));
@@ -1868,7 +1877,7 @@ class Applier {
     bool untyped(const duql::Term& t) const {
         bool out = false;
         duql::for_each_term_field(t, [&](const duql::TField& f) {
-            if (f.root != duql::FieldRoot::RECORD) return;
+            if (f.root != duql::FieldRoot::Record) return;
             for (const auto& c : cols_)
                 if (c.type.id == df::TypeId::Unknown && !c.json &&
                     (c.name == f.base ||
@@ -1968,7 +1977,7 @@ class Applier {
         std::vector<const duql::Term*> literal;
         duql::for_each_term(*t, [&](const duql::Term& x) {
             if (const auto* c = std::get_if<duql::TCall>(&x.node);
-                c && c->fn == duql::Fn::CONTAINS &&
+                c && c->fn == duql::Fn::Contains &&
                 std::holds_alternative<duql::TList>(c->args[0]->node))
                 literal.push_back(c->args[0].get());
         });
@@ -2000,7 +2009,7 @@ class Applier {
                        bool values, std::vector<std::string>& keys,
                        std::vector<df::Expr>& args,
                        std::vector<df::DataType>& types) {
-        if (f.root != duql::FieldRoot::RECORD || f.neg_at != f.steps.size())
+        if (f.root != duql::FieldRoot::Record || f.neg_at != f.steps.size())
             return;
         if (auto i = field_index(f.base)) {
             if (cols_[*i].type.id != df::TypeId::Struct) return;
@@ -2071,14 +2080,14 @@ class Applier {
         std::vector<df::Expr> args;
         std::vector<df::DataType> arg_types;
         std::vector<std::string> keys;
-        if (c && (c->fn == duql::Fn::KEYS || c->fn == duql::Fn::VALUES)) {
+        if (c && (c->fn == duql::Fn::Keys || c->fn == duql::Fn::Values)) {
             if (const auto* f = std::get_if<duql::TField>(&c->args[0]->node))
-                object_fields(*f, text, c->fn == duql::Fn::VALUES, keys, args,
+                object_fields(*f, text, c->fn == duql::Fn::Values, keys, args,
                               arg_types);
         } else {
             for (const auto* a : operands) {
                 if (const auto* inner = std::get_if<duql::TCall>(&a->node);
-                    inner && inner->fn == duql::Fn::PARSE_JSON)
+                    inner && inner->fn == duql::Fn::ParseJson)
                     refuse("'" + text +
                            "' reads a parse_json() value, which only a scan "
                            "filter evaluates");
@@ -2151,8 +2160,7 @@ class Applier {
             return;
         }
         std::vector<duql::VectorColumn> next = cols_;
-        next.push_back(
-            {name, *type, c && c->fn == duql::Fn::PARSE_JSON, false});
+        next.push_back({name, *type, c && c->fn == duql::Fn::ParseJson, false});
         mark(next.back());
         map_rows(
             [t, term, args, keys, type = *type, name](df::DataFrame f) {
@@ -2181,7 +2189,7 @@ class Applier {
                         [q](const auto& c) { return c.quant == q; }))
             return;
         if (const auto* f = std::get_if<duql::TField>(&q->subject->node);
-            f && f->root == duql::FieldRoot::RECORD &&
+            f && f->root == duql::FieldRoot::Record &&
             !array_field(*q->subject))
             refuse("'" + duql::term_text(*term) +
                    "' walks a negative index; only a scan filter "
@@ -2242,7 +2250,7 @@ class Applier {
                               std::vector<std::string>& right, bool& memory,
                               const std::string& marker) {
         const auto& side_cols = ctx_.sides->columns[l.side];
-        if (l.kind == duql::LookupKind::IN) {
+        if (l.kind == duql::LookupKind::In) {
             if (side_cols.size() != l.keys.size())
                 refuse("the sub-query '" + l.name + "' gives " +
                        std::to_string(side_cols.size()) +
@@ -2303,7 +2311,7 @@ class Applier {
         const std::vector<std::string> left = key_columns(t, *l, id);
         std::vector<std::string> right;
         bool memory = false;
-        const bool in = l->kind == duql::LookupKind::IN;
+        const bool in = l->kind == duql::LookupKind::In;
         const std::string matched = "__duql_lm_" + id;
         df::LazyFrame side =
             joined_side(*l, right, memory, in ? matched : std::string());
@@ -2384,21 +2392,21 @@ class Applier {
             return;
         }
         df::DataType type = df::scalar(df::TypeId::Bool);
-        if (l->kind == duql::LookupKind::ARROW) {
+        if (l->kind == duql::LookupKind::Arrow) {
             type = side_type(l->side, l->column);
-        } else if (l->kind == duql::LookupKind::SCALAR) {
+        } else if (l->kind == duql::LookupKind::Scalar) {
             const auto& cols = ctx_.sides->columns[l->side];
-            if (l->range == duql::RangeRead::SUM) {
+            if (l->range == duql::RangeRead::Sum) {
                 const df::TypeId v = side_type(l->side, l->column).id;
                 type = df::scalar(v == df::TypeId::Float32 ||
                                           v == df::TypeId::Float64
                                       ? df::TypeId::Float64
                                       : df::TypeId::Int64);
-            } else if (l->range == duql::RangeRead::MEAN) {
+            } else if (l->range == duql::RangeRead::Mean) {
                 type = df::scalar(df::TypeId::Float64);
-            } else if (l->range == duql::RangeRead::COUNT ||
-                       l->range == duql::RangeRead::COUNT_VALUES ||
-                       l->range == duql::RangeRead::COUNT_IF) {
+            } else if (l->range == duql::RangeRead::Count ||
+                       l->range == duql::RangeRead::CountValues ||
+                       l->range == duql::RangeRead::CountIf) {
                 type = df::scalar(df::TypeId::Int64);
             } else if (!l->keys.empty())
                 type = side_type(l->side, l->column);
@@ -2496,7 +2504,7 @@ class Applier {
     void stage(const duql::PipelineWhere& w) {
         leave_scan("where");
         if (const auto* l = std::get_if<duql::TLookup>(&w.condition->node);
-            l && l->kind == duql::LookupKind::IN && !l->negated &&
+            l && l->kind == duql::LookupKind::In && !l->negated &&
             duql::joined(*l) && typed_keys(*l)) {
             semi_join(w.condition, *l);
             return;
@@ -2767,15 +2775,15 @@ class Applier {
             df::GroupAgg g{df::Agg::Var, in, c->column};
             df::DataType type = df::scalar(df::TypeId::Float64);
             switch (c->fn) {
-                case duql::WinFn::STD:
+                case duql::WinFn::Std:
                     g.op = df::Agg::Std;
                     break;
-                case duql::WinFn::QUANTILE:
+                case duql::WinFn::Quantile:
                     g.op = df::Agg::Pct;
                     g.param = c->q;
                     quantiles.push_back(c->column);
                     break;
-                case duql::WinFn::HISTOGRAM:
+                case duql::WinFn::Histogram:
                     g.op = df::Agg::Hist;
                     type = df::list_of(df::struct_of(
                         {df::Field{"lo", df::scalar(df::TypeId::Float64), true},
@@ -2890,7 +2898,7 @@ class Applier {
         for (std::size_t i = 0; i < w.calls.size(); ++i) {
             const auto& c = w.calls[i];
             std::string in;
-            if (c.fn == duql::WinFn::COUNT_IF) {
+            if (c.fn == duql::WinFn::CountIf) {
                 in = "__duql_in_" + std::to_string(i);
                 with_column(
                     in,
@@ -2904,17 +2912,17 @@ class Applier {
             }
             const std::string tmp = "__duql_fill_" + std::to_string(i);
             switch (c.fn) {
-                case duql::WinFn::ROW_NUMBER:
+                case duql::WinFn::RowNumber:
                     forward.push_back(
                         {DFTU_WINDOW_ROW_NUMBER, "", c.column, i64});
                     break;
-                case duql::WinFn::RUNNING_COUNT:
+                case duql::WinFn::RunningCount:
                     forward.push_back(
                         {DFTU_WINDOW_RUNNING_COUNT, "", c.column, i64});
                     break;
-                case duql::WinFn::LAG:
-                case duql::WinFn::LEAD:
-                    forward.push_back({c.fn == duql::WinFn::LAG
+                case duql::WinFn::Lag:
+                case duql::WinFn::Lead:
+                    forward.push_back({c.fn == duql::WinFn::Lag
                                            ? DFTU_WINDOW_LAG
                                            : DFTU_WINDOW_LEAD,
                                        in, c.column, type_of(in), c.offset});
@@ -2926,93 +2934,93 @@ class Applier {
                         edges.emplace_back(edge, &c);
                     }
                     break;
-                case duql::WinFn::RUNNING_MIN:
-                case duql::WinFn::RUNNING_MAX:
-                    forward.push_back({c.fn == duql::WinFn::RUNNING_MIN
+                case duql::WinFn::RunningMin:
+                case duql::WinFn::RunningMax:
+                    forward.push_back({c.fn == duql::WinFn::RunningMin
                                            ? DFTU_WINDOW_RUNNING_MIN
                                            : DFTU_WINDOW_RUNNING_MAX,
                                        in, c.column, type_of(in)});
                     break;
-                case duql::WinFn::RUNNING_MEAN:
+                case duql::WinFn::RunningMean:
                     sum_type(in, c.text);
                     forward.push_back({DFTU_WINDOW_FRAME_MEAN, in, c.column,
                                        df::scalar(df::TypeId::Float64), 1, 0});
                     break;
-                case duql::WinFn::NTILE:
+                case duql::WinFn::Ntile:
                     forward.push_back(
                         {DFTU_WINDOW_NTILE, "", c.column, i64, c.offset});
                     break;
-                case duql::WinFn::NTH:
+                case duql::WinFn::Nth:
                     forward.push_back({DFTU_WINDOW_NTH_VALUE, in, c.column,
                                        type_of(in), c.offset});
                     break;
-                case duql::WinFn::FILL_FORWARD:
+                case duql::WinFn::FillForward:
                     forward.push_back(
                         {DFTU_WINDOW_FILL_FORWARD, in, c.column, type_of(in)});
                     break;
-                case duql::WinFn::PERCENT_RANK:
-                case duql::WinFn::CUME_DIST:
+                case duql::WinFn::PercentRank:
+                case duql::WinFn::CumeDist:
                     dist.push_back(&c);
                     break;
-                case duql::WinFn::RUNNING_SUM:
+                case duql::WinFn::RunningSum:
                     forward.push_back({DFTU_WINDOW_FRAME_SUM, in, c.column,
                                        sum_type(in, c.text), 0, 0});
                     break;
-                case duql::WinFn::COUNT:
+                case duql::WinFn::Count:
                     framed({DFTU_WINDOW_FRAME_COUNT, in.empty() ? pos : in,
                             c.column, i64},
                            c);
                     break;
-                case duql::WinFn::SUM:
+                case duql::WinFn::Sum:
                     framed({DFTU_WINDOW_FRAME_SUM, in, c.column,
                             sum_type(in, c.text)},
                            c);
                     break;
-                case duql::WinFn::MEAN:
+                case duql::WinFn::Mean:
                     sum_type(in, c.text);
                     framed({DFTU_WINDOW_FRAME_MEAN, in, c.column,
                             df::scalar(df::TypeId::Float64)},
                            c);
                     break;
-                case duql::WinFn::MIN:
-                case duql::WinFn::MAX:
-                    framed({c.fn == duql::WinFn::MIN ? DFTU_WINDOW_FRAME_MIN
+                case duql::WinFn::Min:
+                case duql::WinFn::Max:
+                    framed({c.fn == duql::WinFn::Min ? DFTU_WINDOW_FRAME_MIN
                                                      : DFTU_WINDOW_FRAME_MAX,
                             in, c.column, type_of(in)},
                            c);
                     break;
-                case duql::WinFn::LAST:
+                case duql::WinFn::Last:
                     forward.push_back(
                         {DFTU_WINDOW_FILL_FORWARD, in, tmp, type_of(in)});
                     reverse.push_back(
                         {DFTU_WINDOW_FIRST_VALUE, tmp, c.column, type_of(in)});
                     break;
-                case duql::WinFn::FIRST:
+                case duql::WinFn::First:
                     reverse.push_back(
                         {DFTU_WINDOW_FILL_FORWARD, in, tmp, type_of(in)});
                     last.push_back(
                         {DFTU_WINDOW_FIRST_VALUE, tmp, c.column, type_of(in)});
                     break;
-                case duql::WinFn::RANK:
-                case duql::WinFn::DENSE_RANK:
+                case duql::WinFn::Rank:
+                case duql::WinFn::DenseRank:
                     ranks.push_back(&c);
                     break;
-                case duql::WinFn::COUNT_IF:
+                case duql::WinFn::CountIf:
                     framed({DFTU_WINDOW_FRAME_COUNT, in, c.column, i64}, c);
                     break;
-                case duql::WinFn::COUNT_DISTINCT:
+                case duql::WinFn::CountDistinct:
                     framed(
                         {DFTU_WINDOW_FRAME_COUNT_DISTINCT, in, c.column, i64},
                         c);
                     break;
-                case duql::WinFn::COLLECT:
+                case duql::WinFn::Collect:
                     framed({DFTU_WINDOW_FRAME_COLLECT, in, c.column,
                             df::list_of(type_of(in))},
                            c);
                     break;
-                case duql::WinFn::ARGMAX:
-                case duql::WinFn::ARGMIN: {
-                    WinSpec s{c.fn == duql::WinFn::ARGMAX
+                case duql::WinFn::Argmax:
+                case duql::WinFn::Argmin: {
+                    WinSpec s{c.fn == duql::WinFn::Argmax
                                   ? DFTU_WINDOW_FRAME_ARG_MAX
                                   : DFTU_WINDOW_FRAME_ARG_MIN,
                               in, c.column, type_of(in)};
@@ -3021,14 +3029,14 @@ class Applier {
                     framed(std::move(s), c);
                     break;
                 }
-                case duql::WinFn::VAR:
-                case duql::WinFn::STD:
-                case duql::WinFn::QUANTILE:
+                case duql::WinFn::Var:
+                case duql::WinFn::Std:
+                case duql::WinFn::Quantile:
                     if (c.frame) {
                         sum_type(in, c.text);
                         WinSpec s{
-                            c.fn == duql::WinFn::VAR ? DFTU_WINDOW_FRAME_VAR
-                            : c.fn == duql::WinFn::STD
+                            c.fn == duql::WinFn::Var ? DFTU_WINDOW_FRAME_VAR
+                            : c.fn == duql::WinFn::Std
                                 ? DFTU_WINDOW_FRAME_STD
                                 : DFTU_WINDOW_FRAME_QUANTILE,
                             in, c.column, df::scalar(df::TypeId::Float64)};
@@ -3037,7 +3045,7 @@ class Applier {
                         break;
                     }
                     [[fallthrough]];
-                case duql::WinFn::HISTOGRAM:
+                case duql::WinFn::Histogram:
                     sum_type(in, c.text);
                     partition.emplace_back(&c, in);
                     break;
@@ -3081,7 +3089,7 @@ class Applier {
                                         df::expr_lit_null(df::TypeId::Int64)),
                         "peer start row");
             for (const auto* c : ranks)
-                last.push_back(c->fn == duql::WinFn::RANK
+                last.push_back(c->fn == duql::WinFn::Rank
                                    ? WinSpec{DFTU_WINDOW_FILL_FORWARD,
                                              "__duql_start", c->column, i64}
                                    : WinSpec{DFTU_WINDOW_FRAME_SUM,
@@ -3104,8 +3112,8 @@ class Applier {
         window_op(part, ord, last);
         for (const auto* c : dist)
             distribution.push_back(
-                {c->fn == duql::WinFn::PERCENT_RANK ? DFTU_WINDOW_PERCENT_RANK
-                                                    : DFTU_WINDOW_CUME_DIST,
+                {c->fn == duql::WinFn::PercentRank ? DFTU_WINDOW_PERCENT_RANK
+                                                   : DFTU_WINDOW_CUME_DIST,
                  "", c->column, df::scalar(df::TypeId::Float64)});
         window_op(part, "__duql_dr", distribution);
         if (!partition.empty()) partition_aggs(partition, pid);
@@ -3773,7 +3781,7 @@ class Applier {
             overlap_lookup(l, *o, left, right, keys_text, side_index);
             return;
         }
-        if (l.kind == duql::syntax::LookupKind::ANTI) {
+        if (l.kind == duql::syntax::LookupKind::Anti) {
             bool memory = false;
             df::LazyFrame side = side_plan(l.side, memory);
             lines.push_back("lookup " + l.name + " on " + keys_text + " anti" +
@@ -3784,7 +3792,7 @@ class Applier {
             if (names() != before) keep(before);
             return;
         }
-        const bool inner = l.kind == duql::syntax::LookupKind::INNER;
+        const bool inner = l.kind == duql::syntax::LookupKind::Inner;
         const auto* into = std::get_if<duql::PipelineNest>(&l.mode);
         const bool nest = into != nullptr;
         std::vector<duql::VectorColumn> next = cols_;
@@ -4021,9 +4029,9 @@ class Applier {
             .f64(5, a.tolerance.value_or(-1));
         static constexpr const char* DIRECTIONS[] = {"backward", "forward",
                                                      "nearest"};
-        static_assert(static_cast<int>(duql::syntax::AsofDirection::FORWARD) ==
+        static_assert(static_cast<int>(duql::syntax::AsofDirection::Forward) ==
                       DFTU_ASOF_FORWARD);
-        static_assert(static_cast<int>(duql::syntax::AsofDirection::NEAREST) ==
+        static_assert(static_cast<int>(duql::syntax::AsofDirection::Nearest) ==
                       DFTU_ASOF_NEAREST);
         lines.push_back("lookup " + l.name + " on " + keys_text + " asof " +
                         a.time.text + " " +
@@ -4266,40 +4274,40 @@ class Applier {
     std::optional<df::TypeId> agg_type(const duql::PipelineAgg& a,
                                        std::optional<df::TypeId> in) const {
         switch (a.fn) {
-            case duql::AggFn::COUNT:
-            case duql::AggFn::COUNT_IF:
-            case duql::AggFn::COUNT_DISTINCT:
+            case duql::AggFn::Count:
+            case duql::AggFn::CountIf:
+            case duql::AggFn::CountDistinct:
                 return df::TypeId::Int64;
-            case duql::AggFn::SKETCH:
-            case duql::AggFn::MERGE:
+            case duql::AggFn::Sketch:
+            case duql::AggFn::Merge:
                 return df::TypeId::String;
-            case duql::AggFn::COLLECT:
-            case duql::AggFn::PLUGIN:
+            case duql::AggFn::Collect:
+            case duql::AggFn::Plugin:
                 return std::nullopt;
-            case duql::AggFn::SUM:
+            case duql::AggFn::Sum:
                 if (!in) return std::nullopt;
                 return is_integer(*in) ? df::TypeId::Int64
                                        : df::TypeId::Float64;
-            case duql::AggFn::MIN:
-            case duql::AggFn::MAX:
-            case duql::AggFn::FIRST:
-            case duql::AggFn::LAST:
-            case duql::AggFn::ARGMAX:
-            case duql::AggFn::ARGMIN:
+            case duql::AggFn::Min:
+            case duql::AggFn::Max:
+            case duql::AggFn::First:
+            case duql::AggFn::Last:
+            case duql::AggFn::Argmax:
+            case duql::AggFn::Argmin:
                 if (in && (is_number(*in) || *in == df::TypeId::String ||
                            *in == df::TypeId::Bool))
                     return in;
                 return std::nullopt;
-            case duql::AggFn::MEAN:
-            case duql::AggFn::VAR:
-            case duql::AggFn::STD:
-            case duql::AggFn::QUANTILE:
+            case duql::AggFn::Mean:
+            case duql::AggFn::Var:
+            case duql::AggFn::Std:
+            case duql::AggFn::Quantile:
                 return df::TypeId::Float64;
-            case duql::AggFn::HISTOGRAM:
-            case duql::AggFn::BUSY:
-            case duql::AggFn::CONCURRENCY:
-            case duql::AggFn::UTILIZATION:
-            case duql::AggFn::ACTIVE:
+            case duql::AggFn::Histogram:
+            case duql::AggFn::Busy:
+            case duql::AggFn::Concurrency:
+            case duql::AggFn::Utilization:
+            case duql::AggFn::Active:
                 return std::nullopt;
         }
         return std::nullopt;
@@ -4395,12 +4403,12 @@ class Applier {
         duql::PipelineGroup g = group;
         std::vector<std::pair<std::string, std::string>> sums;
         for (const auto& a : group.aggs)
-            if (a.fn == duql::AggFn::SUM) {
+            if (a.fn == duql::AggFn::Sum) {
                 std::string valid =
                     "__duql_valid_" + std::to_string(sums.size());
                 duql::PipelineAgg hidden;
                 hidden.name = valid;
-                hidden.fn = duql::AggFn::MEAN;
+                hidden.fn = duql::AggFn::Mean;
                 hidden.arg = a.arg;
                 hidden.text = "mean(" + duql::term_text(*a.arg) + ")";
                 g.aggs.push_back(std::move(hidden));
@@ -4488,7 +4496,7 @@ class Applier {
                                         df::expr_lit(std::int64_t{1}),
                                         df::expr_lit_null(df::TypeId::Int64))));
         for (const auto& a : group.aggs)
-            if (a.fn == duql::AggFn::QUANTILE)
+            if (a.fn == duql::AggFn::Quantile)
                 v_ = v_.with_column(
                     a.name,
                     df::expr_select(
@@ -4555,8 +4563,8 @@ class Applier {
                 ? 1.0
                 : static_cast<double>(dur_ns->second) / 1000.0;
         for (std::size_t i = 0; i < g.aggs.size() && us_per_dur != 1.0; ++i) {
-            if (g.aggs[i].fn != duql::AggFn::BUSY &&
-                g.aggs[i].fn != duql::AggFn::ACTIVE)
+            if (g.aggs[i].fn != duql::AggFn::Busy &&
+                g.aggs[i].fn != duql::AggFn::Active)
                 continue;
             const std::string out = "__duql_agg_" + std::to_string(i);
             with_column(
@@ -4575,7 +4583,7 @@ class Applier {
                 df::BinaryOp::Div, df::expr_col(static_cast<std::int32_t>(*i)),
                 df::expr_lit(us_per_time_unit()));
             const auto* field = schema_.field_at(roles_.time);
-            if (field && field->type == ix::FieldType::INT)
+            if (field && field->type == ix::FieldType::Int)
                 in_unit = df::expr_cast(df::TypeId::Int64, in_unit);
             with_column("time_bucket", in_unit, "time_bucket in time units");
         }
@@ -4738,7 +4746,7 @@ class Applier {
             if (a.by)
                 by[i] = source({"", a.by, duql::term_text(*a.by)},
                                "__duql_by_" + std::to_string(i));
-            if (a.fn == duql::AggFn::COUNT_IF) {
+            if (a.fn == duql::AggFn::CountIf) {
                 in = "__duql_in_" + std::to_string(i);
                 with_column(
                     in,
@@ -4752,7 +4760,7 @@ class Applier {
             }
             df::GroupAgg spec{df::Agg::Count, in, out};
             switch (a.fn) {
-                case duql::AggFn::COUNT:
+                case duql::AggFn::Count:
                     spec.op = df::Agg::CountValid;
                     if (!a.arg) {
                         // A key-less Count with no input gives null.
@@ -4762,72 +4770,72 @@ class Applier {
                                         df::expr_lit(std::int64_t{1}), "1");
                     }
                     break;
-                case duql::AggFn::COUNT_IF:
+                case duql::AggFn::CountIf:
                     spec.op = df::Agg::CountValid;
                     break;
-                case duql::AggFn::SUM:
+                case duql::AggFn::Sum:
                     spec.op = df::Agg::Sum;
                     break;
-                case duql::AggFn::MIN:
+                case duql::AggFn::Min:
                     spec.op = df::Agg::Min;
                     break;
-                case duql::AggFn::MAX:
+                case duql::AggFn::Max:
                     spec.op = df::Agg::Max;
                     break;
-                case duql::AggFn::MEAN:
+                case duql::AggFn::Mean:
                     spec.op = df::Agg::Mean;
                     break;
-                case duql::AggFn::VAR:
+                case duql::AggFn::Var:
                     spec.op = df::Agg::Var;
                     break;
-                case duql::AggFn::STD:
+                case duql::AggFn::Std:
                     spec.op = df::Agg::Std;
                     break;
-                case duql::AggFn::FIRST:
+                case duql::AggFn::First:
                     spec.op = df::Agg::First;
                     break;
-                case duql::AggFn::LAST:
+                case duql::AggFn::Last:
                     spec.op = df::Agg::Last;
                     break;
-                case duql::AggFn::QUANTILE:
+                case duql::AggFn::Quantile:
                     spec.op = df::Agg::Pct;
                     spec.param = a.q;
-                    if (a.merged) fold[i].op = duql::FoldOp::MERGE_QUANTILE;
+                    if (a.merged) fold[i].op = duql::FoldOp::MergeQuantile;
                     break;
-                case duql::AggFn::HISTOGRAM:
+                case duql::AggFn::Histogram:
                     spec.op = df::Agg::Hist;
                     break;
-                case duql::AggFn::BUSY:
-                case duql::AggFn::CONCURRENCY:
-                case duql::AggFn::UTILIZATION:
-                case duql::AggFn::ACTIVE:
+                case duql::AggFn::Busy:
+                case duql::AggFn::Concurrency:
+                case duql::AggFn::Utilization:
+                case duql::AggFn::Active:
                     refuse("'" + agg_name(a.fn) +
                            "' needs the trace aggregation");
-                case duql::AggFn::COUNT_DISTINCT:
-                    fold[i].op = duql::FoldOp::COUNT_DISTINCT;
+                case duql::AggFn::CountDistinct:
+                    fold[i].op = duql::FoldOp::CountDistinct;
                     break;
-                case duql::AggFn::COLLECT:
-                    fold[i].op = duql::FoldOp::COLLECT;
+                case duql::AggFn::Collect:
+                    fold[i].op = duql::FoldOp::Collect;
                     break;
-                case duql::AggFn::ARGMAX:
-                    fold[i].op = duql::FoldOp::ARGMAX;
+                case duql::AggFn::Argmax:
+                    fold[i].op = duql::FoldOp::Argmax;
                     break;
-                case duql::AggFn::ARGMIN:
-                    fold[i].op = duql::FoldOp::ARGMIN;
+                case duql::AggFn::Argmin:
+                    fold[i].op = duql::FoldOp::Argmin;
                     break;
-                case duql::AggFn::SKETCH:
-                    fold[i].op = duql::FoldOp::SKETCH;
+                case duql::AggFn::Sketch:
+                    fold[i].op = duql::FoldOp::Sketch;
                     break;
-                case duql::AggFn::MERGE:
-                    fold[i].op = duql::FoldOp::MERGE;
+                case duql::AggFn::Merge:
+                    fold[i].op = duql::FoldOp::Merge;
                     break;
-                case duql::AggFn::PLUGIN:
-                    fold[i].op = duql::FoldOp::PLUGIN;
+                case duql::AggFn::Plugin:
+                    fold[i].op = duql::FoldOp::Plugin;
                     fold[i].plugin = a.plugin;
                     fold[i].params = plugin_params(a);
                     break;
             }
-            folded = folded || fold[i].op != duql::FoldOp::ENGINE;
+            folded = folded || fold[i].op != duql::FoldOp::Engine;
             fold[i].engine = df::to_agg_op(spec.op);
             fold[i].param = spec.param;
             specs.push_back(std::move(spec));
@@ -4872,27 +4880,27 @@ class Applier {
                 f.in < 0 ? df::scalar(df::TypeId::Int64)
                          : type_of(read[static_cast<std::size_t>(f.in)]);
             switch (f.op) {
-                case duql::FoldOp::ENGINE:
+                case duql::FoldOp::Engine:
                     f.type = df::agg_output_type(f.engine, t.id);
                     break;
-                case duql::FoldOp::COUNT_DISTINCT:
+                case duql::FoldOp::CountDistinct:
                     f.type = df::scalar(df::TypeId::Int64);
                     break;
-                case duql::FoldOp::COLLECT:
+                case duql::FoldOp::Collect:
                     f.type = df::list_of(t);
                     break;
-                case duql::FoldOp::ARGMAX:
-                case duql::FoldOp::ARGMIN:
+                case duql::FoldOp::Argmax:
+                case duql::FoldOp::Argmin:
                     f.type = t;
                     break;
-                case duql::FoldOp::PLUGIN:
+                case duql::FoldOp::Plugin:
                     f.type = plugin_type(f.plugin);
                     break;
-                case duql::FoldOp::SKETCH:
-                case duql::FoldOp::MERGE:
+                case duql::FoldOp::Sketch:
+                case duql::FoldOp::Merge:
                     f.type = df::scalar(df::TypeId::String);
                     break;
-                case duql::FoldOp::MERGE_QUANTILE:
+                case duql::FoldOp::MergeQuantile:
                     f.type = df::scalar(df::TypeId::Float64);
                     break;
             }
@@ -5048,7 +5056,7 @@ class Applier {
                     add.columns.push_back(
                         df::Series::flat_i64(zeros.data(), m));
                 }
-                const bool carry = mode != duql::syntax::FillMode::ZERO;
+                const bool carry = mode != duql::syntax::FillMode::Zero;
                 df::DataFrame flagged;
                 const df::DataFrame* base = &f;
                 if (carry) {
@@ -5078,7 +5086,7 @@ class Applier {
                 for (std::int64_t r = 0; r < total; ++r)
                     if (!pos.is_null(r))
                         members[key_in(sorted_text, r)].push_back(r);
-                const bool linear = mode == duql::syntax::FillMode::LINEAR;
+                const bool linear = mode == duql::syntax::FillMode::Linear;
                 for (std::size_t c = 1 + n_keys; c < f.names.size(); ++c) {
                     if (std::find(counts.begin(), counts.end(), f.names[c]) !=
                         counts.end())
@@ -5146,8 +5154,8 @@ class Applier {
             },
             "fill buckets " + number_text(width) +
                 (origin != 0 ? " at " + number_text(origin) : "") +
-                (mode == duql::syntax::FillMode::FORWARD  ? " forward"
-                 : mode == duql::syntax::FillMode::LINEAR ? " linear"
+                (mode == duql::syntax::FillMode::Forward  ? " forward"
+                 : mode == duql::syntax::FillMode::Linear ? " linear"
                                                           : "") +
                 (b.low ? " from " + number_text(*b.low) + " to " +
                              number_text(*b.high)
@@ -5161,9 +5169,9 @@ class Applier {
 Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
             std::vector<std::string>& lines, bool main, bool ordered) {
     View v = ctx.input(p.input);
-    if (ordered && p.input.kind != duql::InputKind::SIDE) v = ctx.order(v);
+    if (ordered && p.input.kind != duql::InputKind::Side) v = ctx.order(v);
     std::optional<std::vector<duql::VectorColumn>> side_cols;
-    if (p.input.kind == duql::InputKind::SIDE) {
+    if (p.input.kind == duql::InputKind::Side) {
         const std::size_t i = p.input.side;
         side_cols = ctx.sides->columns[i];
         df::Schema schema;
@@ -5227,13 +5235,13 @@ Built build(const Ctx& ctx, const duql::Pipeline& p, bool table,
             out.push_back(o->into);
             return out;
         }
-        if (l.kind == duql::syntax::LookupKind::ANTI) return out;
+        if (l.kind == duql::syntax::LookupKind::Anti) return out;
         for (const auto& c : ctx.sides->columns[l.side]) out.push_back(c.name);
         return out;
     };
     Reads fields = referenced_fields(
         p.stages, adds,
-        ctx.schema(v).decoder == dftracer::utils::index::Decoder::PATH);
+        ctx.schema(v).decoder == dftracer::utils::index::Decoder::Path);
     if (!p.scan_select.empty()) {
         lines.push_back("scan select: " + joined(p.scan_select));
         std::vector<std::string> select;
@@ -5322,10 +5330,10 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
     };
     ctx.input = [this](const duql::Input& in) -> View {
         switch (in.kind) {
-            case duql::InputKind::DATA:
+            case duql::InputKind::Data:
                 break;
-            case duql::InputKind::ALL:
-            case duql::InputKind::SIDE: {
+            case duql::InputKind::All:
+            case duql::InputKind::Side: {
                 auto all = std::make_shared<detail::ViewPlan>();
                 all->files = plan_->files;
                 all->record_schema = plan_->record_schema;
@@ -5337,7 +5345,7 @@ std::pair<View, std::vector<std::string>> View::duql_plan(
                 all->all_records = true;
                 return detail::view_of(std::move(all));
             }
-            case duql::InputKind::FILE:
+            case duql::InputKind::File:
                 return View::from_file(
                     in.path, internal::determine_index_path(in.path, ""));
         }

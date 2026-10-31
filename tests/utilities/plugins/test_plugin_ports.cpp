@@ -3,7 +3,7 @@
 // covering the same-batch delivery, the ordering rule, and the per-batch reset.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/string_intern.h>
+#include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
@@ -18,7 +18,7 @@
 #include <vector>
 
 namespace views = dftracer::utils::trace::views;
-using dftracer::utils::StringIntern;
+using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
 using views::detail::FoldBatch;
 using views::detail::FoldEvent;
@@ -83,8 +83,8 @@ std::vector<FoldEvent> make_events(std::uint64_t with_dur,
         // COUNTER survives the filter without counting as "has a duration".
         evs[i].has_dur = i < with_dur;
         evs[i].phase = evs[i].has_dur
-                           ? dftracer::utils::trace::RecordPhase::COMPLETE
-                           : dftracer::utils::trace::RecordPhase::COUNTER;
+                           ? dftracer::utils::trace::RecordPhase::Complete
+                           : dftracer::utils::trace::RecordPhase::Counter;
     }
     return evs;
 }

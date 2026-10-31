@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_QUERY_H
 #define DFTRACER_UTILS_DUQL_QUERY_H
 
-#include <dftracer/utils/core/common/transparent_string_hash.h>
+#include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/evaluator.h>
@@ -18,7 +18,7 @@ namespace dftracer::utils::duql {
 class Query {
    public:
     /// Parse a query DSL string. Returns error on invalid syntax.
-    static dftracer::utils::expected<Query, DuqlError> from_string(
+    static dftracer::utils::dstd::Expected<Query, DuqlError> from_string(
         std::string_view input);
     /// A query over a compiled filter; its source is the filter's text.
     static Query from_node(QueryNodePtr root);

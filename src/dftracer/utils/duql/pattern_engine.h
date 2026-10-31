@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DUQL_PATTERN_ENGINE_H
 #define DFTRACER_UTILS_DUQL_PATTERN_ENGINE_H
 
-#include <dftracer/utils/core/common/expected.h>
+#include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/duql/pattern.h>
 #include <dftracer/utils/duql/substr_simd.h>
 
@@ -18,21 +18,21 @@
 namespace dftracer::utils::duql {
 
 /// The outcome of one match: LIMIT when a regex reached its work limit.
-enum class MatchResult : std::uint8_t { NO, YES, LIMIT };
+enum class MatchResult : std::uint8_t { No, Yes, Limit };
 
 namespace detail {
 
 enum class Kind : std::uint8_t {
-    EXACT,
-    PREFIX,
-    SUFFIX,
-    CONTAINS,
-    SEGMENTS,
-    GLOB,
-    REGEX
+    Exact,
+    Prefix,
+    Suffix,
+    Contains,
+    Segments,
+    Glob,
+    Regex
 };
 
-enum class GlobKind : std::uint8_t { LITERAL, ANY_RUN, ANY_ONE };
+enum class GlobKind : std::uint8_t { Literal, AnyRun, AnyOne };
 
 struct GlobToken {
     GlobKind kind;
@@ -93,7 +93,7 @@ inline bool equal_at(std::string_view s, std::size_t at, std::string_view lit,
 
 /// A compiled pattern; read-only after compile.
 struct CompiledPattern {
-    detail::Kind kind = detail::Kind::EXACT;
+    detail::Kind kind = detail::Kind::Exact;
     bool icase = false;
     std::string literal;
     // SEGMENTS: the literal pieces between `%`; GLOB: the literal runs, which
@@ -128,14 +128,14 @@ bool glob_match_t(const std::vector<GlobToken>& toks, std::string_view s) {
     const std::size_t n = s.size();
     const std::size_t m = toks.size();
     while (si < n) {
-        if (ANY_ONE && pi < m && toks[pi].kind == GlobKind::ANY_ONE) {
+        if (ANY_ONE && pi < m && toks[pi].kind == GlobKind::AnyOne) {
             si = step_char(s, si);
             ++pi;
-        } else if (pi < m && toks[pi].kind == GlobKind::LITERAL &&
+        } else if (pi < m && toks[pi].kind == GlobKind::Literal &&
                    (ICASE ? fold(s[si]) : s[si]) == toks[pi].ch) {
             ++si;
             ++pi;
-        } else if (pi < m && toks[pi].kind == GlobKind::ANY_RUN) {
+        } else if (pi < m && toks[pi].kind == GlobKind::AnyRun) {
             star = pi;
             star_si = si;
             ++pi;
@@ -147,7 +147,7 @@ bool glob_match_t(const std::vector<GlobToken>& toks, std::string_view s) {
             return false;
         }
     }
-    while (pi < m && toks[pi].kind == GlobKind::ANY_RUN) ++pi;
+    while (pi < m && toks[pi].kind == GlobKind::AnyRun) ++pi;
     return pi == m;
 }
 
@@ -203,33 +203,33 @@ MatchResult match_regex_pcre2(const CompiledPattern& p, std::string_view s);
 /// Safe from any thread; a compiled pattern is read-only.
 inline MatchResult match(const CompiledPattern& p, std::string_view s) {
     using detail::Kind;
-    auto yes = [](bool b) { return b ? MatchResult::YES : MatchResult::NO; };
+    auto yes = [](bool b) { return b ? MatchResult::Yes : MatchResult::No; };
     switch (p.kind) {
-        case Kind::EXACT:
+        case Kind::Exact:
             return yes(s.size() == p.literal.size() &&
                        detail::equal_at(s, 0, p.literal, p.icase));
-        case Kind::PREFIX:
+        case Kind::Prefix:
             return yes(detail::equal_at(s, 0, p.literal, p.icase));
-        case Kind::SUFFIX:
+        case Kind::Suffix:
             return yes(s.size() >= p.literal.size() &&
                        detail::equal_at(s, s.size() - p.literal.size(),
                                         p.literal, p.icase));
-        case Kind::CONTAINS:
+        case Kind::Contains:
             return yes(detail::find(s, p.literal, p.icase) >= 0);
-        case Kind::SEGMENTS:
+        case Kind::Segments:
             // A short string is cheaper to walk than to search part by part.
             if (s.size() < detail::SIMD_MIN_HAY)
                 return yes(detail::glob_match(p.glob, s, p.icase, false));
             return yes(detail::segments_match(p, s));
-        case Kind::GLOB:
+        case Kind::Glob:
             // On a long string, rule out a missing literal part before the
             // character-by-character glob.
             if (s.size() >= detail::SIMD_MIN_HAY)
                 for (const auto& seg : p.segments)
                     if (detail::find(s, seg, p.icase) < 0)
-                        return MatchResult::NO;
+                        return MatchResult::No;
             return yes(detail::glob_match(p.glob, s, p.icase, true));
-        case Kind::REGEX:
+        case Kind::Regex:
             break;
     }
     return detail::match_regex(p, s);
@@ -243,7 +243,7 @@ struct PatternError {
 };
 
 using PatternPtr = std::shared_ptr<const CompiledPattern>;
-using PatternResult = dftracer::utils::expected<PatternPtr, PatternError>;
+using PatternResult = dftracer::utils::dstd::Expected<PatternPtr, PatternError>;
 
 /// SQL LIKE over the whole string: `%` any run (newlines included), `_` one
 /// UTF-8 character; `escape` makes `c%`, `c_` and `cc` literal. `icase` folds
@@ -272,7 +272,7 @@ MatchResult findall(const CompiledPattern& p, std::string_view s,
 /// in a loop over many strings. `text` is ASCII-folded when `icase`, and
 /// lives as long as the pattern.
 struct LiteralTest {
-    enum class Op : std::uint8_t { EQUALS, STARTS_WITH, ENDS_WITH, CONTAINS };
+    enum class Op : std::uint8_t { Equals, StartsWith, EndsWith, Contains };
     Op op;
     std::string_view text;
     bool icase;
@@ -303,8 +303,8 @@ struct Substitution {
 /// Compile `to`: `$n` and `${n}` insert group n, `${name}` a named group,
 /// `$$` a dollar sign. A non-regex pattern, an unknown group or name, and a
 /// `$` followed by anything else are errors whose offset is in `to`.
-dftracer::utils::expected<Substitution, PatternError> compile_substitution(
-    const CompiledPattern& p, std::string_view to);
+dftracer::utils::dstd::Expected<Substitution, PatternError>
+compile_substitution(const CompiledPattern& p, std::string_view to);
 
 /// Replace every non-overlapping match of a regex in `s` into `out`, left to
 /// right; a group that took no part inserts nothing. NO leaves `out` equal to

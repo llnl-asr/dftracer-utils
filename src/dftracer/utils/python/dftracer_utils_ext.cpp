@@ -1,9 +1,11 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregation_serialization.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/index/schemas/dft/agg/system_metrics_serialization.h>
+#include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/columnar_eval.h>
@@ -133,6 +135,9 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void);  // declared before use
 
 PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     PyObject* m;
+    // numpy and pandas may still hold blocks of ours when the interpreter
+    // exits.
+    dftracer::utils::memory::set_exit_check(false);
     m = PyModule_Create(&dftracer_utils_module);
     if (m == NULL) return NULL;
     // The aggregation CF shard count, so distributed callers split the shard
@@ -169,6 +174,11 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     // DFTRACER_UTILS_LOG_LEVEL and auto color (on only when stderr is a TTY),
     // matching the CLI binaries. Without this the logger runs on bare defaults.
     dftracer::utils::logger::init();
+    if (auto configured = dftracer::utils::configure_memory_from_env();
+        !configured) {
+        PyErr_SetString(PyExc_ImportError, configured.error().format().c_str());
+        return NULL;
+    }
     if (dftracer::utils::python::init_py_errors(m) < 0) return NULL;
     if (dftracer::utils::python::init_checkpoint_indexer(m) < 0) return NULL;
     if (dftracer::utils::python::init_indexer(m) < 0) return NULL;

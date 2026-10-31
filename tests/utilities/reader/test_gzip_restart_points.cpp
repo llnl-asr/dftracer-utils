@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -81,8 +81,8 @@ struct Fixture {
     std::string read_from(std::size_t start) {
         GzipReader reader(indexer);
         auto stream = reader.stream(StreamConfig()
-                                        .stream_type(StreamType::BYTES)
-                                        .range_type(RangeType::BYTE_RANGE)
+                                        .stream_type(StreamType::Bytes)
+                                        .range_type(RangeType::ByteRange)
                                         .from(start)
                                         .to(reader.get_max_bytes()));
         std::string out;
@@ -133,10 +133,10 @@ TEST_SUITE("gzip_restart_points") {
         Fixture fx(gzip(text));
         const auto pieces = fx.indexer->get_members();
         REQUIRE(pieces.size() >= 6);
-        CHECK(pieces[0].kind == GzipRecordKind::HEAD);
+        CHECK(pieces[0].kind == GzipRecordKind::Head);
         CHECK(pieces[0].c_offset == 0);
         for (std::size_t i = 1; i < pieces.size(); ++i) {
-            CHECK(pieces[i].kind == GzipRecordKind::RESTART);
+            CHECK(pieces[i].kind == GzipRecordKind::Restart);
             CHECK(pieces[i].bits <= 7);
             CHECK(pieces[i].c_offset ==
                   pieces[i - 1].c_offset + pieces[i - 1].c_size);
@@ -157,8 +157,8 @@ TEST_SUITE("gzip_restart_points") {
         }
         Fixture fx(comp);
         const auto pieces = fx.indexer->get_members();
-        CHECK(pieces[0].kind == GzipRecordKind::HEAD);
-        CHECK(pieces[pieces.size() - 1].kind == GzipRecordKind::MEMBER);
+        CHECK(pieces[0].kind == GzipRecordKind::Head);
+        CHECK(pieces[pieces.size() - 1].kind == GzipRecordKind::Member);
         check_pieces_cover(pieces, text.size() + tail.size());
         check_reads_from_every_piece(fx, text + tail);
     }
@@ -178,7 +178,7 @@ TEST_SUITE("gzip_restart_points") {
         const auto members = fx.indexer->get_members();
         REQUIRE(members.size() == sizes.size());
         for (std::size_t i = 0; i < members.size(); ++i) {
-            CHECK(members[i].kind == GzipRecordKind::MEMBER);
+            CHECK(members[i].kind == GzipRecordKind::Member);
             CHECK(members[i].bits == 0);
             CHECK(members[i].uc_size == sizes[i]);
         }

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -100,7 +100,7 @@ TEST_SUITE("dftracer_view_mpi") {
     // mpirun; n=2 must match n=1 (single-node), same one binary.
     TEST_CASE("distributed counters match single-rank") {
         std::string bin =
-            find_binary_by_name("DFTRACER_VIEW_PATH", "dftracer_view");
+            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
         std::string launcher = find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
@@ -137,7 +137,7 @@ TEST_SUITE("dftracer_view_mpi") {
     // _table across ranks must equal the single-rank collect.
     TEST_CASE("distributed aggregate table matches single-rank") {
         std::string bin =
-            find_binary_by_name("DFTRACER_VIEW_PATH", "dftracer_view");
+            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
         std::string launcher = find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
@@ -173,7 +173,7 @@ TEST_SUITE("dftracer_view_mpi") {
     // transport end to end.
     TEST_CASE("distributed occupancy merges across ranks") {
         std::string bin =
-            find_binary_by_name("DFTRACER_VIEW_PATH", "dftracer_view");
+            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
         std::string launcher = find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");
@@ -206,7 +206,7 @@ TEST_SUITE("dftracer_view_mpi") {
     // NDJSON lines sort/compare directly).
     TEST_CASE("distributed merge matches single-rank") {
         std::string bin =
-            find_binary_by_name("DFTRACER_VIEW_PATH", "dftracer_view");
+            find_binary_by_name("DFTRACER_UTILS_VIEW_PATH", "dftracer_view");
         std::string launcher = find_mpi_launcher();
         if (bin.empty() || launcher.empty()) {
             MESSAGE("dftracer_view or MPI launcher unavailable, skipping.");

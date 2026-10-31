@@ -1,0 +1,38 @@
+#ifndef DFTRACER_UTILS_COMMON_ENV_H
+#define DFTRACER_UTILS_COMMON_ENV_H
+
+#include <cstdint>
+#include <optional>
+#include <string_view>
+#include <type_traits>
+
+namespace dftracer::utils {
+
+class Env {
+   public:
+    template <typename T = std::string_view>
+    static std::optional<T> get(std::string_view name);
+
+    static int rocksdb_max_open_files();
+};
+
+template <typename T>
+std::optional<T> Env::get(std::string_view) {
+    static_assert(sizeof(T) == 0,
+                  "Env::get<T>() requires an explicit specialization");
+    return std::nullopt;
+}
+
+template <>
+std::optional<std::string_view> Env::get<std::string_view>(
+    std::string_view name);
+
+template <>
+std::optional<int> Env::get<int>(std::string_view name);
+
+template <>
+std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name);
+
+}  // namespace dftracer::utils
+
+#endif  // DFTRACER_UTILS_COMMON_ENV_H

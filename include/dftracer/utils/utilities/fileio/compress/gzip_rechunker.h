@@ -1,80 +1,108 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_RECHUNKER_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_COMPRESS_GZIP_RECHUNKER_H
 
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/common/scoped_fd.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/io/io.h>
+#include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/io/io.h>
+#include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include <zlib.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace dftracer::utils::utilities::fileio::compress {
 
-/// The read and index paths decode a whole gzip member at once (libdeflate), so
-/// a single foreign member larger than this cannot be handled with bounded
-/// memory and must be rechunked first. Matches the reader's default guard.
+/// A member larger than this is worth rewriting as smaller members: the
+/// readers stream it, but a multi-member file is read faster and in parallel.
 inline constexpr std::size_t RECHUNK_MEMBER_CAP = std::size_t{1} << 31;
 
-/// True if the file's first gzip member decodes to more than `cap` uncompressed
-/// bytes, i.e. it would force an unbounded whole-member decode downstream and
-/// must be rechunked first. A bounded first member (whether the file is single-
-/// or multi-member) returns false, since the read/index paths handle it fine.
-/// Bounded memory: decodes at most one member, discarding output, stopping once
-/// output passes `cap`.
-inline coro::CoroTask<bool> gzip_needs_rechunk(int fd, std::uint64_t file_size,
-                                               std::size_t cap) {
-    if (file_size == 0) co_return false;
+/// What decoding the start of a file shows. `compressed` and `uncompressed`
+/// count the bytes read and produced up to the point where the decode stopped.
+struct FirstMember {
+    bool exceeds_cap = false;
+    std::uint64_t compressed = 0;
+    std::uint64_t uncompressed = 0;
+};
 
-    z_stream zs{};
-    if (inflateInit2(&zs, 15 + 16) != Z_OK) co_return false;
+/// Decodes the first gzip member of the file, discarding the output, and stops
+/// once the output passes `cap`. Bounded memory: one member at most, never
+/// held. With `sample_bytes` the decode goes on through the next members until
+/// it has read that many compressed bytes, so a tiny first member (a "[" line
+/// of its own) does not decide the ratio. `exceeds_cap` is about the first
+/// member only.
+inline coro::CoroTask<FirstMember> gzip_first_member(
+    int fd, std::uint64_t file_size, std::size_t cap,
+    std::uint64_t sample_bytes = 0) {
+    FirstMember member;
+    if (file_size == 0) co_return member;
 
-    std::vector<unsigned char> in(1u << 20);
-    std::vector<unsigned char> out(1u << 20);
+    GzipStreamInflater gz;
+    if (!gz.init(15 + 16)) co_return member;
+
+    constexpr std::size_t BUFFER_BYTES = std::size_t{1} << 20;
+    const std::size_t in_bytes = static_cast<std::size_t>(
+        std::min<std::uint64_t>(BUFFER_BYTES, file_size));
+    auto in = std::make_unique_for_overwrite<unsigned char[]>(in_bytes);
+    auto out = std::make_unique_for_overwrite<unsigned char[]>(BUFFER_BYTES);
     std::uint64_t off = 0;
     std::uint64_t produced = 0;
-    bool result = false;
+    std::uint64_t member_produced = 0;
+    std::uint64_t finished = 0;  // compressed bytes of the members that ended
+    bool in_first = true;
+    bool counted = false;
 
     while (true) {
-        if (zs.avail_in == 0) {
+        if (gz.avail_in() == 0) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
-                std::min<std::uint64_t>(in.size(), file_size - off));
-            const ssize_t n = co_await io::pread(fd, in.data(), want,
-                                                 static_cast<off_t>(off));
+                std::min<std::uint64_t>(in_bytes, file_size - off));
+            const ssize_t n =
+                co_await io::pread(fd, in.get(), want, static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            zs.next_in = in.data();
-            zs.avail_in = static_cast<uInt>(n);
+            gz.set_input(in.get(), static_cast<std::size_t>(n));
         }
 
-        zs.next_out = out.data();
-        zs.avail_out = static_cast<uInt>(out.size());
-        int rc = inflate(&zs, Z_NO_FLUSH);
-        produced += out.size() - zs.avail_out;
+        gz.set_output(out.get(), BUFFER_BYTES);
+        const InflateStatus rc = gz.inflate();
+        const std::uint64_t got = BUFFER_BYTES - gz.avail_out();
+        produced += got;
+        member_produced += got;
 
-        if (produced > cap) {  // first member exceeds the cap: rechunk
-            result = true;
+        if (in_first && member_produced > cap) {  // rechunk
+            member.exceeds_cap = true;
             break;
         }
-        // First member ended within the cap (or corrupt): the fast path is
-        // safe. A corrupt/truncated stream is left for the normal path to
-        // report, since rechunking would not help.
-        if (rc != Z_OK) break;
+        if (rc == InflateStatus::StreamEnd) {
+            finished += gz.total_in();
+            in_first = false;
+            const bool more = gz.avail_in() > 0 || off < file_size;
+            if (finished >= sample_bytes || !more || !gz.reset()) {
+                counted = true;
+                break;
+            }
+            member_produced = 0;
+            continue;
+        }
+        // The first member ended within the cap (or is corrupt): the fast path
+        // is safe. A corrupt or truncated stream is left for the normal path
+        // to report, since rechunking would not help.
+        if (rc != InflateStatus::Ok) break;
     }
 
-    inflateEnd(&zs);
-    co_return result;
+    member.compressed = counted ? finished : finished + gz.total_in();
+    member.uncompressed = produced;
+    co_return member;
 }
 
 /// Decodes `in_path` (single huge member or otherwise; plain text is read as
@@ -91,23 +119,23 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     ssize_t in_fd_res = co_await io::open(in_path.c_str(), O_RDONLY);
     if (in_fd_res < 0) {
-        throw DFTUtilsException(ErrorCode::IO, "Cannot open file: " + in_path);
+        throw DFTUtilsException(ErrorCode::Io, "Cannot open file: " + in_path);
     }
     ScopedFd in_fd(static_cast<int>(in_fd_res));
 
     struct stat st;
     if (::fstat(in_fd.get(), &st) != 0) {
-        throw DFTUtilsException(ErrorCode::IO, "Cannot stat file: " + in_path);
+        throw DFTUtilsException(ErrorCode::Io, "Cannot stat file: " + in_path);
     }
     const auto file_size = static_cast<std::uint64_t>(st.st_size);
     unsigned char magic[2] = {0, 0};
     const bool plain = co_await io::pread(in_fd.get(), magic, 2, 0) != 2 ||
                        magic[0] != 0x1f || magic[1] != 0x8b;
 
-    z_stream zs{};
-    if (!plain && inflateInit2(&zs, 15 + 16) != Z_OK) {
-        throw DFTUtilsException(ErrorCode::COMPRESSION,
-                                "inflateInit2 failed for " + in_path);
+    GzipStreamInflater gz;
+    if (!plain && !gz.init(15 + 16)) {
+        throw DFTUtilsException(ErrorCode::Compression,
+                                "cannot open a gzip stream for " + in_path);
     }
 
     GzipWriterOptions opts;
@@ -134,7 +162,6 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
 
     bool ok = true;
     while (ok) {
-        int rc = Z_OK;
         if (plain) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
@@ -148,7 +175,7 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                  static_cast<std::size_t>(n)));
             continue;
         }
-        if (zs.avail_in == 0) {
+        if (gz.avail_in() == 0) {
             if (off >= file_size) break;
             const std::size_t want = static_cast<std::size_t>(
                 std::min<std::uint64_t>(in.size(), file_size - off));
@@ -156,74 +183,31 @@ inline coro::CoroTask<void> gzip_rechunk_to_members(const std::string& in_path,
                                                  static_cast<off_t>(off));
             if (n <= 0) break;
             off += static_cast<std::uint64_t>(n);
-            zs.next_in = in.data();
-            zs.avail_in = static_cast<uInt>(n);
+            gz.set_input(in.data(), static_cast<std::size_t>(n));
         }
 
-        zs.next_out = out.data();
-        zs.avail_out = static_cast<uInt>(out.size());
-        rc = inflate(&zs, Z_NO_FLUSH);
+        gz.set_output(out.data(), out.size());
+        const InflateStatus rc = gz.inflate();
         co_await feed(
             std::string_view(reinterpret_cast<const char*>(out.data()),
-                             out.size() - zs.avail_out));
+                             out.size() - gz.avail_out()));
 
-        if (rc == Z_STREAM_END) {
-            if (zs.total_in >= file_size && zs.avail_in == 0) break;
-            if (inflateReset2(&zs, 15 + 16) != Z_OK) {
+        if (rc == InflateStatus::StreamEnd) {
+            if (gz.total_in() >= file_size && gz.avail_in() == 0) break;
+            if (!gz.reset()) {
                 ok = false;
                 break;
             }
-        } else if (rc != Z_OK) {
+        } else if (rc != InflateStatus::Ok) {
             ok = false;
         }
     }
 
-    if (!plain) inflateEnd(&zs);
     if (!ok) {
-        throw DFTUtilsException(ErrorCode::COMPRESSION,
+        throw DFTUtilsException(ErrorCode::Compression,
                                 "decompression failed for " + in_path);
     }
     unwrap(co_await writer.close(carry));
-}
-
-/// If `path`'s first gzip member exceeds `member_size` uncompressed (a single
-/// huge member), rechunk it to ~member_size members at `<dir>/<basename>` and
-/// return that path; a plain (not gzip) file with content becomes
-/// `<dir>/<basename>.gz` the same way. Else return `path` unchanged.
-/// Non-destructive; a split copy newer than the source is reused. `did_split`
-/// = true when a split copy is returned. `member_size` 0 = default checkpoint
-/// size.
-inline coro::CoroTask<std::string> rechunk_to_dir_if_needed(
-    std::string path, std::string dir, std::size_t member_size,
-    bool& did_split) {
-    did_split = false;
-    ssize_t fd = co_await io::open(path.c_str(), O_RDONLY);
-    if (fd < 0) co_return path;
-    ScopedFd sfd(static_cast<int>(fd));
-    struct stat st;
-    if (::fstat(sfd.get(), &st) != 0) co_return path;
-    const auto fsize = static_cast<std::uint64_t>(st.st_size);
-    if (fsize == 0) co_return path;
-    unsigned char magic[2] = {0, 0};
-    const bool plain = co_await io::pread(sfd.get(), magic, 2, 0) != 2 ||
-                       magic[0] != 0x1f || magic[1] != 0x8b;
-    const std::size_t cap = member_size ? member_size : RECHUNK_MEMBER_CAP;
-    const bool needs =
-        plain || co_await gzip_needs_rechunk(sfd.get(), fsize, cap);
-    sfd.reset();
-    if (!needs) co_return path;
-
-    std::string split_path = dir + "/" + fs::path(path).filename().string();
-    if (plain && !split_path.ends_with(".gz")) split_path += ".gz";
-    did_split = true;
-    struct stat sst;
-    const bool fresh =
-        ::stat(split_path.c_str(), &sst) == 0 && sst.st_mtime >= st.st_mtime;
-    if (!fresh) {
-        fs::create_directories(dir);
-        co_await gzip_rechunk_to_members(path, split_path, member_size, 6);
-    }
-    co_return split_path;
 }
 
 }  // namespace dftracer::utils::utilities::fileio::compress

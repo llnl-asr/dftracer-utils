@@ -1,12 +1,9 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/binaries/json_cell_printer.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/common/memory_budget.h>  // NO_SPILL_BUDGET
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -15,6 +12,11 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
+#include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -34,7 +36,7 @@
 // source then produces a distribution-capable dftracer_view; without MPI it is
 // the plain single-node binary.
 #ifdef DFTRACER_UTILS_ENABLE_MPI
-#include <dftracer/utils/core/distributed/mpi_transport.h>
+#include <dftracer/utils/runtime/distributed/mpi_transport.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #endif
 
@@ -88,7 +90,7 @@ static std::vector<std::string> shard_files(
 
 class ViewArgParse : public cli::ArgParse {
    public:
-    cli::DirectoryArgs directory{cli::DirMode::DEFAULT_EMPTY};
+    cli::DirectoryArgs directory{cli::DirMode::DefaultEmpty};
     cli::FilesArgs files_args;
     cli::PipelineArgs pipeline;
     cli::IndexingArgs indexing;
@@ -765,7 +767,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         shard_set_root = resolve_shard_set_root(index_dir);
     if (shard_set_root.empty() && directory.empty() &&
         cli->files_args.value.size() == 1 &&
-        fs::is_directory(cli->files_args.value[0]))
+        dftracer::utils::input_is_directory(cli->files_args.value[0]))
         shard_set_root = resolve_shard_set_root(cli->files_args.value[0]);
 
     if (!shard_set_root.empty() && !aggregate && !counters) {
@@ -780,17 +782,14 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     if (!shard_set_root.empty()) {
         // Self-describing: ShardedView enumerates files from each shard index.
     } else if (!directory.empty()) {
-        if (!fs::exists(directory)) {
+        if (!dftracer::utils::input_exists(directory)) {
             DFTRACER_UTILS_LOG_ERROR("Directory does not exist: %s",
                                      directory.c_str());
             co_return 1;
         }
 
-        PatternDirectoryScannerUtility scanner;
-        PatternDirectoryScannerUtilityInput scan_input{
-            directory, trace_file_patterns(), /*rec=*/true,
-            /*with_size=*/false};
-        auto matched = co_await scanner(scan_input);
+        auto matched = cli::scan_trace_files_on_pool(cli->pipeline, directory,
+                                                     /*populate_size=*/false);
 
         for (const auto& entry : matched) {
             files.push_back(entry.path.string());
@@ -812,28 +811,13 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         }
     }
 
-    // Normalize single-member inputs to bounded multi-member gzip (shared with
-    // every ingest path); index and reader both use the returned split copies.
-    std::vector<std::pair<std::string, std::string>> auto_split;
-    if (!no_auto_index) {
-        dftracer::utils::index::build::MemberNormalizeResult norm;
-        cli::run_on_pool(cli->pipeline, "dftracer_view normalize",
-                         [&](CoroScope&) -> coro::CoroTask<void> {
-                             norm = co_await dftracer::utils::index::build::
-                                 normalize_members_for_ingest(std::move(files),
-                                                              checkpoint_size);
-                         });
-        files = std::move(norm.files);
-        auto_split = std::move(norm.split);
-    }
-
     // One View over every file; the executor plans and scans them in parallel.
     std::vector<ViewFile> view_files;
     view_files.reserve(files.size());
-    for (const auto& file_path : files) {
+    for (std::size_t i = 0; i < files.size(); ++i) {
         ViewFile vf;
-        vf.file_path = file_path;
-        vf.index_path = internal::determine_index_path(file_path, index_dir);
+        vf.file_path = files[i];
+        vf.index_path = internal::determine_index_path(files[i], index_dir);
         vf.checkpoint_size = checkpoint_size;
         view_files.push_back(std::move(vf));
     }
@@ -962,7 +946,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         if (time_bucket > 0) v = v.time_bucket(time_bucket);
         if (cli->occ_cell > 0) v = v.resolution(cli->occ_cell);
         if (cli->no_spill)
-            v = v.memory_budget(NO_SPILL_BUDGET);
+            v = v.memory_budget(memory::NO_SPILL_BUDGET);
         else if (cli->memory_budget > 0)
             v = v.memory_budget(cli->memory_budget);
         // else: leave the plan default (0), which resolves to auto (~1/3 RAM).
@@ -1134,8 +1118,10 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 if (transport.rank() == 0) {
                     std::vector<std::string> parts(rank_outs.begin(),
                                                    rank_outs.end());
-                    if (co_await fileio::parallel::merge_shards(final_output,
-                                                                parts) != 0) {
+                    const auto merge_rc =
+                        co_await fileio::parallel::merge_shards(final_output,
+                                                                parts);
+                    if (merge_rc != 0) {
                         DFTRACER_UTILS_LOG_ERROR("merge_shards failed for %s",
                                                  final_output.c_str());
                     } else if (!no_index) {
@@ -1263,25 +1249,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                      "read as null\n",
                      (unsigned long long)stats.lines_invalid,
                      (unsigned long long)stats.values_unconverted);
-
-    if (!auto_split.empty()) {
-        std::fprintf(
-            stderr,
-            "\n"
-            "============================================================\n"
-            "WARNING: %zu single-member trace(s) were auto-split into a\n"
-            "sibling split/ directory so every checkpoint is a real gzip\n"
-            "member. Your original files were NOT modified; the split\n"
-            "copies were indexed and read:\n",
-            auto_split.size());
-        for (const auto& [src, dst] : auto_split)
-            std::fprintf(stderr, "  %s\n    -> %s\n", src.c_str(), dst.c_str());
-        std::fprintf(
-            stderr,
-            "Re-run against the split/ copies (or `dftracer_split` output) to\n"
-            "skip this step next time.\n"
-            "============================================================\n");
-    }
 
     co_return verify_failed ? 1 : 0;
 }

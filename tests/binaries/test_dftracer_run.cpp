@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -88,9 +88,10 @@ long first_capture(const std::string& text, const std::string& pattern) {
 
 TEST_SUITE("DFTracerRun") {
     TEST_CASE("event_counter plugin (C ABI) counts every scanned event") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string plugin = env_or_probe("DFTRACER_EVENT_COUNTER_PLUGIN_PATH",
-                                          "event_counter.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string plugin = env_or_probe(
+            "DFTRACER_UTILS_EVENT_COUNTER_PLUGIN_PATH", "event_counter.so");
         if (run.empty() || plugin.empty()) {
             MESSAGE(
                 "dftracer_run or event_counter plugin not found, skipping.");
@@ -112,9 +113,11 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("duration_histogram plugin (C++ ABI) bins every event") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string plugin = env_or_probe(
-            "DFTRACER_DURATION_HISTOGRAM_PLUGIN_PATH", "duration_histogram.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string plugin =
+            env_or_probe("DFTRACER_UTILS_DURATION_HISTOGRAM_PLUGIN_PATH",
+                         "duration_histogram.so");
         if (run.empty() || plugin.empty()) {
             MESSAGE("dftracer_run or duration_histogram plugin not found.");
             return;
@@ -142,9 +145,10 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("query_filter plugin (C++ SDK, F builder, no query-lib link)") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string plugin = env_or_probe("DFTRACER_QUERY_FILTER_PLUGIN_PATH",
-                                          "query_filter.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string plugin = env_or_probe(
+            "DFTRACER_UTILS_QUERY_FILTER_PLUGIN_PATH", "query_filter.so");
         if (run.empty() || plugin.empty()) {
             MESSAGE("dftracer_run or query_filter plugin not found, skipping.");
             return;
@@ -168,11 +172,14 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("consumer reads the producer's per-batch value over a port") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string producer = env_or_probe(
-            "DFTRACER_PERBATCH_PRODUCER_PLUGIN_PATH", "perbatch_producer.so");
-        std::string consumer = env_or_probe(
-            "DFTRACER_PERBATCH_CONSUMER_PLUGIN_PATH", "perbatch_consumer.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string producer =
+            env_or_probe("DFTRACER_UTILS_PERBATCH_PRODUCER_PLUGIN_PATH",
+                         "perbatch_producer.so");
+        std::string consumer =
+            env_or_probe("DFTRACER_UTILS_PERBATCH_CONSUMER_PLUGIN_PATH",
+                         "perbatch_consumer.so");
         if (run.empty() || producer.empty() || consumer.empty()) {
             MESSAGE("dftracer_run or perbatch plugins not found, skipping.");
             return;
@@ -198,9 +205,11 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("consumer alone fails before scanning (no producer)") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string consumer = env_or_probe(
-            "DFTRACER_PERBATCH_CONSUMER_PLUGIN_PATH", "perbatch_consumer.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string consumer =
+            env_or_probe("DFTRACER_UTILS_PERBATCH_CONSUMER_PLUGIN_PATH",
+                         "perbatch_consumer.so");
         if (run.empty() || consumer.empty()) {
             MESSAGE("dftracer_run or perbatch_consumer plugin not found.");
             return;
@@ -219,11 +228,14 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("consumer reads producer's cross-worker-merged accumulator") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string producer = env_or_probe(
-            "DFTRACER_DUR_STATS_PRODUCER_PLUGIN_PATH", "dur_stats_producer.so");
-        std::string consumer = env_or_probe(
-            "DFTRACER_DUR_STATS_CONSUMER_PLUGIN_PATH", "dur_stats_consumer.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string producer =
+            env_or_probe("DFTRACER_UTILS_DUR_STATS_PRODUCER_PLUGIN_PATH",
+                         "dur_stats_producer.so");
+        std::string consumer =
+            env_or_probe("DFTRACER_UTILS_DUR_STATS_CONSUMER_PLUGIN_PATH",
+                         "dur_stats_consumer.so");
         if (run.empty() || producer.empty() || consumer.empty()) {
             MESSAGE("dftracer_run or dur_stats plugins not found, skipping.");
             return;
@@ -253,9 +265,11 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("dur_stats consumer alone fails before scanning") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string consumer = env_or_probe(
-            "DFTRACER_DUR_STATS_CONSUMER_PLUGIN_PATH", "dur_stats_consumer.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string consumer =
+            env_or_probe("DFTRACER_UTILS_DUR_STATS_CONSUMER_PLUGIN_PATH",
+                         "dur_stats_consumer.so");
         if (run.empty() || consumer.empty()) {
             MESSAGE("dftracer_run or dur_stats_consumer plugin not found.");
             return;
@@ -274,11 +288,14 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("--describe prints provides/consumes without a trace") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
-        std::string producer = env_or_probe(
-            "DFTRACER_DUR_STATS_PRODUCER_PLUGIN_PATH", "dur_stats_producer.so");
-        std::string consumer = env_or_probe(
-            "DFTRACER_DUR_STATS_CONSUMER_PLUGIN_PATH", "dur_stats_consumer.so");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
+        std::string producer =
+            env_or_probe("DFTRACER_UTILS_DUR_STATS_PRODUCER_PLUGIN_PATH",
+                         "dur_stats_producer.so");
+        std::string consumer =
+            env_or_probe("DFTRACER_UTILS_DUR_STATS_CONSUMER_PLUGIN_PATH",
+                         "dur_stats_consumer.so");
         if (run.empty() || producer.empty() || consumer.empty()) {
             MESSAGE("dftracer_run or dur_stats plugins not found, skipping.");
             return;
@@ -305,7 +322,8 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("--describe on a plugin that fails to load reports the error") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
         if (run.empty()) {
             MESSAGE("dftracer_run not found, skipping.");
             return;
@@ -318,7 +336,8 @@ TEST_SUITE("DFTracerRun") {
     }
 
     TEST_CASE("missing plugin path fails cleanly") {
-        std::string run = env_or_probe("DFTRACER_RUN_PATH", "dftracer_run");
+        std::string run =
+            env_or_probe("DFTRACER_UTILS_RUN_PATH", "dftracer_run");
         if (run.empty()) {
             MESSAGE("dftracer_run not found, skipping.");
             return;

@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_scanner_utility.h>

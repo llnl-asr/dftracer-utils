@@ -17,7 +17,123 @@ on:
         required: true
 
 jobs:
+  # One build per OS; the shards below download it and only run tests, so
+  # the changed files compile once instead of once per shard.
+  build:
+    permissions:
+      contents: read
+      actions: write
+    name: build (${{ inputs.os }})
+    env:
+      ROCKSDB_VERSION: ${{ inputs.rocksdb_version }}
+      CMAKE_POLICY_VERSION_MINIMUM: 3.5
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      CMAKE_ASM_COMPILER_LAUNCHER: sccache
+      DFTRACER_UTILS_DEPS_PREFIX: ${{ github.workspace }}/.deps
+      SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: auto
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_S3_USE_SSL: "true"
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_SECRET_ACCESS_KEY }}
+
+    runs-on: ${{ inputs.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare deps dir
+        run: |
+          sudo mkdir -p /opt/dftracer-deps
+          sudo chown "$(id -u):$(id -g)" /opt/dftracer-deps
+
+      - name: Restore RocksDB
+        run: scripts/ci/deps_cache.sh restore rocksdb /opt/dftracer-deps
+
+      - name: Use prebuilt RocksDB
+        run: |
+          prefix="/opt/dftracer-deps/rocksdb-${ROCKSDB_VERSION}"
+          if [ -x "${prefix}/bin/ldb" ]; then
+            echo "DFTRACER_UTILS_ROCKSDB_PREFIX=${prefix}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no prebuilt RocksDB at ${prefix}; building from source"
+          fi
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Restore dependency installs
+        run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: Cache CPM dependency sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ github.workspace }}/.cpmsource
+          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
+          restore-keys: |
+            cpmsource-lite-v1-
+
+      - name: Install dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake lcov zlib1g-dev libsqlite3-dev pkg-config ninja-build
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for f in cmake lcov zlib sqlite pkg-config ninja; do
+            if brew list --versions "$f" >/dev/null; then
+              echo "$f already installed"
+            else
+              brew install "$f"
+            fi
+          done
+
+      - name: Build with coverage
+        if: inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest'
+        run: scripts/coverage.sh --build-only
+
+      - name: Build
+        if: "!(inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest')"
+        run: |
+          cmake --preset tests
+          cmake --build --preset tests
+
+      # tar keeps file modes and symlinks, which the artifact zip drops.
+      # Object files are not needed to run the tests; coverage keeps its .gcno
+      # notes next to them. Static archives stay: the install tests need them,
+      # and so does .cpmsource, whose headers the install step copies.
+      - name: Pack the build
+        run: |
+          dir=build/${{ (inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest') && 'build-coverage' || 'build-tests' }}
+          tar --exclude='*.o' --exclude='*.gcda' --exclude='.git' -cf build.tar "$dir" .cpmsource
+          ls -lh build.tar
+
+      - uses: actions/upload-artifact@v6.0.0
+        with:
+          name: build-${{ inputs.os }}
+          path: build.tar
+          retention-days: 1
+          compression-level: 1
+
+      - name: Save dependency installs
+        if: success()
+        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
   test:
+    needs: build
     permissions:
       contents: read
       actions: write
@@ -76,14 +192,6 @@ jobs:
       - name: Restore dependency installs
         run: scripts/ci/deps_cache.sh restore "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
 
-      - name: Cache CPM dependency sources
-        uses: actions/cache@v5
-        with:
-          path: ${{ github.workspace }}/.cpmsource
-          key: cpmsource-lite-v1-${{ hashFiles('cmake/modules/Dependencies.cmake') }}
-          restore-keys: |
-            cpmsource-lite-v1-
-
       - name: Install dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -100,6 +208,19 @@ jobs:
               brew install "$f"
             fi
           done
+
+      - uses: actions/download-artifact@v7.0.0
+        with:
+          name: build-${{ inputs.os }}
+
+      - name: Unpack the build
+        run: tar -xf build.tar && rm build.tar
+
+      # The checkout above is newer than the build job's .gcno notes, and gcov
+      # rejects notes older than their source.
+      - name: Date the coverage notes after the checkout
+        if: inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest'
+        run: find build/build-coverage -name '*.gcno' -exec touch {} +
 
       # Route cores to a known dir (overrides apport/systemd-coredump) so a
       # crash in a test binary or a spawned server yields a gdb-able core.
@@ -123,18 +244,28 @@ jobs:
         if: inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest'
         run: |
           ulimit -c unlimited || true
-          make coverage
+          scripts/ci/core_watch.sh "${{ runner.os == 'macOS' && '/cores' || '/tmp/cores' }}" /tmp/backtraces &
+          watch_pid=$!
+          trap 'kill "$watch_pid" 2>/dev/null || true' EXIT
+          scripts/coverage.sh --test-only
 
       - name: Run test (Unix)
         if: "!(inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest')"
         run: |
           ulimit -c unlimited || true
-          make test
+          scripts/ci/core_watch.sh "${{ runner.os == 'macOS' && '/cores' || '/tmp/cores' }}" /tmp/backtraces &
+          watch_pid=$!
+          trap 'kill "$watch_pid" 2>/dev/null || true' EXIT
+          read -r -a shard_args <<<"$CTEST_ARGS"
+          ctest --preset tests "${shard_args[@]}"
 
       - name: Run Python tests (with venv)
         if: "matrix.shard == 1 && !(inputs.os == 'ubuntu-22.04' || inputs.os == 'macos-latest')"
         run: |
           ulimit -c unlimited || true
+          scripts/ci/core_watch.sh "${{ runner.os == 'macOS' && '/cores' || '/tmp/cores' }}" /tmp/backtraces &
+          watch_pid=$!
+          trap 'kill "$watch_pid" 2>/dev/null || true' EXIT
           if [ "${{ runner.os }}" = "Linux" ] && [ "3.12" = "3.12" ]; then
             make test-py RUN_TY=1
           else
@@ -153,6 +284,7 @@ jobs:
           sudo apt-get install -y gdb >/dev/null 2>&1 || true
           mkdir -p /tmp/backtraces
           for c in "${cores[@]}"; do
+            [ -e "/tmp/backtraces/$(basename "$c").txt" ] && continue
             enc=$(basename "$c")
             enc=${enc#core.*.}
             exe=$(printf '%s' "$enc" | tr '!' '/')
@@ -177,6 +309,7 @@ jobs:
           fi
           mkdir -p /tmp/backtraces
           for c in "${cores[@]}"; do
+            [ -e "/tmp/backtraces/$(basename "$c").txt" ] && continue
             echo "==================================================================="
             echo "core: $c"
             echo "==================================================================="
@@ -194,7 +327,7 @@ jobs:
         with:
           name: backtraces-${{ inputs.os }}-${{ matrix.shard }}
           path: /tmp/backtraces
-          retention-days: 7
+          retention-days: 1
           if-no-files-found: ignore
 
       - name: Trust Coveralls Homebrew tap (macOS)
@@ -216,10 +349,3 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
-      - name: Save dependency installs
-        if: success()
-        run: scripts/ci/deps_cache.sh save "ci-RelWithDebInfo" "$DFTRACER_UTILS_DEPS_PREFIX"
-
-      - name: sccache stats
-        if: always()
-        run: sccache --show-stats || true

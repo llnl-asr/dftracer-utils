@@ -11,6 +11,7 @@
 //   index_bench [--out F] [--baseline F] [--workdir D] [--build-runs N]
 //               [--runs N] [--warmups N] [--memory-budget BYTES]
 //               [--aggregation-interval-us US] INPUT...
+//   index_bench --smoke   (one tiny generated trace, one run, for ctest)
 //
 // --memory-budget bounds the index build (IndexerOptions::memory_budget);
 // build_peak_rss_bytes is the peak before any query runs.
@@ -21,15 +22,16 @@
 // group_by or flamegraph; a query with an arrow is not pruned, which only
 // reads one file's own columns.
 
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/view.h>
+#include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
 #include <simdjson.h>
 #include <sys/resource.h>
@@ -47,6 +49,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -647,8 +650,44 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
     return regressed;
 }
 
+std::string write_smoke_trace(const std::string& dir) {
+    fs::create_directories(dir);
+    const std::string gz = dir + "/smoke.pfw.gz";
+    std::string lines;
+    const char* names[] = {"read", "write", "open", "close"};
+    for (int i = 0; i < 2000; ++i) {
+        lines += R"({"ph":"X","name":")";
+        lines += names[i % 4];
+        lines += R"(","cat":"POSIX","pid":)" + std::to_string(i % 4);
+        lines += R"(,"tid":1,"ts":)" + std::to_string(1000 + i * 10);
+        lines += R"(,"dur":)" + std::to_string(1 + i % 50);
+        lines +=
+            R"(,"args":{"fname":"/data/f)" + std::to_string(i % 8) + "\"}}\n";
+    }
+    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(6);
+    auto member = comp.compress_member(
+        reinterpret_cast<const std::uint8_t*>(lines.data()), lines.size());
+    if (!member) {
+        std::fprintf(stderr, "compress failed\n");
+        std::exit(1);
+    }
+    std::ofstream(gz, std::ios::binary)
+        .write(reinterpret_cast<const char*>(member->data()),
+               static_cast<std::streamsize>(member->size()));
+    return gz;
+}
+
 Options parse_args(int argc, char** argv) {
     Options o;
+    if (argc == 2 && std::string_view(argv[1]) == "--smoke") {
+        o.workdir = (fs::temp_directory_path() / "index_bench_smoke").string();
+        o.out = o.workdir + "/index_bench.json";
+        o.build_runs = 1;
+        o.runs = 1;
+        o.warmups = 0;
+        o.inputs.push_back(write_smoke_trace(o.workdir));
+        return o;
+    }
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string {
@@ -682,7 +721,8 @@ Options parse_args(int argc, char** argv) {
                      "usage: index_bench [--out F] [--baseline F] "
                      "[--workdir D] [--build-runs N] [--runs N] "
                      "[--warmups N] [--memory-budget BYTES] "
-                     "[--aggregation-interval-us US] INPUT...\n");
+                     "[--aggregation-interval-us US] INPUT...\n       "
+                     "index_bench --smoke\n");
         std::exit(2);
     }
     return o;
@@ -750,7 +790,10 @@ int main(int argc, char** argv) {
             std::printf("%s: no baseline\n", std::string(input).c_str());
             continue;
         }
-        (void)cur.get(c);
+        if (cur.get(c) != simdjson::SUCCESS) {
+            std::printf("%s: no current result\n", std::string(input).c_str());
+            continue;
+        }
         std::printf("%s\n", std::string(input).c_str());
         regressed = compare(b, c) || regressed;
     }

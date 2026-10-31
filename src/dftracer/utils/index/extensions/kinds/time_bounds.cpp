@@ -22,10 +22,10 @@ chunk_bounds(const index::store::IndexDatabase& db, int file_id,
     ankerl::unordered_dense::map<std::uint64_t,
                                  std::pair<std::uint64_t, std::uint64_t>>
         out;
-    if (!db.extension_current(file_id, index::store::IndexExtension::ZONEMAP))
+    if (!db.extension_current(file_id, index::store::IndexExtension::Zonemap))
         return out;
     for (const auto& [granule, bytes] :
-         db.path_granules(file_id, index::store::IndexExtension::ZONEMAP,
+         db.path_granules(file_id, index::store::IndexExtension::Zonemap,
                           std::string(path))) {
         auto zone = decode_zone(bytes);
         std::uint64_t lo = 0;
@@ -54,10 +54,10 @@ ankerl::unordered_dense::set<std::uint64_t> chunks_without_starts(
     const index::store::IndexDatabase& db, int file_id, std::uint64_t begin,
     std::uint64_t end) {
     ankerl::unordered_dense::set<std::uint64_t> out;
-    if (!db.extension_current(file_id, index::store::IndexExtension::ZONEMAP))
+    if (!db.extension_current(file_id, index::store::IndexExtension::Zonemap))
         return out;
     for (const auto& [granule, bytes] : db.path_granules(
-             file_id, index::store::IndexExtension::ZONEMAP, "ts")) {
+             file_id, index::store::IndexExtension::Zonemap, "ts")) {
         auto zone = decode_zone(bytes);
         if (zone && zone->histogram && !zone->histogram->empty() &&
             zone->histogram->count_in_range(begin, end) == 0)
@@ -83,7 +83,7 @@ index::gzip::TimeBounds file_time_bounds(const index::store::IndexDatabase& db,
 std::optional<std::pair<double, double>> file_value_range(
     const index::store::IndexDatabase& db, int file_id, std::string_view path) {
     std::optional<std::pair<double, double>> out;
-    if (!db.extension_current(file_id, index::store::IndexExtension::ZONEMAP))
+    if (!db.extension_current(file_id, index::store::IndexExtension::Zonemap))
         return out;
     auto number = [](const std::string& text, double& v) {
         char* end = nullptr;
@@ -91,7 +91,7 @@ std::optional<std::pair<double, double>> file_value_range(
         return !text.empty() && end == text.c_str() + text.size();
     };
     for (const auto& [granule, bytes] :
-         db.path_granules(file_id, index::store::IndexExtension::ZONEMAP,
+         db.path_granules(file_id, index::store::IndexExtension::Zonemap,
                           std::string(path))) {
         auto zone = decode_zone(bytes);
         double lo = 0;

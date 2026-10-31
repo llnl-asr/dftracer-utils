@@ -10,12 +10,12 @@
 //
 //   view_api_bench [events] [workdir] [case-substring]
 
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/runtime.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -232,9 +232,13 @@ struct Case {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::int64_t events = argc > 1 ? std::atoll(argv[1]) : 2'000'000;
+    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const std::int64_t events =
+        smoke ? 20'000 : (argc > 1 ? std::atoll(argv[1]) : 2'000'000);
     const std::string dir =
-        argc > 2 ? argv[2] : fs::temp_directory_path().string() + "/view_bench";
+        !smoke && argc > 2 ? argv[2]
+                           : fs::temp_directory_path().string() +
+                                 (smoke ? "/view_bench_smoke" : "/view_bench");
     fs::create_directories(dir);
     const std::string gz = write_trace(dir, events);
     std::printf("trace: %s (%lld events)\n", gz.c_str(),
@@ -264,12 +268,13 @@ int main(int argc, char** argv) {
          [&] {
              rows_via_collect<EventRow>(
                  tv, {"name", "dur", "args.size"},
-                 [](const df::DataFrame& f, const std::vector<std::size_t>& at,
-                    std::int64_t r, EventRow& row) {
+                 [](const df::DataFrame& f,
+                    const std::vector<std::size_t>& col_idx, std::int64_t r,
+                    EventRow& row) {
                      row.name.value =
-                         std::string(f.columns[at[0]].string_at(r));
-                     row.dur.value = int_at(f, at[1], r);
-                     row.size.value = int_at(f, at[2], r);
+                         std::string(f.columns[col_idx[0]].string_at(r));
+                     row.dur.value = int_at(f, col_idx[1], r);
+                     row.size.value = int_at(f, col_idx[2], r);
                  });
          },
          [&] { run(rows<EventRow>(tv)); }},
@@ -277,11 +282,13 @@ int main(int argc, char** argv) {
          [&] {
              rows_via_collect<GenericRow>(
                  gv, {"op", "lat", "io.size"},
-                 [](const df::DataFrame& f, const std::vector<std::size_t>& at,
-                    std::int64_t r, GenericRow& row) {
-                     row.op.value = std::string(f.columns[at[0]].string_at(r));
-                     row.lat.value = int_at(f, at[1], r);
-                     row.size.value = int_at(f, at[2], r);
+                 [](const df::DataFrame& f,
+                    const std::vector<std::size_t>& col_idx, std::int64_t r,
+                    GenericRow& row) {
+                     row.op.value =
+                         std::string(f.columns[col_idx[0]].string_at(r));
+                     row.lat.value = int_at(f, col_idx[1], r);
+                     row.size.value = int_at(f, col_idx[2], r);
                  });
          },
          [&] { run(rows<GenericRow>(gv)); }},
@@ -562,15 +569,15 @@ int main(int argc, char** argv) {
     std::printf("%-36s %10s %10s %8s %20s\n", "case", "base ms", "view ms",
                 "view/base", "95% CI");
     for (const Case& c : cases) {
-        if (argc > 3 &&
+        if (!smoke && argc > 3 &&
             std::string_view(c.name).find(argv[3]) == std::string_view::npos)
             continue;
-        for (int i = 0; i < WARMUPS; ++i) {
+        for (int i = 0; i < (smoke ? 0 : WARMUPS); ++i) {
             c.baseline();
             c.view();
         }
         std::vector<double> base_t, view_t;
-        for (int i = 0; i < RUNS; ++i) {
+        for (int i = 0; i < (smoke ? 3 : RUNS); ++i) {
             base_t.push_back(seconds(c.baseline));
             view_t.push_back(seconds(c.view));
         }
@@ -581,5 +588,5 @@ int main(int argc, char** argv) {
         std::printf("%-36s %10.2f %10.2f %8.3f   [%6.3f, %6.3f]%s\n", c.name,
                     mo * 1e3, mn * 1e3, mn / mo, lo, hi, bad ? "  SLOWER" : "");
     }
-    return regressed ? 1 : 0;
+    return regressed && !smoke ? 1 : 0;
 }

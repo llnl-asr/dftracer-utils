@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_OPS_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_PLAN_OPS_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -118,11 +118,11 @@ coro::CoroTask<std::string> flamegraph_partial(
     std::string dur, std::string name, std::vector<std::string> group);
 dataframe::DataFrame merge_flamegraph_partials(
     const std::vector<std::string_view>& partials);
-coro::CoroTask<ExportStats> run_folds(ScanPlan plan_,
-                                      std::span<detail::Fold* const> folds,
-                                      dftracer::utils::StringIntern& intern,
-                                      detail::DynamicPrune* dyn_prune = nullptr,
-                                      coro::CoroSemaphore* gate = nullptr);
+coro::CoroTask<ExportStats> run_folds(
+    ScanPlan plan_, std::span<detail::Fold* const> folds,
+    dftracer::utils::dstd::StringIntern& intern,
+    detail::DynamicPrune* dyn_prune = nullptr,
+    coro::CoroSemaphore* gate = nullptr);
 coro::CoroTask<ExportStats> run(ScanPlan plan_,
                                 const ProgressFn* progress = nullptr);
 std::string materialize_dir(const ScanPlan& plan_);

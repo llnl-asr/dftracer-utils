@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DATAFRAME_INTERNAL_SCALAR_H
 #define DFTRACER_UTILS_DATAFRAME_INTERNAL_SCALAR_H
 
-#include <dftracer/utils/core/common/error.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/types.h>
 
@@ -44,7 +44,7 @@ inline dftu_scalar raise_if_error(dftu_scalar s) {
         const char* msg = s.value.err != nullptr && s.value.err->message
                               ? s.value.err->message
                               : "reduction failed";
-        throw DFTUtilsException(ErrorCode::INVALID_ARGUMENT, msg);
+        throw DFTUtilsException(ErrorCode::InvalidArgument, msg);
     }
     return s;
 }

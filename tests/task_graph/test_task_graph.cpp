@@ -1,13 +1,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/task_graph/reduction.h>
-#include <dftracer/utils/core/task_graph/task_graph.h>
-#include <dftracer/utils/core/task_graph/task_group.h>
-#include <dftracer/utils/core/task_graph/task_result.h>
-#include <dftracer/utils/core/task_graph/types.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/task_graph/reduction.h>
+#include <dftracer/utils/runtime/task_graph/task_graph.h>
+#include <dftracer/utils/runtime/task_graph/task_group.h>
+#include <dftracer/utils/runtime/task_graph/task_result.h>
+#include <dftracer/utils/runtime/task_graph/types.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
 #include <memory>

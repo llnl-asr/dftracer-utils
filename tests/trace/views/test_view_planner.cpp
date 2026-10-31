@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/filesystem.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_database_writer_context.h>
@@ -8,10 +8,9 @@
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
+#include <testing_utilities.h>
 
 #include <string>
-
-#include "testing_utilities.h"
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
@@ -93,9 +92,9 @@ static void populate_test_idx(const std::string& index_path,
                                     file_cat_bloom.num_entries());
 
     dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "name");
+        *writer, dftu_utils_test::IndexExtension::Bloom, fid, "name");
     dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "cat");
+        *writer, dftu_utils_test::IndexExtension::Bloom, fid, "cat");
     dftu_utils_test::mark_built(*writer, fid);
     writer->commit();
 }
@@ -297,7 +296,7 @@ TEST_SUITE("ViewPlannerUtility") {
             dftu_utils_test::put_chunk_bloom(*writer, fid, 0, "fhash", blob,
                                              fhash_bloom.num_entries());
             dftu_utils_test::index_records::put_path(
-                *writer, dftu_utils_test::IndexExtension::BLOOM, fid, "fhash");
+                *writer, dftu_utils_test::IndexExtension::Bloom, fid, "fhash");
             dftu_utils_test::mark_built(*writer, fid);
             writer->commit();
         }

@@ -1,12 +1,12 @@
 #ifndef DFTRACER_UTILS_UTILITIES_READER_TRACE_READER_H
 #define DFTRACER_UTILS_UTILITIES_READER_TRACE_READER_H
 
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/constants.h>
-#include <dftracer/utils/core/coro/async_generator.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/json/parser.h>
+#include <dftracer/utils/runtime/coro/async_generator.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
@@ -145,7 +145,7 @@ class TraceReader {
     TraceReaderConfig config_;
     bool has_index_ = false;
     std::string index_path_;
-    ArchiveFormat format_ = ArchiveFormat::UNKNOWN;
+    ArchiveFormat format_ = ArchiveFormat::Unknown;
     std::size_t cached_max_bytes_ = 0;
     std::size_t cached_num_lines_ = 0;
     bool metadata_cached_ = false;

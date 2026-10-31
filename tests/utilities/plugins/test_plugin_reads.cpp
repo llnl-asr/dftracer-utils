@@ -3,21 +3,20 @@
 // distinct arg key in the batch - the cost this feature exists to avoid.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <filesystem>
 #include <fstream>
 #include <string>
-
-#include "test_plugin_common.h"
 
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::PluginRun;
@@ -73,7 +72,8 @@ TEST_CASE("a declared reads() narrows on_batch to exactly those columns") {
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": true})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);
@@ -94,7 +94,8 @@ TEST_CASE(
                    .add(READS_PROJECTION_PLUGIN_PATH,
                         config_of(R"({"declare_reads": false})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     dftu_utils_test::TestEnvironment env(0);

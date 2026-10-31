@@ -1,23 +1,22 @@
 #include <dftracer/utils/binaries/common_cli.h>
-#include <dftracer/utils/core/common/config.h>
-#include <dftracer/utils/core/common/logging.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/pipeline/pipeline.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
-#include <dftracer/utils/core/tasks/task.h>
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
-#include <dftracer/utils/index/schemas/dft/agg/aggregators.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/pipeline/pipeline.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
 #include <dftracer/utils/trace/comparator/comparison_config.h>
 #include <dftracer/utils/trace/comparator/comparison_result.h>
 #include <dftracer/utils/trace/comparator/comparison_utility.h>
 #include <dftracer/utils/trace/comparator/tree_table_formatter.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -25,14 +24,9 @@
 #include <optional>
 
 using namespace dftracer::utils;
-using namespace dftracer::utils::utilities;
-using namespace dftracer::utils::index::schemas::dft::agg;
 using namespace dftracer::utils::trace::comparator;
-using dftracer::utils::index::build::BatchBuilder;
-using dftracer::utils::index::build::ensure_index_fresh;
-using dftracer::utils::index::build::IndexBuildBatchConfig;
-using dftracer::utils::index::build::Resolver;
-using dftracer::utils::index::build::ResolverInput;
+using dftracer::utils::index::build::resolve_and_build_index;
+using dftracer::utils::index::build::ResolveAndBuildInput;
 
 class ComparatorArgParse : public cli::ArgParse {
    public:
@@ -154,8 +148,6 @@ void flatten_nodes(const ComparisonNode& node,
 }
 
 struct AggSpec {
-    AggregationConfig agg_cfg;
-    std::optional<duql::Query> query;
     const ComparisonNode* visitor;
 };
 
@@ -164,23 +156,22 @@ struct NodeAggPlan {
     std::vector<AggSpec> specs;
 };
 
-static coro::CoroTask<void> run_all_aggregations(
-    CoroScope& ctx, const std::vector<std::string>& files,
-    const std::vector<NodeAggPlan>& plans,
-    std::vector<std::vector<EventAggregatorOutput>>& results,
-    const std::string& index_dir, const ComparisonConfig& config) {
-    results.resize(plans.size());
-    for (std::size_t ni = 0; ni < plans.size(); ++ni) {
-        const auto& plan = plans[ni];
-        results[ni].resize(plan.specs.size());
-        for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {
-            const auto& spec = plan.specs[vi];
-            results[ni][vi] = co_await run_comparison_aggregation(
-                ctx, files, spec.agg_cfg, spec.query, index_dir,
-                config.checkpoint_size, config.force_rebuild,
-                config.executor_threads);
-        }
+static coro::CoroTask<void> aggregate_all(
+    const std::vector<std::string>& files,
+    const dstd::Vector<ComparisonFilter>& filters, const std::string& index_dir,
+    const ComparisonConfig& config, dstd::StringIntern& strings,
+    SideAggregate& out, bool& failed) {
+    auto result = co_await aggregate_side(
+        files, index_dir, filters,
+        static_cast<std::uint64_t>(config.defaults.time_interval_ms * 1000.0),
+        config.executor_threads, strings);
+    if (!result) {
+        DFTRACER_UTILS_LOG_ERROR("Aggregation failed: %s",
+                                 result.error().format().c_str());
+        failed = true;
+        co_return;
     }
+    out = std::move(*result);
 }
 
 }  // namespace
@@ -273,12 +264,12 @@ static std::optional<ComparisonConfig> build_comparison_config(
     return config;
 }
 
-// Precompute the per-node aggregation plans from the resolved config (needed by
-// both the baseline and variant Agg tasks). Returns nullopt on an invalid node
-// query (already logged).
-static std::optional<std::vector<NodeAggPlan>> build_agg_plans(
-    const ComparisonConfig& config) {
-    std::vector<NodeAggPlan> agg_plans;
+// Precompute the per-node aggregation plans and the filters of their visitors,
+// in plan order (needed by both the baseline and variant Agg tasks). Returns
+// false on an invalid or unsupported node query (already logged).
+static bool build_agg_plans(const ComparisonConfig& config,
+                            std::vector<NodeAggPlan>& agg_plans,
+                            dstd::Vector<ComparisonFilter>& filters) {
     for (auto& node : config.nodes) {
         NodeAggPlan plan;
         plan.root = node;
@@ -287,33 +278,30 @@ static std::optional<std::vector<NodeAggPlan>> build_agg_plans(
         flatten_nodes(node, visitors);
 
         for (const auto* visitor : visitors) {
-            AggSpec spec;
+            ComparisonFilter filter;
             if (!visitor->composed_query.empty()) {
-                auto result = duql::Query::from_string(visitor->composed_query);
-                if (!result) {
+                auto query = duql::Query::from_string(visitor->composed_query);
+                if (!query) {
                     DFTRACER_UTILS_LOG_ERROR("Invalid query for node '%s': %s",
                                              visitor->name.c_str(),
-                                             result.error().format().c_str());
-                    return std::nullopt;
+                                             query.error().format().c_str());
+                    return false;
                 }
-                spec.query = std::move(*result);
+                auto translated = filter_from_query(*query);
+                if (!translated) {
+                    DFTRACER_UTILS_LOG_ERROR(
+                        "Node '%s': %s", visitor->name.c_str(),
+                        translated.error().format().c_str());
+                    return false;
+                }
+                filter = std::move(*translated);
             }
-
-            spec.agg_cfg.time_interval_us = static_cast<std::uint64_t>(
-                config.defaults.time_interval_ms * 1000.0);
-            spec.agg_cfg.extra_group_keys = {};
-            spec.agg_cfg.compute_statistics = true;
-            spec.agg_cfg.compute_percentiles = true;
-            spec.agg_cfg.percentiles = visitor->resolved_percentiles;
-            spec.agg_cfg.sketch_accuracy = 0.01;
-            spec.agg_cfg.track_process_parents = false;
-            spec.visitor = visitor;
-
-            plan.specs.push_back(std::move(spec));
+            filters.push_back(std::move(filter));
+            plan.specs.push_back(AggSpec{visitor});
         }
         agg_plans.push_back(std::move(plan));
     }
-    return agg_plans;
+    return true;
 }
 
 // Render the assembled comparison output as JSON or a formatted tree table.
@@ -338,43 +326,43 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (!config_opt) return 1;
     ComparisonConfig config = std::move(*config_opt);
 
-    // Precompute aggregation plans from config (needed by both Agg tasks)
-    auto agg_plans_opt = build_agg_plans(config);
-    if (!agg_plans_opt) return 1;
-    std::vector<NodeAggPlan> agg_plans = std::move(*agg_plans_opt);
+    // Precompute aggregation plans and filters from config (needed by both
+    // Agg tasks)
+    std::vector<NodeAggPlan> agg_plans;
+    dstd::Vector<ComparisonFilter> filters;
+    if (!build_agg_plans(config, agg_plans, filters)) return 1;
 
     auto pipeline_config =
         cli::build_pipeline_config("DFTracer Comparator", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
+    // Indexes the traces under `path` with their aggregation tier and lists
+    // the trace files. The aggregation config is the one the queries use.
     auto resolve_and_build =
         [&config](CoroScope& scope, const std::string& path,
                   const std::string& index_dir,
                   std::vector<std::string>& out_files) -> coro::CoroTask<void> {
-        if (!fs::exists(path)) {
+        if (!dftracer::utils::input_exists(path)) {
             DFTRACER_UTILS_LOG_ERROR("Path does not exist: %s", path.c_str());
             co_return;
         }
 
-        if (fs::is_regular_file(path)) {
-            co_await ensure_index_fresh(&scope, "", path, index_dir,
-                                        config.force_rebuild);
+        ResolveAndBuildInput input;
+        if (dftracer::utils::input_is_regular_file(path)) {
+            input.files.push_back(path);
         } else {
-            co_await ensure_index_fresh(&scope, path, "", index_dir,
-                                        config.force_rebuild);
+            input.directory = path;
         }
+        input.index_dir = index_dir;
+        input.checkpoint_size = config.checkpoint_size;
+        input.parallelism = config.executor_threads;
+        input.force_rebuild = config.force_rebuild;
+        input.build_bloom = false;
+        input.require_aggregation = true;
+        input.aggregation_config = comparison_index_config();
 
-        Resolver resolver;
-        ResolverInput resolve_input;
-        resolve_input.index_dir = index_dir;
-        resolve_input.require_checkpoints = !config.force_rebuild;
-        if (fs::is_regular_file(path)) {
-            resolve_input.files = {path};
-        } else {
-            resolve_input.directory = path;
-        }
-
-        auto result = co_await resolver(resolve_input);
+        auto result =
+            co_await resolve_and_build_index(&scope, std::move(input));
         out_files = std::move(result.all_files);
 
         if (out_files.empty()) {
@@ -382,34 +370,22 @@ static int run_comparator(const ComparatorArgParse* cli) {
                                      path.c_str());
             co_return;
         }
-
-        if (result.needs_checkpoint.empty()) {
-            DFTRACER_UTILS_LOG_INFO("All %zu files already indexed",
-                                    out_files.size());
-            co_return;
+        for (const auto& failure : result.failures) {
+            DFTRACER_UTILS_LOG_WARN("Could not index %s: %s",
+                                    failure.file_path.c_str(),
+                                    failure.message.c_str());
         }
-
-        auto batch_cfg = std::make_shared<IndexBuildBatchConfig>();
-        batch_cfg->file_paths.reserve(result.needs_checkpoint.size());
-        for (const auto& item : result.needs_checkpoint) {
-            batch_cfg->file_paths.push_back(item.file_path);
-        }
-        batch_cfg->index_dir = index_dir;
-        batch_cfg->checkpoint_size = config.checkpoint_size;
-        batch_cfg->parallelism = config.executor_threads;
-        batch_cfg->force_rebuild = config.force_rebuild;
-
-        DFTRACER_UTILS_LOG_INFO("Indexing %zu of %zu files...",
-                                result.needs_checkpoint.size(),
-                                out_files.size());
-        co_await BatchBuilder::process(&scope, std::move(batch_cfg));
     };
 
     // Shared state between tasks
     std::vector<std::string> baseline_files;
     std::vector<std::string> variant_files;
-    std::vector<std::vector<EventAggregatorOutput>> baseline_results;
-    std::vector<std::vector<EventAggregatorOutput>> variant_results;
+    // The ids of both sides' groups are in this one table.
+    dstd::StringIntern strings;
+    SideAggregate baseline_side;
+    SideAggregate variant_side;
+    bool baseline_failed = false;
+    bool variant_failed = false;
 
     auto baseline_index_path = trace::internal::determine_index_path(
         config.baseline, config.baseline_index_dir);
@@ -464,13 +440,13 @@ static int run_comparator(const ComparatorArgParse* cli) {
     bool same_files = shared_index && config.baseline == config.variant;
     if (same_files) {
         auto agg_shared = make_task(
-            [&baseline_files, &baseline_results, &variant_results, &agg_plans,
-             &config](CoroScope& ctx) -> coro::CoroTask<void> {
+            [&baseline_files, &baseline_side, &baseline_failed, &filters,
+             &strings,
+             &config]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
                 if (baseline_files.empty()) co_return;
-                co_await run_all_aggregations(
-                    ctx, baseline_files, agg_plans, baseline_results,
-                    config.baseline_index_dir, config);
-                variant_results = baseline_results;
+                co_await aggregate_all(baseline_files, filters,
+                                       config.baseline_index_dir, config,
+                                       strings, baseline_side, baseline_failed);
             },
             "Aggregate");
         agg_shared->depends_on(enum_index_base);
@@ -478,23 +454,24 @@ static int run_comparator(const ComparatorArgParse* cli) {
         agg_var = agg_shared;
     } else {
         agg_base = make_task(
-            [&baseline_files, &baseline_results, &agg_plans,
-             &config](CoroScope& ctx) -> coro::CoroTask<void> {
+            [&baseline_files, &baseline_side, &baseline_failed, &filters,
+             &strings,
+             &config]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
                 if (baseline_files.empty()) co_return;
-                co_await run_all_aggregations(
-                    ctx, baseline_files, agg_plans, baseline_results,
-                    config.baseline_index_dir, config);
+                co_await aggregate_all(baseline_files, filters,
+                                       config.baseline_index_dir, config,
+                                       strings, baseline_side, baseline_failed);
             },
             "AggBaseline");
         agg_base->depends_on(enum_index_base);
 
         agg_var = make_task(
-            [&variant_files, &variant_results, &agg_plans,
-             &config](CoroScope& ctx) -> coro::CoroTask<void> {
+            [&variant_files, &variant_side, &variant_failed, &filters, &strings,
+             &config]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
                 if (variant_files.empty()) co_return;
-                co_await run_all_aggregations(ctx, variant_files, agg_plans,
-                                              variant_results,
-                                              config.variant_index_dir, config);
+                co_await aggregate_all(variant_files, filters,
+                                       config.variant_index_dir, config,
+                                       strings, variant_side, variant_failed);
             },
             "AggVariant");
         agg_var->depends_on(enum_index_var);
@@ -507,57 +484,49 @@ static int run_comparator(const ComparatorArgParse* cli) {
     int result_code = 0;
 
     auto compare_task = make_task(
-        [&config, &baseline_files, &variant_files, &baseline_results,
-         &variant_results, &agg_plans, &output, &result_code](
-            [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
-            if (baseline_files.empty() || variant_files.empty()) {
+        [&config, &baseline_files, &variant_files, &baseline_side,
+         &variant_side, &baseline_failed, &variant_failed, &strings, &agg_plans,
+         &output, &result_code,
+         same_files]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+            if (baseline_files.empty() || variant_files.empty() ||
+                baseline_failed || variant_failed) {
                 result_code = 1;
                 co_return;
             }
 
-            output.baseline_file_count =
-                baseline_results[0][0].total_files_processed;
-            output.variant_file_count =
-                variant_results[0][0].total_files_processed;
+            const SideAggregate& variant_ref =
+                same_files ? baseline_side : variant_side;
+            output.baseline_file_count = baseline_files.size();
+            output.variant_file_count = variant_files.size();
+            // Metadata comes from the first node's first visitor so
+            // process_count, thread_count, and makespan reflect the full
+            // trace rather than whichever node happens to be last.
+            output.baseline_meta = baseline_side.meta;
+            output.variant_meta = variant_ref.meta;
 
             auto start_time = std::chrono::high_resolution_clock::now();
 
+            std::size_t visitor_index = 0;
             for (std::size_t ni = 0; ni < agg_plans.size(); ++ni) {
                 const auto& plan = agg_plans[ni];
                 std::vector<ComparisonVisitorPair> pairs;
                 pairs.reserve(plan.specs.size());
 
                 for (std::size_t vi = 0; vi < plan.specs.size(); ++vi) {
-                    // Compute metadata once from the first node/visitor so
-                    // process_count, thread_count, and makespan reflect the
-                    // full trace rather than whichever node happens to be last.
-                    if (ni == 0 && vi == 0) {
-                        auto b_files =
-                            baseline_results[0][0].total_files_processed;
-                        auto v_files =
-                            variant_results[0][0].total_files_processed;
-                        output.baseline_meta = extract_metadata(
-                            baseline_results[ni][vi].strings(),
-                            baseline_results[ni][vi].aggregations, b_files);
-                        output.variant_meta = extract_metadata(
-                            variant_results[ni][vi].strings(),
-                            variant_results[ni][vi].aggregations, v_files);
-                    }
-
                     ComparisonVisitorPair pair;
-                    pair.baseline = std::move(baseline_results[ni][vi]);
-                    pair.variant = std::move(variant_results[ni][vi]);
+                    pair.baseline = &baseline_side.groups[visitor_index];
+                    pair.variant = &variant_ref.groups[visitor_index];
                     pair.node = *plan.specs[vi].visitor;
                     pairs.push_back(std::move(pair));
+                    ++visitor_index;
                 }
 
                 ComparisonUtilityInput cmp_input;
                 cmp_input.visitors = std::move(pairs);
                 cmp_input.root_node = plan.root;
-                cmp_input.baseline_file_count =
-                    baseline_results[ni][0].total_files_processed;
-                cmp_input.variant_file_count =
-                    variant_results[ni][0].total_files_processed;
+                cmp_input.strings = &strings;
+                cmp_input.baseline_file_count = baseline_files.size();
+                cmp_input.variant_file_count = variant_files.size();
 
                 ComparisonUtility cmp;
                 auto cmp_output = co_await cmp(cmp_input);

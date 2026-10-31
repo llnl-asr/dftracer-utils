@@ -14,7 +14,7 @@ TEST_CASE("parse - simple comparison") {
     CHECK(std::holds_alternative<CompareNode>(node.data));
     auto& cmp = std::get<CompareNode>(node.data);
     CHECK(cmp.field.path == "cat");
-    CHECK(cmp.op == CompareOp::EQ);
+    CHECK(cmp.op == CompareOp::Eq);
     CHECK(std::get<std::string>(cmp.value.value) == "POSIX");
 }
 
@@ -109,7 +109,7 @@ TEST_CASE("parse - substring 'sub' in field") {
     REQUIRE(std::holds_alternative<MatchNode>(node.data));
     auto& m = std::get<MatchNode>(node.data);
     CHECK(m.field.path == "name");
-    CHECK(m.op == MatchOp::ICONTAINS);
+    CHECK(m.op == MatchOp::Icontains);
     CHECK_FALSE(m.negated);
     CHECK(m.pattern == "send");
 }
@@ -118,7 +118,7 @@ TEST_CASE("parse - substring 'sub' not in field") {
     auto result = parse(R"('send' not in name)");
     REQUIRE(result.has_value());
     auto& m = std::get<MatchNode>((*result)->data);
-    CHECK(m.op == MatchOp::ICONTAINS);
+    CHECK(m.op == MatchOp::Icontains);
     CHECK(m.negated);
 }
 

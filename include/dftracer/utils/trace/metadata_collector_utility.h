@@ -1,10 +1,10 @@
 #ifndef DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
 #define DFTRACER_UTILS_UTILITIES_COMPOSITES_DFTRACER_METADATA_COLLECTOR_UTILITY_H
 
-#include <dftracer/utils/core/common/archive_format.h>
-#include <dftracer/utils/core/coro/task.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
+#include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <string>
@@ -90,7 +90,7 @@ struct MetadataCollectorUtilityOutput {
     std::uint64_t num_lines = 0;
     std::uint64_t checkpoint_size = 0;
     std::size_t num_checkpoints = 0;
-    ArchiveFormat format = ArchiveFormat::UNKNOWN;
+    ArchiveFormat format = ArchiveFormat::Unknown;
     std::string error_message;
     std::size_t event_hash = 0;
 

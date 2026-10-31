@@ -1,8 +1,6 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_BLOOM_FILTER_H
 
-#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -45,8 +43,20 @@ class BloomFilter {
 
     static BloomFilter from_blob(const unsigned char* data, std::size_t size);
 
-    void add(std::string_view value);
-    bool possibly_contains(std::string_view value) const;
+    /// The two hashes of a value. They depend on the value alone, so a caller
+    /// that probes and then inserts it computes them once.
+    struct Hashes {
+        std::uint64_t block;
+        std::uint64_t mask;
+    };
+    static Hashes hash(std::string_view value);
+
+    void add(std::string_view value) { add(hash(value)); }
+    void add(const Hashes& hashes);
+    bool possibly_contains(std::string_view value) const {
+        return possibly_contains(hash(value));
+    }
+    bool possibly_contains(const Hashes& hashes) const;
     void merge_from(const BloomFilter& other);
 
     std::vector<unsigned char> serialize() const;
@@ -64,20 +74,12 @@ class BloomFilter {
     BloomFilter(std::vector<unsigned char> bits, std::size_t num_bits,
                 std::size_t num_hashes, std::size_t num_entries);
 
-    void compute_hashes(std::string_view value, std::uint64_t& h1,
-                        std::uint64_t& h2) const;
     static std::size_t optimal_num_hashes(std::size_t m, std::size_t n);
 
     std::vector<unsigned char> bits_;
     std::size_t num_bits_;
     std::size_t num_hashes_;
     std::size_t num_entries_;
-    mutable utilities::hash::Fnv1aHasherUtility hasher_;
-
-    static constexpr std::size_t LAST_VALUE_CAP = 64;
-    std::array<char, LAST_VALUE_CAP> last_value_buf_{};
-    std::size_t last_value_size_ = 0;
-    bool last_value_valid_ = false;
 };
 
 }  // namespace dftracer::utils::index::extensions

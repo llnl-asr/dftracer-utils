@@ -1,11 +1,11 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_STREAM_ROW_FOLD_H
 #define DFTRACER_UTILS_TRACE_VIEWS_STREAM_ROW_FOLD_H
 
-#include <dftracer/utils/core/common/string_intern.h>
-#include <dftracer/utils/core/coro/async_semaphore.h>
-#include <dftracer/utils/core/coro/channel.h>
-#include <dftracer/utils/core/coro/task.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/string_intern.h>
+#include <dftracer/utils/runtime/coro/async_semaphore.h>
+#include <dftracer/utils/runtime/coro/channel.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/views/batch_bridge.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -44,7 +44,7 @@ class StreamRowFold : public Fold {
    public:
     StreamRowFold(std::shared_ptr<coro::Channel<dataframe::Morsel>> channel,
                   std::shared_ptr<coro::CoroSemaphore> budget,
-                  std::shared_ptr<dftracer::utils::StringIntern> intern,
+                  std::shared_ptr<dftracer::utils::dstd::StringIntern> intern,
                   std::vector<std::string> select, double time_scale = 1.0,
                   bool keep_metadata = false, bool emit_dyn = false,
                   std::shared_ptr<const ViewPlan> branch = nullptr,
@@ -110,7 +110,7 @@ class StreamRowFold : public Fold {
 
     std::shared_ptr<coro::Channel<dataframe::Morsel>> channel_;
     std::shared_ptr<coro::CoroSemaphore> budget_;
-    std::shared_ptr<dftracer::utils::StringIntern> intern_;
+    std::shared_ptr<dftracer::utils::dstd::StringIntern> intern_;
     std::vector<std::string> select_;
     double time_scale_;
     bool keep_metadata_;  // phase("metadata"): keep ph=M records

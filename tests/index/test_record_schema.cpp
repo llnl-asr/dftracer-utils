@@ -1,11 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/common/error.h>
-#include <dftracer/utils/core/common/filesystem.h>
-#include <dftracer/utils/core/coro/task.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -126,10 +126,10 @@ TEST_SUITE("Schemas") {
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
-            CHECK(cat.at("ok").type == store::PathType::BOOL);
+            CHECK(cat.at("ok").type == store::PathType::Bool);
             const auto blooms =
                 db.extension_paths(static_cast<int>(files[0].file_id),
-                                   store::IndexExtension::BLOOM);
+                                   store::IndexExtension::Bloom);
             CHECK(std::find(blooms.begin(), blooms.end(), "op") !=
                   blooms.end());
             CHECK(std::find(blooms.begin(), blooms.end(), "cat") ==

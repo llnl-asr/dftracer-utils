@@ -228,7 +228,7 @@ Configure it once at startup with functions; emit with macros:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/core/common/logging.h>
+   #include <dftracer/utils/common/logging.h>
    namespace logger = dftracer::utils::logger;
 
    logger::init();  // reads env, defaults to Info + auto color
@@ -295,6 +295,17 @@ The pre-commit hook runs:
 Python checks require ``uvx`` or ``ruff`` in PATH; web checks require Node/``npm``
 and ``web/node_modules``. Both are skipped gracefully if their tools are not
 available, so the C++ workflow is unaffected.
+
+To keep ``git blame`` pointing at the real authors, turn on the list of
+formatting-only commits:
+
+.. code-block:: bash
+
+   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+Append the full hash of a commit that only moves or reformats code to
+``.git-blame-ignore-revs``. The ``blame_ignore_revs`` test rejects a hash
+that changes more than whitespace or file names.
 
 Web UI
 ~~~~~~
@@ -557,7 +568,7 @@ Never store it across the parser's or the input buffer's lifetime.
 
 **Instantiating Executor directly**
 
-``Executor`` (``core/pipeline/executor.h``) is internal to the Pipeline. Never create it directly; use ``Pipeline`` or the task framework instead.
+``Executor`` (``runtime/executor/executor.h``) is internal to the Pipeline. Never create it directly; use ``Pipeline`` or the task framework instead.
 
 **Per-event SQL indexing**
 

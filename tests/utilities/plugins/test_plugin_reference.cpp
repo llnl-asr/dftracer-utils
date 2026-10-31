@@ -4,21 +4,20 @@
 // service checks race-free writes into the plugin's own status table.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
+#include <utilities/plugins/test_plugin_common.h>
 
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
-
-#include "test_plugin_common.h"
 
 #ifdef REFERENCE_PLUGIN_PATH
 
@@ -115,7 +114,8 @@ TEST_CASE("reference_plugin: every service reports OK") {
                         ConfigTree::from_json_string(R"({"workdir": ")" +
                                                      env.get_dir() + R"("})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});
@@ -139,7 +139,8 @@ TEST_CASE("reference_plugin: a forced-missing service fails loudly") {
                             R"({"workdir": ")" + env.get_dir() +
                             R"(", "force_missing": "dftu.svc.agg@1"})"))
                    .build();
-    INFO((set.has_value() ? std::string{} : set.error().message));
+    INFO(
+        (set.has_value() ? std::string{} : std::string(set.error().message())));
     REQUIRE(set.has_value());
 
     View view = View::from_files({make_trace(env)});

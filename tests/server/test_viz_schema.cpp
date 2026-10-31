@@ -1,8 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/core/coro/coro.h>
-#include <dftracer/utils/core/runtime.h>
-#include <dftracer/utils/core/tasks/coro_scope.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/runtime/coro/coro.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/http_request.h>
 #include <dftracer/utils/server/http_response.h>
 #include <dftracer/utils/server/router.h>
@@ -80,6 +80,8 @@ void write_gz(const fs::path& path, const std::string& content) {
 }
 
 struct Served {
+    explicit Served(const std::string& name) : dir(name) {}
+    dftu_utils_test::ScopedTestDir dir;
     std::unique_ptr<TraceIndex> index;
     Router router;
 };
@@ -88,12 +90,9 @@ struct Served {
 // directory. Discovery lists .pfw.gz files only.
 std::unique_ptr<Served> serve(const std::string& name,
                               const std::string& content) {
-    auto dir = dftu_utils_test::make_unique_test_path(name);
-    fs::create_directories(dir);
-    write_gz(dir / "trace.pfw.gz", content);
-    auto s = std::make_unique<Served>();
-    s->index =
-        std::make_unique<TraceIndex>(dir.string(), (dir / "idx").string());
+    auto s = std::make_unique<Served>(name);
+    write_gz(s->dir.path() / "trace.pfw.gz", content);
+    s->index = std::make_unique<TraceIndex>(s->dir.str(), s->dir.file("idx"));
     Runtime rt(4);
     auto task =
         run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {

@@ -21,6 +21,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <instrumentation.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/resource.h>
@@ -695,21 +696,6 @@ struct ChildResult {
 constexpr std::chrono::seconds CHILD_TIMEOUT{300};
 constexpr std::size_t MAX_PARALLEL_CHILDREN = 4;
 
-// Peak RSS under a sanitizer or Valgrind is the tool's shadow memory, not the
-// engine's, so the bounds mean nothing there.
-bool under_instrumentation() {
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    return true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
-    __has_feature(memory_sanitizer)
-    return true;
-#endif
-#endif
-    const char* preload = std::getenv("LD_PRELOAD");
-    return preload && std::strstr(preload, "vgpreload") != nullptr;
-}
-
 // Runs on worker threads, so it makes no assertion. The caller checks `piped`
 // and `forked`.
 ChildResult run_child(const std::string& op) {
@@ -826,7 +812,7 @@ TEST_CASE("every lazy op is in the expectation table") {
 }
 
 TEST_CASE("each op stays within its bound at a small budget" *
-          doctest::skip(under_instrumentation())) {
+          doctest::skip(instrumentation::active())) {
     const bool report = std::getenv("DFTU_OP_PEAK_REPORT") != nullptr;
     const ChildResult base = run_child("input_only");
     REQUIRE(base.piped);

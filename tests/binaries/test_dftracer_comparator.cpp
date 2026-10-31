@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <instrumentation.h>
 #include <simdjson.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -159,20 +160,6 @@ constexpr std::uint64_t MB = 1024 * 1024;
 constexpr std::uint64_t WARM_BUDGET_BYTES = 160 * MB;
 constexpr std::uint64_t WARM_GROWTH_BYTES = 64 * MB;
 constexpr std::uint64_t COLD_BUDGET_BYTES = 1024 * MB;
-
-bool under_instrumentation() {
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    return true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
-    return true;
-#else
-    return false;
-#endif
-#else
-    return false;
-#endif
-}
 
 // A build whose instrumentation adds a fixed memory cost of its own, which
 // the budgets measured on a release build do not hold.
@@ -676,7 +663,7 @@ TEST_SUITE("DFTracerComparator") {
         MESSAGE("peak rss, 100 files: cold "
                 << small.cold << " warm " << small.warm << "; 400 files: cold "
                 << large.cold << " warm " << large.warm);
-        if (under_instrumentation()) return;
+        if (instrumentation::active()) return;
 
         // The warm peak grows slowly with the file count. The comparator
         // before the index queries grew much faster. The budget and the

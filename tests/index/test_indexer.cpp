@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <instrumentation.h>
 #include <sys/resource.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -412,7 +413,7 @@ TEST_SUITE("Truncated") {
 #else
         const auto peak = static_cast<std::uint64_t>(ru.ru_maxrss) * 1024;
 #endif
-        CHECK(peak < (std::uint64_t{1} << 30));
+        if (!instrumentation::active()) CHECK(peak < (std::uint64_t{1} << 30));
         const auto got = indexed(cut);
         CHECK(got.lines == zlib_prefix(cut).lines);
         CHECK(got.truncated);

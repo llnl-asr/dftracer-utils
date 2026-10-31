@@ -9,6 +9,7 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <doctest/doctest.h>
+#include <instrumentation.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <trace/views/agg_parity_common.h>
@@ -110,23 +111,10 @@ std::uint64_t peak_rss(pid_t pid) {
 #endif
 }
 
-bool under_instrumentation() {
-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
-    return true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || \
-    __has_feature(memory_sanitizer)
-    return true;
-#endif
-#endif
-    const char* preload = std::getenv("LD_PRELOAD");
-    return preload && std::strstr(preload, "vgpreload") != nullptr;
-}
-
 }  // namespace
 
 TEST_CASE("a group-key transform holds no more than one morsel" *
-          doctest::skip(under_instrumentation())) {
+          doctest::skip(instrumentation::active())) {
     TestEnvironment env(200);
     REQUIRE(env.is_valid());
     const std::string gz = write_trace(env.get_dir());

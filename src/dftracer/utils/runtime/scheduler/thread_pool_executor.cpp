@@ -141,11 +141,15 @@ void ThreadPoolExecutor::shutdown() {
     }
     if (sysmon_thread_.joinable()) sysmon_thread_.join();
 
-    std::lock_guard<std::mutex> workers_lock(workers_mutex_);
-
-    for (auto& worker : workers_) {
-        if (worker->thread.joinable()) {
-            worker->thread.join();
+    // Not held across resize_mutex_ below: set_threads takes resize_mutex_
+    // and then workers_mutex_. spawn_worker adds nothing once running_ is
+    // false, so the list cannot grow between the two locks.
+    {
+        std::lock_guard<std::mutex> workers_lock(workers_mutex_);
+        for (auto& worker : workers_) {
+            if (worker->thread.joinable()) {
+                worker->thread.join();
+            }
         }
     }
 
@@ -168,7 +172,10 @@ void ThreadPoolExecutor::shutdown() {
         }
     }
 
-    workers_.clear();
+    {
+        std::lock_guard<std::mutex> workers_lock(workers_mutex_);
+        workers_.clear();
+    }
     live_workers_.store(0, std::memory_order_release);
     timer_service_.stop();
 

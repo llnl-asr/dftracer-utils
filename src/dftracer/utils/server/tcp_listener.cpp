@@ -12,6 +12,7 @@
 #include <cerrno>
 #include <cstring>
 #include <exception>
+#include <memory>
 
 namespace dftracer::utils::server {
 
@@ -80,6 +81,10 @@ bool TcpListener::start(int backlog) {
 
 coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
                                               ConnectionHandler handler) {
+    // Connections run in the caller's scope and can outlive this frame, so
+    // each one shares ownership of the handler.
+    const auto shared_handler =
+        std::make_shared<const ConnectionHandler>(std::move(handler));
     while (!stopped_.load(std::memory_order_acquire) &&
            !g_shutdown_requested.load(std::memory_order_acquire)) {
         struct sockaddr_in client_addr{};
@@ -95,9 +100,6 @@ coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
             break;
         }
 
-        // Spawn a coroutine per connection (structured concurrency).
-        // Capture by value: fd and addr are small.
-        auto* handler_ptr = &handler;
         int fd = static_cast<int>(client_fd);
 
         // Ensure the client socket is blocking so recv/send work
@@ -107,12 +109,12 @@ coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
 
         struct sockaddr_in addr_copy = client_addr;
         track_active(fd);
-        scope.spawn([this, fd, addr_copy, handler_ptr](
+        scope.spawn([this, fd, addr_copy, handler = shared_handler](
                         CoroScope& /*child*/) -> coro::CoroTask<void> {
             // The close must be awaited, so this cannot be an RAII guard.
             std::exception_ptr err;
             try {
-                co_await (*handler_ptr)(fd, addr_copy);
+                co_await (*handler)(fd, addr_copy);
             } catch (...) {
                 err = std::current_exception();
             }

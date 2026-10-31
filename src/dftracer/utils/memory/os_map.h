@@ -12,10 +12,19 @@
 
 namespace dftracer::utils::memory {
 
+#if defined(__SANITIZE_THREAD__)
+#define DFTRACER_UTILS_MEMORY_TSAN 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DFTRACER_UTILS_MEMORY_TSAN 1
+#endif
+#endif
+
 // The heap maps with system calls, not the libc symbols. A tracer that wraps
 // munmap (DFTracer) allocates in its wrapper and reaches this heap again.
-// macOS has no supported syscall().
-#if defined(__linux__)
+// ThreadSanitizer forgets a range's history only through the libc calls it
+// intercepts, so a sanitized build uses those. macOS has no syscall().
+#if defined(__linux__) && !defined(DFTRACER_UTILS_MEMORY_TSAN)
 inline void* os_mmap(void* addr, std::size_t len, int prot, int flags, int fd,
                      off_t off) noexcept {
     return reinterpret_cast<void*>(

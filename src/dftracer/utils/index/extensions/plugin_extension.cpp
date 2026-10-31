@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <map>
 #include <mutex>
@@ -145,26 +146,23 @@ void PluginBuilders::finish() {
     }
 }
 
-void PluginBuilders::write(store::IndexWrite& w, int file_id) {
-    namespace records = store::records;
+void PluginBuilders::write(FileBuild& build) {
     for (auto& b : built_) {
         const std::string& name = b.ext->name;
-        records::clear_plugin(w, file_id, name);
         if (!b.builder) {
-            records::put_plugin_manifest(w, file_id, name, b.ext->vt.version,
-                                         b.ext->vt.params_hash,
-                                         store::layout::ExtStatus::Failed);
+            index::fail_plugin(build, name, b.ext->vt.version,
+                               b.ext->vt.params_hash);
             continue;
         }
-        records::put_path(w, store::IndexExtension::Plugin, file_id, name);
+        GranuleViews granules;
+        granules.reserve(b.granules.size());
         for (const auto& [granule, bytes] : b.granules)
-            records::put_path_granule(w, store::IndexExtension::Plugin, file_id,
-                                      name, granule, bytes);
-        if (b.file)
-            records::put_path_file(w, store::IndexExtension::Plugin, file_id,
-                                   name, *b.file);
-        records::put_plugin_manifest(w, file_id, name, b.ext->vt.version,
-                                     b.ext->vt.params_hash);
+            granules.emplace_back(granule,
+                                  dstd::StringView(bytes.data(), bytes.size()));
+        dstd::Optional<dstd::StringView> file;
+        if (b.file) file = dstd::StringView(b.file->data(), b.file->size());
+        index::put_plugin_views(build, name, b.ext->vt.version,
+                                b.ext->vt.params_hash, granules, file);
     }
 }
 

@@ -32,15 +32,13 @@ bool collect_bootstrap_eligible(const ViewPlan& plan);
 
 #if DFTRACER_UTILS_TEST_PROBES
 /// Files the first-touch bootstrap has in flight, for tests: the most at once
-/// since the last reset, and the writes it committed.
+/// since the last reset.
 struct BootstrapCounters {
     std::atomic<std::size_t> in_flight{0};
     std::atomic<std::size_t> max_in_flight{0};
-    std::atomic<std::size_t> sink_commits{0};
     void reset() {
         in_flight.store(0, std::memory_order_relaxed);
         max_in_flight.store(0, std::memory_order_relaxed);
-        sink_commits.store(0, std::memory_order_relaxed);
     }
 };
 BootstrapCounters& bootstrap_counters();

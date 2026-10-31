@@ -2,7 +2,6 @@
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_PLUGIN_EXTENSION_H
 
 #include <dftracer/utils/index/store/file.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/plugins/abi/index.h>
 
 #include <cstdint>
@@ -13,6 +12,10 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace dftracer::utils::index {
+class FileBuild;
+}
 
 namespace dftracer::utils::index::extensions {
 
@@ -54,8 +57,9 @@ class PluginBuilders {
     void step(std::uint64_t granule, std::span<const std::string_view> lines);
     /// Ends the last chunk and the file.
     void finish();
-    /// Replaces each extension's data for `file_id` with what was built.
-    void write(store::IndexWrite& w, int file_id);
+    /// Writes each extension's data into `build`, which replaces the file's
+    /// copy of it when committed.
+    void write(FileBuild& build);
 
    private:
     struct Built {

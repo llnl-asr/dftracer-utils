@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/error.h>
@@ -105,10 +106,8 @@ struct Admission {
     Admission(std::uint64_t budget, std::size_t workers,
               std::uint64_t sink_bytes_each, std::size_t sinks,
               std::size_t file_count)
-        : sink_limit(sink_bytes_each),
-          files(budget, workers, sink_bytes_each * sinks, file_count) {}
+        : files(budget, workers, sink_bytes_each * sinks, file_count) {}
 
-    std::size_t sink_limit;
     FileAdmission files;
     bool spill_staged = false;
     index::store::IndexDatabase* staged_db = nullptr;
@@ -145,34 +144,9 @@ static std::string basename_of(const std::string& path) {
 }
 
 struct BlockWriter {
-    index::store::IndexDatabase* db = nullptr;
+    const index::Index* index = nullptr;
     index::build::BatchWriterMetrics* metrics = nullptr;
 };
-
-struct OpenSink {
-    std::unique_ptr<index::store::IndexDatabaseWrite> sink;
-    std::vector<std::size_t> written;
-    std::uint64_t write_ns = 0;
-};
-
-static coro::CoroTask<void> commit_open_sink(BlockWriter* writer,
-                                             OpenSink& open) {
-    const auto c0 = std::chrono::steady_clock::now();
-    if (open.sink) {
-        co_await open.sink->commit_async();
-        open.sink.reset();
-    }
-    open.write_ns += static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - c0)
-            .count());
-    writer->metrics->write_ns.fetch_add(open.write_ns,
-                                        std::memory_order_relaxed);
-    writer->metrics->files_written.fetch_add(open.written.size(),
-                                             std::memory_order_relaxed);
-    writer->metrics->batches_committed.fetch_add(1, std::memory_order_relaxed);
-    open = {};
-}
 
 static coro::CoroTask<void> parse_and_write_worker(
     CoroScope* scope, std::atomic<std::size_t>* next_block_ptr,
@@ -196,7 +170,6 @@ static coro::CoroTask<void> parse_and_write_worker(
         if (block + 1 >= block_starts->size()) break;
         const std::size_t block_begin = (*block_starts)[block];
         const std::size_t block_end = (*block_starts)[block + 1];
-        OpenSink open;
 
         for (std::size_t idx = block_begin; idx < block_end; ++idx) {
             auto& pf = (*prepared_ptr)[idx];
@@ -418,41 +391,26 @@ static coro::CoroTask<void> parse_and_write_worker(
                 (*parsed_jobs_ptr)[idx] = std::move(holder);
                 (*results_ptr)[idx] = std::move(result);
 
-                if (!open.sink) open.sink = writer->db->begin_write();
-                if (index::build::write_index_job(*open.sink, write_job)) {
-                    open.written.push_back(idx);
+                const bool written = co_await index::build::write_index_job(
+                    *writer->index, write_job, ticket);
+                if (written) {
+                    writer->metrics->files_written.fetch_add(
+                        1, std::memory_order_relaxed);
+                    writer->metrics->batches_committed.fetch_add(
+                        1, std::memory_order_relaxed);
                 } else {
                     (*results_ptr)[idx].success = false;
                     (*results_ptr)[idx].error_message = write_job.error_message;
                 }
-                for (auto& staged : write_job.staged) {
-                    std::string failed;
-                    try {
-                        co_await staged->commit_async();
-                    } catch (const std::exception& e) {
-                        failed = e.what();
-                    }
-                    staged.reset();
-                    if (!failed.empty()) {
-                        DFTRACER_UTILS_LOG_ERROR(
-                            "Failed to publish the staged index of %s: %s",
-                            pf.file_path.c_str(), failed.c_str());
-                        (*results_ptr)[idx].success = false;
-                        (*results_ptr)[idx].error_message = failed;
-                    }
-                }
             }
-            open.write_ns += static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - w0)
-                    .count());
+            writer->metrics->write_ns.fetch_add(
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - w0)
+                        .count()),
+                std::memory_order_relaxed);
             ticket = {};
-            if (open.sink &&
-                open.sink->buffered_bytes() >= admission->sink_limit)
-                co_await commit_open_sink(writer, open);
         }
-
-        co_await commit_open_sink(writer, open);
     }
     co_return;
 }
@@ -496,6 +454,15 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     index::load_index_schemas(state->index_path);
     auto writer_db =
         std::make_shared<index::store::IndexDatabase>(state->index_path);
+    auto writer_index = index::Index::open(
+        index::store::internal::normalize_index_root(state->index_path));
+    if (!writer_index) {
+        for (auto& result : *state->results) {
+            result.success = false;
+            result.error_message = std::string(writer_index.error().message());
+        }
+        co_return;
+    }
 
     constexpr std::uint64_t NO_BUDGET = memory::NO_SPILL_BUDGET;
     const std::uint64_t budget =
@@ -521,7 +488,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
 
     BlockWriter block_writer;
     block_writer.metrics = writer_metrics.get();
-    block_writer.db = writer_db.get();
+    block_writer.index = &*writer_index;
     auto* writer_ptr = &block_writer;
 
     const auto* block_starts_ptr = block_starts.get();

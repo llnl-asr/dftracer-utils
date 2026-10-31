@@ -164,10 +164,43 @@ void put_agg_chunk_columns(FileBuild& build, std::uint64_t chunk,
 void put_agg_dictionary_entry(FileBuild& build, std::uint32_t id,
                               dstd::StringView text);
 
+/// As put_agg_partial, with `value` the whole stored value including the layout
+/// header (layout::append_value), so it is stored without a copy.
+void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
+                           std::uint32_t cat_id, std::uint32_t name_id,
+                           std::uint32_t host_id, std::uint32_t extra_id,
+                           std::uint8_t kind, dstd::StringView value);
+/// As put_agg_chunk_columns, with `value` the whole stored value including the
+/// layout header.
+void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
+                                 dstd::StringView value);
+
 /// Writes and finishes plugin extension `name` in one call.
 void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
                 std::uint64_t params_hash, const GranuleList& granules,
                 const dstd::Optional<dstd::String>& file);
+
+/// As above, with views the build copies. Each payload is copied once, into the
+/// stored value that carries the layout header.
+using GranuleViews = dstd::Vector<std::pair<std::uint64_t, dstd::StringView>>;
+void put_plugin_views(FileBuild& build, dstd::StringView name,
+                      std::uint32_t version, std::uint64_t params_hash,
+                      const GranuleViews& granules,
+                      const dstd::Optional<dstd::StringView>& file);
+
+/// Marks plugin extension `name` failed for `params_hash`.
+void fail_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
+                 std::uint64_t params_hash);
+
+/// Makes the commit drop every copy of the file the build does not write,
+/// plugin copies included, except the built-in extensions in `keep`. For a
+/// full rebuild, whose new members renumber the chunks the old copies describe.
+void clear_unwritten(FileBuild& build,
+                     dstd::Span<const store::IndexExtension> keep = {});
+
+/// Starts a build of a file the index holds, with the stat it was indexed
+/// with, to add or replace extensions at query time.
+Result<FileBuild> rebuild(const Index& index, dstd::StringView path);
 
 /// Marks the extension failed for `params_hash`. The failure lands after the
 /// publish of the finished extensions, not in the same record.

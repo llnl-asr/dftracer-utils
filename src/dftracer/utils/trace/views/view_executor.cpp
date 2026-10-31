@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -21,10 +22,12 @@
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/json_value.h>
@@ -196,44 +199,12 @@ coro::CoroTask<void> build_bootstrap_artifacts(
     }
 }
 
-// A bloom fold that spilled writes its tier into a staged write, which is
-// returned for the caller to publish.
-std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite>
-write_bootstrap_index(
-    dftracer::utils::index::store::IndexWrite& w, const std::string& logical,
-    const std::string& file_path,
-    const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
-    const dftracer::utils::index::RecordSchema& schema,
-    dftracer::utils::index::extensions::BloomFold& bloom,
-    dftracer::utils::index::extensions::RowSetFold& rowsets, std::uint64_t hash,
-    int fid) {
-    const auto mtime = static_cast<std::uint64_t>(
-        dftracer::utils::index::store::internal::get_file_modification_time(
-            file_path));
-    const auto bytes =
-        dftracer::utils::index::store::internal::file_size_bytes(file_path);
-    dftracer::utils::index::store::records::put_file_record(
-        w, logical, {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-    dftracer::utils::index::gzip::persist_gzip_index_artifacts(w, fid, arts);
-    dftracer::utils::index::store::records::put_profile(w, fid, schema.id,
-                                                        schema.params_hash());
-    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> staged;
-    if (bloom.writes_runs()) {
-        staged = bloom.finish_staged(fid);
-        dftracer::utils::index::store::records::put_file_record(
-            *staged, logical,
-            {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-    } else {
-        bloom.write(w, fid);
-    }
-    rowsets.write(w, fid);
-    return staged;
-}
-
 struct BootstrapRoot {
     std::string index_path;
     dstd::Vector<std::size_t> members;
     std::optional<dftracer::utils::index::store::IndexDatabase> db;
+    dstd::Optional<dftracer::utils::index::Index> index;
+    std::string index_error;
 };
 
 // Every index root of a bootstrap is held read-write until the last commit.
@@ -287,6 +258,13 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
                 paths.push_back(plan.files[i].file_path);
         // A reader that opens the root meanwhile shares this handle.
         store->db.emplace(index_path);
+        auto opened = dftracer::utils::index::Index::open(
+            dftracer::utils::index::store::internal::normalize_index_root(
+                index_path));
+        if (opened)
+            store->index.emplace(std::move(*opened));
+        else
+            store->index_error = std::string(opened.error().message());
         const auto got = store->db->assign_file_ids(paths);
         for (std::size_t i : members)
             out.ids[i] =
@@ -297,39 +275,62 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
     }
 }
 
-struct BootstrapSink {
-    BootstrapRoot* root;
-    std::unique_ptr<dftracer::utils::index::store::IndexDatabaseWrite> write;
-    /// Bytes the write holds before its worker commits it.
-    std::size_t limit = 0;
-};
-
-coro::CoroTask<void> commit_bootstrap_sink(BootstrapSink& open) {
-    if (!open.write) co_return;
-    co_await open.write->commit_async();
-    open.write.reset();
-#if DFTRACER_UTILS_TEST_PROBES
-    bootstrap_counters().sink_commits.fetch_add(1, std::memory_order_relaxed);
-#endif
-}
-
-coro::CoroTask<void> write_bootstrap_file(
-    BootstrapSink& open, const ViewFile& f, int file_id,
+// Publishes the file's index in one commit. A bloom fold that spilled writes
+// its tier into a staged write instead, published before it. Returns the
+// failure, empty on success.
+coro::CoroTask<std::string> write_bootstrap_file(
+    BootstrapRoot& root, const ViewFile& f, int file_id,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
     const dftracer::utils::index::RecordSchema& schema,
     dftracer::utils::index::extensions::BloomFold& bloom,
     dftracer::utils::index::extensions::RowSetFold& rowsets,
     std::uint64_t hash) {
-    if (!open.write) open.write = open.root->db->begin_write();
-    // The id was reserved for this pass, so there is nothing of it to clear.
-    open.write->set_fresh_file(file_id);
-    auto staged = write_bootstrap_index(
-        *open.write,
-        dftracer::utils::index::store::internal::get_logical_path(f.file_path),
-        f.file_path, arts, schema, bloom, rowsets, hash, file_id);
-    if (staged) co_await staged->commit_async();
-    if (open.write->buffered_bytes() >= open.limit)
-        co_await commit_bootstrap_sink(open);
+    namespace idx = dftracer::utils::index;
+    const std::string logical =
+        idx::store::internal::get_logical_path(f.file_path);
+    const auto mtime = static_cast<std::uint64_t>(
+        idx::store::internal::get_file_modification_time(f.file_path));
+    const auto bytes = idx::store::internal::file_size_bytes(f.file_path);
+    std::string failure;
+    dstd::Optional<idx::FileBuild> build;
+    std::unique_ptr<idx::store::IndexDatabaseWrite> staged;
+    if (root.index) {
+        auto started =
+            root.index->build(logical, idx::SourceStat{mtime, bytes, hash});
+        if (started)
+            build.emplace(std::move(*started));
+        else
+            failure = std::string(started.error().message());
+    } else {
+        failure = root.index_error;
+    }
+    if (build) {
+        idx::gzip::persist_gzip_index_artifacts(*build, arts);
+        idx::put_profile(*build, schema.id);
+        build->finish(idx::store::IndexExtension::Profile,
+                      schema.params_hash());
+        if (bloom.writes_runs()) {
+            staged = bloom.finish_staged(file_id);
+            idx::store::records::put_file_record(
+                *staged, logical,
+                {static_cast<std::uint32_t>(file_id), mtime, hash, bytes});
+        } else {
+            bloom.write(*build);
+        }
+        rowsets.write(*build);
+        if (staged) {
+            try {
+                co_await staged->commit_async();
+            } catch (const std::exception& e) {
+                failure = e.what();
+            }
+        }
+        if (failure.empty()) {
+            auto committed = co_await build->commit();
+            if (!committed) failure = std::string(committed.error().message());
+        }
+    }
+    co_return failure;
 }
 
 // An IndexVisitor that streams a member's plaintext lines straight to the
@@ -401,23 +402,9 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
 
     BootstrapStores stores;
     co_await open_bootstrap_stores(plan, stores);
-    // One sink per root is open at a time, so each may hold a worker's share.
-    const std::uint64_t budget =
-        plan.memory_budget == memory::NO_SPILL_BUDGET
-            ? memory::NO_SPILL_BUDGET
-            : memory::resolve_spill_budget(plan.memory_budget);
-    const std::size_t sink_limit =
-        dftracer::utils::index::build::FileAdmission::plan_sinks(
-            budget, 1,
-            dftracer::utils::index::build::g_max_sink_bytes.load(
-                std::memory_order_relaxed))
-            .sink_bytes;
-    dstd::Vector<BootstrapSink> open;
     dstd::Map<std::string, std::size_t> slot_of;
-    for (const auto& root : stores.roots) {
-        slot_of.emplace(root->index_path, open.size());
-        open.push_back({root.get(), nullptr, sink_limit});
-    }
+    for (std::size_t r = 0; r < stores.roots.size(); ++r)
+        slot_of.emplace(stores.roots[r]->index_path, r);
 
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
         const auto& f = plan.files[i];
@@ -447,11 +434,15 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
             &ok, std::size_t{0}, f.fd, &hash);
         if (!ok) co_return false;
         driver.seal();
-        co_await write_bootstrap_file(open[slot_of.find(f.index_path)->second],
-                                      f, stores.ids[i], arts, schema, bloom,
-                                      rowsets, hash);
+        // The lines are already out, so a failed index write is logged and
+        // the export stays whole.
+        const std::string failure = co_await write_bootstrap_file(
+            *stores.roots[slot_of.find(f.index_path)->second], f, stores.ids[i],
+            arts, schema, bloom, rowsets, hash);
+        if (!failure.empty())
+            DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                     f.file_path.c_str(), failure.c_str());
     }
-    for (auto& o : open) co_await commit_bootstrap_sink(o);
     co_return true;
 }
 
@@ -681,7 +672,6 @@ struct BootstrapRun {
     // The merged state of each block's files, in file order.
     dstd::Vector<dataframe::AggStatePtr> states;
     dftracer::utils::index::build::FileAdmission* admission = nullptr;
-    std::size_t sink_limit = 0;
     bool keep_state;
     dstd::Optional<AggQuery> rule_query;
     std::atomic<std::size_t> next_block{0};
@@ -692,7 +682,7 @@ struct BootstrapRun {
 };
 
 coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
-                                             int file_id, BootstrapSink* open) {
+                                             int file_id, BootstrapRoot* root) {
     namespace gzi = dftracer::utils::index::gzip;
     const ViewPlan* plan = run->plan;
     BootstrapFile out;
@@ -740,7 +730,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     dftracer::utils::index::extensions::RowSetFold rowsets(
         intern, dftracer::utils::index::indexed_rowsets(schema));
     if (ticket.elastic_bytes() != memory::NO_SPILL_BUDGET) {
-        auto staged = open->root->db->begin_staged_write();
+        auto staged = root->db->begin_staged_write();
         // Its runs come before the file's record.
         staged->bind_file(
             dftracer::utils::index::store::internal::get_logical_path(
@@ -770,8 +760,13 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     read.events_scanned = arts.total_lines;
     counted(*plan, read);
     driver.seal();
-    co_await write_bootstrap_file(*open, f, file_id, arts, schema, bloom,
-                                  rowsets, hash);
+    const std::string failure = co_await write_bootstrap_file(
+        *root, f, file_id, arts, schema, bloom, rowsets, hash);
+    if (!failure.empty()) {
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                 f.file_path.c_str(), failure.c_str());
+        co_return out;
+    }
     if (run->keep_state) {
         if (rule_agg) {
             CoverageSet none;
@@ -794,14 +789,13 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 run->next_block.fetch_add(1, std::memory_order_relaxed);
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
-            BootstrapSink open{block.root, nullptr, run->sink_limit};
             auto& merged = run->states[b];
             for (std::size_t k = block.begin; k < block.end; ++k) {
                 if (run->failed.load(std::memory_order_relaxed))
                     co_return false;
                 const std::size_t i = block.root->members[k];
                 auto file = co_await bootstrap_file(run, run->plan->files[i],
-                                                    (*run->ids)[i], &open);
+                                                    (*run->ids)[i], block.root);
                 if (!file.ok) {
                     run->failed.store(true, std::memory_order_relaxed);
                     co_return false;
@@ -812,7 +806,6 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
                 else
                     dataframe::agg_merge(*merged, *file.state);
             }
-            co_await commit_bootstrap_sink(open);
         }
     } catch (...) {
         run->failed.store(true, std::memory_order_relaxed);
@@ -884,7 +877,6 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
         dftracer::utils::index::build::g_max_sink_bytes.load(
             std::memory_order_relaxed));
     const std::size_t active = std::min(at_once, sinks.workers);
-    run.sink_limit = sinks.sink_bytes;
     dftracer::utils::index::build::FileAdmission admission(
         budget, sinks.workers,
         budget == memory::NO_SPILL_BUDGET ? 0 : sinks.sink_bytes * active,

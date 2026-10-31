@@ -112,22 +112,6 @@ TEST_SUITE("BootstrapParallelism") {
         CHECK(total == FILES * EVENTS);
     }
 
-    TEST_CASE("an export bootstrap commits its sink at the sink limit") {
-        dftu_utils_test::TestEnvironment env(10);
-        std::vector<std::string> files;
-        for (int i = 0; i < FILES; ++i)
-            files.push_back(write_trace(env.get_dir(), i));
-        configure_default_runtime({.threads = WORKERS, .eager = true});
-
-        trace::views::detail::bootstrap_counters().reset();
-        const auto lines = export_lines(files, env.get_dir() + "/idx");
-        CHECK(lines.size() == static_cast<std::size_t>(FILES) * EVENTS);
-        const auto commits =
-            trace::views::detail::bootstrap_counters().sink_commits.load();
-        CHECK(commits >= 1);
-        CHECK(commits < FILES / 8);
-    }
-
     TEST_CASE(
         "an export bootstrap opens the store once and equals a warm one") {
         dftu_utils_test::TestEnvironment env(10);

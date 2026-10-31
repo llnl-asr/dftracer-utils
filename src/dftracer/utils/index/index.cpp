@@ -38,6 +38,46 @@ kv::Namespace read_ns(Ext ext) {
 
 bool builtin(Ext ext) { return ext != Ext::Plugin && ext != Ext::Host; }
 
+bool has_name(const dstd::Vector<kv::Namespace>& list,
+              const kv::Namespace& ns) {
+    for (const kv::Namespace& known : list)
+        if (known.spec.name == ns.spec.name) return true;
+    return false;
+}
+
+/// The newest declared version of every index namespace that holds a copy of
+/// `scope`.
+dstd::Expected<dstd::Vector<kv::Namespace>, dstd::Error> held_copies(
+    kv::Store& store, const kv::Snapshot& taken, const kv::ScopeKey& scope) {
+    auto declared = taken.namespaces();
+    if (!declared) return dstd::Unexpected<dstd::Error>(declared.error());
+    const std::string_view prefix(store_layout::NAMESPACE_PREFIX);
+    const std::string_view meta(store_layout::AGG_META_NAMESPACE_PREFIX);
+    std::map<std::string, kv::NamespaceSpec> latest;
+    for (const kv::NamespaceDecl& decl : *declared) {
+        const std::string_view name(decl.name.data(), decl.name.size());
+        if (!name.starts_with(prefix) || name.starts_with(meta)) continue;
+        kv::NamespaceSpec& known = latest[std::string(name)];
+        if (known.name.empty() || decl.format_version > known.format_version) {
+            known.name = decl.name;
+            known.format_version = decl.format_version;
+        }
+    }
+    dstd::Vector<kv::Namespace> held;
+    held.reserve(latest.size());
+    for (const auto& [name, spec] : latest) {
+        kv::Namespace ns;
+        ns.spec = spec;
+        if (taken.copy_info(ns, scope).state == kv::ScopeState::Absent)
+            continue;
+        auto registered = store.ns(spec);
+        if (!registered)
+            return dstd::Unexpected<dstd::Error>(registered.error());
+        held.push_back(*registered);
+    }
+    return held;
+}
+
 dstd::Unexpected<dstd::Error> invalid(std::string_view message) {
     return dstd::Unexpected<dstd::Error>(
         dstd::Error(dstd::Condition::InvalidArgument, message));
@@ -144,6 +184,13 @@ const kv::ScopeKey& IndexAccess::scope(const FileRef& file) {
 void IndexAccess::record_error(FileBuild& build, dstd::Error error) {
     FileBuild::Impl& impl = *build.impl_;
     if (!impl.error) impl.error = std::move(error);
+}
+
+void IndexAccess::drop_unwritten(FileBuild& build,
+                                 dstd::Span<const kv::NamespaceSpec> kept) {
+    FileBuild::Impl& impl = *build.impl_;
+    impl.drop_unwritten = true;
+    for (const kv::NamespaceSpec& spec : kept) impl.kept.push_back(spec.name);
 }
 
 void IndexAccess::put(FileBuild& build, const kv::NamespaceSpec& spec,
@@ -261,6 +308,20 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
     for (const Copy& copy : build.copies) {
         if (!copy.finished && !copy.failed)
             co_return invalid("index: an extension is not finished");
+    }
+    if (build.drop_unwritten) {
+        auto taken = build.store.snapshot();
+        if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
+        auto held = held_copies(build.store, *taken, build.scope);
+        if (!held) co_return dstd::Unexpected<dstd::Error>(held.error());
+        dstd::Vector<kv::Namespace> written;
+        for (const Copy& copy : build.copies) written.push_back(copy.ns);
+        for (const kv::Namespace& ns : *held) {
+            const bool kept = std::find(build.kept.begin(), build.kept.end(),
+                                        ns.spec.name) != build.kept.end();
+            if (!kept && !has_name(written, ns) && !has_name(build.cleared, ns))
+                build.cleared.push_back(ns);
+        }
     }
     dstd::Vector<kv::Publish> targets;
     targets.reserve(build.copies.size() + build.cleared.size());
@@ -434,36 +495,13 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::remove_task(
     kv::Store store = **found;
     auto taken = store.snapshot();
     if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
-    auto declared = taken->namespaces();
-    if (!declared) co_return dstd::Unexpected<dstd::Error>(declared.error());
     const kv::ScopeKey scope =
         kv::ScopeKey::file(dstd::StringView(path.data(), path.size()));
-    const std::string_view prefix(store_layout::NAMESPACE_PREFIX);
-    const std::string_view meta(store_layout::AGG_META_NAMESPACE_PREFIX);
-    std::map<std::string, kv::NamespaceSpec> latest;
-    for (const kv::NamespaceDecl& decl : *declared) {
-        const std::string_view name(decl.name.data(), decl.name.size());
-        if (!name.starts_with(prefix) || name.starts_with(meta)) continue;
-        kv::NamespaceSpec& known = latest[std::string(name)];
-        if (known.name.empty() || decl.format_version > known.format_version) {
-            known.name = decl.name;
-            known.format_version = decl.format_version;
-        }
-    }
+    auto namespaces = held_copies(store, *taken, scope);
+    if (!namespaces)
+        co_return dstd::Unexpected<dstd::Error>(namespaces.error());
     dstd::Vector<kv::Publish> targets;
-    dstd::Vector<kv::Namespace> namespaces;
-    namespaces.reserve(latest.size());
-    for (const auto& [name, spec] : latest) {
-        kv::Namespace ns;
-        ns.spec = spec;
-        if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
-            continue;
-        auto registered = store.ns(spec);
-        if (!registered)
-            co_return dstd::Unexpected<dstd::Error>(registered.error());
-        namespaces.push_back(*registered);
-    }
-    for (const kv::Namespace& ns : namespaces) {
+    for (const kv::Namespace& ns : *namespaces) {
         targets.push_back(
             kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
     }

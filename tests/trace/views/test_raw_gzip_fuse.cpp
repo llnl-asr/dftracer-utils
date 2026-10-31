@@ -4,6 +4,7 @@
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -169,9 +170,7 @@ TEST_SUITE("RawGzipFuse") {
         driver.seal();
 
         // Persist the index this one pass produced.
-        int fid = -1;
         {
-            dftracer::utils::index::store::IndexDatabase db(idx);
             auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(gz);
             const auto hash =
@@ -182,14 +181,19 @@ TEST_SUITE("RawGzipFuse") {
                     get_file_modification_time(gz));
             const auto bytes =
                 dftracer::utils::index::store::internal::file_size_bytes(gz);
-            auto w = db.begin_write();
-            fid = dftu_utils_test::register_test_file(*w, logical, hash, mtime,
-                                                      bytes);
-            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*w, fid,
+            auto index = dftracer::utils::index::Index::open(
+                dftracer::utils::index::store::internal::normalize_index_root(
+                    idx));
+            REQUIRE(index);
+            auto build = index->build(
+                logical,
+                dftracer::utils::index::SourceStat{mtime, bytes, hash});
+            REQUIRE(build);
+            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*build,
                                                                        arts);
-            bloom.write(*w, fid);
-            dict.write(*w, fid);
-            w->commit();
+            bloom.write(*build);
+            dict.write(*build);
+            REQUIRE(build->commit().get());
         }
 
         // Per-consumer filtering: the aggregation from the one pass matches the

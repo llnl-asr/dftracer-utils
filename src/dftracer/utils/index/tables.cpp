@@ -641,6 +641,24 @@ void put_agg_partial(FileBuild& build, std::uint64_t chunk,
               payload);
 }
 
+void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
+                           std::uint32_t cat_id, std::uint32_t name_id,
+                           std::uint32_t host_id, std::uint32_t extra_id,
+                           std::uint8_t kind, dstd::StringView value) {
+    const std::string key =
+        agg_partial_key(chunk, cat_id, name_id, host_id, extra_id, kind);
+    IndexAccess::put(build, ext_spec(Ext::Agg), dstd::ByteView(key),
+                     dstd::ByteView(value.data(), value.size()));
+}
+
+void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
+                                 dstd::StringView value) {
+    const std::string key =
+        granule_key(Ext::Agg, layout::agg_kind::COLUMNS, chunk);
+    IndexAccess::put(build, ext_spec(Ext::Agg), dstd::ByteView(key),
+                     dstd::ByteView(value.data(), value.size()));
+}
+
 void put_agg_chunk_columns(FileBuild& build, std::uint64_t chunk,
                            dstd::StringView payload) {
     put_value(build, Ext::Agg, layout::agg_kind::COLUMNS,
@@ -654,9 +672,12 @@ void put_agg_dictionary_entry(FileBuild& build, std::uint32_t id,
     put_value(build, Ext::Agg, layout::agg_kind::DICT, key, text);
 }
 
-void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
-                std::uint64_t params_hash, const GranuleList& granules,
-                const dstd::Optional<dstd::String>& file) {
+namespace {
+
+template <class Granules, class File>
+void write_plugin(FileBuild& build, dstd::StringView name,
+                  std::uint32_t version, std::uint64_t params_hash,
+                  const Granules& granules, const File& file) {
     const kv::NamespaceSpec spec = plugin_spec(name, version);
     const std::string listed = file_key(Ext::Plugin, pk::PATHS, name);
     IndexAccess::put(build, spec, dstd::ByteView(listed), dstd::ByteView());
@@ -677,6 +698,45 @@ void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
                          dstd::ByteView(value));
     }
     IndexAccess::finish(build, spec, params_hash);
+}
+
+}  // namespace
+
+void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
+                std::uint64_t params_hash, const GranuleList& granules,
+                const dstd::Optional<dstd::String>& file) {
+    write_plugin(build, name, version, params_hash, granules, file);
+}
+
+void put_plugin_views(FileBuild& build, dstd::StringView name,
+                      std::uint32_t version, std::uint64_t params_hash,
+                      const GranuleViews& granules,
+                      const dstd::Optional<dstd::StringView>& file) {
+    write_plugin(build, name, version, params_hash, granules, file);
+}
+
+void fail_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
+                 std::uint64_t params_hash) {
+    IndexAccess::fail(build, plugin_spec(name, version), params_hash);
+}
+
+void clear_unwritten(FileBuild& build,
+                     dstd::Span<const store::IndexExtension> keep) {
+    dstd::Vector<kv::NamespaceSpec> specs;
+    for (const store::IndexExtension ext : keep)
+        if (builtin_ext(ext)) specs.push_back(ext_spec(ext));
+    IndexAccess::drop_unwritten(
+        build, dstd::Span<const kv::NamespaceSpec>(specs.data(), specs.size()));
+}
+
+Result<FileBuild> rebuild(const Index& index, dstd::StringView path) {
+    auto snapshot = index.snapshot();
+    if (!snapshot) return dstd::Unexpected<dstd::Error>(snapshot.error());
+    const auto file = snapshot->file(path);
+    if (!file)
+        return dstd::Unexpected<dstd::Error>(dstd::Error(
+            dstd::Condition::NotFound, "index: the file is not indexed"));
+    return index.build(path, file->stat());
 }
 
 void fail_extension(FileBuild& build, store::IndexExtension ext,

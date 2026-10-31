@@ -3,13 +3,13 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
-#include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -315,21 +315,19 @@ std::vector<std::string> BloomFold::dims_of(const AutoKeys& keys) const {
     return dims;
 }
 
-void BloomFold::write_file(index::store::IndexWrite& w, int file_id,
-                           const std::string& file, FileState& fs) {
+void BloomFold::write_file(index::FileBuild& build, const std::string& file,
+                           FileState& fs) {
     // A whole-file read fills every checkpoint, so any gap is an empty chunk
     // for an unobserved member. One chunk is assembled at a time.
     const std::uint64_t end = fs.chunks.rbegin()->first + 1;
     const AutoKeys keys = auto_keys(file, fs);
     const auto dims = dims_of(keys);
-    for (auto ext : BV::tier_extensions(config_))
-        index::store::records::clear_file(w, ext, file_id);
     BV::FileAccumulator acc(config_);
     for (std::uint64_t cp = 0; cp < end; ++cp)
-        BV::write_chunk(w, file_id, cp, assemble_chunk(fs, cp, dims, keys),
-                        dims, config_, acc);
+        BV::write_chunk(build, cp, assemble_chunk(fs, cp, dims, keys), dims,
+                        config_, acc);
     fs.auto_chunks.clear();
-    BV::finish_file(w, file_id, acc, config_, dims, catalog(fs));
+    BV::finish_file(build, acc, config_, dims, catalog(fs));
 }
 
 std::uint64_t BloomFold::resident_bytes(const FileState& fs,
@@ -688,12 +686,12 @@ coro::CoroTask<bool> BloomFold::finalize(
         // entry that later reads as "no events".
         if (!covered.covers_file(file)) continue;
 
-        int file_id = -1;
+        const std::string logical =
+            index::store::internal::get_logical_path(file);
         try {
             index::store::IndexDatabase ro(
                 fs.index_path, index::store::IndexOpenMode::ReadOnly);
-            file_id = ro.get_file_info_id(
-                index::store::internal::get_logical_path(file));
+            const int file_id = ro.get_file_info_id(logical);
             if (file_id < 0 || ro.pruning_tier_current(file_id)) continue;
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("bloom delta check failed for %s: %s",
@@ -701,30 +699,44 @@ coro::CoroTask<bool> BloomFold::finalize(
             continue;
         }
 
-        std::unique_lock<std::mutex> lk(
-            index::build::index_write_mutex(fs.index_path));
-        try {
-            index::store::IndexDatabase db(fs.index_path);
-            auto writer = db.begin_write();
-            write_file(*writer, file_id, file, fs);
-            writer->commit();
-            wrote = true;
-        } catch (const std::exception& e) {
-            // A locked or read-only index persists nothing rather than failing
-            // the query.
-            DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for %s: %s",
-                                    fs.index_path.c_str(), e.what());
+        // A locked or read-only index persists nothing rather than failing the
+        // query.
+        auto opened = index::Index::open(
+            index::store::internal::normalize_index_root(fs.index_path));
+        auto build = opened
+                         ? index::rebuild(*opened, logical)
+                         : dstd::Expected<index::FileBuild, dstd::Error>(
+                               dstd::Unexpected<dstd::Error>(opened.error()));
+        std::string failure;
+        if (build) {
+            try {
+                write_file(*build, file, fs);
+            } catch (const std::exception& e) {
+                failure = e.what();
+            }
+        } else {
+            failure = std::string(build.error().message());
         }
+        if (failure.empty()) {
+            auto committed = co_await build->commit();
+            if (!committed) failure = std::string(committed.error().message());
+        }
+        if (!failure.empty()) {
+            DFTRACER_UTILS_LOG_WARN("bloom materialization skipped for %s: %s",
+                                    fs.index_path.c_str(), failure.c_str());
+            continue;
+        }
+        wrote = true;
     }
 
     co_return wrote;
 }
 
-void BloomFold::write(index::store::IndexWrite& w, int file_id) {
+void BloomFold::write(index::FileBuild& build) {
     if (files_.empty()) return;
     FileState& fs = files_.begin()->second;
     if (fs.chunks.empty()) return;
-    write_file(w, file_id, files_.begin()->first, fs);
+    write_file(build, files_.begin()->first, fs);
 }
 
 }  // namespace dftracer::utils::index::extensions

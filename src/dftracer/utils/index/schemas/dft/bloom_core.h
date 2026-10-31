@@ -18,6 +18,10 @@
 #include <utility>
 #include <vector>
 
+namespace dftracer::utils::index {
+class FileBuild;
+}
+
 namespace dftracer::utils::index::store {
 class IndexWrite;
 enum class ColumnType : std::uint8_t;
@@ -247,6 +251,13 @@ class BloomCore {
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc);
 
+    static void write_chunk(index::FileBuild& build,
+                            std::uint64_t checkpoint_idx,
+                            const ChunkState& chunk,
+                            const std::vector<std::string>& extra_dims,
+                            const ChunkIndexerConfig& config,
+                            FileAccumulator& acc);
+
     /// The records a chunk of `observed` data events has for an extra
     /// dimension it never observed, as write_chunk writes them.
     static void write_absent_extra(index::store::IndexWrite& w, int file_id,
@@ -259,6 +270,11 @@ class BloomCore {
     /// Returns the file statistics.
     static ChunkStatistics finish_file(
         index::store::IndexWrite& w, int file_id, FileAccumulator& acc,
+        const ChunkIndexerConfig& config,
+        const std::vector<std::string>& extra_dims, const Catalog& catalog);
+    /// As above into `build`, which gets each extension finished.
+    static ChunkStatistics finish_file(
+        index::FileBuild& build, FileAccumulator& acc,
         const ChunkIndexerConfig& config,
         const std::vector<std::string>& extra_dims, const Catalog& catalog);
 };

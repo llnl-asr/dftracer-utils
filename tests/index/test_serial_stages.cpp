@@ -42,8 +42,6 @@ constexpr int NESTED_FILES = 10;
 constexpr std::size_t WORKERS = 8;
 constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
-constexpr std::size_t TINY_SINK = 1;
-constexpr std::size_t HUGE_SINK = std::size_t{1} << 40;
 
 void write_sized_file(const std::string& path, std::size_t bytes) {
     std::ofstream out(path, std::ios::binary);
@@ -132,47 +130,15 @@ void cold_count(const std::vector<std::string>& files,
                                    });
 }
 
-using Rows = std::vector<std::pair<std::string, std::string>>;
-
-// A scope is named by its paths, so two indexes of the same files compare equal
-// whatever ids they gave them.
-Rows dump_index(const std::string& root) {
-    store::release_index(root);
-    store::IndexDatabase db(root, store::IndexOpenMode::ReadOnly);
-    Rows rows;
-    db.for_each_record([&rows](std::string_view key, std::string_view value) {
-        rows.emplace_back(std::string(key), std::string(value));
-    });
-    return rows;
-}
-
-struct SinkLimit {
-    explicit SinkLimit(std::size_t bytes)
-        : previous(build::g_max_sink_bytes.exchange(bytes)) {}
-    ~SinkLimit() { build::g_max_sink_bytes.store(previous); }
-    std::size_t previous;
-};
-
-// Built once and shared by the cases that read it. The sink commits after every
-// file.
+// Written once and shared by the cases that read it.
 struct ViewRun {
     ViewRun() : env(10) {
         files = write_view_traces(env.get_dir(), VIEW_FILES);
-        many_dir = env.get_dir() + "/many";
         configure_default_runtime({.threads = VIEW_WORKERS, .eager = true});
-        auto& counters = views::detail::bootstrap_counters();
-        counters.reset();
-        {
-            SinkLimit limit(TINY_SINK);
-            cold_count(files, many_dir);
-        }
-        sink_commits = counters.sink_commits.load();
     }
 
     dftu_utils_test::TestEnvironment env;
     std::vector<std::string> files;
-    std::string many_dir;
-    std::size_t sink_commits = 0;
 };
 
 ViewRun& view_run() {
@@ -244,12 +210,9 @@ TEST_SUITE("SerialStages") {
         files.push_back(write_corrupt_trace(run.env.get_dir(), VIEW_FILES));
         const auto index_dir = run.env.get_dir() + "/failed";
         configure_default_runtime({.threads = 2, .eager = true});
-        {
-            SinkLimit limit(TINY_SINK);
-            try {
-                cold_count(files, index_dir);
-            } catch (const std::exception&) {
-            }
+        try {
+            cold_count(files, index_dir);
+        } catch (const std::exception&) {
         }
 
         const auto root = view_index_root(files.front(), index_dir);
@@ -275,31 +238,5 @@ TEST_SUITE("SerialStages") {
         CHECK(db.get_file_info_id(
                   dftracer::utils::index::store::internal::get_logical_path(
                       files.back())) < 0);
-    }
-
-    TEST_CASE("many sink commits store the index that one commit stores") {
-        const auto& run = view_run();
-        const auto one_dir = run.env.get_dir() + "/one";
-        configure_default_runtime({.threads = VIEW_WORKERS, .eager = true});
-        auto& counters = views::detail::bootstrap_counters();
-        {
-            SinkLimit limit(HUGE_SINK);
-            counters.reset();
-            cold_count(run.files, one_dir);
-        }
-        const auto one_commits = counters.sink_commits.load();
-        REQUIRE(run.sink_commits > 1);
-        REQUIRE(one_commits < run.sink_commits);
-
-        const auto many =
-            dump_index(view_index_root(run.files.front(), run.many_dir));
-        const auto one =
-            dump_index(view_index_root(run.files.front(), one_dir));
-        REQUIRE_FALSE(many.empty());
-        REQUIRE(many.size() == one.size());
-        for (std::size_t i = 0; i < many.size(); ++i) {
-            if (many[i] != one[i])
-                FAIL("record " << i << " differs: " << many[i].first);
-        }
     }
 }

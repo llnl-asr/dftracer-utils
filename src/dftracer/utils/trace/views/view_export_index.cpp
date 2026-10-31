@@ -6,9 +6,9 @@
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -44,7 +44,7 @@ namespace dftracer::utils::trace::views::detail {
 namespace {
 
 // Per-part index data, accumulated while writing and persisted together at the
-// end so all parts land in one index transaction sharing one index_path.
+// end, all under one index_path.
 struct PartData {
     std::string path;
     std::vector<dftracer::utils::index::gzip::GzipMemberRecord> members;
@@ -297,50 +297,61 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
 
     for (auto& sl : pool) bloom.merge(*sl->bloom);
 
-    // Persist the index for every part in one transaction. Registering each
-    // with its exact mtime/size makes the resolver accept it as fresh; any
-    // later edit trips the stale check and rebuilds.
-    try {
-        dftracer::utils::index::store::IndexDatabase db(index_path);
-        auto w = db.begin_write();
-        // BloomFold::finalize below writes the dft.index data; until then
-        // the parts have members but no bloom tier, which a later scan fills.
-        namespace records = dftracer::utils::index::store::records;
-        using dftracer::utils::index::store::IndexExtension;
-        for (const auto& part : parts) {
-            auto logical =
-                dftracer::utils::index::store::internal::get_logical_path(
-                    part.path);
-            const auto hash =
-                dftracer::utils::index::store::internal::calculate_file_hash(
-                    part.path);
-            const auto mtime = static_cast<std::uint64_t>(
-                dftracer::utils::index::store::internal::
-                    get_file_modification_time(part.path));
-            const auto bytes =
-                dftracer::utils::index::store::internal::file_size_bytes(
-                    part.path);
-            const int fid = w->file_id_for(logical);
-            records::put_file_record(
-                *w, logical,
-                {static_cast<std::uint32_t>(fid), mtime, hash, bytes});
-            for (auto ext : {IndexExtension::Zonemap, IndexExtension::Bloom,
-                             IndexExtension::Counts, IndexExtension::Postings,
-                             IndexExtension::Stats})
-                records::clear_file(*w, ext, fid);
-            records::clear_file(*w, IndexExtension::Members, fid);
-            for (const auto& m : part.members)
-                records::put_gzip_member(*w, fid, m);
-            records::put_file_metadata(*w, fid, member_size, part.total_lines,
+    // Persist the index of every part, one commit each. Registering each with
+    // its exact mtime/size makes the resolver accept it as fresh; any later
+    // edit trips the stale check and rebuilds.
+    {
+        namespace idx = dftracer::utils::index;
+        using idx::store::IndexExtension;
+        std::string failure;
+        try {
+            auto index = idx::Index::open(
+                idx::store::internal::normalize_index_root(index_path));
+            if (!index) failure = std::string(index.error().message());
+            // BloomFold::finalize below writes the dft.index data; until then
+            // the parts have members but no bloom tier, which a later scan
+            // fills.
+            for (const auto& part : parts) {
+                if (!failure.empty()) break;
+                auto logical =
+                    idx::store::internal::get_logical_path(part.path);
+                const auto hash =
+                    idx::store::internal::calculate_file_hash(part.path);
+                const auto mtime = static_cast<std::uint64_t>(
+                    idx::store::internal::get_file_modification_time(
+                        part.path));
+                const auto bytes =
+                    idx::store::internal::file_size_bytes(part.path);
+                auto build =
+                    index->build(logical, idx::SourceStat{mtime, bytes, hash});
+                if (!build) {
+                    failure = std::string(build.error().message());
+                    break;
+                }
+                for (auto ext :
+                     {IndexExtension::Zonemap, IndexExtension::Bloom,
+                      IndexExtension::Counts, IndexExtension::Postings,
+                      IndexExtension::Stats})
+                    build->clear(ext);
+                for (const auto& m : part.members)
+                    idx::put_gzip_member(*build, m);
+                idx::put_file_metadata(*build, member_size, part.total_lines,
                                        part.total_uc, false);
-            records::put_manifest(*w, fid, IndexExtension::Members, 0);
-            records::put_profile(*w, fid, schema.id, schema.params_hash());
+                build->finish(IndexExtension::Members, 0);
+                idx::put_profile(*build, schema.id);
+                build->finish(IndexExtension::Profile, schema.params_hash());
+                auto committed = co_await build->commit();
+                if (!committed)
+                    failure = std::string(committed.error().message());
+            }
+        } catch (const std::exception& e) {
+            failure = e.what();
         }
-        w->commit();
-    } catch (const std::exception& e) {
-        throw DFTUtilsException(ErrorCode::Io,
-                                std::string("fused index build failed for ") +
-                                    opts.output_path + ": " + e.what());
+        if (!failure.empty()) {
+            throw DFTUtilsException(
+                ErrorCode::Io, std::string("fused index build failed for ") +
+                                   opts.output_path + ": " + failure);
+        }
     }
 
     // Members are committed, so the folds' finalize can open the index, resolve

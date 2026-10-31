@@ -62,6 +62,10 @@ struct FileBuild::Impl {
     dstd::Vector<Copy> copies;
     /// Extensions whose copy of the file the commit drops.
     dstd::Vector<kv::Namespace> cleared;
+    /// Also drop every copy of the file the build did not write, but the ones
+    /// named in `kept`.
+    bool drop_unwritten = false;
+    dstd::Vector<dstd::String> kept;
     /// The first error of a put or a finish, reported by commit.
     dstd::Optional<dstd::Error> error;
     bool committed = false;
@@ -97,6 +101,8 @@ struct IndexAccess {
     static void fail(FileBuild& build, const kv::NamespaceSpec& spec,
                      std::uint64_t params_hash);
     static void record_error(FileBuild& build, dstd::Error error);
+    static void drop_unwritten(FileBuild& build,
+                               dstd::Span<const kv::NamespaceSpec> kept);
     static void clear(FileBuild& build, const kv::NamespaceSpec& spec);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> stage(
         FileBuild& build);

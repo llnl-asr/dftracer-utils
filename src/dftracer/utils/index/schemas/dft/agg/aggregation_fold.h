@@ -31,6 +31,10 @@
 #include <string_view>
 #include <variant>
 
+namespace dftracer::utils::index {
+class FileBuild;
+}
+
 namespace dftracer::utils::index::schemas::dft::agg {
 
 /// The closed rows a fold that writes through holds before its first run. For
@@ -179,9 +183,10 @@ class AggregationFold : public trace::views::detail::Fold {
     }
 
     /// Emits the partials, column blocks and referenced dictionary entries into
-    /// `w`, and the file's manifest entry when the fold has a file. Throws
-    /// std::logic_error on a fold that wrote through.
-    void write(index::store::IndexWrite& w);
+    /// `build`, and finishes the Agg extension. The commit replaces the file's
+    /// copy of it. Throws std::logic_error on a fold that wrote through or has
+    /// no file.
+    void write(index::FileBuild& build);
 
     /// Lets the fold move its closed rows into a staged write of `db` once they
     /// pass a run's size, so a large file does not hold them all until the
@@ -270,8 +275,11 @@ class AggregationFold : public trace::views::detail::Fold {
     void close_columns();
     /// Puts the closed rows into `w` and frees them.
     void put_closed(index::store::IndexWrite& w);
+    void put_closed(index::FileBuild& build);
+    void release_closed();
     void queue_closed();
     void finish_rows(index::store::IndexWrite& w);
+    void finish_rows(index::FileBuild& build);
 
     dftracer::utils::dstd::StringIntern* build_intern_;
     index::schemas::dft::agg::MetricArgIds metric_ids_;

@@ -324,6 +324,7 @@ set(TEST_CPP_SOURCES
     index/test_index_pass_parallel.cpp
     index/test_index_skip.cpp
     index/test_catalog.cpp
+    index/test_spill_publish.cpp
     index/test_bloom_open_counts.cpp
     index/test_build_parallelism.cpp
     index/test_build_peak.cpp

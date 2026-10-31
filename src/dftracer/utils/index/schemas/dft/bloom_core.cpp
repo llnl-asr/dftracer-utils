@@ -4,6 +4,7 @@
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/index_write.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <array>
 #include <charconv>
@@ -40,31 +41,133 @@ namespace records = index::store::records;
 namespace kinds = index::extensions::kinds;
 using index::store::IndexExtension;
 
-void put_bloom(index::store::IndexWrite& w, int file_id,
-               std::uint64_t checkpoint_idx, std::string_view path,
+// A spilled file's tier records go to the legacy write and an in-memory
+// file's to its FileBuild. Both take the same calls.
+class LegacyTier {
+   public:
+    LegacyTier(index::store::IndexWrite& w, int file_id)
+        : w_(w), file_id_(file_id) {}
+
+    void path(IndexExtension ext, std::string_view path) {
+        records::put_path(w_, ext, file_id_, path);
+    }
+    void path_granule(IndexExtension ext, std::string_view path,
+                      std::uint64_t granule, std::string_view payload) {
+        records::put_path_granule(w_, ext, file_id_, path, granule, payload);
+    }
+    void path_file(IndexExtension ext, std::string_view path,
+                   std::string_view payload) {
+        records::put_path_file(w_, ext, file_id_, path, payload);
+    }
+    void posting(std::string_view path, std::uint64_t value_hash) {
+        records::put_posting(w_, file_id_, path, value_hash);
+    }
+    void posting_granule(std::string_view path, std::uint64_t value_hash,
+                         std::uint64_t granule) {
+        records::put_posting_granule(w_, file_id_, path, value_hash, granule);
+    }
+    void chunk_statistics(std::uint64_t checkpoint_idx,
+                          const BloomCore::ChunkStatistics& stats) {
+        records::put_chunk_statistics(w_, file_id_, checkpoint_idx, stats);
+    }
+    void chunk_metadata(std::uint64_t checkpoint_idx,
+                        const index::store::ChunkMetadata& metadata) {
+        records::put_chunk_metadata(w_, file_id_, checkpoint_idx, metadata);
+    }
+    void scalar_stats(const BloomCore::ChunkStatistics& stats,
+                      std::uint64_t chunks) {
+        records::put_file_scalar_stats(w_, file_id_, stats, chunks);
+    }
+    void pid_tid_counts(const dstd::StringViewMap<std::uint64_t>& counts) {
+        records::put_file_pid_tid_counts(w_, file_id_, counts);
+    }
+    void catalog_path(std::string_view path,
+                      const index::store::PathStat& stat) {
+        records::put_catalog_path(w_, file_id_, path, stat);
+    }
+    void finish(IndexExtension ext, std::uint64_t params_hash) {
+        records::put_manifest(w_, file_id_, ext, params_hash);
+    }
+
+   private:
+    index::store::IndexWrite& w_;
+    int file_id_;
+};
+
+class BuildTier {
+   public:
+    explicit BuildTier(index::FileBuild& build) : build_(build) {}
+
+    void path(IndexExtension ext, std::string_view path) {
+        index::put_path(build_, ext, path);
+    }
+    void path_granule(IndexExtension ext, std::string_view path,
+                      std::uint64_t granule, std::string_view payload) {
+        index::put_path_granule(build_, ext, path, granule, payload);
+    }
+    void path_file(IndexExtension ext, std::string_view path,
+                   std::string_view payload) {
+        index::put_path_file(build_, ext, path, payload);
+    }
+    void posting(std::string_view path, std::uint64_t value_hash) {
+        index::put_posting(build_, path, value_hash);
+    }
+    void posting_granule(std::string_view path, std::uint64_t value_hash,
+                         std::uint64_t granule) {
+        index::put_posting_granule(build_, path, value_hash, granule);
+    }
+    void chunk_statistics(std::uint64_t checkpoint_idx,
+                          const BloomCore::ChunkStatistics& stats) {
+        index::put_chunk_statistics(build_, checkpoint_idx, stats);
+    }
+    void chunk_metadata(std::uint64_t checkpoint_idx,
+                        const index::store::ChunkMetadata& metadata) {
+        index::put_chunk_metadata(build_, checkpoint_idx, metadata);
+    }
+    void scalar_stats(const BloomCore::ChunkStatistics& stats,
+                      std::uint64_t chunks) {
+        index::put_file_scalar_stats(build_, stats, chunks);
+    }
+    void pid_tid_counts(const dstd::StringViewMap<std::uint64_t>& counts) {
+        index::put_file_pid_tid_counts(build_, counts);
+    }
+    void catalog_path(std::string_view path,
+                      const index::store::PathStat& stat) {
+        index::put_catalog_path(build_, path, stat);
+    }
+    void finish(IndexExtension ext, std::uint64_t params_hash) {
+        build_.finish(ext, params_hash);
+    }
+
+   private:
+    index::FileBuild& build_;
+};
+
+template <class Tier>
+void put_bloom(Tier& t, std::uint64_t checkpoint_idx, std::string_view path,
                const ScalableBloomFilter& bf,
                std::vector<unsigned char>& blob) {
     bf.serialize_into(blob);
-    records::put_path_granule(
-        w, IndexExtension::Bloom, file_id, path, checkpoint_idx,
-        kinds::encode_bloom(blob,
-                            static_cast<std::uint64_t>(bf.num_entries())));
+    t.path_granule(IndexExtension::Bloom, path, checkpoint_idx,
+                   kinds::encode_bloom(
+                       blob, static_cast<std::uint64_t>(bf.num_entries())));
 }
 
-void put_file_bloom(index::store::IndexWrite& w, int file_id,
-                    std::string_view path, const ScalableBloomFilter& bf,
+template <class Tier>
+void put_file_bloom(Tier& t, std::string_view path,
+                    const ScalableBloomFilter& bf,
                     std::vector<unsigned char>& blob) {
     bf.serialize_into(blob);
-    records::put_path_file(w, IndexExtension::Bloom, file_id, path,
-                           kinds::encode_bloom(blob, static_cast<std::uint64_t>(
-                                                         bf.num_entries())));
+    t.path_file(IndexExtension::Bloom, path,
+                kinds::encode_bloom(
+                    blob, static_cast<std::uint64_t>(bf.num_entries())));
 }
 
 // One dimension's statistics as a zonemap and, when its value dictionary fit
 // the cap, counts. `observed` is the chunk's data events. An extra dimension
 // without a value gets an absence zone.
-void put_dimension(index::store::IndexWrite& w, int file_id,
-                   std::uint64_t checkpoint_idx,
+template <class Tier>
+void put_dimension(Tier& t, std::uint64_t checkpoint_idx,
                    const BloomCore::ChunkDimensionStats& ds,
                    std::uint64_t observed,
                    const BloomCore::ChunkIndexerConfig& config,
@@ -88,14 +191,145 @@ void put_dimension(index::store::IndexWrite& w, int file_id,
         zone.present = present;
         if (ds.dimension == DIM_TS && !stats.timestamp_histogram.empty())
             zone.histogram = stats.timestamp_histogram;
-        records::put_path_granule(w, IndexExtension::Zonemap, file_id,
-                                  ds.dimension, checkpoint_idx,
-                                  kinds::encode_zone(zone));
+        t.path_granule(IndexExtension::Zonemap, ds.dimension, checkpoint_idx,
+                       kinds::encode_zone(zone));
     }
     if (counts && compressed)
-        records::put_path_granule(
-            w, IndexExtension::Counts, file_id, ds.dimension, checkpoint_idx,
-            kinds::encode_counts({observed, *compressed}));
+        t.path_granule(IndexExtension::Counts, ds.dimension, checkpoint_idx,
+                       kinds::encode_counts({observed, *compressed}));
+}
+
+template <class Tier>
+void write_chunk_to(Tier& t, std::uint64_t checkpoint_idx,
+                    const BloomCore::ChunkState& chunk,
+                    const std::vector<std::string>& extra_dims,
+                    const BloomCore::ChunkIndexerConfig& config,
+                    BloomCore::FileAccumulator& acc) {
+    const auto& m = config.extensions;
+    const bool blooms = m.has(IndexExtension::Bloom);
+    const bool zones = m.has(IndexExtension::Zonemap);
+    const bool fixed = config.fixed_dimensions;
+    const auto observed = chunk.statistics.total_events;
+    auto& blob = acc.blob;
+
+    for (std::size_t b = 0; fixed && blooms && b < BloomCore::BfCount; ++b) {
+        put_bloom(t, checkpoint_idx, FIXED_BLOOM_NAMES[b],
+                  chunk.fixed_blooms[b], blob);
+        acc.fixed_blooms[b].merge_from(chunk.fixed_blooms[b]);
+    }
+    for (std::size_t e = 0;
+         blooms && e < extra_dims.size() && e < chunk.extra_dim_stats.size();
+         ++e) {
+        if (chunk.extra_dim_stats[e].present == 0) continue;
+        auto& file_bloom = acc.extra(extra_dims[e]);
+        if (e < chunk.extra_bloom_skip.size() && chunk.extra_bloom_skip[e]) {
+            file_bloom.skip = true;
+            continue;
+        }
+        if (e < chunk.extra_blooms.size()) {
+            put_bloom(t, checkpoint_idx, extra_dims[e], chunk.extra_blooms[e],
+                      blob);
+            file_bloom.bloom.merge_from(chunk.extra_blooms[e]);
+            continue;
+        }
+        const auto& values = chunk.extra_values[e];
+        // One more than the values, so the last add opens no second level.
+        ScalableBloomFilter bf(values.size() + 1, config.false_positive_rate);
+        for (std::string_view v : values) {
+            bf.add(v);
+            file_bloom.bloom.add(v);
+        }
+        put_bloom(t, checkpoint_idx, extra_dims[e], bf, blob);
+    }
+
+    t.chunk_statistics(checkpoint_idx, chunk.statistics);
+    t.chunk_metadata(checkpoint_idx, chunk.metadata);
+    acc.statistics.merge_from(chunk.statistics);
+    ++acc.chunks;
+
+    for (const auto& ds : chunk.fixed_dim_stats)
+        if (fixed)
+            put_dimension(t, checkpoint_idx, ds, observed, config,
+                          chunk.statistics, false);
+    for (const auto& ds : chunk.extra_dim_stats)
+        put_dimension(t, checkpoint_idx, ds, observed, config, chunk.statistics,
+                      true);
+    // Event end (ts + dur): the time bounds a time range prunes with. Its
+    // min is the first start, a lower bound of every end.
+    if (zones && observed > 0 &&
+        chunk.statistics.min_timestamp_us <=
+            chunk.statistics.max_timestamp_us) {
+        kinds::Zone te;
+        te.value_type = "uint";
+        te.min = std::to_string(chunk.statistics.min_timestamp_us);
+        te.max = std::to_string(chunk.statistics.max_timestamp_us);
+        te.observed = observed;
+        te.present = observed;
+        t.path_granule(IndexExtension::Zonemap, DIM_TE, checkpoint_idx,
+                       kinds::encode_zone(te));
+    }
+
+    // Postings hash the value, so postings written by concurrent workers or
+    // sinks agree.
+    if (m.has(IndexExtension::Postings))
+        for (const auto& [name, _] : chunk.statistics.name_counts)
+            t.posting_granule(DIM_NAME, kinds::value_hash(name),
+                              checkpoint_idx);
+}
+
+template <class Tier>
+void write_absent_extra_to(Tier& t, std::uint64_t checkpoint_idx,
+                           std::string_view dim, std::uint64_t observed,
+                           const BloomCore::ChunkIndexerConfig& config) {
+    BloomCore::ChunkDimensionStats ds;
+    ds.dimension = std::string(dim);
+    ds.value_type.clear();
+    put_dimension(t, checkpoint_idx, ds, observed, config, {}, true);
+}
+
+template <class Tier>
+BloomCore::ChunkStatistics finish_file_to(
+    Tier& t, BloomCore::FileAccumulator& acc,
+    const BloomCore::ChunkIndexerConfig& config,
+    const std::vector<std::string>& extra_dims,
+    const BloomCore::Catalog& catalog) {
+    const auto& m = config.extensions;
+    const bool blooms = m.has(IndexExtension::Bloom);
+    const bool zones = m.has(IndexExtension::Zonemap);
+    const bool fixed = config.fixed_dimensions;
+    auto& blob = acc.blob;
+
+    for (std::size_t b = 0; fixed && blooms && b < BloomCore::BfCount; ++b) {
+        put_file_bloom(t, FIXED_BLOOM_NAMES[b], acc.fixed_blooms[b], blob);
+        t.path(IndexExtension::Bloom, FIXED_BLOOM_NAMES[b]);
+    }
+    for (std::size_t e = 0; blooms && e < extra_dims.size(); ++e) {
+        auto& file_bloom = acc.extra(extra_dims[e]);
+        if (!file_bloom.skip)
+            put_file_bloom(t, extra_dims[e], file_bloom.bloom, blob);
+        t.path(IndexExtension::Bloom, extra_dims[e]);
+    }
+    if (fixed && zones) t.path(IndexExtension::Zonemap, DIM_TE);
+    for (auto ext : {IndexExtension::Zonemap, IndexExtension::Counts}) {
+        if (!m.has(ext)) continue;
+        for (auto dim : FIXED_DIM_NAMES)
+            if (fixed) t.path(ext, dim);
+        for (const auto& dim : extra_dims) t.path(ext, dim);
+    }
+
+    t.scalar_stats(acc.statistics, acc.chunks);
+    t.pid_tid_counts(acc.statistics.pid_tid_counts);
+
+    if (m.has(IndexExtension::Postings)) {
+        t.path(IndexExtension::Postings, DIM_NAME);
+        for (const auto& [name, _] : acc.statistics.name_counts)
+            t.posting(DIM_NAME, kinds::value_hash(name));
+    }
+
+    for (const auto& [path, stat] : catalog) t.catalog_path(path, stat);
+    for (auto ext : BloomCore::tier_extensions(config))
+        t.finish(ext, config.params_hash(ext));
+    return acc.statistics;
 }
 
 }  // namespace
@@ -128,134 +362,42 @@ void BloomCore::write_chunk(index::store::IndexWrite& w, int file_id,
                             const std::vector<std::string>& extra_dims,
                             const ChunkIndexerConfig& config,
                             FileAccumulator& acc) {
-    const auto& m = config.extensions;
-    const bool blooms = m.has(IndexExtension::Bloom);
-    const bool zones = m.has(IndexExtension::Zonemap);
-    const bool fixed = config.fixed_dimensions;
-    const auto observed = chunk.statistics.total_events;
-    auto& blob = acc.blob;
+    LegacyTier tier(w, file_id);
+    write_chunk_to(tier, checkpoint_idx, chunk, extra_dims, config, acc);
+}
 
-    for (std::size_t b = 0; fixed && blooms && b < BfCount; ++b) {
-        put_bloom(w, file_id, checkpoint_idx, FIXED_BLOOM_NAMES[b],
-                  chunk.fixed_blooms[b], blob);
-        acc.fixed_blooms[b].merge_from(chunk.fixed_blooms[b]);
-    }
-    for (std::size_t e = 0;
-         blooms && e < extra_dims.size() && e < chunk.extra_dim_stats.size();
-         ++e) {
-        if (chunk.extra_dim_stats[e].present == 0) continue;
-        auto& file_bloom = acc.extra(extra_dims[e]);
-        if (e < chunk.extra_bloom_skip.size() && chunk.extra_bloom_skip[e]) {
-            file_bloom.skip = true;
-            continue;
-        }
-        if (e < chunk.extra_blooms.size()) {
-            put_bloom(w, file_id, checkpoint_idx, extra_dims[e],
-                      chunk.extra_blooms[e], blob);
-            file_bloom.bloom.merge_from(chunk.extra_blooms[e]);
-            continue;
-        }
-        const auto& values = chunk.extra_values[e];
-        // One more than the values, so the last add opens no second level.
-        ScalableBloomFilter bf(values.size() + 1, config.false_positive_rate);
-        for (std::string_view v : values) {
-            bf.add(v);
-            file_bloom.bloom.add(v);
-        }
-        put_bloom(w, file_id, checkpoint_idx, extra_dims[e], bf, blob);
-    }
-
-    records::put_chunk_statistics(w, file_id, checkpoint_idx, chunk.statistics);
-    records::put_chunk_metadata(w, file_id, checkpoint_idx, chunk.metadata);
-    acc.statistics.merge_from(chunk.statistics);
-    ++acc.chunks;
-
-    for (const auto& ds : chunk.fixed_dim_stats)
-        if (fixed)
-            put_dimension(w, file_id, checkpoint_idx, ds, observed, config,
-                          chunk.statistics, false);
-    for (const auto& ds : chunk.extra_dim_stats)
-        put_dimension(w, file_id, checkpoint_idx, ds, observed, config,
-                      chunk.statistics, true);
-    // Event end (ts + dur): the time bounds a time range prunes with. Its
-    // min is the first start, a lower bound of every end.
-    if (zones && observed > 0 &&
-        chunk.statistics.min_timestamp_us <=
-            chunk.statistics.max_timestamp_us) {
-        kinds::Zone te;
-        te.value_type = "uint";
-        te.min = std::to_string(chunk.statistics.min_timestamp_us);
-        te.max = std::to_string(chunk.statistics.max_timestamp_us);
-        te.observed = observed;
-        te.present = observed;
-        records::put_path_granule(w, IndexExtension::Zonemap, file_id, DIM_TE,
-                                  checkpoint_idx, kinds::encode_zone(te));
-    }
-
-    // Postings hash the value, so postings written by concurrent workers or
-    // sinks agree.
-    if (m.has(IndexExtension::Postings))
-        for (const auto& [name, _] : chunk.statistics.name_counts)
-            records::put_posting_granule(
-                w, file_id, DIM_NAME, kinds::value_hash(name), checkpoint_idx);
+void BloomCore::write_chunk(index::FileBuild& build,
+                            std::uint64_t checkpoint_idx,
+                            const ChunkState& chunk,
+                            const std::vector<std::string>& extra_dims,
+                            const ChunkIndexerConfig& config,
+                            FileAccumulator& acc) {
+    BuildTier tier(build);
+    write_chunk_to(tier, checkpoint_idx, chunk, extra_dims, config, acc);
 }
 
 void BloomCore::write_absent_extra(index::store::IndexWrite& w, int file_id,
                                    std::uint64_t checkpoint_idx,
                                    std::string_view dim, std::uint64_t observed,
                                    const ChunkIndexerConfig& config) {
-    ChunkDimensionStats ds;
-    ds.dimension = std::string(dim);
-    ds.value_type.clear();
-    put_dimension(w, file_id, checkpoint_idx, ds, observed, config, {}, true);
+    LegacyTier tier(w, file_id);
+    write_absent_extra_to(tier, checkpoint_idx, dim, observed, config);
 }
 
 BloomCore::ChunkStatistics BloomCore::finish_file(
     index::store::IndexWrite& w, int file_id, FileAccumulator& acc,
     const ChunkIndexerConfig& config,
     const std::vector<std::string>& extra_dims, const Catalog& catalog) {
-    const auto& m = config.extensions;
-    const bool blooms = m.has(IndexExtension::Bloom);
-    const bool zones = m.has(IndexExtension::Zonemap);
-    const bool fixed = config.fixed_dimensions;
-    auto& blob = acc.blob;
+    LegacyTier tier(w, file_id);
+    return finish_file_to(tier, acc, config, extra_dims, catalog);
+}
 
-    for (std::size_t b = 0; fixed && blooms && b < BfCount; ++b) {
-        put_file_bloom(w, file_id, FIXED_BLOOM_NAMES[b], acc.fixed_blooms[b],
-                       blob);
-        records::put_path(w, IndexExtension::Bloom, file_id,
-                          FIXED_BLOOM_NAMES[b]);
-    }
-    for (std::size_t e = 0; blooms && e < extra_dims.size(); ++e) {
-        auto& file_bloom = acc.extra(extra_dims[e]);
-        if (!file_bloom.skip)
-            put_file_bloom(w, file_id, extra_dims[e], file_bloom.bloom, blob);
-        records::put_path(w, IndexExtension::Bloom, file_id, extra_dims[e]);
-    }
-    if (fixed && zones)
-        records::put_path(w, IndexExtension::Zonemap, file_id, DIM_TE);
-    for (auto ext : {IndexExtension::Zonemap, IndexExtension::Counts}) {
-        if (!m.has(ext)) continue;
-        for (auto dim : FIXED_DIM_NAMES)
-            if (fixed) records::put_path(w, ext, file_id, dim);
-        for (const auto& dim : extra_dims)
-            records::put_path(w, ext, file_id, dim);
-    }
-
-    records::put_file_scalar_stats(w, file_id, acc.statistics, acc.chunks);
-    records::put_file_pid_tid_counts(w, file_id, acc.statistics.pid_tid_counts);
-
-    if (m.has(IndexExtension::Postings)) {
-        records::put_path(w, IndexExtension::Postings, file_id, DIM_NAME);
-        for (const auto& [name, _] : acc.statistics.name_counts)
-            records::put_posting(w, file_id, DIM_NAME, kinds::value_hash(name));
-    }
-
-    for (const auto& [path, stat] : catalog)
-        records::put_catalog_path(w, file_id, path, stat);
-    for (auto ext : tier_extensions(config))
-        records::put_manifest(w, file_id, ext, config.params_hash(ext));
-    return acc.statistics;
+BloomCore::ChunkStatistics BloomCore::finish_file(
+    index::FileBuild& build, FileAccumulator& acc,
+    const ChunkIndexerConfig& config,
+    const std::vector<std::string>& extra_dims, const Catalog& catalog) {
+    BuildTier tier(build);
+    return finish_file_to(tier, acc, config, extra_dims, catalog);
 }
 
 BloomCore::ChunkState::ChunkState() = default;

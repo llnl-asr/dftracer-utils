@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/fold.h>
 
@@ -15,6 +14,10 @@
 #include <string>
 #include <variant>
 #include <vector>
+
+namespace dftracer::utils::index {
+class FileBuild;
+}
 
 namespace dftracer::utils::index::extensions {
 
@@ -47,9 +50,10 @@ class RowSetFold : public trace::views::detail::Fold {
         co_return true;
     }
 
-    /// Writes each row set's sealed rows and the file's manifest entry. The
-    /// source is part of the schema's hash, which the profile records.
-    void write(index::store::IndexWrite& w, int file_id) const;
+    /// Writes each row set's sealed rows into `build` and finishes the
+    /// extension. The source is part of the schema's hash, which the profile
+    /// records.
+    void write(index::FileBuild& build) const;
 
     bool abandoned() const noexcept { return abandoned_; }
     /// Sealed rows over every row set.

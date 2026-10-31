@@ -2,6 +2,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -223,10 +224,26 @@ void AggregationFold::put_closed(index::store::IndexWrite& w) {
             w, file_id_, closed.chunk, closed.key.cat, closed.key.name,
             closed.key.host, closed.key.extra,
             static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
-    closed_.clear();
     for (const ClosedColumns& closed : closed_columns_)
         index::store::records::put_agg_chunk_columns_value(
             w, file_id_, closed.chunk, bytes_of(closed.value));
+    release_closed();
+}
+
+void AggregationFold::put_closed(index::FileBuild& build) {
+    for (const Closed& closed : closed_)
+        index::put_agg_partial_value(
+            build, closed.chunk, closed.key.cat, closed.key.name,
+            closed.key.host, closed.key.extra,
+            static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
+    for (const ClosedColumns& closed : closed_columns_)
+        index::put_agg_chunk_columns_value(build, closed.chunk,
+                                           bytes_of(closed.value));
+    release_closed();
+}
+
+void AggregationFold::release_closed() {
+    closed_.clear();
     closed_columns_.clear();
     closed_bytes_ = 0;
     std::sort(referenced_.begin(), referenced_.end());
@@ -258,7 +275,7 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
     o.referenced_.clear();
 }
 
-void AggregationFold::write(index::store::IndexWrite& w) {
+void AggregationFold::write(index::FileBuild& build) {
     if (file_id_ < 0) {
         throw std::logic_error(
             "an aggregation fold writes the data of one file, and has none");
@@ -268,10 +285,7 @@ void AggregationFold::write(index::store::IndexWrite& w) {
             "an aggregation fold that wrote through finishes its staged write");
     }
     close_chunk();
-    // The clear covers every kind, so it comes before any put.
-    index::store::records::clear_file(w, index::store::layout::Ext::Agg,
-                                      file_id_);
-    finish_rows(w);
+    finish_rows(build);
 }
 
 void AggregationFold::write_through(index::store::IndexDatabase& db,
@@ -295,6 +309,15 @@ void AggregationFold::finish_rows(index::store::IndexWrite& w) {
         index::store::records::put_agg_dictionary_entry(
             w, file_id_, id, agg_intern_->intern.resolve(id));
     tier::put_file(w, file_id_, config_.params_hash());
+    referenced_.clear();
+}
+
+void AggregationFold::finish_rows(index::FileBuild& build) {
+    put_closed(build);
+    for (const std::uint32_t id : referenced_)
+        index::put_agg_dictionary_entry(build, id,
+                                        agg_intern_->intern.resolve(id));
+    build.finish(index::store::IndexExtension::Agg, config_.params_hash());
     referenced_.clear();
 }
 

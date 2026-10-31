@@ -20,6 +20,10 @@
 #include <utility>
 #include <vector>
 
+namespace dftracer::utils::index {
+class FileBuild;
+}
+
 namespace dftracer::utils::index::extensions {
 
 /// Builds the per-checkpoint pruner index (bloom filters, chunk statistics,
@@ -83,11 +87,10 @@ class BloomFold : public trace::views::detail::Fold {
     coro::CoroTask<bool> finalize(
         const trace::views::detail::CoverageSet& covered) override;
 
-    /// Write the single harvested file's `dft.index` data and manifest entry
-    /// into a caller-owned write, for the streaming index build which owns
-    /// the transaction. Assumes one file; no coverage gate. Consumes the
-    /// chunks.
-    void write(index::store::IndexWrite& w, int file_id);
+    /// Writes the single harvested file's tier into `build`, which gets each
+    /// tier extension finished. Assumes one file; no coverage gate. Consumes
+    /// the chunks.
+    void write(index::FileBuild& build);
 
     /// Total data events harvested across this fold's files. Call before
     /// write, which consumes the chunks.
@@ -241,10 +244,10 @@ class BloomFold : public trace::views::detail::Fold {
     std::uint32_t dur_key_ = 0;
     std::optional<std::uint64_t> file_bytes_;
 
-    /// Writes the tier and manifest entries of `file` into `w`, one chunk at
-    /// a time. Consumes `fs`.
-    void write_file(index::store::IndexWrite& w, int file_id,
-                    const std::string& file, FileState& fs);
+    /// Writes the tier of `file` into `build`, one chunk at a time. Consumes
+    /// `fs`.
+    void write_file(index::FileBuild& build, const std::string& file,
+                    FileState& fs);
     // Nested extra dimensions come from a capture under "args."; records whose
     // every leaf is already a key need none.
     bool captures_nested() const { return !config_.auto_prefix.empty(); }

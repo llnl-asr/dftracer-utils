@@ -1,12 +1,11 @@
 #include <dftracer/utils/common/logging.h>
-#include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <exception>
-#include <mutex>
+#include <string>
 
 namespace dftracer::utils::index::extensions {
 
@@ -50,12 +49,12 @@ coro::CoroTask<bool> CatalogFold::finalize(
         if (fs.index_path.empty() || fs.paths.empty()) continue;
         if (!covered.covers_file(file)) continue;
 
-        int file_id = -1;
+        const std::string logical =
+            index::store::internal::get_logical_path(file);
         try {
             index::store::IndexDatabase ro(
                 fs.index_path, index::store::IndexOpenMode::ReadOnly);
-            file_id = ro.get_file_info_id(
-                index::store::internal::get_logical_path(file));
+            const int file_id = ro.get_file_info_id(logical);
             if (file_id < 0 ||
                 ro.extension_current(file_id, IndexExtension::Catalog))
                 continue;
@@ -65,24 +64,28 @@ coro::CoroTask<bool> CatalogFold::finalize(
             continue;
         }
 
-        std::unique_lock<std::mutex> lk(
-            index::build::index_write_mutex(fs.index_path));
-        try {
-            index::store::IndexDatabase db(fs.index_path);
-            auto writer = db.begin_write();
-            index::store::records::clear_file(*writer, IndexExtension::Catalog,
-                                              file_id);
+        auto opened = index::Index::open(
+            index::store::internal::normalize_index_root(fs.index_path));
+        auto build = opened
+                         ? index::rebuild(*opened, logical)
+                         : dstd::Expected<index::FileBuild, dstd::Error>(
+                               dstd::Unexpected<dstd::Error>(opened.error()));
+        std::string failure;
+        if (build) {
             for (const auto& [id, stat] : fs.paths)
-                index::store::records::put_catalog_path(
-                    *writer, file_id, intern_->resolve(id), stat);
-            index::store::records::put_manifest(
-                *writer, file_id, IndexExtension::Catalog, params_hash_);
-            writer->commit();
-            wrote = true;
-        } catch (const std::exception& e) {
-            DFTRACER_UTILS_LOG_WARN("catalog write skipped for %s: %s",
-                                    fs.index_path.c_str(), e.what());
+                index::put_catalog_path(*build, intern_->resolve(id), stat);
+            build->finish(IndexExtension::Catalog, params_hash_);
+            auto committed = co_await build->commit();
+            if (!committed) failure = std::string(committed.error().message());
+        } else {
+            failure = std::string(build.error().message());
         }
+        if (!failure.empty()) {
+            DFTRACER_UTILS_LOG_WARN("catalog write skipped for %s: %s",
+                                    fs.index_path.c_str(), failure.c_str());
+            continue;
+        }
+        wrote = true;
     }
     co_return wrote;
 }

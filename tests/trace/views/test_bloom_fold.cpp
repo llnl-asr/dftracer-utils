@@ -5,10 +5,12 @@
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <doctest/doctest.h>
@@ -32,7 +34,7 @@ using namespace dftracer::utils::index::extensions;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::index::extensions::ScalableBloomFilter;
 
-namespace store = dftracer::utils::index::store;
+namespace istore = dftracer::utils::index::store;
 
 namespace {
 
@@ -67,6 +69,20 @@ std::string create_bloom_trace(TestEnvironment& env, int n,
     return gz;
 }
 
+// A FileBuild for the indexed file `logical_path` of the index at `index_path`.
+dftracer::utils::index::FileBuild rebuild_file(const std::string& index_path,
+                                               std::string_view logical_path) {
+    auto index = dftracer::utils::index::Index::open(
+        dftracer::utils::index::store::internal::normalize_index_root(
+            index_path));
+    REQUIRE(index);
+    auto build = dftracer::utils::index::rebuild(
+        *index, dftracer::utils::dstd::StringView(logical_path.data(),
+                                                  logical_path.size()));
+    REQUIRE(build);
+    return std::move(*build);
+}
+
 int file_id_of(dftracer::utils::index::store::IndexDatabase& db,
                const std::string& gz) {
     return db.get_file_info_id(
@@ -75,7 +91,7 @@ int file_id_of(dftracer::utils::index::store::IndexDatabase& db,
 
 // Binds a logical path to the file id a fold writes, since the store names a
 // file by its path.
-int bind_file(store::IndexDatabase& db, std::string_view logical_path) {
+int bind_file(istore::IndexDatabase& db, std::string_view logical_path) {
     auto write = db.begin_write();
     const int fid = dftu_utils_test::register_test_file(*write, logical_path);
     write->commit();
@@ -160,7 +176,7 @@ TEST_SUITE("BloomFold") {
         };
         const std::string dropped = env.get_dir() + "/dropped";
         {
-            store::IndexDatabase db(dropped);
+            istore::IndexDatabase db(dropped);
             REQUIRE(bind_file(db, "f.pfw.gz") == 1);
             BloomFold fold(intern);
             fold.enable_spill(1, db.begin_staged_write(), 1,
@@ -170,14 +186,14 @@ TEST_SUITE("BloomFold") {
             CHECK(fold.spill_runs() == 1);
         }
         {
-            store::IndexDatabase db(dropped, store::IndexOpenMode::ReadOnly);
+            istore::IndexDatabase db(dropped, istore::IndexOpenMode::ReadOnly);
             CHECK_FALSE(db.pruning_tier_current(1));
             CHECK(db.query_chunk_statistics(1).empty());
         }
 
         const std::string kept = env.get_dir() + "/kept";
         {
-            store::IndexDatabase db(kept);
+            istore::IndexDatabase db(kept);
             REQUIRE(bind_file(db, "f.pfw.gz") == 1);
             BloomFold fold(intern);
             fold.enable_spill(1, db.begin_staged_write(), 1,
@@ -192,17 +208,22 @@ TEST_SUITE("BloomFold") {
         // that fit in memory writes does.
         const std::string memory = env.get_dir() + "/memory";
         {
-            store::IndexDatabase db(memory);
+            istore::IndexDatabase db(memory);
             REQUIRE(bind_file(db, "f.pfw.gz") == 1);
             BloomFold fold(intern);
             drive(fold);
             CHECK(fold.spill_runs() == 0);
-            auto write = db.begin_write();
-            fold.write(*write, 1);
-            write->commit();
+            auto index = dftracer::utils::index::Index::open(
+                dftracer::utils::index::store::internal::normalize_index_root(
+                    memory));
+            REQUIRE(index);
+            auto build = index->build("f.pfw.gz", {});
+            REQUIRE(build);
+            fold.write(*build);
+            REQUIRE(build->commit().get());
         }
         auto chunks = [](const std::string& path) {
-            store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
+            istore::IndexDatabase db(path, istore::IndexOpenMode::ReadOnly);
             return db.query_chunk_statistics(1);
         };
         const auto spilled = chunks(kept);
@@ -359,14 +380,15 @@ TEST_SUITE("BloomFold") {
 
         int fid = -1;
         {
+            const auto logical =
+                dftracer::utils::index::store::internal::get_logical_path(gz);
+            auto build = rebuild_file(index_path, logical);
+            bloom.write(build);
+            dict.write(build);
+            REQUIRE(build.commit().get());
             dftracer::utils::index::store::IndexDatabase db(index_path);
-            fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(gz));
+            fid = db.get_file_info_id(logical);
             REQUIRE(fid >= 0);
-            auto w = db.begin_write();
-            bloom.write(*w, fid);
-            dict.write(*w, fid);
-            w->commit();
         }
 
         dftracer::utils::index::store::IndexDatabase rd(
@@ -415,14 +437,15 @@ TEST_SUITE("BloomFold") {
 
         int fid = -1;
         {
+            const auto logical =
+                dftracer::utils::index::store::internal::get_logical_path(gz);
+            auto build = rebuild_file(index_path, logical);
+            bloom.write(build);
+            dict.write(build);
+            REQUIRE(build.commit().get());
             dftracer::utils::index::store::IndexDatabase db(index_path);
-            fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(gz));
+            fid = db.get_file_info_id(logical);
             REQUIRE(fid >= 0);
-            auto w = db.begin_write();
-            bloom.write(*w, fid);
-            dict.write(*w, fid);
-            w->commit();
         }
 
         dftracer::utils::index::store::IndexDatabase rd(

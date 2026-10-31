@@ -401,6 +401,7 @@ struct IndexingArgs : CliSchema {
     std::string group = "Indexing";
     bool with_index_dir = true;
     bool with_force = true;
+    bool with_checkpoint = true;
 
     IndexingArgs() = default;
     explicit IndexingArgs(bool f) : with_force(f) {}
@@ -412,10 +413,12 @@ struct IndexingArgs : CliSchema {
                 .help(index_dir_help)
                 .default_value<std::string>("");
         }
-        p.add_argument("--checkpoint-size")
-            .help(checkpoint_help)
-            .default_value(
-                std::to_string(constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+        if (with_checkpoint) {
+            p.add_argument("--checkpoint-size")
+                .help(checkpoint_help)
+                .default_value(std::to_string(
+                    constants::indexer::DEFAULT_CHECKPOINT_SIZE));
+        }
         if (with_force) {
             p.add_argument("-f", "--force").help(force_help).flag();
         }
@@ -425,7 +428,9 @@ struct IndexingArgs : CliSchema {
         if (with_index_dir) {
             index_dir = p.get<std::string>("--index-dir");
         }
-        checkpoint_size = get_bytes_arg(p, "--checkpoint-size");
+        if (with_checkpoint) {
+            checkpoint_size = get_bytes_arg(p, "--checkpoint-size");
+        }
         if (with_force) {
             force = p.get<bool>("--force");
         }

@@ -1,32 +1,36 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/index/build/resolver.h>
+#include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
+#include <dftracer/utils/trace/parse_inflated.h>
+#include <dftracer/utils/trace/views/fold_event.h>
+#include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
+#include <fcntl.h>
+#include <simdjson.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
 #include <chrono>
-#include <memory>
+#include <cstdio>
+#include <map>
 #include <string>
-#include <unordered_map>
+#include <string_view>
 #include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::index::build;
-using dftracer::utils::index::build::BatchBuilder;
-using dftracer::utils::index::build::IndexBuildBatchConfig;
 
 class EventCountArgParse : public cli::ArgParse {
    public:
@@ -36,64 +40,141 @@ class EventCountArgParse : public cli::ArgParse {
 
     explicit EventCountArgParse(argparse::ArgumentParser& p) : ArgParse(p) {
         indexing.index_dir_help =
-            "Directory to store index files (default: system temp directory)";
+            "Directory that holds .dftindex stores to read counts from "
+            "(never written)";
+        indexing.force_help =
+            "Ignore any index and stream every file to count its events";
+        indexing.with_checkpoint = false;
         schema(directory, pipeline, indexing);
     }
 };
 
 static int run_event_count(const EventCountArgParse* cli);
 
-struct EventCountBatchResult {
+namespace {
+
+constexpr std::size_t PLAIN_READ_BYTES = std::size_t{4} << 20;
+
+struct IndexedCounts {
     std::size_t total_events = 0;
-    std::size_t files_processed = 0;
-    bool is_approximate = false;
+    std::size_t files_counted = 0;
+    std::vector<std::string> to_stream;
 };
 
-static EventCountBatchResult process_index_group_event_counts_sync(
-    std::string index_path, std::vector<ResolvedFile> entries) {
-    std::vector<int> file_ids;
-    file_ids.reserve(entries.size());
-    for (const auto& entry : entries) {
-        file_ids.push_back(entry.file_id);
-    }
+IndexedCounts count_from_index(const std::string& index_path,
+                               const std::vector<ResolvedFile>& entries) {
+    IndexedCounts counts;
+    try {
+        std::vector<int> file_ids;
+        file_ids.reserve(entries.size());
+        for (const auto& entry : entries) file_ids.push_back(entry.file_id);
 
-    EventCountBatchResult batch_result;
-
-    dftracer::utils::index::store::IndexDatabase db(
-        index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-
-    auto metadata_rows = db.query_file_metadata_batch(file_ids);
-    auto merged_stats =
-        dftracer::utils::index::schemas::dft::merged_statistics(db, file_ids);
-
-    for (const auto file_id : file_ids) {
-        auto merged_it = merged_stats.find(file_id);
-        if (merged_it != merged_stats.end() &&
-            merged_it->second.num_chunks > 0) {
-            batch_result.total_events +=
-                static_cast<std::size_t>(merged_it->second.stats.total_events);
-            batch_result.files_processed++;
-            continue;
+        dftracer::utils::index::store::IndexDatabase db(
+            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        auto merged_stats =
+            dftracer::utils::index::schemas::dft::merged_statistics(db,
+                                                                    file_ids);
+        for (const auto& entry : entries) {
+            auto it = merged_stats.find(entry.file_id);
+            if (it != merged_stats.end() && it->second.num_chunks > 0) {
+                counts.total_events +=
+                    static_cast<std::size_t>(it->second.stats.total_events);
+                counts.files_counted++;
+            } else {
+                counts.to_stream.push_back(entry.file_path);
+            }
         }
-
-        auto metadata_it = metadata_rows.find(file_id);
-        if (metadata_it != metadata_rows.end()) {
-            batch_result.total_events +=
-                static_cast<std::size_t>(metadata_it->second.num_lines);
-            batch_result.files_processed++;
-            batch_result.is_approximate = true;
-        }
+    } catch (const std::exception& e) {
+        DFTRACER_UTILS_LOG_WARN(
+            "Cannot read index %s (%s); streaming its files",
+            index_path.c_str(), e.what());
+        counts = IndexedCounts{};
+        for (const auto& entry : entries)
+            counts.to_stream.push_back(entry.file_path);
     }
-
-    return batch_result;
+    return counts;
 }
 
-static coro::CoroTask<EventCountBatchResult> process_index_group_event_counts(
-    std::shared_ptr<std::string> index_path,
-    std::shared_ptr<std::vector<ResolvedFile>> entries) {
-    co_return process_index_group_event_counts_sync(std::move(*index_path),
-                                                    std::move(*entries));
+class StreamCounter {
+   public:
+    explicit StreamCounter(bool path_decoder) : path_decoder_(path_decoder) {}
+
+    std::size_t count() const { return count_; }
+
+    // Whole lines go into work_ because parse_lines needs SIMDJSON_PADDING
+    // after them and strip_array_delimiters writes in place.
+    // A last line with no newline is never parsed, as in the index build.
+    void feed(std::string_view chunk) {
+        const std::size_t cut = chunk.rfind('\n');
+        if (cut == std::string_view::npos) {
+            carry_.append(chunk);
+            return;
+        }
+        const std::size_t whole = cut + 1;
+        work_.assign(carry_);
+        work_.append(chunk.data(), whole);
+        const std::size_t total = work_.size();
+        carry_.assign(chunk.data() + whole, chunk.size() - whole);
+        trace::strip_array_delimiters(work_.data(), total);
+        work_.resize(total + simdjson::SIMDJSON_PADDING, '\0');
+        trace::parse_lines(
+            parser_, work_.data(), total,
+            [&](simdjson::dom::element root, std::string_view) {
+                if (path_decoder_ ? root.is_object()
+                                  : trace::views::detail::counts_as_event(root))
+                    ++count_;
+            });
+    }
+
+   private:
+    simdjson::dom::parser parser_;
+    std::string carry_;
+    std::string work_;
+    std::size_t count_ = 0;
+    bool path_decoder_;
+};
+
+coro::CoroTask<std::size_t> stream_count(std::string path) {
+    ScopedFd fd(::open(path.c_str(), O_RDONLY));
+    if (fd.get() < 0)
+        throw DFTUtilsException::cat(ErrorCode::Io, "cannot open ", path);
+    struct stat st;
+    if (::fstat(fd.get(), &st) != 0)
+        throw DFTUtilsException::cat(ErrorCode::Io, "cannot stat ", path);
+    const auto size = static_cast<std::uint64_t>(st.st_size);
+    const auto& schema =
+        index::detect_file_schema(path, fd.get(), size, stat_mtime_ns(st));
+    StreamCounter counter(schema.decoder == index::Decoder::Path);
+
+    unsigned char magic[2] = {0, 0};
+    const auto magic_read = co_await io::pread(fd.get(), magic, 2, 0);
+    if (magic_read == 2 && magic[0] == 0x1f && magic[1] == 0x8b) {
+        auto members =
+            utilities::fileio::compress::decode_gzip_members(fd.get(), size);
+        for (;;) {
+            auto chunk = co_await members.next();
+            if (!chunk) break;
+            counter.feed(*chunk);
+        }
+    } else {
+        std::string buf(PLAIN_READ_BYTES, '\0');
+        std::uint64_t offset = 0;
+        while (offset < size) {
+            const auto got = co_await io::pread(
+                fd.get(), buf.data(), buf.size(), static_cast<off_t>(offset));
+            if (got < 0)
+                throw DFTUtilsException::cat(ErrorCode::Io, "cannot read ",
+                                             path);
+            if (got == 0) break;
+            counter.feed(
+                std::string_view(buf.data(), static_cast<std::size_t>(got)));
+            offset += static_cast<std::uint64_t>(got);
+        }
+    }
+    co_return counter.count();
 }
+
+}  // namespace
 
 int main(int argc, char** argv) {
     return cli::cli_main<EventCountArgParse>(
@@ -106,22 +187,14 @@ int main(int argc, char** argv) {
 static int run_event_count(const EventCountArgParse* cli) {
     const auto log_dir = fs::absolute(cli->directory.value).string();
     const auto index_dir = cli->indexing.index_dir;
-    const auto checkpoint_size = cli->indexing.checkpoint_size;
-    const auto force_rebuild = cli->indexing.force;
+    const auto force = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;
-
-    auto scanned = cli::ensure_indexes_fresh_blocking(
-        "DFTracer Event Count Index", cli->pipeline, log_dir, {}, index_dir,
-        force_rebuild);
 
     Resolver resolver;
     ResolverInput resolve_input;
-    if (scanned.empty())
-        resolve_input.directory = log_dir;
-    else
-        resolve_input.entries = std::move(scanned);
+    resolve_input.directory = log_dir;
     resolve_input.index_dir = index_dir;
-    resolve_input.require_checkpoints = !force_rebuild;
+    resolve_input.require_checkpoints = true;
 
     auto resolve_result = resolver(resolve_input).get();
 
@@ -135,125 +208,75 @@ static int run_event_count(const EventCountArgParse* cli) {
 
     std::atomic<std::size_t> total_events{0};
     std::atomic<std::size_t> files_processed{0};
-    std::atomic<bool> is_approximate{false};
+    std::atomic<bool> failed{false};
 
-    std::vector<FileWorkItem> direct_scan_items;
-    std::vector<ResolvedFile> indexed_entries =
-        std::move(resolve_result.cached);
-    std::string index_path = resolve_result.index_path;
-
-    auto refresh_entries =
-        scanned_entries(resolve_result, resolve_result.needs_checkpoint);
-    std::vector<FileWorkItem> needs_checkpoint =
-        std::move(resolve_result.needs_checkpoint);
+    std::vector<std::string> stream_items;
+    std::map<std::string, std::vector<ResolvedFile>> index_groups;
+    for (auto& entry : resolve_result.cached) {
+        if (force) {
+            stream_items.push_back(std::move(entry.file_path));
+            continue;
+        }
+        auto index_path =
+            trace::internal::determine_index_path(entry.file_path, index_dir);
+        index_groups[index_path].push_back(std::move(entry));
+    }
+    for (auto& item : resolve_result.needs_checkpoint)
+        stream_items.push_back(std::move(item.file_path));
 
     auto pipeline_config =
         cli::build_pipeline_config("DFTracer Event Count", cli->pipeline);
     Pipeline pipeline(pipeline_config);
 
-    auto build_task = make_task(
-        [&needs_checkpoint, index_dir, checkpoint_size, executor_threads,
-         force_rebuild](CoroScope& scope) -> coro::CoroTask<void> {
-            if (needs_checkpoint.empty()) {
-                co_return;
-            }
-            auto batch_config = std::make_shared<IndexBuildBatchConfig>();
-            batch_config->file_paths.reserve(needs_checkpoint.size());
-            for (const auto& item : needs_checkpoint) {
-                batch_config->file_paths.push_back(item.file_path);
-            }
-            batch_config->index_dir = index_dir;
-            batch_config->checkpoint_size = checkpoint_size;
-            batch_config->parallelism = executor_threads;
-            batch_config->force_rebuild = force_rebuild;
-            co_await BatchBuilder::process(&scope, std::move(batch_config));
-        },
-        "BatchIndex");
-
     auto count_task = make_task(
-        [&needs_checkpoint, &refresh_entries, &indexed_entries,
-         &direct_scan_items, &total_events, &files_processed, &is_approximate,
-         index_dir, index_path,
+        [&index_groups, &stream_items, &total_events, &files_processed, &failed,
          executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
-            if (!needs_checkpoint.empty()) {
-                Resolver re_resolver;
-                ResolverInput refresh_input;
-                refresh_input.entries = std::move(refresh_entries);
-                refresh_input.index_dir = index_dir;
-                refresh_input.require_checkpoints = true;
-
-                auto refresh_result = co_await re_resolver(refresh_input);
-                for (auto& entry : refresh_result.cached) {
-                    indexed_entries.push_back(std::move(entry));
-                }
-                for (auto& item : refresh_result.needs_checkpoint) {
-                    direct_scan_items.push_back(std::move(item));
-                }
+            for (const auto& [index_path, entries] : index_groups) {
+                auto counts = count_from_index(index_path, entries);
+                total_events.fetch_add(counts.total_events,
+                                       std::memory_order_relaxed);
+                files_processed.fetch_add(counts.files_counted,
+                                          std::memory_order_relaxed);
+                for (auto& path : counts.to_stream)
+                    stream_items.push_back(std::move(path));
             }
 
-            if (!indexed_entries.empty()) {
-                auto idx_path_ptr = std::make_shared<std::string>(index_path);
-                auto entries_ptr = std::make_shared<std::vector<ResolvedFile>>(
-                    std::move(indexed_entries));
-                try {
-                    auto batch_result =
-                        co_await process_index_group_event_counts(
-                            std::move(idx_path_ptr), std::move(entries_ptr));
-                    total_events.fetch_add(batch_result.total_events,
-                                           std::memory_order_relaxed);
-                    files_processed.fetch_add(batch_result.files_processed,
-                                              std::memory_order_relaxed);
-                    if (batch_result.is_approximate) {
-                        is_approximate.store(true, std::memory_order_relaxed);
-                    }
-                } catch (...) {
-                    is_approximate.store(true, std::memory_order_relaxed);
-                }
-            }
-
-            if (!direct_scan_items.empty()) {
-                is_approximate.store(true, std::memory_order_relaxed);
-                co_await ctx.scope([&](CoroScope& scope)
-                                       -> coro::CoroTask<void> {
-                    cli::parallel_for_each(
-                        scope, std::move(direct_scan_items), executor_threads,
-                        [total_events_ptr = &total_events,
-                         files_processed_ptr = &files_processed](
-                            const FileWorkItem& item) -> coro::CoroTask<void> {
-                            // Un-indexed file: count parsed events with a
-                            // no-op View scan rather than reading raw lines.
-                            trace::views::View v =
-                                trace::views::View::from_file(item.file_path);
-                            trace::views::ExportStats vs =
-                                co_await v.for_each_batch(
-                                    [](std::size_t,
-                                       const std::vector<std::string_view>&) {},
-                                    1);
+            if (stream_items.empty()) co_return;
+            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+                cli::parallel_for_each(
+                    scope, std::move(stream_items), executor_threads,
+                    [total_events_ptr = &total_events,
+                     files_processed_ptr = &files_processed,
+                     failed_ptr = &failed](
+                        const std::string& path) -> coro::CoroTask<void> {
+                        try {
+                            const std::size_t n = co_await stream_count(path);
                             total_events_ptr->fetch_add(
-                                vs.events_matched, std::memory_order_relaxed);
+                                n, std::memory_order_relaxed);
                             files_processed_ptr->fetch_add(
                                 1, std::memory_order_relaxed);
-                        });
-                    co_return;
-                });
-            }
+                        } catch (const std::exception& e) {
+                            DFTRACER_UTILS_LOG_ERROR("Cannot count %s: %s",
+                                                     path.c_str(), e.what());
+                            failed_ptr->store(true, std::memory_order_relaxed);
+                        }
+                    });
+                co_return;
+            });
             co_return;
         },
         "Count");
 
-    count_task->depends_on(build_task);
-    pipeline.set_source(build_task);
+    pipeline.set_source(count_task);
     pipeline.set_destination(count_task);
     pipeline.execute();
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 
-    if (is_approximate.load()) {
-        std::printf("~%zu\n", total_events.load());
-    } else {
-        std::printf("%zu\n", total_events.load());
-    }
+    if (failed.load()) return 1;
+
+    std::printf("%zu\n", total_events.load());
 
     DFTRACER_UTILS_LOG_DEBUG("Completed in %.2f ms", duration.count());
     DFTRACER_UTILS_LOG_DEBUG("Files processed: %zu", files_processed.load());

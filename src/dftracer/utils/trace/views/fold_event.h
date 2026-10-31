@@ -682,6 +682,11 @@ bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
                             DecodeHints& hints,
                             dftracer::utils::dstd::InternCache* cache);
 
+/// True for the records the index counts in total_events under the dftracer
+/// decoder: an object with a top-level "ph" that is not a metadata phase.
+/// Allocates and interns nothing.
+bool counts_as_event(simdjson::dom::element root);
+
 /// Parse a DOM object into `ev` (reset first) as an owned event. Every string
 /// is interned, so the result stays valid after the parser that produced `root`
 /// is reused. Args are captured only when `needs_args`. `extra_fields`, if

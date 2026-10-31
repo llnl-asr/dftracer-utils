@@ -668,7 +668,7 @@ foreach(test_file ${TEST_BINARY_SOURCES})
       "DFTRACER_UTILS_SERVER_PATH=$<TARGET_FILE:dftracer_server>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_event_count")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
-      "DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>")
+      "DFTRACER_UTILS_EVENT_COUNT_PATH=$<TARGET_FILE:dftracer_event_count>;DFTRACER_UTILS_INDEX_PATH=$<TARGET_FILE:dftracer_index>")
   elseif(bin_exec STREQUAL "binaries/test_dftracer_split")
     set_tests_properties(${bin_exec} PROPERTIES ENVIRONMENT
       "DFTRACER_UTILS_SPLIT_PATH=$<TARGET_FILE:dftracer_split>")

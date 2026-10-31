@@ -221,7 +221,7 @@ dftracer_split
 dftracer_event_count
 --------------------
 
-**Description:** Count valid events in DFTracer .pfw.gz files using pipeline processing
+**Description:** Count valid events in DFTracer .pfw.gz files. The tool reads the count of a file from its index when the index is fresh. Otherwise it inflates and counts the file and writes nothing, so it never builds an index.
 
 **Usage:**
 
@@ -232,10 +232,9 @@ dftracer_event_count
 **Options:**
 
 - ``-d, --directory <path>`` - Directory containing .pfw.gz files, read with all of its subfolders (default: .)
-- ``-f, --force`` - Force index recreation
-- ``--checkpoint-size <bytes>`` - Checkpoint size for indexing in bytes (default: 33554432 B / 32 MB)
+- ``-f, --force`` - Ignore any index and stream every file to count its events
 - ``--executor-threads <count>`` - Number of worker threads for parallel processing (default: number of CPU cores)
-- ``--index-dir <path>`` - Directory to store index files (default: system temp directory)
+- ``--index-dir <path>`` - Directory that holds .dftindex stores to read counts from (never written)
 
 **Example:**
 
@@ -247,7 +246,7 @@ dftracer_event_count
    # Count events in specific directory with 8 threads
    dftracer_event_count -d ./traces --executor-threads 8
 
-   # Force index rebuild
+   # Count by streaming the files, even where an index exists
    dftracer_event_count -d ./logs -f
 
 dftracer_validate

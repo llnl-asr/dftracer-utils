@@ -972,6 +972,20 @@ std::uint32_t key_at(dftracer::utils::dstd::Vector<DecodeHints::KeyAt>& slots,
 
 }  // namespace
 
+bool counts_as_event(simdjson::dom::element root) {
+    simdjson::dom::object top;
+    if (root.get_object().get(top) != simdjson::SUCCESS) return false;
+    RecordPhase phase = RecordPhase::Unknown;
+    bool has_ph = false;
+    for (auto field : top) {
+        if (key_is(field.key, "ph")) {
+            phase = trace::read_phase(field.value);
+            has_ph = true;
+        }
+    }
+    return has_ph && phase != RecordPhase::Metadata;
+}
+
 bool append_dftracer_record(FoldEventBuffer& batch, simdjson::dom::element root,
                             dftracer::utils::dstd::StringIntern& intern,
                             bool needs_args, bool capture_schema,

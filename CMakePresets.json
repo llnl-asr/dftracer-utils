@@ -314,12 +314,10 @@
       "displayName": "Run ASAN Tests",
       "configurePreset": "asan",
       "environment": {
-        "DFTRACER_UTILS_ELASTIC": "0",
-        "DFTRACER_UTILS_THREADS": "8",
-        "DFTRACER_UTILS_IO_THREADS": "8"
+        "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
-        "jobs": 0
+        "jobs": 4
       },
       "output": {
         "outputOnFailure": true
@@ -331,12 +329,10 @@
       "configurePreset": "tsan",
       "environment": {
         "TSAN_OPTIONS": "suppressions=${sourceDir}/tests/tsan/tsan.supp",
-        "DFTRACER_UTILS_ELASTIC": "0",
-        "DFTRACER_UTILS_THREADS": "8",
-        "DFTRACER_UTILS_IO_THREADS": "8"
+        "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
-        "jobs": 0,
+        "jobs": 4,
         "timeout": 1800
       },
       "output": {
@@ -349,12 +345,10 @@
       "configurePreset": "ubsan",
       "environment": {
         "UBSAN_OPTIONS": "print_stacktrace=1:suppressions=${sourceDir}/tests/ubsan/ubsan.supp",
-        "DFTRACER_UTILS_ELASTIC": "0",
-        "DFTRACER_UTILS_THREADS": "8",
-        "DFTRACER_UTILS_IO_THREADS": "8"
+        "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
-        "jobs": 0
+        "jobs": 4
       },
       "output": {
         "outputOnFailure": true
@@ -366,12 +360,10 @@
       "configurePreset": "asan-ubsan",
       "environment": {
         "UBSAN_OPTIONS": "print_stacktrace=1:suppressions=${sourceDir}/tests/ubsan/ubsan.supp",
-        "DFTRACER_UTILS_ELASTIC": "0",
-        "DFTRACER_UTILS_THREADS": "8",
-        "DFTRACER_UTILS_IO_THREADS": "8"
+        "DFTRACER_UTILS_ELASTIC": "0"
       },
       "execution": {
-        "jobs": 0
+        "jobs": 4
       },
       "output": {
         "outputOnFailure": true

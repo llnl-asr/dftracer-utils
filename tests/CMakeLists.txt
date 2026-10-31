@@ -323,14 +323,10 @@ set(TEST_CPP_SOURCES
     index/test_index_skip.cpp
     index/test_catalog.cpp
     index/test_bloom_open_counts.cpp
-    index/test_build_memory.cpp
     index/test_build_parallelism.cpp
     index/test_build_peak.cpp
-    index/test_design_a.cpp
     index/test_big_member_reads.cpp
-    index/test_parser_reuse.cpp
     index/test_parse_allocations.cpp
-    index/test_agg_partials_store.cpp
     index/test_input_syscalls.cpp
     index/test_fold_driver.cpp
     index/test_record_schema.cpp
@@ -338,9 +334,6 @@ set(TEST_CPP_SOURCES
     index/test_schema_class.cpp
     index/test_prefilter.cpp
     index/test_prefilter_fuzz.cpp
-    index/test_event_cost.cpp
-    index/test_parse_walks.cpp
-    index/test_serial_stages.cpp
     )
 
 # Test-only syscall counter injected into the CLI tools by
@@ -351,6 +344,19 @@ set_target_properties(input_syscalls_interpose PROPERTIES
 target_set_warnings(input_syscalls_interpose)
 if(UNIX AND NOT APPLE)
   target_link_libraries(input_syscalls_interpose PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
+# These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.
+if(DFTRACER_UTILS_TEST_PROBES)
+  list(APPEND TEST_CPP_SOURCES
+    index/test_build_memory.cpp
+    index/test_design_a.cpp
+    index/test_parser_reuse.cpp
+    index/test_agg_partials_store.cpp
+    index/test_event_cost.cpp
+    index/test_parse_walks.cpp
+    index/test_serial_stages.cpp
+    )
 endif()
 
 foreach(test_file ${TEST_CPP_SOURCES})

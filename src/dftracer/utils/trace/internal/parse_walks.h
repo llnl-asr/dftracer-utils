@@ -1,11 +1,14 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_PARSE_WALKS_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_PARSE_WALKS_H
 
+#include <dftracer/utils/common/test_probes.h>
+
 #include <atomic>
 #include <cstdint>
 
 namespace dftracer::utils::trace::internal::parse_walks {
 
+#if DFTRACER_UTILS_TEST_PROBES
 /// While set, the index parse counts the key walks it makes. For tests.
 inline std::atomic<bool> g_count{false};
 
@@ -23,6 +26,10 @@ inline void args_walk() {
     if (g_count.load(std::memory_order_relaxed))
         g_args_walks.fetch_add(1, std::memory_order_relaxed);
 }
+#else
+inline void record_walk() {}
+inline void args_walk() {}
+#endif
 
 }  // namespace dftracer::utils::trace::internal::parse_walks
 

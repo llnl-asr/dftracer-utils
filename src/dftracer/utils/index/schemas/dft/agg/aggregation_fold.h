@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_FOLD_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
@@ -36,8 +37,10 @@ namespace dftracer::utils::index::schemas::dft::agg {
 /// tests.
 inline std::atomic<std::uint64_t> g_agg_run_bytes{
     constants::file_admission::MIN_SPILL_RUN_BYTES};
+#if DFTRACER_UTILS_TEST_PROBES
 /// Runs staged so far by folds that write through. For tests.
 inline std::atomic<std::uint64_t> g_agg_runs_staged{0};
+#endif
 
 /// The aggregation core's Accessor over an owned FoldEvent. hhash and fhash
 /// come from the POD's dedicated fields, not from `args`. The metric arg values

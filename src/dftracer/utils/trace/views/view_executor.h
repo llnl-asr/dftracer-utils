@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_TRACE_VIEWS_VIEW_EXECUTOR_H
 #define DFTRACER_UTILS_TRACE_VIEWS_VIEW_EXECUTOR_H
 
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -29,6 +30,7 @@ class DynamicPrune;
 bool export_bootstrap_eligible(const ViewPlan& plan);
 bool collect_bootstrap_eligible(const ViewPlan& plan);
 
+#if DFTRACER_UTILS_TEST_PROBES
 /// Files the first-touch bootstrap has in flight, for tests: the most at once
 /// since the last reset, and the writes it committed.
 struct BootstrapCounters {
@@ -42,6 +44,7 @@ struct BootstrapCounters {
     }
 };
 BootstrapCounters& bootstrap_counters();
+#endif
 
 coro::CoroTask<ExportStats> run_export(const ViewPlan& plan, ExportSink& sink);
 

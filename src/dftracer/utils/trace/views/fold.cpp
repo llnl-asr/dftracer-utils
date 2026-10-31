@@ -80,8 +80,10 @@ std::uint32_t intern_string(Ids& ids, simdjson::dom::element val) {
 
 std::uint32_t intern_leaf_path(dftracer::utils::dstd::StringIntern& intern,
                                std::string_view path) {
+#if DFTRACER_UTILS_TEST_PROBES
     dftracer::utils::index::event_cost::g_leaf_path_interns.fetch_add(
         1, std::memory_order_relaxed);
+#endif
     return intern.get_or_insert(path);
 }
 

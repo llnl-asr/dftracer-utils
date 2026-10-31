@@ -212,7 +212,9 @@ coro::CoroTask<void> AggregationFold::stage_async() {
     stage_due_ = false;
     co_await staged_->stage_async();
     ++through_runs_;
+#if DFTRACER_UTILS_TEST_PROBES
     g_agg_runs_staged.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 void AggregationFold::put_closed(index::store::IndexWrite& w) {

@@ -308,7 +308,9 @@ coro::CoroTask<void> commit_bootstrap_sink(BootstrapSink& open) {
     if (!open.write) co_return;
     co_await open.write->commit_async();
     open.write.reset();
+#if DFTRACER_UTILS_TEST_PROBES
     bootstrap_counters().sink_commits.fetch_add(1, std::memory_order_relaxed);
+#endif
 }
 
 coro::CoroTask<void> write_bootstrap_file(
@@ -644,10 +646,12 @@ coro::CoroTask<ExportStats> run_folds(
                             /*limit=*/0, dyn_prune, gate);
 }
 
+#if DFTRACER_UTILS_TEST_PROBES
 BootstrapCounters& bootstrap_counters() {
     static BootstrapCounters counters;
     return counters;
 }
+#endif
 
 namespace {
 
@@ -706,6 +710,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         dftracer::utils::index::build::FileAdmission::plaintext_estimate(
             f.uncompressed_size, compressed);
     auto ticket = co_await run->admission->admit(plaintext);
+#if DFTRACER_UTILS_TEST_PROBES
     auto& counters = bootstrap_counters();
     const auto now =
         counters.in_flight.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -717,6 +722,7 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
         BootstrapCounters& c;
         ~Leave() { c.in_flight.fetch_sub(1, std::memory_order_relaxed); }
     } leave{counters};
+#endif
     dftracer::utils::dstd::StringIntern intern;
     std::unique_ptr<IndexRuleFold> rule_agg;
     std::unique_ptr<EngineAggFold> frame_agg;

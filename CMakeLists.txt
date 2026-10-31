@@ -79,6 +79,13 @@ option(DFTRACER_UTILS_TESTS "Build tests" OFF)
 option(DFTRACER_UTILS_COVERAGE "Enable coverage reporting" OFF)
 option(DFTRACER_UTILS_DEBUG "Enable debug mode including verbose logging" OFF)
 option(
+  DFTRACER_UTILS_TEST_PROBES
+  "Compile in the counters and switches that only tests read; the tests that read them build only when it is ON"
+  OFF)
+if(DFTRACER_UTILS_TEST_PROBES)
+  add_compile_definitions(DFTRACER_UTILS_TEST_PROBES=1)
+endif()
+option(
   DFTRACER_UTILS_LOGGER_LEVEL_TRACE
   "Compile in TRACE-level logging and coroutine auto-tracing (still runtime-gated by DFTRACER_UTILS_LOG_LEVEL); OFF strips it for a minimal build"
   ON)

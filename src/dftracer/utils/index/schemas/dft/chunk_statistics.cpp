@@ -52,8 +52,10 @@ void ChunkStatistics::update_from_event(NameSlots& names, PidSlots& pids,
     ++total_events;
 
     if (names.category_count == NO_SLOT) {
+#if DFTRACER_UTILS_TEST_PROBES
         index::event_cost::g_stats_string_lookups.fetch_add(
             1, std::memory_order_relaxed);
+#endif
         names.category_count = slot_of(category_counts, cat);
         names.name_count = slot_of(name_counts, name);
         if (name_category.find(name) == name_category.end())

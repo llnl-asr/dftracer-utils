@@ -13,8 +13,6 @@ set(TRACE_TEST_SOURCES
     test_index_builder.cpp
     test_metadata_collector.cpp
     test_time_metric.cpp
-    test_bootstrap_parallelism.cpp
-    test_bootstrap_peak.cpp
     test_index_root_stat.cpp
 
     # Indexing
@@ -101,6 +99,12 @@ set(TRACE_TEST_SOURCES
     comparator/test_is_data_transfer_op.cpp
     comparator/test_tree_table_formatter.cpp
 )
+
+# These read counters that exist only when DFTRACER_UTILS_TEST_PROBES is ON.
+if(DFTRACER_UTILS_TEST_PROBES)
+  list(APPEND TRACE_TEST_SOURCES test_bootstrap_parallelism.cpp
+       test_bootstrap_peak.cpp)
+endif()
 
 foreach(test_file ${TRACE_TEST_SOURCES})
   string(REPLACE ".cpp" "" bin_exec ${test_file})

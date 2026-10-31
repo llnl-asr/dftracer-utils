@@ -1,6 +1,7 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 #define DFTRACER_UTILS_INDEX_BUILD_INDEX_FOLD_DRIVER_H
 
+#include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
@@ -37,6 +38,7 @@
 
 namespace dftracer::utils::index::build {
 
+#if DFTRACER_UTILS_TEST_PROBES
 /// Idle fold event buffers freed to cover a reservation. For tests.
 inline std::atomic<std::uint64_t> g_fold_buffers_freed{0};
 
@@ -57,6 +59,7 @@ inline std::atomic<std::uint64_t> g_max_parse_in_flight{0};
 /// g_intern_order_digest. For tests.
 inline std::atomic<bool> g_probe_intern_order{false};
 inline std::atomic<std::uint64_t> g_intern_order_digest{0};
+#endif
 
 /// Event buffers parsed chunks decode into. A buffer goes back from whichever
 /// thread ends its chunk and keeps its capacity. Idle buffers are reclaimable
@@ -121,7 +124,9 @@ class FoldBufferPool final : public memory::Reclaimer {
             free_.pop_back();
             idle_bytes_ -= bytes;
             want -= std::min(want, std::max<std::uint64_t>(bytes, 1));
+#if DFTRACER_UTILS_TEST_PROBES
             g_fold_buffers_freed.fetch_add(1, std::memory_order_relaxed);
+#endif
         }
         slot_.set_reclaimable(idle_bytes_);
     }
@@ -286,8 +291,10 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         unit.index_path = index_path_;
         for (auto* f : folds_) f->seal_unit(unit);
         if (builders_) builders_->finish();
+#if DFTRACER_UTILS_TEST_PROBES
         if (g_probe_intern_order.load(std::memory_order_relaxed))
             probe_intern_order();
+#endif
     }
 
     void finalize(index::store::IndexDatabaseWrite& /*writer*/,
@@ -305,7 +312,9 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         bool skip_never_indexed;
         bool keep_lines;
         std::vector<std::string> extra_fields;
+#if DFTRACER_UTILS_TEST_PROBES
         mutable std::atomic<std::uint64_t> parsing{0};
+#endif
     };
 
     using EventBuffer = FoldBufferPool::EventBuffer;
@@ -378,10 +387,14 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     // never suspends, so no two tasks use a thread's parser at once.
     struct LocalParser {
         json::RecordParser parser;
+#if DFTRACER_UTILS_TEST_PROBES
         std::uint64_t held = 0;
 
         LocalParser() { g_parsers_created.fetch_add(1); }
         ~LocalParser() { g_parser_live_capacity.fetch_sub(held); }
+#else
+        LocalParser() = default;
+#endif
         LocalParser(const LocalParser&) = delete;
         LocalParser& operator=(const LocalParser&) = delete;
 
@@ -405,6 +418,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
 
         void record() {
+#if DFTRACER_UTILS_TEST_PROBES
             const std::uint64_t now = parser.capacity();
             const std::uint64_t live =
                 g_parser_live_capacity.fetch_add(now - held) + now - held;
@@ -413,12 +427,14 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             while (live > peak &&
                    !g_parser_peak_capacity.compare_exchange_weak(peak, live)) {
             }
+#endif
         }
     };
 
     static void parse_into(const ParseConfig& cfg, Parsed& c) {
         thread_local LocalParser local;
         local.reserve(c.buf->size());
+#if DFTRACER_UTILS_TEST_PROBES
         if (g_probe_parse.load(std::memory_order_relaxed)) {
             ProbedParse probed(cfg);
             parse_with(cfg, local.parser, c);
@@ -426,9 +442,13 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         } else {
             parse_with(cfg, local.parser, c);
         }
+#else
+        parse_with(cfg, local.parser, c);
+#endif
         local.release();
     }
 
+#if DFTRACER_UTILS_TEST_PROBES
     struct ProbedParse {
         explicit ProbedParse(const ParseConfig& cfg) : cfg_(cfg) {
             const std::uint64_t now =
@@ -464,6 +484,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                !g_parse_peak_live.compare_exchange_weak(peak, live)) {
         }
     }
+#endif
 
     static void parse_with(const ParseConfig& cfg, json::RecordParser& parser,
                            Parsed& c) {

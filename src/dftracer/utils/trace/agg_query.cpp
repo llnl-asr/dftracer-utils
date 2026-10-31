@@ -100,7 +100,7 @@ class Runner {
     bool is_failed() const { return failed.load(std::memory_order_acquire); }
     bool cancelled() const { return rules.q.cancelled && rules.q.cancelled(); }
     void take_stats(const AggQueryStats& t);
-    void submit(std::size_t seq, AggQueryResult::Rows&& rows);
+    void submit(std::size_t seq, std::size_t sub, AggQueryResult::Rows& rows);
 
     dstd::StringIntern read;
     AggEventRules rules;
@@ -118,6 +118,8 @@ class Runner {
     /// The floating moments of one file's row, kept by an ordered query.
     struct Moments {
         std::size_t seq = 0;
+        /// 0 for the file's partials, 1 + the job for a chunk re-read.
+        std::size_t sub = 0;
         AggKey key;
         dataframe::FieldStat duration;
         dataframe::FieldStat size;
@@ -144,8 +146,8 @@ class Runner {
                                    std::size_t seq);
     coro::CoroTask<void> chunk_task(Source* source, const std::string* path,
                                     const index::gzip::ChunkSpan* span,
-                                    const ChunkJob* job,
-                                    AggQueryResult::Rows* slot);
+                                    const ChunkJob* job, std::size_t seq,
+                                    std::size_t sub);
 
     std::mutex mu;
     std::array<Stripe, MERGE_STRIPES> stripes;
@@ -309,7 +311,8 @@ void Runner::Stripe::drain(bool offset) {
     }
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) {
         return a.first != b.first ? a.first < b.first
-                                  : a.second->seq < b.second->seq;
+                                  : std::pair(a.second->seq, a.second->sub) <
+                                        std::pair(b.second->seq, b.second->sub);
     });
     for (std::size_t at = 0; at < order.size();) {
         Moments merged = *order[at].second;
@@ -332,7 +335,8 @@ coro::CoroTask<void> Runner::drain_task(std::size_t at) {
     co_return;
 }
 
-void Runner::submit(std::size_t seq, AggQueryResult::Rows&& file_rows) {
+void Runner::submit(std::size_t seq, std::size_t sub,
+                    AggQueryResult::Rows& file_rows) {
     std::array<dstd::Vector<Row*>, MERGE_STRIPES> parts;
     std::array<dstd::Vector<Moments>, MERGE_STRIPES> moments;
     for (auto& row : file_rows) {
@@ -343,6 +347,7 @@ void Runner::submit(std::size_t seq, AggQueryResult::Rows&& file_rows) {
         if (rules.q.ordered) {
             Moments& m = moments[at].emplace_back();
             m.seq = seq;
+            m.sub = sub;
             m.key = key;
             m.duration = partial.duration;
             m.size = partial.size;
@@ -438,7 +443,6 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
     const std::string path(rules.q.sources[source].files[file]);
     dstd::Vector<ChunkJob> jobs;
     dstd::Vector<index::gzip::ChunkSpan> spans;
-    AggQueryResult::Rows file_rows;
     {
         co_await permits->acquire(1);
         Permit permit(*permits);
@@ -450,40 +454,28 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
                 else
                     co_await task.scan_file(path, jobs, spans);
                 take_stats(task.stats);
-                file_rows = std::move(task.rows);
+                submit(seq, 0, task.rows);
             }
         } catch (...) {
             fail(std::current_exception());
         }
     }
-    if (!jobs.empty() && !is_failed() && !cancelled()) {
-        dstd::Vector<AggQueryResult::Rows> slots(jobs.size());
-        co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-            for (std::size_t at = 0; at < jobs.size(); ++at)
-                scope.spawn(
-                    [this, &src, &path, &spans, &jobs, &slots, at](CoroScope&) {
-                        return chunk_task(&src, &path, spans.data(), &jobs[at],
-                                          &slots[at]);
-                    });
-            co_return;
-        });
-        for (auto& slot : slots) {
-            for (auto& [key, partial] : slot) {
-                auto it = file_rows.find(key);
-                if (it == file_rows.end())
-                    file_rows.emplace(key, std::move(partial));
-                else
-                    it->second.merge(partial);
-            }
-        }
-    }
-    submit(seq, std::move(file_rows));
+    if (jobs.empty() || is_failed() || cancelled()) co_return;
+    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+        for (std::size_t at = 0; at < jobs.size(); ++at)
+            scope.spawn(
+                [this, &src, &path, &spans, &jobs, seq, at](CoroScope&) {
+                    return chunk_task(&src, &path, spans.data(), &jobs[at], seq,
+                                      at + 1);
+                });
+        co_return;
+    });
 }
 
 coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
                                         const index::gzip::ChunkSpan* spans,
-                                        const ChunkJob* job,
-                                        AggQueryResult::Rows* slot) {
+                                        const ChunkJob* job, std::size_t seq,
+                                        std::size_t sub) {
     co_await permits->acquire(1);
     Permit permit(*permits);
     try {
@@ -494,7 +486,7 @@ coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
             job->whole_file ? whole_file : spans[job->chunk];
         co_await task.read_chunk(*path, span, *job, spans);
         take_stats(task.stats);
-        *slot = std::move(task.rows);
+        submit(seq, sub, task.rows);
     } catch (...) {
         fail(std::current_exception());
     }

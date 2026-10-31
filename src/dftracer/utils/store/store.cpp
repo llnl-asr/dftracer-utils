@@ -31,6 +31,9 @@ namespace {
 
 using dstd::ByteView;
 
+/// Most batches hold few entries, and an arena grows by full blocks after this.
+constexpr std::size_t FIRST_ARENA_BLOCK = 4096;
+
 const std::array<std::uint8_t, 8> COUNT_VALUE = {1, 0, 0, 0, 0, 0, 0, 0};
 
 dstd::Unexpected<dstd::Error> invalid_error() {
@@ -114,7 +117,8 @@ bool operator<(const ScopeKey& a, const ScopeKey& b) {
 
 ByteView Batch::keep(ByteView bytes) {
     if (bytes.empty()) return {};
-    if (!arena_) arena_ = dstd::make_unique<dstd::StringArena>();
+    if (!arena_)
+        arena_ = dstd::make_unique<dstd::StringArena>(FIRST_ARENA_BLOCK);
     const std::string_view kept =
         arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};

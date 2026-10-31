@@ -204,13 +204,11 @@ Result<std::map<std::string, std::uint32_t>> plugin_versions(
 void put_value(FileBuild& build, Ext ext, std::uint8_t kind,
                const std::string& key, std::string_view body) {
     const std::string value = layout::with_header(ext, kind, body);
-    IndexAccess::put(build, ext_spec(ext), dstd::ByteView(key),
-                     dstd::ByteView(value));
+    IndexAccess::put(build, ext, dstd::ByteView(key), dstd::ByteView(value));
 }
 
 void put_bare(FileBuild& build, Ext ext, const std::string& key) {
-    IndexAccess::put(build, ext_spec(ext), dstd::ByteView(key),
-                     dstd::ByteView());
+    IndexAccess::put(build, ext, dstd::ByteView(key), dstd::ByteView());
 }
 
 bool builtin(FileBuild& build, store::IndexExtension ext) {
@@ -665,7 +663,7 @@ void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
                            std::uint8_t kind, dstd::StringView value) {
     const std::string key =
         agg_partial_key(chunk, cat_id, name_id, host_id, extra_id, kind);
-    IndexAccess::put(build, ext_spec(Ext::Agg), dstd::ByteView(key),
+    IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
                      dstd::ByteView(value.data(), value.size()));
 }
 
@@ -673,7 +671,7 @@ void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
                                  dstd::StringView value) {
     const std::string key =
         granule_key(Ext::Agg, layout::agg_kind::COLUMNS, chunk);
-    IndexAccess::put(build, ext_spec(Ext::Agg), dstd::ByteView(key),
+    IndexAccess::put(build, Ext::Agg, dstd::ByteView(key),
                      dstd::ByteView(value.data(), value.size()));
 }
 

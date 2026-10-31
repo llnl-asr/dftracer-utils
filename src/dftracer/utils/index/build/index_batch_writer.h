@@ -73,14 +73,12 @@ inline void fill_file_build(index::FileBuild& build, ParsedIndexJob& job) {
     index::clear_unwritten(build);
 }
 
-/// Writes `job` into `build`, the one its folds spilled into, and commits it.
-/// One commit publishes the members, the tier and the aggregation rows, so a
-/// reader never sees the file without its tier. The folds and the ticket go
+/// Writes `job` into `build`, the one its folds spilled into, for the caller
+/// to commit with the other builds of its group. The folds and the ticket go
 /// once the build holds their data. Returns false, with `job.error_message`
-/// set, when a write failed, and nothing is published.
-inline coro::CoroTask<bool> write_index_job(index::FileBuild& build,
-                                            ParsedIndexJob& job,
-                                            FileAdmission::Ticket& ticket) {
+/// set, when a write failed, and the build must not be committed.
+inline bool fill_index_job(index::FileBuild& build, ParsedIndexJob& job,
+                           FileAdmission::Ticket& ticket) {
     std::string failure;
     try {
         fill_file_build(build, job);
@@ -94,19 +92,13 @@ inline coro::CoroTask<bool> write_index_job(index::FileBuild& build,
     job.plugin_builders.reset();
     job.intern.reset();
     ticket = {};
-    if (failure.empty()) {
-        auto committed = co_await build.commit();
-        if (!committed) failure = std::string(committed.error().message());
-    }
-    if (!failure.empty()) {
-        job.success = false;
-        job.error_message = failure;
-        DFTRACER_UTILS_LOG_ERROR(
-            "Failed to write index for %s: %s; file dropped from index",
-            job.file_path.c_str(), failure.c_str());
-        co_return false;
-    }
-    co_return true;
+    if (failure.empty()) return true;
+    job.success = false;
+    job.error_message = failure;
+    DFTRACER_UTILS_LOG_ERROR(
+        "Failed to write index for %s: %s; file dropped from index",
+        job.file_path.c_str(), failure.c_str());
+    return false;
 }
 
 }  // namespace dftracer::utils::index::build

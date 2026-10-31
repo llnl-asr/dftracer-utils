@@ -233,6 +233,13 @@ class Claim {
     coro::AsyncMutexGuard held_;
 };
 
+/// Publishes the builds in one record. The result has one slot per build: its
+/// error or empty. A build that failed a put or is unfinished is skipped, and
+/// a failed publish errors every published build. The builds must come from
+/// one Index and stay alive until the task ends.
+coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>> commit_group(
+    dstd::Span<FileBuild* const> builds);
+
 /// Waits for the build's current writer, if any, to give it up.
 coro::CoroTask<dstd::UniquePtr<Claim>> claim(FileBuild& build);
 

@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -555,6 +556,93 @@ TEST_CASE("a FileBuild with an unfinished extension does not commit") {
     index::put_chunk_statistics(build, 0, {});
     CHECK_FALSE(run(build.commit()).has_value());
     CHECK_FALSE(take(opened->snapshot()).file(path).has_value());
+}
+
+TEST_CASE("a group of FileBuilds becomes visible together") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    auto opened = Index::open(env.get_dir() + "/.dftindex");
+    REQUIRE(opened.has_value());
+    const std::string a = "/traces/group_a.pfw.gz";
+    const std::string b = "/traces/group_b.pfw.gz";
+    const std::string bad = "/traces/group_bad.pfw.gz";
+    auto build_a = take(opened->build(a, stat_of(1, 2)));
+    auto build_b = take(opened->build(b, stat_of(3, 4)));
+    auto build_bad = take(opened->build(bad, stat_of(5, 6)));
+    put_members(build_a, 1);
+    put_stats(build_a, 2);
+    put_members(build_b, 3);
+    put_members(build_bad, 1);
+    index::put_chunk_statistics(build_bad, 0, {});
+
+    CHECK_FALSE(take(opened->snapshot()).file(a).has_value());
+    index::FileBuild* group[] = {&build_a, &build_bad, &build_b};
+    auto errors = dftracer::utils::default_runtime()
+                      .submit(index::commit_group(
+                          dstd::Span<index::FileBuild* const>(group, 3)))
+                      .get();
+    REQUIRE(errors.size() == 3);
+    CHECK_FALSE(errors[0].has_value());
+    CHECK(errors[1].has_value());
+    CHECK_FALSE(errors[2].has_value());
+
+    const auto after = take(opened->snapshot());
+    const auto file_a = after.file(a);
+    const auto file_b = after.file(b);
+    REQUIRE(file_a.has_value());
+    REQUIRE(file_b.has_value());
+    CHECK(take(index::members(after, *file_a)).size() == 1);
+    CHECK(take(index::members(after, *file_b)).size() == 3);
+    CHECK(take(index::chunk_stats(after, *file_a)).size() == 2);
+    CHECK_FALSE(after.file(bad).has_value());
+}
+
+TEST_CASE("a FileGroup publishes a repeated path in order and counts files") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    auto opened = Index::open(env.get_dir() + "/.dftindex");
+    REQUIRE(opened.has_value());
+    namespace internal = dftracer::utils::index::store::internal;
+    const std::string plain = "/traces/rep.pfw.gz";
+    const std::string dotted = "/traces/./rep.pfw.gz";
+    const std::string other = "/traces/other.pfw.gz";
+    const std::string bad = "/traces/bad.pfw.gz";
+    const auto key = [](const std::string& path) {
+        return internal::get_logical_path(path);
+    };
+    const auto run_task = [](auto task) {
+        return dftracer::utils::default_runtime().submit(std::move(task)).get();
+    };
+
+    index::build::FileGroup group;
+    auto first = take(opened->build(key(plain), stat_of(1, 2)));
+    put_members(first, 1);
+    auto second = take(opened->build(key(dotted), stat_of(1, 2)));
+    put_members(second, 4);
+    auto third = take(opened->build(other, stat_of(3, 4)));
+    put_members(third, 2);
+    auto broken = take(opened->build(bad, stat_of(5, 6)));
+    put_members(broken, 1);
+    index::put_chunk_statistics(broken, 0, {});
+
+    CHECK(run_task(group.add(std::move(first), 0, key(plain))).empty());
+    CHECK(run_task(group.add(std::move(second), 1, key(dotted))).empty());
+    CHECK(run_task(group.add(std::move(third), 2, key(other))).empty());
+    CHECK(run_task(group.add(std::move(broken), 3, bad)).empty());
+    auto result = run_task(group.commit());
+
+    REQUIRE(result.failures.size() == 1);
+    CHECK(result.failures[0].tag == 3);
+    CHECK(result.published == 3);
+    CHECK(result.publishes == 2);
+    CHECK(group.size() == 0);
+
+    const auto after = take(opened->snapshot());
+    const auto file = after.file(key(plain));
+    REQUIRE(file.has_value());
+    CHECK(take(index::members(after, *file)).size() == 4);
+    CHECK(after.file(other).has_value());
+    CHECK_FALSE(after.file(bad).has_value());
 }
 
 TEST_CASE("a FileBuild writes the data IndexDatabase reads") {

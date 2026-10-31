@@ -193,14 +193,27 @@ void IndexAccess::drop_unwritten(FileBuild& build,
     for (const kv::NamespaceSpec& spec : kept) impl.kept.push_back(spec.name);
 }
 
+void FileBuild::Impl::put_to(Copy* copy, dstd::ByteView key,
+                             dstd::ByteView value) {
+    if (copy == nullptr) return;
+    if (!copy->batch)
+        copy->batch.emplace(store.building_batch(copy->ns, scope));
+    copy->batch->put(key, value);
+    ++copy->puts;
+}
+
 void IndexAccess::put(FileBuild& build, const kv::NamespaceSpec& spec,
                       dstd::ByteView key, dstd::ByteView value) {
     FileBuild::Impl& impl = *build.impl_;
     if (impl.error) return;
-    FileBuild::Impl::Copy* copy = impl.copy_of(spec);
-    if (copy == nullptr) return;
-    copy->batch.put(key, value);
-    ++copy->puts;
+    impl.put_to(impl.copy_of(spec), key, value);
+}
+
+void IndexAccess::put(FileBuild& build, store::IndexExtension ext,
+                      dstd::ByteView key, dstd::ByteView value) {
+    FileBuild::Impl& impl = *build.impl_;
+    if (impl.error) return;
+    impl.put_to(impl.copy_of(ext), key, value);
 }
 
 void IndexAccess::erase(FileBuild& build, const kv::NamespaceSpec& spec,
@@ -262,7 +275,17 @@ void IndexAccess::clear(FileBuild& build, const kv::NamespaceSpec& spec) {
 FileBuild::Impl::Impl(std::string index_root, kv::Store s, kv::ScopeKey key,
                       const SourceStat& stat)
     : root(std::move(index_root)), store(std::move(s)), scope(std::move(key)) {
+    ext_copy.fill(-1);
     sources.push_back(stat);
+}
+
+FileBuild::Impl::Copy* FileBuild::Impl::copy_of(store::IndexExtension ext) {
+    std::int16_t& known = ext_copy[static_cast<std::size_t>(ext)];
+    if (known >= 0) return &copies[static_cast<std::size_t>(known)];
+    Copy* found = copy_of(ext_spec(ext));
+    if (found != nullptr)
+        known = static_cast<std::int16_t>(found - copies.data());
+    return found;
 }
 
 FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
@@ -286,9 +309,7 @@ FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
         error = registered.error();
         return nullptr;
     }
-    kv::Batch batch = store.building_batch(*registered, scope);
-    copies.push_back(
-        Copy{*registered, std::move(batch), 0, 0, 0, false, false});
+    copies.push_back(Copy{*registered, std::nullopt, 0, 0, 0, false, false});
     return &copies.back();
 }
 
@@ -303,12 +324,12 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::stage(
     if (impl.committed) co_return invalid("index: the build is committed");
     for (FileBuild::Impl::Copy& copy : impl.copies) {
         if (copy.puts == 0 || copy.failed) continue;
-        auto written = co_await impl.store.commit(std::move(copy.batch));
+        auto written = co_await impl.store.commit(std::move(*copy.batch));
+        copy.batch.reset();
         if (!written) {
             impl.error = written.error();
             co_return dstd::Unexpected<dstd::Error>(written.error());
         }
-        copy.batch = impl.store.building_batch(copy.ns, impl.scope);
         copy.staged_puts += copy.puts;
         copy.puts = 0;
     }
@@ -325,9 +346,8 @@ coro::CoroTask<dstd::UniquePtr<Claim>> claim(FileBuild& build) {
     co_return dstd::make_unique<Claim>(build, coro::AsyncMutexGuard(mutex));
 }
 
-coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
-    dstd::SharedPtr<Impl> self) {
-    Impl& build = *self;
+coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::prepare(
+    Impl& build, dstd::Vector<kv::Publish>& targets) {
     if (build.error) co_return dstd::Unexpected<dstd::Error>(*build.error);
     if (build.committed) co_return invalid("index: the build is committed");
     build.committed = true;
@@ -349,8 +369,8 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
                 build.cleared.push_back(ns);
         }
     }
-    dstd::Vector<kv::Publish> targets;
-    targets.reserve(build.copies.size() + build.cleared.size());
+    targets.reserve(targets.size() + build.copies.size() +
+                    build.cleared.size());
     for (Copy& copy : build.copies) {
         if (copy.failed) {
             targets.push_back(kv::Publish{&copy.ns, &build.scope,
@@ -359,10 +379,13 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
             continue;
         }
         const bool empty = copy.puts == 0 && copy.staged_puts == 0;
-        if (empty)
-            copy.batch.put(dstd::ByteView(EMPTY_COPY_KEY), dstd::ByteView());
+        if (empty) {
+            copy.batch.emplace(
+                build.store.building_batch(copy.ns, build.scope));
+            copy.batch->put(dstd::ByteView(EMPTY_COPY_KEY), dstd::ByteView());
+        }
         if (empty || copy.puts != 0) {
-            auto written = co_await build.store.commit(std::move(copy.batch));
+            auto written = co_await build.store.commit(std::move(*copy.batch));
             if (!written)
                 co_return dstd::Unexpected<dstd::Error>(written.error());
         }
@@ -380,6 +403,15 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
                                           kv::Publish::Change::Dropped});
         }
     }
+    co_return dstd::Expected<void, dstd::Error>{};
+}
+
+coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
+    dstd::SharedPtr<Impl> self) {
+    Impl& build = *self;
+    dstd::Vector<kv::Publish> targets;
+    auto prepared = co_await prepare(build, targets);
+    if (!prepared) co_return prepared;
     if (!targets.empty()) {
         auto published = co_await build.store.publish(
             dstd::Span<const kv::Publish>(targets.data(), targets.size()));
@@ -389,6 +421,51 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
                                                                targets.size()));
     }
     co_return dstd::Expected<void, dstd::Error>{};
+}
+
+coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>>
+FileBuild::Impl::commit_group_task(dstd::Vector<dstd::SharedPtr<Impl>> group) {
+    const std::size_t n = group.size();
+    dstd::Vector<dstd::Optional<dstd::Error>> errors(n);
+    dstd::Vector<kv::Publish> targets;
+    dstd::Vector<std::size_t> begin(n + 1, 0);
+    for (std::size_t i = 0; i < n; ++i) {
+        begin[i] = targets.size();
+        auto prepared = co_await prepare(*group[i], targets);
+        if (!prepared) {
+            errors[i] = prepared.error();
+            targets.resize(begin[i], kv::Publish{});
+        }
+    }
+    begin[n] = targets.size();
+    if (targets.empty()) co_return errors;
+    kv::Store store = group[0]->store;
+    auto published = co_await store.publish(
+        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+    for (std::size_t i = 0; i < n; ++i) {
+        if (errors[i] || begin[i] == begin[i + 1]) continue;
+        if (!published) {
+            errors[i] = published.error();
+            continue;
+        }
+        note_applied(group[i]->root,
+                     dstd::Span<const kv::Publish>(targets.data() + begin[i],
+                                                   begin[i + 1] - begin[i]));
+    }
+    co_return errors;
+}
+
+coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>>
+IndexAccess::commit_group(dstd::Span<FileBuild* const> builds) {
+    dstd::Vector<dstd::SharedPtr<FileBuild::Impl>> group;
+    group.reserve(builds.size());
+    for (FileBuild* build : builds) group.push_back(build->impl_);
+    return FileBuild::Impl::commit_group_task(std::move(group));
+}
+
+coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>> commit_group(
+    dstd::Span<FileBuild* const> builds) {
+    return IndexAccess::commit_group(builds);
 }
 
 void FileBuild::clear(store::IndexExtension ext) {

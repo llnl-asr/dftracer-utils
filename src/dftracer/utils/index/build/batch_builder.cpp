@@ -8,6 +8,7 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
+#include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -147,6 +148,31 @@ struct BlockWriter {
     index::build::BatchWriterMetrics* metrics = nullptr;
 };
 
+static coro::CoroTask<void> commit_group(BlockWriter* writer,
+                                         std::vector<IndexBuildResult>* results,
+                                         index::build::FileGroup& group) {
+    if (group.size() == 0) co_return;
+    const auto w0 = std::chrono::steady_clock::now();
+    auto result = co_await group.commit();
+    for (const auto& failure : result.failures) {
+        (*results)[failure.tag].success = false;
+        (*results)[failure.tag].error_message = failure.message;
+        DFTRACER_UTILS_LOG_ERROR(
+            "Failed to write index for %s: %s; file dropped from index",
+            failure.path.c_str(), failure.message.c_str());
+    }
+    writer->metrics->files_written.fetch_add(result.published,
+                                             std::memory_order_relaxed);
+    writer->metrics->batches_committed.fetch_add(result.publishes,
+                                                 std::memory_order_relaxed);
+    writer->metrics->write_ns.fetch_add(
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - w0)
+                .count()),
+        std::memory_order_relaxed);
+}
+
 static coro::CoroTask<void> parse_and_write_worker(
     CoroScope* scope, std::atomic<std::size_t>* next_block_ptr,
     const dstd::Vector<std::size_t>* block_starts,
@@ -163,6 +189,7 @@ static coro::CoroTask<void> parse_and_write_worker(
     BlockWriter* writer) {
     namespace gzip_indexer = index::gzip;
 
+    index::build::FileGroup group;
     while (true) {
         const auto block =
             next_block_ptr->fetch_add(1, std::memory_order_relaxed);
@@ -399,14 +426,12 @@ static coro::CoroTask<void> parse_and_write_worker(
                 (*parsed_jobs_ptr)[idx] = std::move(holder);
                 (*results_ptr)[idx] = std::move(result);
 
-                const bool written = co_await index::build::write_index_job(
-                    *build, write_job, ticket);
-                if (written) {
-                    writer->metrics->files_written.fetch_add(
-                        1, std::memory_order_relaxed);
-                    writer->metrics->batches_committed.fetch_add(
-                        1, std::memory_order_relaxed);
-                } else {
+                if (index::build::fill_index_job(*build, write_job, ticket)) {
+                    write_job.error_message = co_await group.add(
+                        std::move(*build), idx, pf.logical_path);
+                    write_job.success = write_job.error_message.empty();
+                }
+                if (!write_job.success) {
                     (*results_ptr)[idx].success = false;
                     (*results_ptr)[idx].error_message = write_job.error_message;
                 }
@@ -418,7 +443,9 @@ static coro::CoroTask<void> parse_and_write_worker(
                         .count()),
                 std::memory_order_relaxed);
             ticket = {};
+            if (group.full()) co_await commit_group(writer, results_ptr, group);
         }
+        co_await commit_group(writer, results_ptr, group);
     }
     co_return;
 }

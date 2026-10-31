@@ -12,6 +12,7 @@
 #include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/store/store.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -45,9 +46,12 @@ struct Snapshot::Impl {
 };
 
 struct FileBuild::Impl {
+    static constexpr std::size_t EXTENSION_SLOTS = 16;
+
     struct Copy {
         kv::Namespace ns;
-        kv::Batch batch;
+        /// Opened by the first put, and again by the first put after a stage.
+        dstd::Optional<kv::Batch> batch;
         std::uint64_t params_hash = 0;
         /// Puts since the last stage, and puts the stages already committed.
         std::size_t puts = 0;
@@ -64,6 +68,8 @@ struct FileBuild::Impl {
     coro::AsyncMutex write_mutex;
     dstd::Vector<SourceStat> sources;
     dstd::Vector<Copy> copies;
+    /// The position in `copies` of each built-in extension, or -1.
+    std::array<std::int16_t, EXTENSION_SLOTS> ext_copy;
     /// Extensions whose copy of the file the commit drops.
     dstd::Vector<kv::Namespace> cleared;
     /// Also drop every copy of the file the build did not write, but the ones
@@ -78,9 +84,16 @@ struct FileBuild::Impl {
          const SourceStat& stat);
 
     Copy* copy_of(const kv::NamespaceSpec& spec);
+    Copy* copy_of(store::IndexExtension ext);
+    void put_to(Copy* copy, dstd::ByteView key, dstd::ByteView value);
 
+    /// Writes the batches and appends the publish targets of the build.
+    static coro::CoroTask<dstd::Expected<void, dstd::Error>> prepare(
+        Impl& build, dstd::Vector<kv::Publish>& targets);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_task(
         dstd::SharedPtr<Impl> self);
+    static coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>>
+    commit_group_task(dstd::Vector<dstd::SharedPtr<Impl>> group);
 };
 
 /// The state behind the public index classes, for tables.cpp and index.cpp.
@@ -100,6 +113,10 @@ struct IndexAccess {
 
     static void put(FileBuild& build, const kv::NamespaceSpec& spec,
                     dstd::ByteView key, dstd::ByteView value);
+    /// As above for a built-in extension, which finds its copy without
+    /// building the spec.
+    static void put(FileBuild& build, store::IndexExtension ext,
+                    dstd::ByteView key, dstd::ByteView value);
     static void finish(FileBuild& build, const kv::NamespaceSpec& spec,
                        std::uint64_t params_hash);
     static void fail(FileBuild& build, const kv::NamespaceSpec& spec,
@@ -111,6 +128,8 @@ struct IndexAccess {
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> stage(
         FileBuild& build);
     static coro::AsyncMutex& write_mutex(FileBuild& build);
+    static coro::CoroTask<dstd::Vector<dstd::Optional<dstd::Error>>>
+    commit_group(dstd::Span<FileBuild* const> builds);
     /// Erases the keys in [begin, end) of a copy the build holds. A copy it
     /// does not hold needs no erasing.
     static void erase(FileBuild& build, const kv::NamespaceSpec& spec,

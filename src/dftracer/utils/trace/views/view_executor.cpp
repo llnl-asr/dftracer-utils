@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/file_admission.h>
+#include <dftracer/utils/index/build/file_group.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -70,6 +71,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>
@@ -305,24 +307,31 @@ BootstrapBuild open_bootstrap_build(BootstrapRoot& root, std::string_view file,
     return out;
 }
 
-// Publishes the file's index in one commit, the tier its runs staged
-// included. Returns the failure, empty on success.
-coro::CoroTask<std::string> write_bootstrap_file(
+// Puts the file's index, the tier its runs staged included, into its build.
+void fill_bootstrap_file(
     dftracer::utils::index::FileBuild& build,
     const dftracer::utils::index::gzip::GzipBuildArtifacts& arts,
     const dftracer::utils::index::RecordSchema& schema,
     dftracer::utils::index::extensions::BloomFold& bloom,
     dftracer::utils::index::extensions::RowSetFold& rowsets) {
     namespace idx = dftracer::utils::index;
-    std::string failure;
     idx::gzip::persist_gzip_index_artifacts(build, arts);
     idx::put_profile(build, schema.id);
     build.finish(idx::store::IndexExtension::Profile, schema.params_hash());
     bloom.write(build);
     rowsets.write(build);
-    auto committed = co_await build.commit();
-    if (!committed) failure = std::string(committed.error().message());
-    co_return failure;
+}
+
+// Publishes the files of `group` in one record. The lines are already out in
+// the export, so a failed index write is logged and the export stays whole.
+// Returns false when a file did not publish.
+coro::CoroTask<bool> commit_bootstrap(
+    dftracer::utils::index::build::FileGroup& group) {
+    auto result = co_await group.commit();
+    for (const auto& failure : result.failures)
+        DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
+                                 failure.path.c_str(), failure.message.c_str());
+    co_return result.failures.empty();
 }
 
 // An IndexVisitor that streams a member's plaintext lines straight to the
@@ -398,11 +407,17 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
     for (std::size_t r = 0; r < stores.roots.size(); ++r)
         slot_of.emplace(stores.roots[r]->index_path, r);
 
+    dstd::Vector<dftracer::utils::index::build::FileGroup> pending(
+        stores.roots.size());
     for (std::size_t i = 0; i < plan.files.size(); ++i) {
         const auto& f = plan.files[i];
-        BootstrapRoot& root = *stores.roots[slot_of.find(f.index_path)->second];
+        const std::size_t slot = slot_of.find(f.index_path)->second;
+        BootstrapRoot& root = *stores.roots[slot];
         const auto source = open_bootstrap_source(f.file_path, f.fd);
-        if (!source.ok) co_return false;
+        if (!source.ok) {
+            for (auto& group : pending) co_await commit_bootstrap(group);
+            co_return false;
+        }
         auto started = open_bootstrap_build(
             root, f.file_path,
             static_cast<std::uint64_t>(
@@ -432,7 +447,10 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
         co_await dftracer::utils::run_coro_scope(
             build_bootstrap_artifacts, f.file_path, std::move(visitors), &arts,
             &ok, std::size_t{0}, source.fd);
-        if (!ok) co_return false;
+        if (!ok) {
+            for (auto& group : pending) co_await commit_bootstrap(group);
+            co_return false;
+        }
         driver.seal();
         if (!started.build) {
             DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
@@ -440,14 +458,19 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
                                      started.failure.c_str());
             continue;
         }
-        // The lines are already out, so a failed index write is logged and
-        // the export stays whole.
-        const std::string failure = co_await write_bootstrap_file(
-            *started.build, arts, schema, bloom, rowsets);
-        if (!failure.empty())
+        fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets);
+        const std::string staging = co_await pending[slot].add(
+            std::move(*started.build), 0,
+            dftracer::utils::index::store::internal::get_logical_path(
+                f.file_path));
+        if (!staging.empty()) {
             DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
-                                     f.file_path.c_str(), failure.c_str());
+                                     f.file_path.c_str(), staging.c_str());
+            continue;
+        }
+        if (pending[slot].full()) co_await commit_bootstrap(pending[slot]);
     }
+    for (auto& group : pending) co_await commit_bootstrap(group);
     co_return true;
 }
 
@@ -685,8 +708,9 @@ struct BootstrapRun {
     dftracer::utils::index::build::FoldBufferPool buffers;
 };
 
-coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
-                                             BootstrapRoot* root) {
+coro::CoroTask<BootstrapFile> bootstrap_file(
+    BootstrapRun* run, ViewFile f, BootstrapRoot* root,
+    dftracer::utils::index::build::FileGroup* group) {
     namespace gzi = dftracer::utils::index::gzip;
     const ViewPlan* plan = run->plan;
     BootstrapFile out;
@@ -768,8 +792,10 @@ coro::CoroTask<BootstrapFile> bootstrap_file(BootstrapRun* run, ViewFile f,
     read.events_scanned = arts.total_lines;
     counted(*plan, read);
     driver.seal();
-    const std::string failure = co_await write_bootstrap_file(
-        *started.build, arts, schema, bloom, rowsets);
+    fill_bootstrap_file(*started.build, arts, schema, bloom, rowsets);
+    const std::string failure = co_await group->add(
+        std::move(*started.build), 0,
+        dftracer::utils::index::store::internal::get_logical_path(f.file_path));
     if (!failure.empty()) {
         DFTRACER_UTILS_LOG_ERROR("bootstrap index write failed for %s: %s",
                                  f.file_path.c_str(), failure.c_str());
@@ -798,21 +824,41 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
             if (b >= run->blocks.size()) break;
             const BootstrapBlock block = run->blocks[b];
             auto& merged = run->states[b];
-            for (std::size_t k = block.begin; k < block.end; ++k) {
-                if (run->failed.load(std::memory_order_relaxed))
-                    co_return false;
+            dftracer::utils::index::build::FileGroup group;
+            // The files finished before a failure still publish.
+            std::exception_ptr error;
+            bool stop = false;
+            for (std::size_t k = block.begin; k < block.end && !stop; ++k) {
+                if (run->failed.load(std::memory_order_relaxed)) break;
                 const std::size_t i = block.root->members[k];
-                auto file = co_await bootstrap_file(run, run->plan->files[i],
-                                                    block.root);
+                BootstrapFile file;
+                try {
+                    file = co_await bootstrap_file(run, run->plan->files[i],
+                                                   block.root, &group);
+                } catch (...) {
+                    error = std::current_exception();
+                    break;
+                }
                 if (!file.ok) {
                     run->failed.store(true, std::memory_order_relaxed);
-                    co_return false;
+                    break;
+                }
+                if (group.full()) {
+                    const bool published = co_await commit_bootstrap(group);
+                    stop = !published;
                 }
                 if (!file.state) continue;
                 if (!merged)
                     merged = std::move(file.state);
                 else
                     dataframe::agg_merge(*merged, *file.state);
+            }
+            const bool published = co_await commit_bootstrap(group);
+            if (error) std::rethrow_exception(error);
+            if (stop || !published ||
+                run->failed.load(std::memory_order_relaxed)) {
+                run->failed.store(true, std::memory_order_relaxed);
+                co_return false;
             }
         }
     } catch (...) {

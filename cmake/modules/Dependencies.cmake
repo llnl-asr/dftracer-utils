@@ -436,9 +436,8 @@ endfunction()
 
 # zstd 1.5.7 from source for every build, never the system copy: one static
 # PIC archive with hidden visibility. A system zstd can be years older and
-# slower (zstd 1.4.4 on Corona), and with hidden symbols a process that also
-# loads the system libzstd (Python) binds no call of its own
-# to ours. The legacy decoders are off: nothing we read predates zstd 1.0.
+# slower, and with hidden symbols a process that also loads the system libzstd
+# (Python) binds no call of its own to ours. The legacy decoders are off: nothing we read predates zstd 1.0.
 function(need_zstd)
   if(NOT zstd_ADDED)
     cpmaddpackage(
@@ -476,10 +475,12 @@ function(need_zstd)
   target_compile_definitions(
     libzstd_static PRIVATE "ZSTDLIB_VISIBLE=" "ZSTDERRORLIB_VISIBLE="
                            "ZDICTLIB_VISIBLE=")
-  # zstd's own sources trip GCC -Wmaybe-uninitialized; third-party source, so
-  # silence it on zstd's target only.
+  # zstd's own sources trip GCC -Wmaybe-uninitialized, and with NDEBUG the
+  # assert(0) that ends POOL_thread trips -Wreturn-type. Third-party source, so
+  # silence both on zstd's target only.
   if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(libzstd_static PRIVATE -Wno-maybe-uninitialized)
+    target_compile_options(libzstd_static PRIVATE -Wno-maybe-uninitialized
+                                                  -Wno-return-type)
   endif()
   set_property(
     TARGET libzstd_static

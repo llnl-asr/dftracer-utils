@@ -11,7 +11,7 @@
 #include <limits>
 #include <utility>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 namespace {
 
 constexpr std::size_t HEADER_BYTES = 20;
@@ -780,4 +780,4 @@ void SegmentView::Cursor::next() {
     }
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

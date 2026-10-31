@@ -691,6 +691,7 @@ set(DFTRACER_UTILS_STORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/scope_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/segment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/snapshot.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/store/writer_extents.cpp)
 

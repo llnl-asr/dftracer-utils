@@ -14,7 +14,7 @@
 #include <cstring>
 #include <limits>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 namespace {
 
@@ -462,4 +462,4 @@ dstd::Expected<void, dstd::Error> decode_extent(
     return {};
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

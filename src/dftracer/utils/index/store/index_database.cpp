@@ -224,7 +224,7 @@ struct IndexDatabase::Impl {
     std::optional<layout::FileRecord> file_record(std::string_view path);
 
     /// Null when the root holds no store yet, where every read answers nothing.
-    std::shared_ptr<const kv::Snapshot> snapshot() const;
+    std::shared_ptr<const kv::engine::Snapshot> snapshot() const;
     std::optional<std::string> store_get(std::string_view key);
     template <typename Fn>
     void store_scan(std::string_view prefix, Fn&& fn);
@@ -373,7 +373,8 @@ std::optional<layout::FileRecord> IndexDatabase::Impl::file_record(
     return layout::decode_file_record(*value);
 }
 
-std::shared_ptr<const kv::Snapshot> IndexDatabase::Impl::snapshot() const {
+std::shared_ptr<const kv::engine::Snapshot> IndexDatabase::Impl::snapshot()
+    const {
     return store_->snapshot();
 }
 

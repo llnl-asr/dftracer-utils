@@ -91,12 +91,12 @@ TEST_SUITE("IndexBuildPeak") {
         // The store trains each namespace's dictionary on samples that fill
         // within the first files, so 64 files hold as many sample bytes as 256.
         const auto samples =
-            dftracer::utils::store::g_dict_sample_bytes.exchange(
+            dftracer::utils::store::engine::g_dict_sample_bytes.exchange(
                 std::size_t{256} << 10);
 
         const auto small = peak_live(few, env.get_dir() + "/idx64");
         const auto large = peak_live(files, env.get_dir() + "/idx256");
-        dftracer::utils::store::g_dict_sample_bytes.store(samples);
+        dftracer::utils::store::engine::g_dict_sample_bytes.store(samples);
         MESSAGE("peak live bytes: 64 files " << small << ", 256 files "
                                              << large);
         constexpr std::size_t BUDGET = std::size_t{48} << 20;

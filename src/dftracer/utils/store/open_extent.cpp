@@ -15,7 +15,7 @@
 #include <thread>
 #include <utility>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 namespace {
 
@@ -711,4 +711,4 @@ bool ExtentWriter::writing() {
     return in_flight_ != 0;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

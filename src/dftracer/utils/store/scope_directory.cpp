@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 namespace {
 
 constexpr std::size_t COUNT_BYTES = 4;
@@ -740,4 +740,4 @@ int compare_directory_key(dstd::ByteView key, dstd::StringView name,
     return compare_key(key, name, version, kind, paths, false);
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

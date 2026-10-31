@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <utility>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 namespace {
 
@@ -473,6 +473,7 @@ dstd::Expected<void, dstd::Error> Committer::commit_pending() {
         }
     }
     ++next_sequence_;
+    records_.fetch_add(1, std::memory_order_release);
     return {};
 }
 
@@ -493,4 +494,4 @@ std::uint64_t CommitterTestHook::live_batches() {
     return batch_count().load(std::memory_order_relaxed);
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

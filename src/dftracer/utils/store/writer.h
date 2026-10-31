@@ -35,7 +35,7 @@ class Executor;
 
 }  // namespace dftracer::utils
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 inline constexpr dstd::ErrorDomain ERROR_DOMAIN =
     dstd::make_error_domain("dftracer.utils.index.store");
@@ -90,54 +90,6 @@ struct PublishTarget {
 };
 
 class Writer;
-
-/// The entries of one commit. One batch is atomic: it becomes visible whole or
-/// not at all. Entries are copied into the batch, so the caller's buffers may
-/// go away.
-class Batch {
-   public:
-    Batch(const Batch&) = delete;
-    Batch& operator=(const Batch&) = delete;
-    Batch(Batch&&) noexcept = default;
-    Batch& operator=(Batch&&) noexcept = default;
-    ~Batch() = default;
-
-    /// InvalidArgument on a fold namespace, reported by commit.
-    void put(dstd::ByteView key, dstd::ByteView value);
-    /// put() without a copy: the bytes of `key` and `value` must stay valid
-    /// and unchanged until the commit of this batch returns.
-    void put_ref(dstd::ByteView key, dstd::ByteView value);
-    /// InvalidArgument on a non-fold namespace, and when a numeric fold gets a
-    /// value that is not 8 bytes. Reported by commit.
-    void fold(dstd::ByteView key, dstd::ByteView value);
-
-   private:
-    friend class Writer;
-
-    struct Entry {
-        dstd::ByteView key;
-        dstd::ByteView value;
-    };
-
-    Batch() = default;
-
-    /// `bytes` copied into the batch's arena, which never moves them.
-    dstd::ByteView keep(dstd::ByteView bytes);
-    void add(dstd::ByteView key, dstd::ByteView value);
-    void record_error(dstd::Condition condition);
-
-    const Writer* writer_ = nullptr;
-    NamespaceId namespace_id_;
-    ScopeKey scope_;
-    std::uint64_t params_hash_ = 0;
-    dstd::Vector<SourceStat> sources_;
-    FoldKind fold_ = FoldKind::None;
-    dstd::Optional<dstd::Error> error_;
-    bool building_ = false;
-    dstd::Vector<Entry> entries_;
-    /// Opened by the first put() that copies. put_ref() needs none.
-    dstd::UniquePtr<dstd::StringArena> arena_;
-};
 
 /// One data file of one process. Entries become visible at the group commit
 /// that records their extent. add_namespace, batch, commit, fail, drop and
@@ -223,6 +175,12 @@ class Writer {
     /// commit waits on it and reports the outcome itself. Seals the open
     /// extents first. Runs on a thread of the writer's executor.
     coro::CoroTask<void> space();
+
+    /// The group commit records this writer has written. It grows when a
+    /// commit, flush or the commit interval makes entries readable.
+    std::uint64_t committed_records() const noexcept {
+        return committer_.records();
+    }
 
     const dstd::String& name() const { return name_; }
     const dstd::String& path() const { return path_; }
@@ -357,6 +315,6 @@ struct WriterTestHook {
     static void set_space_sealed(SpaceSealedFn fn);
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_WRITER_H

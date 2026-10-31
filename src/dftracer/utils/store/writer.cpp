@@ -8,7 +8,6 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -20,14 +19,12 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 namespace {
 
 using dftracer::utils::dstd::ByteView;
 
 constexpr std::size_t SEGMENT_HEADER_BYTES = 20;
-
-const std::array<std::uint8_t, 8> COUNT_VALUE = {1, 0, 0, 0, 0, 0, 0, 0};
 
 dstd::Unexpected<dstd::Error> invalid_error() {
     return dstd::Unexpected<dstd::Error>(
@@ -196,59 +193,6 @@ std::atomic<WriterTestHook::SpaceSealedFn>& space_sealed_hook() {
 }
 
 }  // namespace
-
-ByteView Batch::keep(ByteView bytes) {
-    if (bytes.empty()) return {};
-    if (!arena_) arena_ = dstd::make_unique<dstd::StringArena>();
-    const std::string_view kept =
-        arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-    return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};
-}
-
-void Batch::record_error(dstd::Condition condition) {
-    if (!error_) error_ = dstd::Error(condition);
-}
-
-void Batch::add(ByteView key, ByteView value) {
-    const ByteView kept_key = keep(key);
-    entries_.push_back(Entry{kept_key, keep(value)});
-}
-
-void Batch::put(ByteView key, ByteView value) {
-    if (error_) return;
-    if (fold_ != FoldKind::None) {
-        record_error(dstd::Condition::InvalidArgument);
-        return;
-    }
-    add(key, value);
-}
-
-void Batch::put_ref(ByteView key, ByteView value) {
-    if (error_) return;
-    if (fold_ != FoldKind::None) {
-        record_error(dstd::Condition::InvalidArgument);
-        return;
-    }
-    entries_.push_back(Entry{key, value});
-}
-
-void Batch::fold(ByteView key, ByteView value) {
-    if (error_) return;
-    if (fold_ == FoldKind::None) {
-        record_error(dstd::Condition::InvalidArgument);
-        return;
-    }
-    if (fold_ == FoldKind::Count) {
-        add(key, ByteView{COUNT_VALUE.data(), COUNT_VALUE.size()});
-        return;
-    }
-    auto checked = check_fold_value(fold_, value);
-    if (!checked) {
-        error_ = checked.error();
-        return;
-    }
-    add(key, value);
-}
 
 void Writer::latch(const dstd::Error& error) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -477,7 +421,7 @@ Batch Writer::batch(NamespaceId namespace_id, const ScopeKey& scope,
                     const dstd::Vector<SourceStat>* sources) {
     Batch batch;
     batch.writer_ = this;
-    batch.namespace_id_ = namespace_id;
+    batch.namespace_id_ = namespace_id.value;
     batch.scope_ = scope;
     batch.params_hash_ = params_hash;
     if (sources != nullptr) {
@@ -695,14 +639,14 @@ dstd::Expected<Writer::SegmentBytes, dstd::Error> Writer::build_segment(
 
 dstd::Expected<void, dstd::Error> Writer::prepare(const Batch& batch,
                                                   PendingBatch& pending) {
-    NamespaceEntry* namespace_entry = find_namespace(batch.namespace_id_.value);
+    NamespaceEntry* namespace_entry = find_namespace(batch.namespace_id_);
     if (namespace_entry == nullptr) return invalid_error();
     ScopeEntry* scope_entry = find_scope(batch.scope_);
     if (scope_entry == nullptr) scope_entry = add_scope(batch.scope_);
 
-    CopyEntry* copy_entry =
-        find_or_add_copy(namespace_entry->spec, batch.namespace_id_,
-                         batch.scope_, scope_entry->id);
+    CopyEntry* copy_entry = find_or_add_copy(namespace_entry->spec,
+                                             NamespaceId{batch.namespace_id_},
+                                             batch.scope_, scope_entry->id);
     if (batch.building_) {
         if (!copy_entry->building) {
             // The copy readers see stays theirs until this one is published.
@@ -1081,4 +1025,4 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Writer::close() {
     co_return dstd::Expected<void, dstd::Error>{};
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void close_fd(DataFileWriter& writer) {
@@ -34,7 +34,7 @@ struct DataFileWriterTestHook {
     }
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 namespace {
 
@@ -43,22 +43,22 @@ namespace store = dftracer::utils::store;
 namespace memory = dftracer::utils::memory;
 
 using dftracer::utils::dstd::ByteView;
-using store::CopyItem;
-using store::CopyState;
-using store::DataFileReader;
-using store::DataFileWriter;
-using store::DropItem;
-using store::EraseItem;
-using store::ExtentRef;
-using store::ExtentRefItem;
-using store::ExtentSegment;
-using store::FileIndex;
-using store::IndexedExtentRef;
-using store::NamespaceItem;
-using store::ScopeItem;
 using store::ScopeKind;
-using store::SegmentBuilder;
 using store::SourceStat;
+using store::engine::CopyItem;
+using store::engine::CopyState;
+using store::engine::DataFileReader;
+using store::engine::DataFileWriter;
+using store::engine::DropItem;
+using store::engine::EraseItem;
+using store::engine::ExtentRef;
+using store::engine::ExtentRefItem;
+using store::engine::ExtentSegment;
+using store::engine::FileIndex;
+using store::engine::IndexedExtentRef;
+using store::engine::NamespaceItem;
+using store::engine::ScopeItem;
+using store::engine::SegmentBuilder;
 
 constexpr std::size_t EXTENT_SIZE = 4096;
 
@@ -139,10 +139,10 @@ std::uint64_t header_tail_offset(const std::vector<std::uint8_t>& file) {
 }
 
 void rewrite_header_crc(std::vector<std::uint8_t>& header) {
-    REQUIRE(header.size() >= store::FILE_HEADER_BYTES);
+    REQUIRE(header.size() >= store::engine::FILE_HEADER_BYTES);
     write_u32_le_at(header, 12, 0);
-    const std::uint32_t crc =
-        store::crc32(0, header.data(), store::FILE_HEADER_BYTES);
+    const std::uint32_t crc = store::engine::crc32(
+        0, header.data(), store::engine::FILE_HEADER_BYTES);
     write_u32_le_at(header, 12, crc);
 }
 
@@ -158,7 +158,7 @@ void rewrite_record_crc(std::vector<std::uint8_t>& file,
     const std::size_t crc_at = record_crc_offset(file, record_offset);
     const std::size_t record_at = static_cast<std::size_t>(record_offset);
     const std::uint32_t crc =
-        store::crc32(0, file.data() + record_at, crc_at - record_at);
+        store::engine::crc32(0, file.data() + record_at, crc_at - record_at);
     write_u32_le_at(file, crc_at, crc);
 }
 
@@ -332,7 +332,7 @@ struct SegmentBlockEntry {
 };
 
 struct SegmentBlockView {
-    store::BlockHandle handle;
+    store::engine::BlockHandle handle;
     std::size_t raw_bytes = 0;
     std::vector<SegmentBlockEntry> entries;
 };
@@ -340,7 +340,7 @@ struct SegmentBlockView {
 struct ClosedRun {
     std::uint32_t copy_id = 0;
     std::uint64_t sequence = 0;
-    store::BlockHandle handle;
+    store::engine::BlockHandle handle;
 };
 
 std::vector<ClosedRun> closed_runs(const DataFileReader& reader) {
@@ -348,21 +348,22 @@ std::vector<ClosedRun> closed_runs(const DataFileReader& reader) {
     const FileIndex& index = reader.index();
     REQUIRE(index.tail.has_value());
     REQUIRE(index.tail->directory_levels == 1);
-    auto top = store::SlotTable::open(view_of(index.tail->top_table));
+    auto top = store::engine::SlotTable::open(view_of(index.tail->top_table));
     REQUIRE(top.has_value());
     for (std::size_t i = 0; i < top->size(); ++i) {
-        store::BlockHandle handle;
+        store::engine::BlockHandle handle;
         std::size_t at = 0;
-        REQUIRE(store::read_block_handle(top->payload(i), at, handle));
+        REQUIRE(store::engine::read_block_handle(top->payload(i), at, handle));
         auto bytes = reader.read_block(handle, nullptr);
         REQUIRE(bytes.has_value());
-        auto directory = store::ScopeDirectory::open(view_of(*bytes));
+        auto directory = store::engine::ScopeDirectory::open(view_of(*bytes));
         REQUIRE(directory.has_value());
         for (std::size_t entry = 0; entry < directory->size(); ++entry) {
             auto decoded = directory->entry(entry);
             REQUIRE(decoded.has_value());
-            for (const store::DirectoryCopy& copy : decoded->copies) {
-                for (const store::DirectoryCommit& commit : copy.commits) {
+            for (const store::engine::DirectoryCopy& copy : decoded->copies) {
+                for (const store::engine::DirectoryCommit& commit :
+                     copy.commits) {
                     runs.push_back(
                         {copy.local_id, commit.sequence, commit.segments});
                 }
@@ -373,7 +374,7 @@ std::vector<ClosedRun> closed_runs(const DataFileReader& reader) {
 }
 
 SegmentBlockView read_segment_block(const DataFileReader& reader,
-                                    store::BlockHandle handle) {
+                                    store::engine::BlockHandle handle) {
     SegmentBlockView block;
     block.handle = handle;
     auto bytes = reader.read_block(handle, nullptr);
@@ -397,7 +398,7 @@ SegmentBlockView read_segment_block(const DataFileReader& reader,
         at += 52;
         for (std::string* key : {&entry.first_key, &entry.last_key}) {
             ByteView body = view_of(raw);
-            auto length = store::decode_varint(body, at);
+            auto length = store::engine::decode_varint(body, at);
             REQUIRE(length.has_value());
             REQUIRE(at + *length <= raw.size());
             key->assign(reinterpret_cast<const char*>(raw.data() + at),
@@ -559,8 +560,9 @@ std::uint64_t commit_record_offset(std::uint32_t commit_id);
 std::vector<RecordMeta> scan_record_metas(
     const std::vector<std::uint8_t>& file) {
     std::vector<RecordMeta> records;
-    for (std::size_t offset = store::FILE_HEADER_BYTES;
-         offset + 40U <= file.size(); offset += store::FILE_HEADER_BYTES) {
+    for (std::size_t offset = store::engine::FILE_HEADER_BYTES;
+         offset + 40U <= file.size();
+         offset += store::engine::FILE_HEADER_BYTES) {
         if (std::memcmp(file.data() + offset, "DFTUREC0", 8) != 0) continue;
         const std::uint32_t kind = read_u32_le_at(file, offset + 8U);
         if (kind < 1 || kind > 3) continue;
@@ -574,7 +576,7 @@ std::vector<RecordMeta> scan_record_metas(
         }
         const std::uint32_t stored_crc = read_u32_le_at(file, crc_end);
         const std::uint32_t crc =
-            store::crc32(0, file.data() + offset, crc_end - offset);
+            store::engine::crc32(0, file.data() + offset, crc_end - offset);
         if (stored_crc != crc) continue;
         records.push_back({sequence, offset, crc_end, kind >= 2});
     }
@@ -701,7 +703,7 @@ TEST_SUITE("index store file") {
         for (std::size_t i = 0; i < extents.size(); ++i) {
             auto read = opened->read_extent(extents[i]);
             REQUIRE(read.has_value());
-            REQUIRE(store::decode_extent(*read).has_value());
+            REQUIRE(store::engine::decode_extent(*read).has_value());
             CHECK(same_bytes(
                 view_of(*read),
                 view_of(
@@ -993,7 +995,7 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
 
         writer.add(make_namespace(1));
-        store::DataFileWriterTestHook::close_fd(writer);
+        store::engine::DataFileWriterTestHook::close_fd(writer);
 
         auto first = writer.commit();
         REQUIRE_FALSE(first.has_value());
@@ -1013,7 +1015,7 @@ TEST_SUITE("index store file") {
         CHECK(closed.error().is(dstd::Condition::Io));
 
         const std::vector<std::uint8_t> bytes = read_file(path);
-        CHECK(bytes.size() == store::FILE_HEADER_BYTES);
+        CHECK(bytes.size() == store::engine::FILE_HEADER_BYTES);
     }
 
     TEST_CASE("a bad header with a checkpoint still scans the full state") {
@@ -1046,7 +1048,8 @@ TEST_SUITE("index store file") {
         TempDir temp;
 
         const std::string garbage_path = temp.file("garbage.dfs");
-        std::vector<std::uint8_t> garbage(store::FILE_HEADER_BYTES * 2, 'g');
+        std::vector<std::uint8_t> garbage(store::engine::FILE_HEADER_BYTES * 2,
+                                          'g');
         write_file(garbage_path, garbage);
         auto opened_garbage = DataFileReader::open(garbage_path);
         REQUIRE_FALSE(opened_garbage.has_value());
@@ -1179,7 +1182,7 @@ TEST_SUITE("index store file") {
 
         std::vector<std::uint8_t> corrupted = read_file(path);
         const std::uint64_t tail = header_tail_offset(corrupted);
-        REQUIRE(tail >= store::FILE_HEADER_BYTES);
+        REQUIRE(tail >= store::engine::FILE_HEADER_BYTES);
         REQUIRE(tail + 40 <= corrupted.size());
         corrupted[tail + 20] ^= 1;
 
@@ -1220,7 +1223,7 @@ TEST_SUITE("index store file") {
     }
 
     TEST_CASE("record item counts are bounded by the body size") {
-        const std::uint64_t record_offset = store::FILE_HEADER_BYTES;
+        const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
         const auto decode_with_tracked_peak =
             [](const dstd::Vector<std::uint8_t>& record) {
                 memory::PoolHandle pool =
@@ -1237,7 +1240,8 @@ TEST_SUITE("index store file") {
                 {
                     memory::Scope scope(*pool);
                     try {
-                        auto decoded = store::decode_record(view_of(record));
+                        auto decoded =
+                            store::engine::decode_record(view_of(record));
                         CHECK_FALSE(decoded.has_value());
                         if (!decoded.has_value()) {
                             CHECK(decoded.error().is(dstd::Condition::Parse));
@@ -1257,8 +1261,9 @@ TEST_SUITE("index store file") {
             ScopeItem scope;
             scope.local_id = 1;
             scope.kind = ScopeKind::Root;
-            auto encoded = store::encode_record(store::RecordKind::Commit, 1, 0,
-                                                record_offset, {scope});
+            auto encoded =
+                store::engine::encode_record(store::engine::RecordKind::Commit,
+                                             1, 0, record_offset, {scope});
             REQUIRE(encoded.has_value());
             std::vector<std::uint8_t> record = std_bytes(*encoded);
             write_u32_le_at(record, first_item_payload_offset(record) + 5U,
@@ -1273,8 +1278,8 @@ TEST_SUITE("index store file") {
             ref.length = 16;
             ref.crc = 0;
             ref.sequence = 1;
-            auto encoded = store::encode_record(store::RecordKind::Commit, 1, 0,
-                                                record_offset, {ref});
+            auto encoded = store::engine::encode_record(
+                store::engine::RecordKind::Commit, 1, 0, record_offset, {ref});
             REQUIRE(encoded.has_value());
             std::vector<std::uint8_t> record = std_bytes(*encoded);
             write_u32_le_at(record, first_item_payload_offset(record) + 24U,
@@ -1285,15 +1290,17 @@ TEST_SUITE("index store file") {
     }
 
     TEST_CASE("an erase record round-trips its range") {
-        const std::uint64_t record_offset = store::FILE_HEADER_BYTES;
+        const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
         const auto encode = [&](const EraseItem& erase) {
-            auto encoded = store::encode_record(store::RecordKind::Commit, 1, 0,
-                                                record_offset, {erase});
+            auto encoded =
+                store::engine::encode_record(store::engine::RecordKind::Commit,
+                                             1, 0, record_offset, {erase});
             REQUIRE(encoded.has_value());
             return std_bytes(*encoded);
         };
         const auto decode = [](const std::vector<std::uint8_t>& record) {
-            return store::decode_record(ByteView{record.data(), record.size()});
+            return store::engine::decode_record(
+                ByteView{record.data(), record.size()});
         };
 
         EraseItem item;
@@ -1360,16 +1367,16 @@ TEST_SUITE("index store file") {
     }
 
     TEST_CASE("a copy record round-trips its sources") {
-        const std::uint64_t record_offset = store::FILE_HEADER_BYTES;
+        const std::uint64_t record_offset = store::engine::FILE_HEADER_BYTES;
         const auto encode = [&](const CopyItem& copy) {
-            auto encoded = store::encode_record(store::RecordKind::Commit, 1, 0,
-                                                record_offset, {copy});
+            auto encoded = store::engine::encode_record(
+                store::engine::RecordKind::Commit, 1, 0, record_offset, {copy});
             REQUIRE(encoded.has_value());
             return std_bytes(*encoded);
         };
         const auto decode = [](const std::vector<std::uint8_t>& record) {
-            auto decoded =
-                store::decode_record(ByteView{record.data(), record.size()});
+            auto decoded = store::engine::decode_record(
+                ByteView{record.data(), record.size()});
             return decoded;
         };
 
@@ -1460,7 +1467,7 @@ TEST_SUITE("index store file") {
         const std::uint64_t copied_offset =
             static_cast<std::uint64_t>(corrupted.size());
         const std::uint64_t source_offset = commit_record_offset(4);
-        REQUIRE(copied_offset % store::FILE_HEADER_BYTES == 0);
+        REQUIRE(copied_offset % store::engine::FILE_HEADER_BYTES == 0);
         REQUIRE(source_offset + EXTENT_SIZE <= corrupted.size());
         corrupted.insert(
             corrupted.end(),
@@ -1571,7 +1578,7 @@ TEST_SUITE("index store file") {
         expected.last_sequence = 5;
 
         const std::vector<std::uint8_t> current = read_file(path);
-        REQUIRE(current.size() >= store::FILE_HEADER_BYTES);
+        REQUIRE(current.size() >= store::engine::FILE_HEADER_BYTES);
         const std::size_t tail_at = header_tail_field_offset(current);
         const std::uint64_t stale_tail = commit_record_offset(3);
         const std::size_t stale_crc_at = record_crc_offset(current, stale_tail);
@@ -1604,7 +1611,7 @@ TEST_SUITE("index store file") {
     }
 
     TEST_CASE("data file names keep only safe characters") {
-        const auto name = store::data_file_name(
+        const auto name = store::engine::data_file_name(
             "my host.example_", 42, 0x0123456789ABCDEFULL, "a/b:c+d");
         CHECK(to_std(name) == "w-myhost.example_-42-0123456789abcdef-abcd.dfs");
     }
@@ -1652,17 +1659,17 @@ TEST_SUITE("index store file") {
         erase.end_key = bytes_of_string(high);
         erases.push_back(std::move(erase));
         erases.push_back({999, 4, bytes_of_string(low), bytes_of_string(mid)});
-        const std::vector<store::DirectoryCommit> commits = {
+        const std::vector<store::engine::DirectoryCommit> commits = {
             {4, 100, view_of(mid), view_of(high), {}},
             {4, 100, view_of(low), view_of(mid), {}},
             {2, 100, view_of(low), view_of(low), {}},
             {3, 200, view_of(mid), view_of(mid), {}}};
-        auto built = store::build_scope_directory(
+        auto built = store::engine::build_scope_directory(
             namespaces, scopes, copies, drops, erases,
-            dstd::Span<const store::DirectoryCommit>(commits.data(),
-                                                     commits.size()));
+            dstd::Span<const store::engine::DirectoryCommit>(commits.data(),
+                                                             commits.size()));
         REQUIRE(built.has_value());
-        auto directory = store::ScopeDirectory::open(view_of(*built));
+        auto directory = store::engine::ScopeDirectory::open(view_of(*built));
         REQUIRE(directory.has_value());
         REQUIRE(directory->size() == 5);
 
@@ -1702,7 +1709,7 @@ TEST_SUITE("index store file") {
         REQUIRE(entry.has_value());
         CHECK(entry->highest_generation == 9);
         REQUIRE(entry->copies.size() == 1);
-        const store::DirectoryCopy& copy = entry->copies[0];
+        const store::engine::DirectoryCopy& copy = entry->copies[0];
         CHECK(copy.local_id == 100);
         CHECK(copy.generation == 1);
         CHECK(copy.params_hash == 7);
@@ -1741,10 +1748,10 @@ TEST_SUITE("index store file") {
         copies.back().sources.push_back(SourceStat{21, 22, 23});
         copies.push_back({101, 1, 10, 6, 2, CopyState::Failed, {}});
 
-        auto built = store::build_scope_directory(namespaces, scopes, copies,
-                                                  {}, {}, {});
+        auto built = store::engine::build_scope_directory(namespaces, scopes,
+                                                          copies, {}, {}, {});
         REQUIRE(built.has_value());
-        auto directory = store::ScopeDirectory::open(view_of(*built));
+        auto directory = store::engine::ScopeDirectory::open(view_of(*built));
         REQUIRE(directory.has_value());
         auto entry = directory->entry(0);
         REQUIRE(entry.has_value());
@@ -1764,8 +1771,8 @@ TEST_SUITE("index store file") {
         dstd::Vector<CopyItem> wrong;
         wrong.push_back({102, 1, 10, 7, 3, CopyState::Ready, {}});
         wrong.back().sources.push_back(SourceStat{1, 2, 3});
-        auto rejected =
-            store::build_scope_directory(namespaces, scopes, wrong, {}, {}, {});
+        auto rejected = store::engine::build_scope_directory(namespaces, scopes,
+                                                             wrong, {}, {}, {});
         REQUIRE_FALSE(rejected.has_value());
         if (!rejected.has_value()) {
             CHECK(rejected.error().is(dstd::Condition::InvalidArgument));
@@ -1780,14 +1787,15 @@ TEST_SUITE("index store file") {
         scopes[0].local_id = 2;
         dstd::Vector<CopyItem> copies;
         copies.push_back({3, 1, 2, 0, 1, CopyState::Ready, {}});
-        auto built = store::build_scope_directory(namespaces, scopes, copies,
-                                                  {}, {}, {});
+        auto built = store::engine::build_scope_directory(namespaces, scopes,
+                                                          copies, {}, {}, {});
         REQUIRE(built.has_value());
-        CHECK(store::ScopeDirectory::open(view_of(*built)).has_value());
+        CHECK(store::engine::ScopeDirectory::open(view_of(*built)).has_value());
         dstd::Vector<std::uint8_t> broken = *built;
         dftracer::utils::dstd::write_u32_le(broken.data() + 4 + 12, 1U << 20);
-        CHECK_FALSE(store::ScopeDirectory::open(view_of(broken)).has_value());
-        CHECK(store::ScopeDirectory::open(ByteView{}).has_value());
+        CHECK_FALSE(
+            store::engine::ScopeDirectory::open(view_of(broken)).has_value());
+        CHECK(store::engine::ScopeDirectory::open(ByteView{}).has_value());
     }
 
     TEST_CASE("segment runs pack into blocks of one copy") {
@@ -1867,7 +1875,8 @@ TEST_SUITE("index store file") {
         const std::vector<ClosedRun> runs = closed_runs(*reader);
 
         const std::size_t wide_entry_bytes = 52 + 2 * (2 + WIDE_KEY_BYTES);
-        REQUIRE(WIDE_SEGMENTS * wide_entry_bytes > store::SEGMENT_BLOCK_BYTES);
+        REQUIRE(WIDE_SEGMENTS * wide_entry_bytes >
+                store::engine::SEGMENT_BLOCK_BYTES);
 
         const auto handle_of = [&runs](std::uint32_t copy_id,
                                        std::uint64_t sequence) {
@@ -1877,13 +1886,15 @@ TEST_SUITE("index store file") {
                 }
             }
             FAIL("no run of copy " << copy_id << " of commit " << sequence);
-            return store::BlockHandle{};
+            return store::engine::BlockHandle{};
         };
-        const store::BlockHandle small_first = handle_of(small_copy, 1);
-        const store::BlockHandle small_second = handle_of(small_copy, 2);
-        const store::BlockHandle wide_handle =
+        const store::engine::BlockHandle small_first = handle_of(small_copy, 1);
+        const store::engine::BlockHandle small_second =
+            handle_of(small_copy, 2);
+        const store::engine::BlockHandle wide_handle =
             handle_of(small_copy, wide_sequence);
-        const store::BlockHandle other_handle = handle_of(other_copy, 4);
+        const store::engine::BlockHandle other_handle =
+            handle_of(other_copy, 4);
         CHECK(small_first.offset == small_second.offset);
         CHECK(small_first.offset != wide_handle.offset);
         CHECK(other_handle.offset != small_first.offset);
@@ -1907,7 +1918,7 @@ TEST_SUITE("index store file") {
         const SegmentBlockView wide_block =
             read_segment_block(*reader, wide_handle);
         REQUIRE(wide_block.entries.size() == WIDE_SEGMENTS);
-        CHECK(wide_block.raw_bytes > store::SEGMENT_BLOCK_BYTES);
+        CHECK(wide_block.raw_bytes > store::engine::SEGMENT_BLOCK_BYTES);
         for (std::size_t i = 0; i < wide_block.entries.size(); ++i) {
             CHECK(wide_block.entries[i].sequence == wide_sequence);
             CHECK(wide_block.entries[i].extent_offset ==
@@ -1920,7 +1931,7 @@ TEST_SUITE("index store file") {
         REQUIRE(other_block.entries.size() == 1);
         CHECK(other_block.entries[0].sequence == 4);
         CHECK(other_block.entries[0].extent_offset == last_extent->offset);
-        CHECK(other_block.handle.length < store::SEGMENT_BLOCK_BYTES);
+        CHECK(other_block.handle.length < store::engine::SEGMENT_BLOCK_BYTES);
     }
 
     TEST_CASE("a space report accounts for every byte of a closed file") {
@@ -1982,7 +1993,7 @@ TEST_SUITE("index store file") {
             REQUIRE_FALSE(folded.bytes.empty());
 
             dstd::Vector<std::uint8_t> packed = left.bytes;
-            while (packed.size() % store::SEGMENT_ALIGN != 0) {
+            while (packed.size() % store::engine::SEGMENT_ALIGN != 0) {
                 packed.push_back(0);
             }
             const std::uint32_t right_at =
@@ -2034,11 +2045,11 @@ TEST_SUITE("index store file") {
         constexpr std::uint64_t EXPECTED_COMMITS = COMMITS + 1;
         constexpr std::uint64_t EXPECTED_SEGMENT_ENTRIES = 3 * COMMITS + 1;
 
-        auto report = store::space_report(path);
+        auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
-        const store::SpaceReport& space = *report;
+        const store::engine::SpaceReport& space = *report;
         CHECK(space.file_bytes == std::filesystem::file_size(path));
-        CHECK(space.header_bytes == store::FILE_HEADER_BYTES);
+        CHECK(space.header_bytes == store::engine::FILE_HEADER_BYTES);
         CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
                   space.gap_bytes + space.segment_block_bytes +
                   space.items_block_bytes + space.directory_leaf_bytes +
@@ -2062,12 +2073,13 @@ TEST_SUITE("index store file") {
         for (const ExtentRef& ref : written) {
             auto stored = opened->read_extent(ref);
             REQUIRE(stored.has_value());
-            auto view = store::ExtentPages::open(view_of(*stored));
+            auto view = store::engine::ExtentPages::open(view_of(*stored));
             REQUIRE(view.has_value());
             ++extents;
             extent_bytes += ref.length;
-            table_bytes += store::ExtentPages::table_length(view_of(*stored)) -
-                           store::EXTENT_HEADER_BYTES;
+            table_bytes +=
+                store::engine::ExtentPages::table_length(view_of(*stored)) -
+                store::engine::EXTENT_HEADER_BYTES;
             pages += view->size();
             page_raw_bytes += view->raw_length();
             for (std::size_t page = 0; page < view->size(); ++page) {
@@ -2086,11 +2098,11 @@ TEST_SUITE("index store file") {
         CHECK(space.page_raw_bytes == raw_written);
         CHECK(space.pages_compressed == compressed);
         CHECK(space.pages_compressed > 0);
-        CHECK(space.extent_bytes % store::EXTENT_ALIGN_BYTES == 0);
-        CHECK(space.extent_bytes == store::EXTENT_HEADER_BYTES * space.extents +
-                                        space.extent_page_table_bytes +
-                                        space.page_bytes +
-                                        space.extent_padding_bytes);
+        CHECK(space.extent_bytes % store::engine::EXTENT_ALIGN_BYTES == 0);
+        CHECK(space.extent_bytes ==
+              store::engine::EXTENT_HEADER_BYTES * space.extents +
+                  space.extent_page_table_bytes + space.page_bytes +
+                  space.extent_padding_bytes);
 
         const std::vector<ClosedRun> runs = closed_runs(*opened);
         CHECK(space.segment_entries == EXPECTED_SEGMENT_ENTRIES);
@@ -2105,18 +2117,18 @@ TEST_SUITE("index store file") {
         CHECK(space.directory_key_bytes > 0);
         CHECK(space.directory_commit_key_bytes > 0);
         CHECK(space.record_bytes ==
-              EXPECTED_COMMITS * store::FILE_HEADER_BYTES);
+              EXPECTED_COMMITS * store::engine::FILE_HEADER_BYTES);
         CHECK(space.commits == EXPECTED_COMMITS);
         CHECK(space.copies == 4);
         CHECK(space.copies == index.copies.size());
-        CHECK(space.footer_bytes > store::FILE_TRAILER_BYTES);
+        CHECK(space.footer_bytes > store::engine::FILE_TRAILER_BYTES);
 
         const std::uint64_t blocks =
             space.segment_block_bytes + space.items_block_bytes +
             space.directory_leaf_bytes + space.directory_separator_bytes;
-        CHECK(space.gap_bytes ==
-              (store::EXTENT_ALIGN_BYTES - blocks % store::EXTENT_ALIGN_BYTES) %
-                  store::EXTENT_ALIGN_BYTES);
+        CHECK(space.gap_bytes == (store::engine::EXTENT_ALIGN_BYTES -
+                                  blocks % store::engine::EXTENT_ALIGN_BYTES) %
+                                     store::engine::EXTENT_ALIGN_BYTES);
     }
 
     TEST_CASE("a space report reads every leaf of a directory") {
@@ -2128,7 +2140,7 @@ TEST_SUITE("index store file") {
         auto& writer = *created;
 
         constexpr std::uint32_t ENTRIES = 300;
-        static_assert(ENTRIES > store::DIRECTORY_BLOCK_ENTRIES);
+        static_assert(ENTRIES > store::engine::DIRECTORY_BLOCK_ENTRIES);
         for (std::uint32_t id = 1; id <= ENTRIES; ++id) {
             writer.add(make_namespace(id));
             writer.add(make_scope(id));
@@ -2139,14 +2151,14 @@ TEST_SUITE("index store file") {
 
         auto opened = DataFileReader::open(path);
         REQUIRE(opened.has_value());
-        auto top =
-            store::SlotTable::open(view_of(opened->index().tail->top_table));
+        auto top = store::engine::SlotTable::open(
+            view_of(opened->index().tail->top_table));
         REQUIRE(top.has_value());
         CHECK(top->size() == 2);
 
-        auto report = store::space_report(path);
+        auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
-        const store::SpaceReport& space = *report;
+        const store::engine::SpaceReport& space = *report;
         CHECK(space.file_bytes == std::filesystem::file_size(path));
         CHECK(space.extents == 0);
         CHECK(space.extent_bytes == 0);
@@ -2183,7 +2195,7 @@ TEST_SUITE("index store file") {
         writer.add(make_extent_ref(*extent, segment, 1));
         REQUIRE(writer.commit().has_value());
 
-        auto report = store::space_report(path);
+        auto report = store::engine::space_report(path);
         REQUIRE_FALSE(report.has_value());
         CHECK(report.error().is(dstd::Condition::Parse));
     }

@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/store/store.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -15,7 +16,7 @@
 struct ZSTD_CDict_s;
 struct ZSTD_DDict_s;
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// A stored extent starts with this header: u32 page count, u32 raw length, u32
 /// crc of the rest of the header and the page table, u32 dictionary length, u64
@@ -35,9 +36,6 @@ inline constexpr std::size_t PAGE_BYTES = 32 * 1024;
 /// The most raw bytes one stored extent may claim, so an extent that passes its
 /// crc but was written wrong cannot ask for an unbounded buffer.
 inline constexpr std::uint32_t EXTENT_MAX_RAW_BYTES = 1U << 30U;
-
-/// ZstdDict is a zstd frame made with the dictionary the extent names.
-enum class PageCodec : std::uint8_t { None = 0, Zstd = 1, ZstdDict = 2 };
 
 struct DictRef {
     std::uint64_t offset = 0;
@@ -215,6 +213,6 @@ class ExtentPages {
 dstd::Expected<void, dstd::Error> decode_extent(
     dstd::Vector<std::uint8_t>& stored, const PageDict* dict = nullptr);
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_EXTENT_CODEC_H

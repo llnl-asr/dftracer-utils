@@ -17,62 +17,16 @@
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/scope_directory.h>
 #include <dftracer/utils/store/segment.h>
+#include <dftracer/utils/store/store.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 class Snapshot;
-
-/// Who owns the data, and therefore which copies of a scope a reader sees.
-struct NamespaceSpec {
-    dstd::String name;
-    std::uint32_t format_version = 0;
-    FoldKind fold = FoldKind::None;
-    bool durable = false;
-    /// Writers only. Reads and namespace matching ignore it.
-    PageCodec codec = PageCodec::Zstd;
-};
-
-bool operator==(const NamespaceSpec& a, const NamespaceSpec& b);
-bool operator!=(const NamespaceSpec& a, const NamespaceSpec& b);
-
-/// Matched across files by kind and paths, since each file numbers scopes
-/// itself.
-struct ScopeKey {
-    ScopeKind kind = ScopeKind::Root;
-    dstd::Vector<dstd::String> paths;
-
-    static ScopeKey root();
-    static ScopeKey file(dstd::StringView path);
-    /// Sorts and removes duplicate paths.
-    static ScopeKey files(dstd::Span<const dstd::StringView> paths);
-};
-
-/// Kind first, then the paths in order. This is also the scan_all order.
-int compare_scopes(const ScopeKey& a, const ScopeKey& b);
-bool operator==(const ScopeKey& a, const ScopeKey& b);
-bool operator!=(const ScopeKey& a, const ScopeKey& b);
-bool operator<(const ScopeKey& a, const ScopeKey& b);
-
-enum class ScopeState : std::uint8_t {
-    Absent = 0,
-    Ready = 1,
-    Failed = 2,
-    Bad = 3
-};
-
-/// The current copy of one scope, read from the scope directories alone.
-struct CopyInfo {
-    ScopeState state = ScopeState::Absent;
-    std::uint64_t generation = 0;
-    std::uint64_t params_hash = 0;
-    /// Empty, or one per path of the scope in its path order.
-    dstd::Vector<SourceStat> sources;
-};
 
 /// The highest generation a scope has in one directory, over copies and drops.
 struct ScopeGeneration {
@@ -80,16 +34,6 @@ struct ScopeGeneration {
     std::uint32_t format_version = 0;
     ScopeKey scope;
     std::uint64_t generation = 0;
-};
-
-struct NamespaceDecl {
-    dstd::String name;
-    std::uint32_t format_version = 0;
-};
-
-struct ScopeEntry {
-    ScopeKey scope;
-    CopyInfo copy;
 };
 
 /// Cumulative block reads, readable at any time from any thread. An open
@@ -122,26 +66,6 @@ struct ReadStats {
 struct SkippedFile {
     dstd::String name;
     dstd::Error error;
-};
-
-/// A value the snapshot returned, in a buffer it owns. Move-only: a copy would
-/// leave the view pointing at the first value's buffer.
-class Value {
-   public:
-    Value() = default;
-    Value(const Value&) = delete;
-    Value& operator=(const Value&) = delete;
-    Value(Value&&) noexcept = default;
-    Value& operator=(Value&&) noexcept = default;
-    ~Value() = default;
-
-    dstd::ByteView bytes() const { return view_; }
-
-   private:
-    friend class Snapshot;
-
-    dstd::ByteView view_;
-    dstd::Vector<std::uint8_t> owned_;
 };
 
 namespace detail {
@@ -914,6 +838,6 @@ class Snapshot {
     dstd::UniquePtr<detail::GroupIndex> groups_;
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_SNAPSHOT_H

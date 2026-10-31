@@ -28,9 +28,9 @@ dstd::SharedPtr<dstd::RawBuffer<std::uint8_t>> page_of(std::uint8_t fill) {
 
 TEST_SUITE("index store page cache") {
     TEST_CASE("a page is found by its file and its offset") {
-        store::PageCache cache(16 * 64 * PAGE);
+        store::engine::PageCache cache(16 * 64 * PAGE);
         CHECK(cache.find(1, 0) == nullptr);
-        const store::CachedPage kept = cache.insert(1, 0, page_of(7));
+        const store::engine::CachedPage kept = cache.insert(1, 0, page_of(7));
         REQUIRE(kept != nullptr);
         CHECK(cache.find(1, 0) == kept);
         CHECK(cache.find(2, 0) == nullptr);
@@ -39,9 +39,9 @@ TEST_SUITE("index store page cache") {
     }
 
     TEST_CASE("a second insert of one place returns the page kept first") {
-        store::PageCache cache(16 * 64 * PAGE);
-        const store::CachedPage first = cache.insert(1, 0, page_of(1));
-        const store::CachedPage second = cache.insert(1, 0, page_of(2));
+        store::engine::PageCache cache(16 * 64 * PAGE);
+        const store::engine::CachedPage first = cache.insert(1, 0, page_of(1));
+        const store::engine::CachedPage second = cache.insert(1, 0, page_of(2));
         CHECK(second == first);
         CHECK((*second)[0] == 1);
         CHECK(cache.bytes() == PAGE);
@@ -49,7 +49,7 @@ TEST_SUITE("index store page cache") {
 
     TEST_CASE("the cache stays within its capacity") {
         const std::size_t capacity = 16 * 4 * PAGE;
-        store::PageCache cache(capacity);
+        store::engine::PageCache cache(capacity);
         for (std::uint64_t i = 0; i < 4096; ++i) {
             cache.insert(i % 3, i * PAGE, page_of(1));
             CHECK(cache.bytes() <= capacity);
@@ -63,8 +63,8 @@ TEST_SUITE("index store page cache") {
     }
 
     TEST_CASE("a page the cache drops lives while a query holds it") {
-        store::PageCache cache(16 * PAGE);
-        const store::CachedPage held = cache.insert(1, 0, page_of(9));
+        store::engine::PageCache cache(16 * PAGE);
+        const store::engine::CachedPage held = cache.insert(1, 0, page_of(9));
         for (std::uint64_t i = 1; i < 1024; ++i) {
             cache.insert(1, i * PAGE, page_of(0));
         }
@@ -79,12 +79,12 @@ TEST_SUITE("index store page cache") {
         // shard keeps only one of two places when they share a shard.
         std::vector<std::uint64_t> same{0};
         for (std::uint64_t i = 1; same.size() < 3; ++i) {
-            store::PageCache probe(16 * PAGE);
+            store::engine::PageCache probe(16 * PAGE);
             probe.insert(1, 0, page_of(0));
             probe.insert(1, i * PAGE, page_of(0));
             if (probe.find(1, 0) == nullptr) same.push_back(i);
         }
-        store::PageCache cache(16 * 2 * PAGE);
+        store::engine::PageCache cache(16 * 2 * PAGE);
         cache.insert(1, same[0] * PAGE, page_of(1));
         cache.insert(1, same[1] * PAGE, page_of(2));
         CHECK(cache.find(1, same[0] * PAGE) != nullptr);
@@ -95,7 +95,7 @@ TEST_SUITE("index store page cache") {
     }
 
     TEST_CASE("threads that insert and find at once see whole pages") {
-        store::PageCache cache(16 * 8 * PAGE);
+        store::engine::PageCache cache(16 * 8 * PAGE);
         std::atomic<std::size_t> wrong{0};
         std::vector<std::thread> threads;
         for (int t = 0; t < 8; ++t) {
@@ -103,7 +103,7 @@ TEST_SUITE("index store page cache") {
                 for (std::uint64_t i = 0; i < 2000; ++i) {
                     const std::uint64_t at = (i * 7 + t) % 64;
                     const auto fill = static_cast<std::uint8_t>(at);
-                    store::CachedPage page = cache.find(0, at * PAGE);
+                    store::engine::CachedPage page = cache.find(0, at * PAGE);
                     if (page == nullptr) {
                         page = cache.insert(0, at * PAGE, page_of(fill));
                     }

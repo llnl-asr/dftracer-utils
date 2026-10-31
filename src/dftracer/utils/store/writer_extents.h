@@ -15,7 +15,7 @@ class Executor;
 
 }  // namespace dftracer::utils
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// What a writer holds now, the most it ever held, and how its takes went.
 struct WriterExtentsCounters {
@@ -149,6 +149,6 @@ class WriterExtents {
     std::atomic<std::uint64_t> waits_{0};
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_WRITER_EXTENTS_H

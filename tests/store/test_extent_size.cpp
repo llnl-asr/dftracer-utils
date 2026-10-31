@@ -56,7 +56,8 @@ struct TempDir {
 std::uint32_t chosen(std::size_t stripe_size,
                      dstd::Optional<std::uint64_t> override_bytes =
                          dstd::Optional<std::uint64_t>{}) {
-    auto result = store::choose_extent_size(stripe_size, override_bytes);
+    auto result =
+        store::engine::choose_extent_size(stripe_size, override_bytes);
     REQUIRE(result.has_value());
     return *result;
 }
@@ -104,11 +105,12 @@ TEST_CASE("store extent size: an override wins over the stripe size") {
 TEST_CASE(
     "store extent size: an override off the 4 KiB grid or out of range is "
     "an error") {
-    check_override_error(store::choose_extent_size(0, 0));
-    check_override_error(store::choose_extent_size(0, 4095));
-    check_override_error(store::choose_extent_size(0, 5000));
-    check_override_error(store::choose_extent_size(0, 32U << 20U));
-    check_override_error(store::choose_extent_size(0, SIXTEEN_MIB + 4096));
+    check_override_error(store::engine::choose_extent_size(0, 0));
+    check_override_error(store::engine::choose_extent_size(0, 4095));
+    check_override_error(store::engine::choose_extent_size(0, 5000));
+    check_override_error(store::engine::choose_extent_size(0, 32U << 20U));
+    check_override_error(
+        store::engine::choose_extent_size(0, SIXTEEN_MIB + 4096));
 }
 
 TEST_CASE(
@@ -116,7 +118,7 @@ TEST_CASE(
     "default") {
     TempDir dir;
     const std::size_t stripe = lustre_stripe(dir.path.string()).size;
-    auto result = store::extent_size_for(dir.path.string());
+    auto result = store::engine::extent_size_for(dir.path.string());
     REQUIRE(result.has_value());
     if (stripe == 0) {
         CHECK(*result == ONE_MIB);
@@ -131,12 +133,12 @@ TEST_CASE(
     TempDir dir;
     {
         ExtentBytesOverride override_value("262144");
-        auto result = store::extent_size_for(dir.path.string());
+        auto result = store::engine::extent_size_for(dir.path.string());
         REQUIRE(result.has_value());
         CHECK(*result == 262144);
     }
     {
-        auto result = store::extent_size_for(dir.path.string());
+        auto result = store::engine::extent_size_for(dir.path.string());
         REQUIRE(result.has_value());
         CHECK(*result == chosen(lustre_stripe(dir.path.string()).size));
     }
@@ -148,10 +150,10 @@ TEST_CASE(
     TempDir dir;
     {
         ExtentBytesOverride override_value("abc");
-        check_override_error(store::extent_size_for(dir.path.string()));
+        check_override_error(store::engine::extent_size_for(dir.path.string()));
     }
     {
         ExtentBytesOverride override_value("5000");
-        check_override_error(store::extent_size_for(dir.path.string()));
+        check_override_error(store::engine::extent_size_for(dir.path.string()));
     }
 }

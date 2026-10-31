@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 namespace {
 
 const std::uint8_t* byte_data(dstd::ByteView bytes) {
@@ -169,4 +169,4 @@ dstd::Expected<void, dstd::Error> check_fold_value(FoldKind kind,
     return {};
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

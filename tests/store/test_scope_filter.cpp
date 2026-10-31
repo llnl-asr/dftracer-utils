@@ -24,8 +24,8 @@ ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {
 
 std::uint64_t file_hash(const std::string& path) {
     const dstd::String held(path.data(), path.size());
-    return store::scope_hash("dftu.test", 1, ScopeKind::File,
-                             dstd::Span<const dstd::String>(&held, 1));
+    return store::engine::scope_hash("dftu.test", 1, ScopeKind::File,
+                                     dstd::Span<const dstd::String>(&held, 1));
 }
 
 std::vector<std::uint64_t> hashes_of(std::size_t first, std::size_t count) {
@@ -37,7 +37,7 @@ std::vector<std::uint64_t> hashes_of(std::size_t first, std::size_t count) {
 }
 
 dstd::Vector<std::uint8_t> filter_of(const std::vector<std::uint64_t>& hashes) {
-    return store::build_scope_filter(
+    return store::engine::build_scope_filter(
         dstd::Span<const std::uint64_t>(hashes.data(), hashes.size()));
 }
 
@@ -49,7 +49,7 @@ TEST_SUITE("index store scope filter") {
         const dstd::Vector<std::uint8_t> filter = filter_of(held);
         CHECK(filter.size() % 8 == 0);
         for (const std::uint64_t hash : held) {
-            CHECK(store::scope_filter_may_hold(view_of(filter), hash));
+            CHECK(store::engine::scope_filter_may_hold(view_of(filter), hash));
         }
     }
 
@@ -58,7 +58,8 @@ TEST_SUITE("index store scope filter") {
         std::size_t passed = 0;
         const std::vector<std::uint64_t> absent = hashes_of(1000000, 100000);
         for (const std::uint64_t hash : absent) {
-            if (store::scope_filter_may_hold(view_of(filter), hash)) ++passed;
+            if (store::engine::scope_filter_may_hold(view_of(filter), hash))
+                ++passed;
         }
         CHECK(passed < absent.size() / 50);
     }
@@ -66,17 +67,19 @@ TEST_SUITE("index store scope filter") {
     TEST_CASE("a filter stays within its most bytes") {
         const dstd::Vector<std::uint8_t> filter =
             filter_of(hashes_of(0, 100000));
-        CHECK(filter.size() == store::SCOPE_FILTER_MAX_BYTES);
-        CHECK(store::scope_filter_may_hold(view_of(filter),
-                                           file_hash("/traces/7.pfw")));
+        CHECK(filter.size() == store::engine::SCOPE_FILTER_MAX_BYTES);
+        CHECK(store::engine::scope_filter_may_hold(view_of(filter),
+                                                   file_hash("/traces/7.pfw")));
     }
 
     TEST_CASE("an empty or malformed filter holds every scope") {
         CHECK(filter_of({}).empty());
         const dstd::Vector<std::uint8_t> empty;
-        CHECK(store::scope_filter_may_hold(view_of(empty), file_hash("/a")));
+        CHECK(store::engine::scope_filter_may_hold(view_of(empty),
+                                                   file_hash("/a")));
         const dstd::Vector<std::uint8_t> odd(7, std::uint8_t{0});
-        CHECK(store::scope_filter_may_hold(view_of(odd), file_hash("/a")));
+        CHECK(store::engine::scope_filter_may_hold(view_of(odd),
+                                                   file_hash("/a")));
     }
 
     TEST_CASE("every part of a directory key changes its hash") {
@@ -89,7 +92,7 @@ TEST_SUITE("index store scope filter") {
         const auto hash = [](const char* name, std::uint32_t version,
                              ScopeKind kind,
                              dstd::Span<const dstd::String> paths) {
-            return store::scope_hash(name, version, kind, paths);
+            return store::engine::scope_hash(name, version, kind, paths);
         };
         const dstd::Span<const dstd::String> one(split_one, 2);
         const std::uint64_t base = hash("ns", 1, ScopeKind::Files, one);
@@ -100,8 +103,8 @@ TEST_SUITE("index store scope filter") {
         CHECK(base != hash("ns", 1, ScopeKind::File, one));
         const dstd::StringView views[] = {dstd::StringView("ab"),
                                           dstd::StringView("c")};
-        CHECK(base ==
-              store::scope_hash("ns", 1, ScopeKind::Files,
-                                dstd::Span<const dstd::StringView>(views, 2)));
+        CHECK(base == store::engine::scope_hash(
+                          "ns", 1, ScopeKind::Files,
+                          dstd::Span<const dstd::StringView>(views, 2)));
     }
 }

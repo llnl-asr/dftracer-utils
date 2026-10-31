@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 namespace {
 
 void mix_bytes(std::uint64_t& hash, const void* data, std::size_t length) {
@@ -88,4 +88,4 @@ bool scope_filter_may_hold(dstd::ByteView filter, std::uint64_t hash) {
     return true;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

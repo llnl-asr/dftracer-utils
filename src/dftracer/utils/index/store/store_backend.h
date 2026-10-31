@@ -83,7 +83,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// Reopened after every commit through this root. Null for a root that was
     /// never written. Throws std::runtime_error when the store cannot be
     /// opened.
-    std::shared_ptr<const kv::Snapshot> snapshot();
+    std::shared_ptr<const kv::engine::Snapshot> snapshot();
 
     /// Syncs and closes the data file, so a later snapshot sees its footer.
     /// Waits for the commits in flight. A later write opens a new writer.
@@ -106,7 +106,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     friend class cache::CacheStore;
 
     struct NamespaceEntry {
-        kv::NamespaceId id;
+        kv::engine::NamespaceId id;
         std::uint32_t version = 0;
     };
 
@@ -132,8 +132,8 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
 
     void ensure_dir_locked();
     void ensure_writer_locked();
-    std::shared_ptr<const kv::Snapshot> open_snapshot_locked();
-    std::shared_ptr<const kv::Snapshot> snapshot_locked();
+    std::shared_ptr<const kv::engine::Snapshot> open_snapshot_locked();
+    std::shared_ptr<const kv::engine::Snapshot> snapshot_locked();
     void seed_file_ids_locked();
     void close_locked();
     void refresh_locked();
@@ -147,12 +147,12 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         coro::CoroTask<dstd::Expected<void, dstd::Error>> task);
 
     /// Waits for extent bytes while the writer is busy.
-    dstd::Expected<void, dstd::Error> commit(kv::Writer& writer,
+    dstd::Expected<void, dstd::Error> commit(kv::engine::Writer& writer,
                                              kv::Batch batch);
 
-    kv::Writer& writer();
-    kv::NamespaceId namespace_id(const std::string& name,
-                                 std::uint32_t version);
+    kv::engine::Writer& writer();
+    kv::engine::NamespaceId namespace_id(const std::string& name,
+                                         std::uint32_t version);
     /// The version this write gave `name`, else the highest the store declares,
     /// else 0.
     std::uint32_t resolved_namespace_version(const std::string& name);
@@ -169,7 +169,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// copy of the scope since. A snapshot behind a refresh for other
     /// processes' files does not serve.
     struct ForeignCopy {
-        std::shared_ptr<const kv::Snapshot> snapshot;
+        std::shared_ptr<const kv::engine::Snapshot> snapshot;
         kv::CopyInfo info;
     };
     std::optional<ForeignCopy> foreign_copy(const std::string& name,
@@ -195,7 +195,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::string index_root_;
     std::string store_dir_;
     std::shared_ptr<Runtime> runtime_;
-    std::unique_ptr<kv::Writer> writer_;
+    std::unique_ptr<kv::engine::Writer> writer_;
     std::map<std::string, NamespaceEntry> namespaces_;
     std::map<std::string, int> ids_by_path_;
     std::map<int, std::string> paths_by_id_;
@@ -216,7 +216,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         const std::string& name, const kv::ScopeKey& scope);
     void forget_scope_entry_locked(const std::string& name,
                                    const kv::ScopeKey& scope);
-    std::shared_ptr<const kv::Snapshot> snapshot_;
+    std::shared_ptr<const kv::engine::Snapshot> snapshot_;
     std::vector<std::pair<std::string, std::uint64_t>> foreign_seen_;
     std::chrono::steady_clock::time_point foreign_checked_{};
     /// Changed under mutex_, read without it by snapshot()'s fast path.
@@ -225,7 +225,7 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     /// snapshot() returns it under a shared lock, so readers never wait on each
     /// other or on mutex_. Written under mutex_, then this lock.
     mutable std::shared_mutex published_mutex_;
-    std::shared_ptr<const kv::Snapshot> published_;
+    std::shared_ptr<const kv::engine::Snapshot> published_;
     std::uint64_t published_version_ = 0;
     /// steady_clock ticks before which no look is due. 0 makes every snapshot()
     /// look.
@@ -320,7 +320,7 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
         bool cleared = false;
         bool building = false;
     };
-    coro::CoroTask<void> stage_body(kv::Writer& writer);
+    coro::CoroTask<void> stage_body(kv::engine::Writer& writer);
     coro::CoroTask<void> stage_in_use();
     coro::CoroTask<void> commit_body();
     bool building(const std::string& name, const kv::ScopeKey& scope) const;

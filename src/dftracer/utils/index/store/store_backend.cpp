@@ -58,9 +58,9 @@ std::string inner_bound_of(std::string_view key) {
 
 /// Retries while the writer reports Busy.
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_with_space(
-    kv::Writer& writer, kv::Batch batch) {
+    kv::engine::Writer& writer, kv::Batch batch) {
     auto result = writer.commit(std::move(batch));
-    while (!result && result.error().is_code(kv::WriterErrc::Busy)) {
+    while (!result && result.error().is_code(kv::engine::WriterErrc::Busy)) {
         co_await writer.space();
         result = writer.commit(std::move(batch));
     }
@@ -205,7 +205,8 @@ void StoreRoot::ensure_writer_locked() {
     if (writer_) return;
     ensure_dir_locked();
     runtime_ = default_runtime_shared();
-    auto created = kv::Writer::create(store_dir_, *runtime_->executor());
+    auto created =
+        kv::engine::Writer::create(store_dir_, *runtime_->executor());
     if (!created)
         throw_store_error("store index: open the writer", created.error());
     writer_ = std::move(*created);
@@ -213,7 +214,7 @@ void StoreRoot::ensure_writer_locked() {
     snapshot_taken_ = false;
 }
 
-dstd::Expected<void, dstd::Error> StoreRoot::commit(kv::Writer& writer,
+dstd::Expected<void, dstd::Error> StoreRoot::commit(kv::engine::Writer& writer,
                                                     kv::Batch batch) {
     return run(commit_with_space(writer, std::move(batch)));
 }
@@ -229,7 +230,7 @@ dstd::Expected<void, dstd::Error> StoreRoot::run(
     return runtime_->submit(std::move(task)).get();
 }
 
-std::shared_ptr<const kv::Snapshot> StoreRoot::open_snapshot_locked() {
+std::shared_ptr<const kv::engine::Snapshot> StoreRoot::open_snapshot_locked() {
     // A root that was never written has no store directory and reads as empty.
     if (writer_) {
         ensure_dir_locked();
@@ -237,13 +238,13 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::open_snapshot_locked() {
         std::error_code missing;
         if (!std::filesystem::exists(store_dir_, missing)) return nullptr;
     }
-    auto opened = kv::Snapshot::open(store_dir_);
+    auto opened = kv::engine::Snapshot::open(store_dir_);
     if (!opened)
         throw_store_error("store index: open the store", opened.error());
-    return std::make_shared<const kv::Snapshot>(std::move(*opened));
+    return std::make_shared<const kv::engine::Snapshot>(std::move(*opened));
 }
 
-std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
+std::shared_ptr<const kv::engine::Snapshot> StoreRoot::snapshot_locked() {
     if (snapshot_taken_ && snapshot_version_ == version_) return snapshot_;
     snapshot_ = open_snapshot_locked();
     snapshot_version_ = version_;
@@ -251,7 +252,7 @@ std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot_locked() {
     return snapshot_;
 }
 
-std::shared_ptr<const kv::Snapshot> StoreRoot::snapshot() {
+std::shared_ptr<const kv::engine::Snapshot> StoreRoot::snapshot() {
     if (steady_now_ns() < next_look_.load(std::memory_order_acquire)) {
         std::shared_lock<std::shared_mutex> shared(published_mutex_);
         if (published_ != nullptr &&
@@ -439,15 +440,15 @@ void StoreRoot::bind_file_id(std::string_view logical_path, int file_id) {
     if (file_id >= next_file_id_) next_file_id_ = file_id + 1;
 }
 
-kv::Writer& StoreRoot::writer() {
+kv::engine::Writer& StoreRoot::writer() {
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     ensure_writer_locked();
     return *writer_;
 }
 
-kv::NamespaceId StoreRoot::namespace_id(const std::string& name,
-                                        std::uint32_t version) {
+kv::engine::NamespaceId StoreRoot::namespace_id(const std::string& name,
+                                                std::uint32_t version) {
     memory::Scope in_pool(*pool_);
     std::lock_guard<std::mutex> lock(mutex_);
     ensure_writer_locked();
@@ -497,7 +498,7 @@ bool StoreRoot::sources_of(const kv::ScopeKey& scope,
     if (scope.kind != kv::ScopeKind::File) return false;
     const std::string members =
         store_layout::namespace_name(layout::Ext::Members);
-    std::shared_ptr<const kv::Snapshot> held;
+    std::shared_ptr<const kv::engine::Snapshot> held;
     dstd::Vector<kv::SourceStat> found;
     for (const dstd::String& path : scope.paths) {
         const std::string key(path.data(), path.size());
@@ -616,7 +617,7 @@ std::optional<StoreRoot::CommittedCopy> StoreRoot::committed_copy(
 std::optional<StoreRoot::ForeignCopy> StoreRoot::foreign_copy(
     const std::string& name, std::uint32_t version, const kv::ScopeKey& scope) {
     memory::Scope in_pool(*pool_);
-    std::shared_ptr<const kv::Snapshot> held;
+    std::shared_ptr<const kv::engine::Snapshot> held;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto file_key = file_copy_key_locked(name, scope);
@@ -1078,9 +1079,9 @@ coro::CoroTask<void> StoreIndexWrite::stage_in_use() {
     co_await stage_body(root_->writer());
 }
 
-coro::CoroTask<void> StoreIndexWrite::stage_body(kv::Writer& writer) {
+coro::CoroTask<void> StoreIndexWrite::stage_body(kv::engine::Writer& writer) {
     for (const PendingErase& erase : erases_) {
-        const kv::NamespaceId id =
+        const kv::engine::NamespaceId id =
             root_->namespace_id(erase.name, erase.version);
         check(
             "store index: erase the keys of a copy",
@@ -1103,7 +1104,8 @@ coro::CoroTask<void> StoreIndexWrite::stage_body(kv::Writer& writer) {
         }
         const std::vector<PendingKey> keys = resolved_keys(copy);
         if (keys.empty() && !copy.has_manifest) continue;
-        const kv::NamespaceId id = root_->namespace_id(copy.name, copy.version);
+        const kv::engine::NamespaceId id =
+            root_->namespace_id(copy.name, copy.version);
         kv::Batch batch = writer.building_batch(id, copy.scope);
         for (const PendingKey& key : keys) {
             batch.put_ref(
@@ -1179,7 +1181,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
     if (committed_) co_return;
     committed_ = true;
     StoreRoot::WriterUse use(*root_);
-    kv::Writer& writer = root_->writer();
+    kv::engine::Writer& writer = root_->writer();
     if (staged_) {
         co_await stage_body(writer);
         // Every batch is recorded before the records that publish them.
@@ -1188,7 +1190,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         // Every building copy goes in one publish, so a reader sees the
         // whole staged write or none of it.
         dstd::Deque<dstd::Vector<kv::SourceStat>> sources_of;
-        dstd::Vector<kv::PublishTarget> targets;
+        dstd::Vector<kv::engine::PublishTarget> targets;
         dstd::Vector<StagedCopy*> building;
         for (auto& entry : staged_copies_) {
             StagedCopy& copy = entry.second;
@@ -1196,7 +1198,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
             dstd::Vector<kv::SourceStat>& sources = sources_of.emplace_back();
             const bool have_sources =
                 root_->sources_of(copy.scope, file_stats_, sources);
-            targets.push_back(kv::PublishTarget{
+            targets.push_back(kv::engine::PublishTarget{
                 root_->namespace_id(copy.name, copy.version), &copy.scope,
                 copy.params_hash, have_sources ? &sources : nullptr});
             building.push_back(&copy);
@@ -1210,7 +1212,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         }
         for (auto& entry : staged_copies_) {
             StagedCopy& copy = entry.second;
-            const kv::NamespaceId id =
+            const kv::engine::NamespaceId id =
                 root_->namespace_id(copy.name, copy.version);
             if (copy.building) {
                 if (copy.failed) {
@@ -1233,7 +1235,7 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         co_return;
     }
     for (const PendingErase& erase : erases_) {
-        const kv::NamespaceId id =
+        const kv::engine::NamespaceId id =
             root_->namespace_id(erase.name, erase.version);
         check(
             "store index: erase the keys of a copy",
@@ -1244,7 +1246,8 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
     for (auto& entry : pending_) {
         PendingCopy& copy = entry.second;
         const std::uint32_t version = copy.version;
-        const kv::NamespaceId id = root_->namespace_id(copy.name, version);
+        const kv::engine::NamespaceId id =
+            root_->namespace_id(copy.name, version);
         const std::vector<PendingKey> keys = resolved_keys(copy);
         const auto previous = root_->committed_copy(copy.name, copy.scope);
         // A write to part of a copy another writer holds rewrites that copy

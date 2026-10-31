@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::store::io_fault {
+namespace dftracer::utils::store::engine::io_fault {
 
 /// Which write of a data file an event is. An Extent goes through the I/O
 /// backend, so only the range it reserved is recorded and its bytes come from
@@ -60,6 +60,6 @@ void on_write(int fd, WriteKind kind, std::uint64_t offset,
               const std::uint8_t* data, std::uint64_t length);
 void on_sync(int fd);
 
-}  // namespace dftracer::utils::store::io_fault
+}  // namespace dftracer::utils::store::engine::io_fault
 
 #endif  // DFTRACER_UTILS_STORE_IO_FAULT_H

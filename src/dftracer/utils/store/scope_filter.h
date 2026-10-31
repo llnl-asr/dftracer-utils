@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// The filter bits per scope of a file: about 1% of the scopes a file does not
 /// hold pass it.
@@ -39,6 +39,6 @@ dstd::Vector<std::uint8_t> build_scope_filter(
 /// every scope.
 bool scope_filter_may_hold(dstd::ByteView filter, std::uint64_t hash);
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_SCOPE_FILTER_H

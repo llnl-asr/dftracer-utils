@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <mutex>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// The raw bytes of one decoded page, shared by the cache and every query that
 /// reads it: a page the cache drops lives until the last query lets go of it.
@@ -69,6 +69,6 @@ class PageCache {
     Shard shards_[SHARDS];
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_PAGE_CACHE_H

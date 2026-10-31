@@ -156,7 +156,8 @@ TEST_SUITE("BootstrapPeak") {
         for (int i = 0; i < *n; ++i)
             files.push_back(write_big_trace(env.get_dir(), i));
         build::g_max_sink_bytes.store(SINK_LIMIT);
-        dftracer::utils::store::g_dict_sample_bytes.store(DICT_SAMPLE_LIMIT);
+        dftracer::utils::store::engine::g_dict_sample_bytes.store(
+            DICT_SAMPLE_LIMIT);
         configure_default_runtime({.threads = PEAK_WORKERS, .eager = true});
         dataframe::DataFrame df;
         const auto peak = peak_live(

@@ -13,7 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 inline constexpr std::size_t GRANULE_BYTES = 32 * 1024;
 inline constexpr std::size_t BIG_VALUE_BYTES = 1U << 20;
@@ -233,6 +233,6 @@ class SegmentView {
 bool append_segment_spans(dstd::ByteView segment, std::uint32_t offset,
                           dstd::Vector<SegmentSpan>& out);
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_SEGMENT_H

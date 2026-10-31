@@ -312,6 +312,7 @@ set(TEST_CPP_SOURCES
     store/test_backpressure.cpp
     store/test_crash.cpp
     store/test_processes.cpp
+    store/test_store_api.cpp
     index/test_agg_extension.cpp
     index/test_counters_columns.cpp
     index/test_chunk_columns.cpp

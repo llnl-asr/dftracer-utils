@@ -222,6 +222,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add a public C++ key-value store API in `dftracer/utils/store/store.h`: open a directory, register namespaces, commit batches, publish several building copies in one atomic step and read snapshots with `get`, `multi_get` and scans.
 - Store every number field of the records of each chunk as an exact column in the index, with the time, duration, pid, tid, phase, category, name and host of each record, so later queries read these values without parsing the trace.
   Indexes built before this change rebuild their aggregation data once.
 - Build the index on the index store from `dftracer_index` and from `distributed_index`, with no staged files and no ingest.

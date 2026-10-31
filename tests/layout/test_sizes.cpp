@@ -60,8 +60,8 @@ static_assert(
     within<dftracer::utils::dstd::Error, ERROR_BUDGET, alignof(void*)>());
 static_assert(within<dftracer::utils::Result<void>, RESULT_VOID_BUDGET,
                      alignof(void*)>());
-static_assert(
-    within<dftracer::utils::store::RecordItem, RECORD_ITEM_BUDGET, 8>());
+static_assert(within<dftracer::utils::store::engine::RecordItem,
+                     RECORD_ITEM_BUDGET, 8>());
 
 }  // namespace
 
@@ -77,5 +77,6 @@ TEST_CASE("the layout budgets hold") {
     CHECK(sizeof(dftracer::utils::duql::TLookup) <= LOOKUP_BUDGET);
     CHECK(sizeof(dftracer::utils::dstd::Error) <= ERROR_BUDGET);
     CHECK(sizeof(dftracer::utils::Result<void>) <= RESULT_VOID_BUDGET);
-    CHECK(sizeof(dftracer::utils::store::RecordItem) <= RECORD_ITEM_BUDGET);
+    CHECK(sizeof(dftracer::utils::store::engine::RecordItem) <=
+          RECORD_ITEM_BUDGET);
 }

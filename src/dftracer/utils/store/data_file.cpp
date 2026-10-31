@@ -25,7 +25,7 @@
 #include <string>
 #include <utility>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 namespace {
 
@@ -2080,4 +2080,4 @@ dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
     return scan.report;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

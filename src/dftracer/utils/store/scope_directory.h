@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <utility>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// The key range one commit holds for one copy of a file, and the block that
 /// holds that copy's segments in that commit. A commit listed by summary
@@ -163,6 +163,6 @@ class ScopeDirectory {
     std::size_t count_ = 0;
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_SCOPE_DIRECTORY_H

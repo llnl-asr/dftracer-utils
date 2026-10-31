@@ -1,7 +1,7 @@
 #include <dftracer/utils/store/crc.h>
 #include <libdeflate.h>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 std::uint32_t crc32(std::uint32_t crc, const void* data, std::size_t len) {
     // libdeflate picks its crc32 kernel on first use by writing unsynchronized
@@ -14,4 +14,4 @@ std::uint32_t crc32(std::uint32_t crc, const void* data, std::size_t len) {
     return libdeflate_crc32(crc, data, len);
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

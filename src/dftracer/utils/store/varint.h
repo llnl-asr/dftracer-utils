@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 inline void encode_varint(dstd::Vector<std::uint8_t>& out,
                           std::uint64_t value) {
@@ -34,6 +34,6 @@ inline dstd::Expected<std::uint64_t, dstd::Error> decode_varint(
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Parse));
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_VARINT_H

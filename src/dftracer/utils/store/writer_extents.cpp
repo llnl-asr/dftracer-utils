@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 WriterExtents::WriterExtents(std::uint64_t quota_bytes,
                              memory::Pool& pool) noexcept
@@ -163,4 +163,4 @@ WriterExtentsCounters WriterExtents::counters() const {
     return out;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

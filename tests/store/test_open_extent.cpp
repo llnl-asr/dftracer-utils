@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
@@ -36,7 +36,7 @@ struct DataFileWriterTestHook {
     }
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 namespace {
 
@@ -48,12 +48,12 @@ namespace fs = std::filesystem;
 using dftracer::utils::Executor;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
-using store::DataFileWriter;
-using store::ExtentSegment;
-using store::ExtentWriter;
-using store::SegmentBuilder;
-using store::SegmentView;
-using store::WrittenExtent;
+using store::engine::DataFileWriter;
+using store::engine::ExtentSegment;
+using store::engine::ExtentWriter;
+using store::engine::SegmentBuilder;
+using store::engine::SegmentView;
+using store::engine::WrittenExtent;
 
 constexpr std::uint32_t FOUR_KIB = 4096;
 constexpr std::uint32_t SIXTY_FOUR_KIB = 64 * 1024;
@@ -262,9 +262,9 @@ std::vector<std::uint8_t> read_range(int fd, std::uint64_t offset,
 std::vector<std::uint8_t> read_extent_raw(int fd, const WrittenExtent& extent) {
     const std::vector<std::uint8_t> stored =
         read_range(fd, extent.offset, extent.length);
-    CHECK(store::crc32(0, stored.data(), stored.size()) == extent.crc);
+    CHECK(store::engine::crc32(0, stored.data(), stored.size()) == extent.crc);
     dstd::Vector<std::uint8_t> bytes(stored.begin(), stored.end());
-    REQUIRE(store::decode_extent(bytes).has_value());
+    REQUIRE(store::engine::decode_extent(bytes).has_value());
     return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
 }
 
@@ -275,7 +275,7 @@ void check_extent_layout(std::vector<WrittenExtent>& extents,
                   return a.offset < b.offset;
               });
     for (std::size_t i = 0; i < extents.size(); ++i) {
-        CHECK(extents[i].offset % store::EXTENT_ALIGN_BYTES == 0);
+        CHECK(extents[i].offset % store::engine::EXTENT_ALIGN_BYTES == 0);
         CHECK(extents[i].length % FOUR_KIB == 0);
         CHECK(extents[i].length <= extent_size);
         CHECK(!extents[i].segments.empty());
@@ -460,7 +460,7 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
     std::vector<WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
     const WrittenExtent& extent = extents.front();
-    CHECK(extent.offset % store::EXTENT_ALIGN_BYTES == 0);
+    CHECK(extent.offset % store::engine::EXTENT_ALIGN_BYTES == 0);
     CHECK(extent.length % FOUR_KIB == 0);
     REQUIRE(extent.segments.size() == 1);
     CHECK(extent.segments.front().offset_in_extent == 0);
@@ -491,7 +491,8 @@ TEST_CASE(
     ExtentWriter writer(*file, backend, *runtime.executor(), EIGHT_KIB,
                         &collect_written, &collector);
 
-    const std::size_t first = EIGHT_KIB - store::EXTENT_HEADER_BYTES - 64;
+    const std::size_t first =
+        EIGHT_KIB - store::engine::EXTENT_HEADER_BYTES - 64;
     std::vector<std::uint8_t> a = make_segment_of(1, first);
     std::vector<std::uint8_t> b = make_segment_of(2, 64);
     std::vector<std::uint8_t> c = make_segment(3, 8);
@@ -561,7 +562,8 @@ TEST_CASE("store open extent: a failed write latches and reports no extent") {
     auto file =
         DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
-    store::DataFileWriterTestHook::reopen_read_only(*file, file_path.string());
+    store::engine::DataFileWriterTestHook::reopen_read_only(*file,
+                                                            file_path.string());
 
     Collector collector;
     std::atomic<std::size_t> discarded{0};
@@ -860,7 +862,7 @@ TEST_CASE(
     std::vector<WrittenExtent> extents = collector.take();
     REQUIRE(extents.size() == 1);
     const WrittenExtent& extent = extents.front();
-    CHECK(extent.offset % store::EXTENT_ALIGN_BYTES == 0);
+    CHECK(extent.offset % store::engine::EXTENT_ALIGN_BYTES == 0);
     CHECK(extent.length % FOUR_KIB == 0);
     REQUIRE(extent.segments.size() == 1);
     CHECK(extent.segments.front().offset_in_extent == 0);
@@ -964,7 +966,7 @@ TEST_CASE(
                 .append(1, ByteView(first.data(), first.size()),
                         segment_info(1, 1), nullptr)
                 .has_value());
-    REQUIRE(store::ExtentWriterTestHook::seal_in_place(writer, 1));
+    REQUIRE(store::engine::ExtentWriterTestHook::seal_in_place(writer, 1));
     REQUIRE(writer
                 .append(1, ByteView(second.data(), second.size()),
                         segment_info(1, 1), nullptr)
@@ -1015,9 +1017,9 @@ TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
     for (int i = 0; i < SEALS; ++i) {
         REQUIRE(writer.seal_all().has_value());
     }
-    CHECK(store::ExtentWriterTestHook::retired_bytes(writer) <
+    CHECK(store::engine::ExtentWriterTestHook::retired_bytes(writer) <
           2 * std::size_t{EIGHT_KIB});
-    CHECK(store::ExtentWriterTestHook::retired_extents(writer) <= 2);
+    CHECK(store::engine::ExtentWriterTestHook::retired_extents(writer) <= 2);
 
     REQUIRE(writer.wait_idle().has_value());
     std::vector<WrittenExtent> extents = collector.take();

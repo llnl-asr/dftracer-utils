@@ -7,13 +7,14 @@
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/store/store.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <variant>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 inline constexpr std::size_t RECORD_BYTES = 4096;
 
@@ -22,7 +23,6 @@ enum class RecordKind : std::uint32_t {
     Checkpoint = 2,
     Footer = 3
 };
-enum class ScopeKind : std::uint8_t { Root = 0, File = 1, Files = 2 };
 /// A Building copy holds batches no reader sees. A later CopyItem of the same
 /// local id in the same file publishes it as Ready.
 enum class CopyState : std::uint8_t { Ready = 0, Failed = 1, Building = 2 };
@@ -34,14 +34,6 @@ struct NamespaceItem {
     std::uint8_t fold_kind = 0;
     std::uint8_t codec = 0;
     std::uint8_t durable = 0;
-};
-
-/// The signature of one trace file of a scope, so a later check can tell
-/// whether a stored copy still matches the trace files it was read from.
-struct SourceStat {
-    std::uint64_t mtime = 0;
-    std::uint64_t size = 0;
-    std::uint64_t hash = 0;
 };
 
 inline constexpr std::size_t SOURCE_STAT_BYTES = 24;
@@ -202,6 +194,6 @@ dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes);
 void set_record_offset(dstd::Vector<std::uint8_t>& encoded,
                        std::uint64_t offset);
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_RECORD_H

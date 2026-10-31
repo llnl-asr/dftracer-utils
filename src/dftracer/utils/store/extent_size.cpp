@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 namespace {
 
@@ -64,4 +64,4 @@ dstd::Expected<std::uint32_t, dstd::Error> extent_size_for(
     return choose_extent_size(lustre_stripe(path).size, override_bytes);
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

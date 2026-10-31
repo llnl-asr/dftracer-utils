@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 namespace {
 
 using dftracer::utils::Executor;
@@ -528,64 +528,6 @@ ScopeKey scope_of(const DirectoryKey& key) {
 }
 
 }  // namespace
-
-bool operator==(const NamespaceSpec& a, const NamespaceSpec& b) {
-    return a.name == b.name && a.format_version == b.format_version &&
-           a.fold == b.fold && a.durable == b.durable;
-}
-
-bool operator!=(const NamespaceSpec& a, const NamespaceSpec& b) {
-    return !(a == b);
-}
-
-ScopeKey ScopeKey::root() { return ScopeKey{}; }
-
-ScopeKey ScopeKey::file(dstd::StringView path) {
-    ScopeKey key;
-    key.kind = ScopeKind::File;
-    key.paths.push_back(dstring(path));
-    return key;
-}
-
-ScopeKey ScopeKey::files(dstd::Span<const dstd::StringView> paths) {
-    ScopeKey key;
-    key.kind = ScopeKind::Files;
-    key.paths.reserve(paths.size());
-    for (const dstd::StringView path : paths)
-        key.paths.push_back(dstring(path));
-    std::sort(key.paths.begin(), key.paths.end());
-    key.paths.erase(std::unique(key.paths.begin(), key.paths.end()),
-                    key.paths.end());
-    return key;
-}
-
-int compare_scopes(const ScopeKey& a, const ScopeKey& b) {
-    if (a.kind != b.kind) {
-        return static_cast<std::uint8_t>(a.kind) <
-                       static_cast<std::uint8_t>(b.kind)
-                   ? -1
-                   : 1;
-    }
-    const std::size_t common =
-        a.paths.size() < b.paths.size() ? a.paths.size() : b.paths.size();
-    for (std::size_t i = 0; i < common; ++i) {
-        const int cmp = a.paths[i].compare(b.paths[i]);
-        if (cmp != 0) return cmp < 0 ? -1 : 1;
-    }
-    if (a.paths.size() < b.paths.size()) return -1;
-    if (a.paths.size() > b.paths.size()) return 1;
-    return 0;
-}
-
-bool operator==(const ScopeKey& a, const ScopeKey& b) {
-    return compare_scopes(a, b) == 0;
-}
-
-bool operator!=(const ScopeKey& a, const ScopeKey& b) { return !(a == b); }
-
-bool operator<(const ScopeKey& a, const ScopeKey& b) {
-    return compare_scopes(a, b) < 0;
-}
 
 dstd::Expected<Snapshot, dstd::Error> Snapshot::open(dstd::StringView dir) {
     Snapshot snapshot;
@@ -2827,4 +2769,4 @@ dstd::Expected<dstd::Vector<ScopeKey>, dstd::Error> Snapshot::namespace_scopes(
     return scopes;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

@@ -3,7 +3,7 @@
 
 #include <utility>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 PageCache::PageCache(std::size_t capacity) : share_(capacity / SHARDS) {}
 
@@ -82,4 +82,4 @@ std::size_t PageCache::bytes() const {
     return total;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

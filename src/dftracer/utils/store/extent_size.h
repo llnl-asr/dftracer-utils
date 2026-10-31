@@ -9,7 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// The extent size P of a new data file, a multiple of 4096 in
 /// [STORE_MIN_EXTENT_BYTES, STORE_MAX_EXTENT_BYTES].
@@ -28,6 +28,6 @@ dstd::Expected<std::uint32_t, dstd::Error> choose_extent_size(
 dstd::Expected<std::uint32_t, dstd::Error> extent_size_for(
     dstd::StringView dir);
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_EXTENT_SIZE_H

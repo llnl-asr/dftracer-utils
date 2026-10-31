@@ -26,7 +26,7 @@ class Executor;
 
 }  // namespace dftracer::utils
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 /// The raw page bytes a namespace collects before it trains a dictionary,
 /// read at each page. A test lowers it so its peaks measure our code, not
@@ -197,6 +197,6 @@ struct ExtentWriterTestHook {
     static std::size_t retired_extents(ExtentWriter& writer);
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_OPEN_EXTENT_H

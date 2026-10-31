@@ -6,7 +6,7 @@
 #include <mutex>
 #include <utility>
 
-namespace dftracer::utils::store::io_fault {
+namespace dftracer::utils::store::engine::io_fault {
 
 static_assert(KINDS == static_cast<std::size_t>(WriteKind::Extent) + 1,
               "KINDS must name every WriteKind");
@@ -138,4 +138,4 @@ void on_sync(int fd) {
     log.events.push_back(std::move(event));
 }
 
-}  // namespace dftracer::utils::store::io_fault
+}  // namespace dftracer::utils::store::engine::io_fault

@@ -28,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
@@ -38,7 +38,7 @@ struct DataFileWriterTestHook {
     }
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 namespace {
 
@@ -49,18 +49,18 @@ using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 using store::Batch;
-using store::CommitterTestHook;
-using store::DataFileReader;
 using store::FoldKind;
-using store::NamespaceId;
 using store::NamespaceSpec;
-using store::PublishTarget;
 using store::ScopeKey;
 using store::ScopeState;
-using store::Snapshot;
-using store::Writer;
-using store::WriterErrc;
-using store::WriterOptions;
+using store::engine::CommitterTestHook;
+using store::engine::DataFileReader;
+using store::engine::NamespaceId;
+using store::engine::PublishTarget;
+using store::engine::Snapshot;
+using store::engine::Writer;
+using store::engine::WriterErrc;
+using store::engine::WriterOptions;
 
 constexpr std::uint32_t EXTENT = 4096;
 constexpr int RUNTIME_THREADS = 8;
@@ -227,11 +227,13 @@ void check_extent_refs_announced(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     REQUIRE(reader.has_value());
     std::vector<std::uint32_t> copies;
-    for (const store::CopyItem& copy : reader->index().copies) {
+    for (const store::engine::CopyItem& copy : reader->index().copies) {
         copies.push_back(copy.local_id);
     }
-    for (const store::IndexedExtentRef& extent : reader->index().extent_refs) {
-        for (const store::ExtentSegment& segment : extent.ref.segments) {
+    for (const store::engine::IndexedExtentRef& extent :
+         reader->index().extent_refs) {
+        for (const store::engine::ExtentSegment& segment :
+             extent.ref.segments) {
             REQUIRE(std::find(copies.begin(), copies.end(), segment.copy_id) !=
                     copies.end());
         }
@@ -242,7 +244,7 @@ std::vector<std::uint64_t> copy_generations(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     REQUIRE(reader.has_value());
     std::vector<std::uint64_t> out;
-    for (const store::CopyItem& copy : reader->index().copies) {
+    for (const store::engine::CopyItem& copy : reader->index().copies) {
         out.push_back(copy.generation);
     }
     return out;
@@ -252,7 +254,7 @@ std::vector<std::uint64_t> drop_generations(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     REQUIRE(reader.has_value());
     std::vector<std::uint64_t> out;
-    for (const store::DropItem& drop : reader->index().drops) {
+    for (const store::engine::DropItem& drop : reader->index().drops) {
         out.push_back(drop.generation);
     }
     return out;
@@ -264,7 +266,7 @@ struct Row {
     std::string value;
 };
 
-std::vector<Row> collect(store::ScanCursor& cursor) {
+std::vector<Row> collect(store::engine::ScanCursor& cursor) {
     std::vector<Row> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
@@ -558,8 +560,8 @@ static std::vector<std::uint8_t> read_range(const std::string& path,
 /// alone keeps the check off the rest of the file, which grows while it runs.
 static bool marker_recorded(const std::string& path, const std::string& key) {
     const std::vector<std::uint8_t> header =
-        read_range(path, 0, store::FILE_HEADER_BYTES);
-    if (header.size() < store::FILE_HEADER_BYTES) return false;
+        read_range(path, 0, store::engine::FILE_HEADER_BYTES);
+    if (header.size() < store::engine::FILE_HEADER_BYTES) return false;
     const std::size_t tail_at =
         48 + dftracer::utils::dstd::read_u16_le(header.data() + 44) +
         dftracer::utils::dstd::read_u16_le(header.data() + 46);
@@ -572,12 +574,13 @@ static bool marker_recorded(const std::string& path, const std::string& key) {
     const std::vector<std::uint8_t> bytes =
         read_range(path, tail, record_bytes);
     if (bytes.size() != record_bytes) return false;
-    auto record = store::decode_record(ByteView{bytes.data(), bytes.size()});
+    auto record =
+        store::engine::decode_record(ByteView{bytes.data(), bytes.size()});
     if (!record.has_value() || record->offset != tail) return false;
-    for (const store::RecordItem& item : record->items) {
-        const auto* ref = std::get_if<store::ExtentRefItem>(&item);
+    for (const store::engine::RecordItem& item : record->items) {
+        const auto* ref = std::get_if<store::engine::ExtentRefItem>(&item);
         if (ref == nullptr) continue;
-        for (const store::ExtentSegment& segment : ref->segments) {
+        for (const store::engine::ExtentSegment& segment : ref->segments) {
             if (segment.first_key.size() != key.size() ||
                 segment.last_key.size() != key.size()) {
                 continue;
@@ -689,16 +692,17 @@ TEST_CASE("every extent ref carries the sequence of the record that holds it") {
     const std::string path = to_std(writer->path());
     const std::vector<std::uint8_t> file = read_file(path);
     std::size_t refs = 0;
-    for (std::size_t offset = store::FILE_HEADER_BYTES;
-         offset + 40U <= file.size(); offset += store::FILE_HEADER_BYTES) {
-        auto record = store::decode_record(
+    for (std::size_t offset = store::engine::FILE_HEADER_BYTES;
+         offset + 40U <= file.size();
+         offset += store::engine::FILE_HEADER_BYTES) {
+        auto record = store::engine::decode_record(
             ByteView{file.data() + offset, file.size() - offset});
         if (!record.has_value() || record->offset != offset) continue;
         // The footer repeats the items of the chain, so it carries the sequence
         // each extent ref was first recorded under, not its own.
-        if (record->kind == store::RecordKind::Footer) continue;
-        for (const store::RecordItem& item : record->items) {
-            const auto* ref = std::get_if<store::ExtentRefItem>(&item);
+        if (record->kind == store::engine::RecordKind::Footer) continue;
+        for (const store::engine::RecordItem& item : record->items) {
+            const auto* ref = std::get_if<store::engine::ExtentRefItem>(&item);
             if (ref == nullptr) continue;
             ++refs;
             CHECK(ref->sequence == record->sequence);
@@ -1054,8 +1058,8 @@ TEST_CASE("a failed extent write deletes the batches of its extent") {
     REQUIRE(commit_waiting(*writer, std::move(entries)).has_value());
     CHECK(CommitterTestHook::live_batches() == before + 1);
 
-    store::DataFileWriterTestHook::reopen_read_only(
-        store::WriterTestHook::file(*writer), to_std(writer->path()));
+    store::engine::DataFileWriterTestHook::reopen_read_only(
+        store::engine::WriterTestHook::file(*writer), to_std(writer->path()));
     auto flushed = flush_writer(*writer);
     REQUIRE_FALSE(flushed.has_value());
     CHECK(flushed.error().is(Condition::Io));

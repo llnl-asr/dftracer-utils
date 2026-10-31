@@ -33,7 +33,7 @@ namespace {
 namespace coro = dftracer::utils::coro;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
-namespace io_fault = store::io_fault;
+namespace io_fault = store::engine::io_fault;
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
@@ -56,7 +56,7 @@ constexpr std::size_t RAW_VALUE_BYTES = 1000;
 /// A raw value longer than the format's big-value bound: its segment holds a
 /// reference and the bytes go to a range of their own, so a lost big value is a
 /// loss the reader has to answer for without its extent.
-constexpr std::size_t BIG_VALUE_LENGTH = store::BIG_VALUE_BYTES + 1;
+constexpr std::size_t BIG_VALUE_LENGTH = store::engine::BIG_VALUE_BYTES + 1;
 constexpr std::size_t FOLD_KEYS = 1;
 constexpr int RETRY_ATTEMPTS = 4000;
 constexpr std::chrono::seconds TASK_LIMIT{120};
@@ -173,23 +173,23 @@ void await_handle(Handle& handle, std::chrono::seconds limit) {
     handle.wait();
 }
 
-dstd::Expected<void, dstd::Error> close_writer(store::Writer& writer) {
+dstd::Expected<void, dstd::Error> close_writer(store::engine::Writer& writer) {
     return store_runtime().submit(writer.close()).get();
 }
 
-dstd::Expected<void, dstd::Error> flush_writer(store::Writer& writer) {
+dstd::Expected<void, dstd::Error> flush_writer(store::engine::Writer& writer) {
     return store_runtime().submit(writer.flush()).get();
 }
 
 bool is_busy(const dstd::Error& error) {
-    return error.is_code(store::WriterErrc::Busy);
+    return error.is_code(store::engine::WriterErrc::Busy);
 }
 
 struct Namespaces {
-    store::NamespaceId sums;
-    store::NamespaceId durable;
-    store::NamespaceId raw;
-    store::NamespaceId big;
+    store::engine::NamespaceId sums;
+    store::engine::NamespaceId durable;
+    store::engine::NamespaceId raw;
+    store::engine::NamespaceId big;
 };
 
 std::string scope_path(int index) {
@@ -217,7 +217,7 @@ std::string raw_value(int index, int round, std::size_t k) {
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
-    store::Writer& writer, store::Batch batch, int attempts) {
+    store::engine::Writer& writer, store::Batch batch, int attempts) {
     for (int attempt = 0; attempt < attempts; ++attempt) {
         auto committed = writer.commit(std::move(batch));
         if (committed.has_value() || !is_busy(committed.error())) {
@@ -225,13 +225,14 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_retrying(
         }
         co_await writer.space();
     }
-    co_return dstd::Unexpected<dstd::Error>(
-        dstd::Error(store::WriterErrc::Busy, "the writer made no progress"));
+    co_return dstd::Unexpected<dstd::Error>(dstd::Error(
+        store::engine::WriterErrc::Busy, "the writer made no progress"));
 }
 
-coro::CoroTask<void> write_coroutine(store::Writer& writer, Namespaces ids,
-                                     std::atomic<int>& errors, int index,
-                                     int first_round, int last_round) {
+coro::CoroTask<void> write_coroutine(store::engine::Writer& writer,
+                                     Namespaces ids, std::atomic<int>& errors,
+                                     int index, int first_round,
+                                     int last_round) {
     const store::ScopeKey scope = file_scope(scope_path(index));
     for (int round = first_round; round < last_round; ++round) {
         store::Batch sums = writer.batch(ids.sums, scope, 0);
@@ -389,12 +390,12 @@ struct Dumped {
     std::string text() const { return ok ? dump.text() : "error:" + error; }
 };
 
-Dumped dump_snapshot(const store::Snapshot& snapshot,
+Dumped dump_snapshot(const store::engine::Snapshot& snapshot,
                      const std::vector<store::NamespaceSpec>& specs) {
     Dumped out;
     out.skipped = snapshot.skipped().size();
     for (const store::NamespaceSpec& spec : specs) {
-        store::ScanCursor cursor = snapshot.scan_all(spec, {}, {});
+        store::engine::ScanCursor cursor = snapshot.scan_all(spec, {}, {});
         const std::string space = to_std(spec.name);
         while (!cursor.at_end()) {
             auto value = cursor.value();
@@ -427,7 +428,7 @@ Dumped dump_snapshot(const store::Snapshot& snapshot,
             std::to_string(static_cast<int>(generations.error().condition()));
         return out;
     }
-    for (const store::ScopeGeneration& generation : *generations) {
+    for (const store::engine::ScopeGeneration& generation : *generations) {
         store::NamespaceSpec spec;
         spec.name = generation.namespace_name;
         spec.format_version = generation.format_version;
@@ -549,7 +550,7 @@ std::string log_text(const dstd::Vector<io_fault::Event>& log) {
     return out;
 }
 
-store::ScopeKey scope_key_of(const store::ScopeItem& item) {
+store::ScopeKey scope_key_of(const store::engine::ScopeItem& item) {
     store::ScopeKey key;
     key.kind = item.kind;
     key.paths.reserve(item.paths.size());
@@ -588,30 +589,32 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
         }
     }
 
-    std::map<std::uint32_t, store::NamespaceItem> namespaces;
-    std::map<std::uint32_t, store::ScopeItem> scopes;
+    std::map<std::uint32_t, store::engine::NamespaceItem> namespaces;
+    std::map<std::uint32_t, store::engine::ScopeItem> scopes;
     std::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>>
         ids_of_copy;
 
     model.copies.resize(record_at.size());
     for (std::size_t c = 0; c < record_at.size(); ++c) {
         const io_fault::Event& event = log[record_at[c]];
-        auto record = store::decode_record(
+        auto record = store::engine::decode_record(
             ByteView{event.bytes.data(), event.bytes.size()});
         REQUIRE(record.has_value());
         REQUIRE(record->sequence == c + 1);
-        for (const store::RecordItem& item : record->items) {
-            if (const auto* ns = std::get_if<store::NamespaceItem>(&item)) {
+        for (const store::engine::RecordItem& item : record->items) {
+            if (const auto* ns =
+                    std::get_if<store::engine::NamespaceItem>(&item)) {
                 namespaces[ns->local_id] = *ns;
             } else if (const auto* scope =
-                           std::get_if<store::ScopeItem>(&item)) {
+                           std::get_if<store::engine::ScopeItem>(&item)) {
                 scopes[scope->local_id] = *scope;
-            } else if (const auto* copy = std::get_if<store::CopyItem>(&item)) {
+            } else if (const auto* copy =
+                           std::get_if<store::engine::CopyItem>(&item)) {
                 model.copies[c][copy->local_id] = copy->generation;
                 ids_of_copy[copy->local_id] = {copy->namespace_id,
                                                copy->scope_id};
             } else if (const auto* extent =
-                           std::get_if<store::ExtentRefItem>(&item)) {
+                           std::get_if<store::engine::ExtentRefItem>(&item)) {
                 if (extent->segments.empty()) {
                     const auto block = big_event.find(extent->offset);
                     REQUIRE(block != big_event.end());
@@ -626,18 +629,20 @@ CrashModel build_model(const dstd::Vector<io_fault::Event>& log,
                     extent->offset;
                 dstd::Vector<std::uint8_t> raw(stored_at,
                                                stored_at + extent->length);
-                REQUIRE(store::decode_extent(raw).has_value());
+                REQUIRE(store::engine::decode_extent(raw).has_value());
                 const ByteView bytes{raw.data(), raw.size()};
-                for (const store::ExtentSegment& segment : extent->segments) {
+                for (const store::engine::ExtentSegment& segment :
+                     extent->segments) {
                     model.extents[extent->sequence].emplace_back(
                         at->second, segment.copy_id);
-                    auto view = store::SegmentView::open(bytes.subspan(
+                    auto view = store::engine::SegmentView::open(bytes.subspan(
                         segment.offset_in_extent, segment.length));
                     REQUIRE(view.has_value());
-                    store::SegmentView::Cursor cursor =
+                    store::engine::SegmentView::Cursor cursor =
                         view->lower_bound(ByteView{});
                     while (!cursor.at_end()) {
-                        const store::SegmentView::Entry found = cursor.entry();
+                        const store::engine::SegmentView::Entry found =
+                            cursor.entry();
                         if (found.is_big()) {
                             const auto big =
                                 big_event.find(found.big_ref().offset);
@@ -741,8 +746,8 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
         // summary that names its record: a lost record of one of them makes
         // its copies Bad, as a lost extent does.
         std::set<std::uint32_t> lost_here = lost_copies;
-        const std::size_t base =
-            m / store::CHECKPOINT_INTERVAL * store::CHECKPOINT_INTERVAL;
+        const std::size_t base = m / store::engine::CHECKPOINT_INTERVAL *
+                                 store::engine::CHECKPOINT_INTERVAL;
         bool record_lost = false;
         for (std::size_t sequence = 1; sequence < base; ++sequence) {
             if (dropped[record_at[sequence - 1]] == 0) continue;
@@ -772,6 +777,7 @@ LostOracle lost_oracle(const CrashModel& model, const std::vector<Dump>& refs,
 
 TEST_CASE("crash: a kill point leaves only whole commits") {
     using namespace store;
+    using namespace store::engine;
 
     dftu_utils_test::ScopedTestDir dir("store_crash");
     WriterOptions options;
@@ -890,7 +896,7 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     const std::string image_path = image_dir + "/" + file_name;
     const auto dump_of = [&](const std::string& bytes) {
         write_bytes(image_path, bytes);
-        auto snapshot = Snapshot::open(image_dir);
+        auto snapshot = store::engine::Snapshot::open(image_dir);
         REQUIRE(snapshot.has_value());
         return dump_snapshot(*snapshot, specs);
     };

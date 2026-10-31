@@ -82,21 +82,21 @@ namespace {
 namespace coro = dftracer::utils::coro;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
-namespace io_fault = dftracer::utils::store::io_fault;
+namespace io_fault = dftracer::utils::store::engine::io_fault;
 
 using dftracer::utils::CoroScope;
 using dftracer::utils::FilesystemKind;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
 using store::Batch;
-using store::NamespaceId;
 using store::NamespaceSpec;
 using store::ScopeKey;
-using store::Snapshot;
-using store::Writer;
-using store::WriterErrc;
-using store::WriterOptions;
-using store::WriterTestHook;
+using store::engine::NamespaceId;
+using store::engine::Snapshot;
+using store::engine::Writer;
+using store::engine::WriterErrc;
+using store::engine::WriterOptions;
+using store::engine::WriterTestHook;
 
 constexpr std::uint64_t MIB_BYTES = 1U << 20;
 constexpr std::uint64_t GIB_BYTES = 1U << 30;
@@ -356,7 +356,7 @@ std::string format_ms(std::uint64_t nanos) {
 /// Every block the snapshot has read so far: the commits it verified, the
 /// blocks of them, the read calls that covered them and the bytes. An open
 /// leaves these at zero, and the first query for a copy pays its commits.
-std::string format_read_stats(const store::ReadStats& reads) {
+std::string format_read_stats(const store::engine::ReadStats& reads) {
     std::ostringstream out;
     out << "commits_read=" << reads.commits_verified
         << " extents_read=" << reads.extents_read
@@ -375,8 +375,8 @@ std::string format_read_stats(const store::ReadStats& reads) {
 
 /// What one open did, and what the snapshot has read so far, as one extra
 /// column.
-std::string format_stats(const store::OpenStats& stats,
-                         const store::ReadStats& reads) {
+std::string format_stats(const store::engine::OpenStats& stats,
+                         const store::engine::ReadStats& reads) {
     std::ostringstream out;
     out << "files=" << stats.files << " extents=" << stats.extents << " "
         << format_read_stats(reads) << " ms list=" << std::setprecision(3)
@@ -678,7 +678,7 @@ struct FoldRow {
     double ns_per_key = 0;
     std::uint64_t mismatches = 0;
     /// What the snapshot had read when the scan of this row finished.
-    store::ReadStats reads;
+    store::engine::ReadStats reads;
 };
 
 /// One timed fold scan: its parts added, against the sums written.
@@ -709,40 +709,41 @@ struct QueryPlan {
 /// One field of a space report, so the mode prints every report alike.
 struct SpaceField {
     const char* name;
-    std::uint64_t store::SpaceReport::* value;
+    std::uint64_t store::engine::SpaceReport::* value;
 };
 
 constexpr SpaceField SPACE_FIELDS[] = {
-    {"file_bytes", &store::SpaceReport::file_bytes},
-    {"header_bytes", &store::SpaceReport::header_bytes},
-    {"extents", &store::SpaceReport::extents},
-    {"extent_bytes", &store::SpaceReport::extent_bytes},
-    {"extent_page_table_bytes", &store::SpaceReport::extent_page_table_bytes},
-    {"page_bytes", &store::SpaceReport::page_bytes},
-    {"page_raw_bytes", &store::SpaceReport::page_raw_bytes},
-    {"pages", &store::SpaceReport::pages},
-    {"pages_compressed", &store::SpaceReport::pages_compressed},
-    {"pages_dict", &store::SpaceReport::pages_dict},
-    {"dicts", &store::SpaceReport::dicts},
-    {"dict_bytes", &store::SpaceReport::dict_bytes},
-    {"extent_padding_bytes", &store::SpaceReport::extent_padding_bytes},
-    {"gap_bytes", &store::SpaceReport::gap_bytes},
-    {"record_bytes", &store::SpaceReport::record_bytes},
-    {"segment_block_bytes", &store::SpaceReport::segment_block_bytes},
-    {"segment_entries", &store::SpaceReport::segment_entries},
-    {"segment_key_bytes", &store::SpaceReport::segment_key_bytes},
-    {"items_block_bytes", &store::SpaceReport::items_block_bytes},
-    {"directory_leaf_bytes", &store::SpaceReport::directory_leaf_bytes},
+    {"file_bytes", &store::engine::SpaceReport::file_bytes},
+    {"header_bytes", &store::engine::SpaceReport::header_bytes},
+    {"extents", &store::engine::SpaceReport::extents},
+    {"extent_bytes", &store::engine::SpaceReport::extent_bytes},
+    {"extent_page_table_bytes",
+     &store::engine::SpaceReport::extent_page_table_bytes},
+    {"page_bytes", &store::engine::SpaceReport::page_bytes},
+    {"page_raw_bytes", &store::engine::SpaceReport::page_raw_bytes},
+    {"pages", &store::engine::SpaceReport::pages},
+    {"pages_compressed", &store::engine::SpaceReport::pages_compressed},
+    {"pages_dict", &store::engine::SpaceReport::pages_dict},
+    {"dicts", &store::engine::SpaceReport::dicts},
+    {"dict_bytes", &store::engine::SpaceReport::dict_bytes},
+    {"extent_padding_bytes", &store::engine::SpaceReport::extent_padding_bytes},
+    {"gap_bytes", &store::engine::SpaceReport::gap_bytes},
+    {"record_bytes", &store::engine::SpaceReport::record_bytes},
+    {"segment_block_bytes", &store::engine::SpaceReport::segment_block_bytes},
+    {"segment_entries", &store::engine::SpaceReport::segment_entries},
+    {"segment_key_bytes", &store::engine::SpaceReport::segment_key_bytes},
+    {"items_block_bytes", &store::engine::SpaceReport::items_block_bytes},
+    {"directory_leaf_bytes", &store::engine::SpaceReport::directory_leaf_bytes},
     {"directory_separator_bytes",
-     &store::SpaceReport::directory_separator_bytes},
-    {"directory_entries", &store::SpaceReport::directory_entries},
-    {"directory_key_bytes", &store::SpaceReport::directory_key_bytes},
+     &store::engine::SpaceReport::directory_separator_bytes},
+    {"directory_entries", &store::engine::SpaceReport::directory_entries},
+    {"directory_key_bytes", &store::engine::SpaceReport::directory_key_bytes},
     {"directory_commit_key_bytes",
-     &store::SpaceReport::directory_commit_key_bytes},
-    {"filter_bytes", &store::SpaceReport::filter_bytes},
-    {"footer_bytes", &store::SpaceReport::footer_bytes},
-    {"copies", &store::SpaceReport::copies},
-    {"commits", &store::SpaceReport::commits},
+     &store::engine::SpaceReport::directory_commit_key_bytes},
+    {"filter_bytes", &store::engine::SpaceReport::filter_bytes},
+    {"footer_bytes", &store::engine::SpaceReport::footer_bytes},
+    {"copies", &store::engine::SpaceReport::copies},
+    {"commits", &store::engine::SpaceReport::commits},
 };
 
 /// Prints the space report of every data file of `dir`, then the sum and the
@@ -763,10 +764,10 @@ bool print_space(const std::string& dir) {
         names.push_back(entry.path().filename().string());
     }
     std::sort(names.begin(), names.end());
-    store::SpaceReport sum;
+    store::engine::SpaceReport sum;
     for (const std::string& name : names) {
         const std::string path = dir + "/" + name;
-        auto report = store::space_report(path);
+        auto report = store::engine::space_report(path);
         if (!report) {
             std::cerr << "store_bench: " << path << ": "
                       << to_std(report.error()) << "\n";
@@ -783,7 +784,8 @@ bool print_space(const std::string& dir) {
     }
     std::error_code size_error;
     const std::uintmax_t summary_bytes = std::filesystem::file_size(
-        std::filesystem::path(dir) / store::SUMMARY_FILE_NAME, size_error);
+        std::filesystem::path(dir) / store::engine::SUMMARY_FILE_NAME,
+        size_error);
     std::cout << "summary_bytes " << (size_error ? 0 : summary_bytes) << "\n";
     return true;
 }
@@ -852,7 +854,7 @@ struct Bench {
             fail("cannot create a directory under " + base.string());
             return false;
         }
-        auto chosen = store::extent_size_for(root);
+        auto chosen = store::engine::extent_size_for(root);
         if (!chosen) {
             fail("extent size of " + root + ": " + to_std(chosen.error()));
             return false;

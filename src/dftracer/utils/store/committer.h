@@ -27,7 +27,7 @@ class Executor;
 
 }  // namespace dftracer::utils
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 class WriterExtents;
 
@@ -105,6 +105,12 @@ class Committer {
     /// with the task's own group commit.
     dstd::Expected<void, dstd::Error> commit_pending();
 
+    /// The records written to the file so far. A reader that opened the file
+    /// before a larger count lacks the entries of the later records.
+    std::uint64_t records() const noexcept {
+        return records_.load(std::memory_order_acquire);
+    }
+
     /// True once a record write failed. error() is meaningful only then.
     bool failed() const noexcept {
         return failed_.load(std::memory_order_acquire);
@@ -164,6 +170,7 @@ class Committer {
     std::atomic<bool> failed_{false};
     dstd::Optional<dstd::Error> latched_error_;
     std::uint64_t next_sequence_ = 1;
+    std::atomic<std::uint64_t> records_{0};
     std::vector<std::uint8_t> announced_namespaces_;
     std::vector<std::uint8_t> announced_scopes_;
     std::vector<std::uint8_t> announced_copies_;
@@ -180,6 +187,6 @@ struct CommitterTestHook {
     static std::uint64_t live_batches();
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_COMMITTER_H

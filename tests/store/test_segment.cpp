@@ -18,15 +18,15 @@ namespace dstd = dftracer::utils::dstd;
 using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 namespace store = dftracer::utils::store;
-using dftracer::utils::store::BIG_VALUE_BYTES;
-using dftracer::utils::store::BigRef;
-using dftracer::utils::store::GRANULE_BYTES;
-using dftracer::utils::store::PAGE_BYTES;
-using dftracer::utils::store::PlacerFn;
-using dftracer::utils::store::SEGMENT_ALIGN;
-using dftracer::utils::store::SegmentBuilder;
-using dftracer::utils::store::SegmentSpan;
-using dftracer::utils::store::SegmentView;
+using dftracer::utils::store::engine::BIG_VALUE_BYTES;
+using dftracer::utils::store::engine::BigRef;
+using dftracer::utils::store::engine::GRANULE_BYTES;
+using dftracer::utils::store::engine::PAGE_BYTES;
+using dftracer::utils::store::engine::PlacerFn;
+using dftracer::utils::store::engine::SEGMENT_ALIGN;
+using dftracer::utils::store::engine::SegmentBuilder;
+using dftracer::utils::store::engine::SegmentSpan;
+using dftracer::utils::store::engine::SegmentView;
 
 constexpr std::uint64_t RANDOM_SEED = 0x5EC7105EED1234C0ULL;
 constexpr std::size_t PAIR_COUNT = 10000;
@@ -421,7 +421,8 @@ TEST_SUITE("index store segment") {
         REQUIRE(view.granule_count() > 4);
 
         dstd::Vector<SegmentSpan> spans;
-        REQUIRE(store::append_segment_spans(view_of(*sealed), 100, spans));
+        REQUIRE(
+            store::engine::append_segment_spans(view_of(*sealed), 100, spans));
         REQUIRE(spans.size() == view.granule_count() + 1);
         CHECK(spans.front().offset == 100);
         CHECK(spans.front().length == view.granule(0).offset);
@@ -449,15 +450,16 @@ TEST_SUITE("index store segment") {
         REQUIRE(sealed->size() <= PAGE_BYTES);
 
         dstd::Vector<SegmentSpan> spans;
-        REQUIRE(store::append_segment_spans(view_of(*sealed), 4096, spans));
+        REQUIRE(
+            store::engine::append_segment_spans(view_of(*sealed), 4096, spans));
         REQUIRE(spans.size() == 1);
         CHECK(spans[0].offset == 4096);
         CHECK(spans[0].length == sealed->size());
 
         dstd::Vector<SegmentSpan> garbage_spans;
         const std::string garbage(4096, 'x');
-        CHECK_FALSE(
-            store::append_segment_spans(view_of(garbage), 0, garbage_spans));
+        CHECK_FALSE(store::engine::append_segment_spans(view_of(garbage), 0,
+                                                        garbage_spans));
         CHECK(garbage_spans.empty());
     }
 

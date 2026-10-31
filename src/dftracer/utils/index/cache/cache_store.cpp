@@ -245,7 +245,7 @@ void CacheStore::put(
     {
         store::StoreRoot::WriterUse use(*root_);
         memory::Scope in_pool(root_->pool());
-        kv::Writer& writer = root_->writer();
+        kv::engine::Writer& writer = root_->writer();
         const kv::ScopeKey scope = scope_of(sig);
         kv::Batch data = writer.batch(
             root_->namespace_id(std::string(DATA_NAMESPACE), NAMESPACE_VERSION),
@@ -278,7 +278,7 @@ void CacheStore::touch(std::uint64_t sig) {
         usage_value(u64_at((**found).bytes(), 0), now_micros());
     store::StoreRoot::WriterUse use(*root_);
     memory::Scope in_pool(root_->pool());
-    kv::Writer& writer = root_->writer();
+    kv::engine::Writer& writer = root_->writer();
     kv::Batch record = writer.batch(
         root_->namespace_id(std::string(USAGE_NAMESPACE), NAMESPACE_VERSION),
         scope, 0);
@@ -298,10 +298,10 @@ void CacheStore::evict(std::uint64_t keep) {
               });
     store::StoreRoot::WriterUse use(*root_);
     memory::Scope in_pool(root_->pool());
-    kv::Writer& writer = root_->writer();
-    const kv::NamespaceId data_id =
+    kv::engine::Writer& writer = root_->writer();
+    const kv::engine::NamespaceId data_id =
         root_->namespace_id(std::string(DATA_NAMESPACE), NAMESPACE_VERSION);
-    const kv::NamespaceId usage_id =
+    const kv::engine::NamespaceId usage_id =
         root_->namespace_id(std::string(USAGE_NAMESPACE), NAMESPACE_VERSION);
     auto remove = [&](const Usage& e) {
         const kv::ScopeKey scope = scope_of(e.sig);

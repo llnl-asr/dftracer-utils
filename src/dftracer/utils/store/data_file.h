@@ -21,7 +21,7 @@
 #include <mutex>
 #include <string_view>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 inline constexpr std::size_t FILE_HEADER_BYTES = 4096;
 inline constexpr std::size_t FILE_TRAILER_BYTES = 32;
@@ -369,6 +369,6 @@ struct SpaceReport {
 /// when two categories claim the same bytes. Io when a read fails.
 dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path);
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 #endif  // DFTRACER_UTILS_STORE_DATA_FILE_H

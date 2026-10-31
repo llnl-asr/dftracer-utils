@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 struct DataFileWriterTestHook {
     static void reopen_read_only(DataFileWriter& writer,
@@ -36,7 +36,7 @@ struct DataFileWriterTestHook {
     }
 };
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine
 
 namespace {
 
@@ -51,18 +51,18 @@ using dftracer::utils::TaskHandle;
 using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 using store::Batch;
-using store::DataFileReader;
 using store::FoldKind;
-using store::NamespaceId;
 using store::NamespaceSpec;
 using store::ScopeKey;
 using store::ScopeState;
-using store::Snapshot;
-using store::Writer;
-using store::WriterErrc;
-using store::WriterExtentsCounters;
-using store::WriterOptions;
-using store::WriterTestHook;
+using store::engine::DataFileReader;
+using store::engine::NamespaceId;
+using store::engine::Snapshot;
+using store::engine::Writer;
+using store::engine::WriterErrc;
+using store::engine::WriterExtentsCounters;
+using store::engine::WriterOptions;
+using store::engine::WriterTestHook;
 
 constexpr std::uint32_t EXTENT_BYTES = 64 * 1024;
 constexpr int RUNTIME_THREADS = 8;
@@ -268,7 +268,7 @@ struct Row {
     std::string value;
 };
 
-std::vector<Row> collect(store::ScanCursor& cursor) {
+std::vector<Row> collect(store::engine::ScanCursor& cursor) {
     std::vector<Row> rows;
     while (!cursor.at_end()) {
         auto value = cursor.value();
@@ -299,12 +299,12 @@ std::vector<CopyRow> read_copies(const std::string& path) {
     auto reader = DataFileReader::open(dstring(path));
     REQUIRE(reader.has_value());
     std::map<std::uint32_t, std::string> scope_paths;
-    for (const store::ScopeItem& scope : reader->index().scopes) {
+    for (const store::engine::ScopeItem& scope : reader->index().scopes) {
         REQUIRE_FALSE(scope.paths.empty());
         scope_paths[scope.local_id] = to_std(scope.paths[0]);
     }
     std::vector<CopyRow> out;
-    for (const store::CopyItem& copy : reader->index().copies) {
+    for (const store::engine::CopyItem& copy : reader->index().copies) {
         out.push_back(
             {scope_paths[copy.scope_id], copy.local_id, copy.generation});
     }
@@ -850,7 +850,7 @@ TEST_CASE("back pressure: a latched extent error ends space() and commit") {
     const WriterExtentsCounters before = WriterTestHook::extents(*writer);
     CHECK(before.held > 0);
 
-    store::DataFileWriterTestHook::reopen_read_only(
+    store::engine::DataFileWriterTestHook::reopen_read_only(
         WriterTestHook::file(*writer), to_std(writer->path()));
 
     auto flushed = store_runtime().submit(writer->flush());
@@ -896,7 +896,7 @@ TEST_CASE(
 
     // space() seals the open extent and parks before its write fails. Nothing
     // else touches the writer, so only the failed write can end the wait.
-    store::DataFileWriterTestHook::reopen_read_only(
+    store::engine::DataFileWriterTestHook::reopen_read_only(
         WriterTestHook::file(*writer), to_std(writer->path()));
     await_space(*writer);
 
@@ -1101,7 +1101,7 @@ TEST_CASE("back pressure keeps extents full under steady load") {
     REQUIRE(created.has_value());
     const NamespaceId space = *created;
 
-    namespace io_fault = store::io_fault;
+    namespace io_fault = store::engine::io_fault;
     io_fault::start_counting();
     std::atomic<int> errors{0};
     TaskHandle handle = store_runtime().scope(
@@ -1139,17 +1139,18 @@ TEST_CASE("back pressure keeps extents full under steady load") {
     if (!SANITIZED) CHECK(busy > 0);
     // Extents hold at least half an extent of raw segment bytes on average. The
     // stored extents are smaller, since they are compressed.
-    auto reader = store::DataFileReader::open(
+    auto reader = store::engine::DataFileReader::open(
         std::string(writer->path().data(), writer->path().size()));
     REQUIRE(reader.has_value());
     auto refs = reader->all_extent_refs();
     REQUIRE(refs.has_value());
     std::uint64_t raw = 0;
     std::uint64_t written = 0;
-    for (const store::IndexedExtentRef& indexed : *refs) {
+    for (const store::engine::IndexedExtentRef& indexed : *refs) {
         if (indexed.ref.segments.empty()) continue;
         ++written;
-        for (const store::ExtentSegment& segment : indexed.ref.segments) {
+        for (const store::engine::ExtentSegment& segment :
+             indexed.ref.segments) {
             raw += segment.length;
         }
     }

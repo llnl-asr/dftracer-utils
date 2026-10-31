@@ -9,7 +9,7 @@
 #include <limits>
 #include <string_view>
 
-namespace dftracer::utils::store {
+namespace dftracer::utils::store::engine {
 
 namespace {
 
@@ -629,4 +629,4 @@ dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes) {
     return record;
 }
 
-}  // namespace dftracer::utils::store
+}  // namespace dftracer::utils::store::engine

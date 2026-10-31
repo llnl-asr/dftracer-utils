@@ -318,4 +318,41 @@ TEST_SUITE("ViewPlannerUtility") {
 
         fs::remove_all(test_dir);
     }
+
+    TEST_CASE("ViewPlanner - several chunks without a chunk table fail") {
+        std::string test_dir =
+            dftu_utils_test::make_unique_test_path("test_view_builder_no_table")
+                .string();
+        fs::create_directories(test_dir);
+
+        std::string index_path = test_dir + "/test.pfw.gz.idx";
+        std::string file_path = "/fake/test.pfw.gz";
+
+        IndexDatabase idx_db(index_path);
+        {
+            auto writer = idx_db.begin_write();
+            dftu_utils_test::register_test_file(
+                *writer, get_logical_path(file_path), 10000);
+            writer->commit();
+        }
+
+        ViewDefinition view;
+        view.with_name("no_table");
+
+        ViewPlannerInput input;
+        input.with_view(view)
+            .with_file_path(file_path)
+            .with_index_path(index_path)
+            .with_uncompressed_size(10000)
+            .with_num_checkpoints(3);
+
+        ViewPlannerUtility builder;
+        auto output = builder(input).get();
+
+        REQUIRE_FALSE(output);
+        CHECK(std::string(output.error().message()).find("chunk table") !=
+              std::string::npos);
+
+        fs::remove_all(test_dir);
+    }
 }

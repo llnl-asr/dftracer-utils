@@ -142,39 +142,31 @@ ChunkPrunerOutput prune_file_chunks(const IndexDatabase& db,
                                     const std::string& file_path,
                                     const Query& query_in) {
     ChunkPrunerOutput out;
-    try {
-        const int fid = db.get_file_info_id(get_logical_path(file_path));
-        out.success = true;
-        out.file_may_match = true;
-        if (fid < 0) return out;
+    const int fid = db.get_file_info_id(get_logical_path(file_path));
+    out.success = true;
+    out.file_may_match = true;
+    if (fid < 0) return out;
 
-        const std::optional<Query> expanded = expand_any(db, fid, query_in);
-        const Query& query = expanded ? *expanded : query_in;
+    const std::optional<Query> expanded = expand_any(db, fid, query_in);
+    const Query& query = expanded ? *expanded : query_in;
 
-        FileIndexData ctx;
-        ctx.db = &db;
-        ctx.fid = fid;
-        ctx.by_path = indexed_by_path(db, fid);
-        auto conds = make_query_conditions(ctx);
-        if (!file_may_match(query.root(), conds)) {
-            out.file_may_match = false;
-            return out;
-        }
-
-        load_chunks(ctx);
-        out.total_checkpoints = ctx.total_chunks;
-        if (ctx.all_chunks.empty()) return out;
-
-        auto candidates = evaluate(query.root(), conds, ctx.all_chunks);
-        out.candidate_checkpoints.assign(candidates.begin(), candidates.end());
-        out.file_may_match = !out.candidate_checkpoints.empty();
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("ChunkPruner: error for %s: %s, assuming match",
-                                file_path.c_str(), e.what());
-        out = ChunkPrunerOutput{};
-        out.success = true;
-        out.file_may_match = true;
+    FileIndexData ctx;
+    ctx.db = &db;
+    ctx.fid = fid;
+    ctx.by_path = indexed_by_path(db, fid);
+    auto conds = make_query_conditions(ctx);
+    if (!file_may_match(query.root(), conds)) {
+        out.file_may_match = false;
+        return out;
     }
+
+    load_chunks(ctx);
+    out.total_checkpoints = ctx.total_chunks;
+    if (ctx.all_chunks.empty()) return out;
+
+    auto candidates = evaluate(query.root(), conds, ctx.all_chunks);
+    out.candidate_checkpoints.assign(candidates.begin(), candidates.end());
+    out.file_may_match = !out.candidate_checkpoints.empty();
     return out;
 }
 
@@ -250,18 +242,9 @@ coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
     const ChunkPrunerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("prune chunks");
     std::optional<IndexDatabase> owned_db;
-    try {
-        if (!input.external_db)
-            owned_db.emplace(input.index_path,
-                             index::store::IndexOpenMode::ReadOnly);
-    } catch (const std::exception& e) {
-        DFTRACER_UTILS_LOG_WARN("ChunkPruner: error for %s: %s, assuming match",
-                                input.file_path.c_str(), e.what());
-        ChunkPrunerOutput out;
-        out.success = true;
-        out.file_may_match = true;
-        co_return out;
-    }
+    if (!input.external_db)
+        owned_db.emplace(input.index_path,
+                         index::store::IndexOpenMode::ReadOnly);
     const IndexDatabase& db =
         input.external_db ? *input.external_db : *owned_db;
     co_return prune_file_chunks(db, input.file_path, input.query);

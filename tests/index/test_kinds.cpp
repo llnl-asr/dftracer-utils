@@ -153,4 +153,51 @@ TEST_SUITE("index kinds") {
         REQUIRE(result.has_value());
         CHECK(result->candidates == std::vector<std::uint64_t>{1});
     }
+
+    TEST_CASE("a corrupt zone bound is an error, not a skipped prune") {
+        auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_zone");
+        fs::create_directories(dir);
+        const std::string trace = "/fake/bad_zone.pfw.gz";
+        const auto path = dir.string() + "/.dftindex";
+        {
+            IndexDatabase db(path);
+            auto w = db.begin_write();
+            const int fid = dftu_utils_test::register_test_file(*w, trace, 1);
+            dftu_utils_test::index_records::put_gzip_member(
+                *w, fid, {0, 0, 100, 0, 200, 1, 2});
+            auto dur = dim("dur", {});
+            dur.value_type = "uint";
+            dur.min_value = "not-a-number";
+            dur.max_value = "20";
+            dftu_utils_test::put_dimension_stats(*w, fid, 0, dur, 2);
+            dftu_utils_test::mark_built(*w, fid);
+            w->commit();
+        }
+        auto q = duql::Query::from_string("dur > 5");
+        REQUIRE(q.has_value());
+        CHECK_THROWS_WITH_AS(
+            index::plan::prune_file({path, trace, &*q, nullptr, std::nullopt})
+                .get(),
+            doctest::Contains("corrupt zone map"), std::exception);
+    }
+
+    TEST_CASE("a ts bound that is not an integer is an error") {
+        auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_ts");
+        fs::create_directories(dir);
+        const std::string trace = "/fake/bad_ts.pfw.gz";
+        const auto index = build_index(dir.string(), trace);
+
+        auto bad = duql::Query::from_string(R"(ts > "abc")");
+        REQUIRE(bad.has_value());
+        CHECK_THROWS_WITH_AS(index::plan::prune_file(
+                                 {index, trace, &*bad, nullptr, std::nullopt})
+                                 .get(),
+                             doctest::Contains("abc"), std::exception);
+
+        auto fraction = duql::Query::from_string("ts > 1.5");
+        REQUIRE(fraction.has_value());
+        CHECK(index::plan::prune_file(
+                  {index, trace, &*fraction, nullptr, std::nullopt})
+                  .get());
+    }
 }

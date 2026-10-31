@@ -855,7 +855,16 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
         for (auto& v : visitors) {
             try {
                 co_await v.get().flush();
+            } catch (const std::exception& e) {
+                // The first error is the one rethrown below.
+                DFTRACER_UTILS_LOG_WARN(
+                    "Indexer: a visitor flush failed after an earlier "
+                    "error: %s",
+                    e.what());
             } catch (...) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "Indexer: a visitor flush failed after an earlier "
+                    "error with a non-standard exception");
             }
         }
         std::rethrow_exception(error);
@@ -1242,7 +1251,10 @@ bool GzipIndexer::need_rebuild() const {
         }
         return index::store::internal::calculate_file_hash(gz_path) !=
                *stored_hash;
-    } catch (...) {
+    } catch (const std::exception& e) {
+        // An unreadable index is stale because the rebuild rewrites it.
+        DFTRACER_UTILS_LOG_WARN("Indexer: index %s is unreadable (%s); rebuild",
+                                index_path.c_str(), e.what());
         return true;
     }
 }

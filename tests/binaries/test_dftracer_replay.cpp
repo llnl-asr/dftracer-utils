@@ -282,6 +282,32 @@ TEST_SUITE("DFTracerReplay") {
         fs::remove_all(temp_dir, ec);
     }
 
+    TEST_CASE("a bad pid or tid token is an error") {
+        auto binary = find_replay_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_replay binary not found, skipping.");
+            return;
+        }
+
+        fs::path temp_dir =
+            dftu_utils_test::make_unique_test_path("replay_bad_id");
+        fs::create_directories(temp_dir);
+        std::string trace_file = (temp_dir / "test_trace.pfw.gz").string();
+        create_sample_trace(trace_file, 10);
+
+        for (const char* flag : {"--filter-pid", "--exclude-pid",
+                                 "--filter-tid", "--exclude-tid"}) {
+            int rc = 0;
+            auto output = run_replay_capture(
+                binary, {"--dry-run", flag, "12,abc", trace_file}, &rc);
+            CHECK(rc == 1);
+            CHECK(output.find("abc") != std::string::npos);
+        }
+
+        std::error_code ec;
+        fs::remove_all(temp_dir, ec);
+    }
+
     TEST_CASE("filter by category") {
         auto binary = find_replay_binary();
         if (binary.empty()) {

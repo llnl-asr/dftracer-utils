@@ -182,8 +182,13 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
                     U = 0;  // suspect 32-bit wrap
             }
             if (U == 0) {
+                // The size only picks a checkpoint size, never the results.
                 std::string fname = read_gzip_fname(fd);
                 double ratio = guess_text_ratio_from_ext(fname);
+                DFTRACER_UTILS_LOG_DEBUG(
+                    "checkpoint size: %s has no usable uncompressed size, "
+                    "assume ratio %.1f",
+                    path.c_str(), ratio);
                 U = std::max<std::size_t>(
                     comp_bytes, (std::size_t)((long double)comp_bytes * ratio));
             }
@@ -193,7 +198,10 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
         }
         ::close(fd);
     } else {
-        // fallback estimate
+        // The size only picks a checkpoint size, never the results.
+        DFTRACER_UTILS_LOG_DEBUG(
+            "checkpoint size: cannot open %s, assume a ratio of 6",
+            path.c_str());
         U = std::max<std::size_t>(comp_bytes, comp_bytes * 6);
     }
 

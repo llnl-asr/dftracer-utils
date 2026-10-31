@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/duql/term.h>
@@ -8,6 +9,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <iterator>
 #include <limits>
@@ -77,13 +79,35 @@ bool trusted_bounds(const Zone& z, bool need_both) {
                   : (z.min.empty() && z.max.empty()))
         return false;
     if (is_numeric_type(z.value_type) && !z.min.empty() && !z.max.empty()) {
+        double lo = 0;
+        double hi = 0;
         try {
-            if (std::stod(z.min) > std::stod(z.max)) return false;
-        } catch (...) {
-            return false;
+            lo = std::stod(z.min);
+            hi = std::stod(z.max);
+        } catch (const std::exception&) {
+            throw DFTUtilsException::cat(
+                ErrorCode::Indexer, "corrupt zone map: bounds [", z.min, ", ",
+                z.max, "] of a ", z.value_type, " zone are not numbers");
         }
+        if (lo > hi) return false;
     }
     return true;
+}
+
+// The histogram counts whole timestamps, so a bound that is not a
+// non-negative integer (a fraction, a negative number) leaves it out. A string
+// that is not an integer is a malformed query.
+std::optional<std::uint64_t> timestamp_bound(const std::string& text,
+                                             const duql_ns::CompareNode& n) {
+    std::uint64_t out = 0;
+    const char* end = text.data() + text.size();
+    const auto parsed = std::from_chars(text.data(), end, out);
+    if (parsed.ec == std::errc{} && parsed.ptr == end) return out;
+    if (std::holds_alternative<std::string>(n.value.value))
+        throw DFTUtilsException::cat(ErrorCode::InvalidArgument,
+                                     "ts compared with \"", text,
+                                     "\", which is not an integer timestamp");
+    return std::nullopt;
 }
 
 bool zone_may_match(const Zone& z, duql_ns::CompareOp op,
@@ -634,12 +658,8 @@ class Zonemap final : public Condition {
         const auto& zones = d_.zones(n->field.path);
         const auto val = literal_to_string(n->value);
         std::optional<std::uint64_t> ts_val;
-        if (!d_.by_path && n->field.path == "ts" && is_range_op(n->op)) {
-            try {
-                ts_val = std::stoull(val);
-            } catch (...) {
-            }
-        }
+        if (!d_.by_path && n->field.path == "ts" && is_range_op(n->op))
+            ts_val = timestamp_bound(val, *n);
         ChunkSet out;
         for (auto ckpt : candidates) {
             auto it = zones.find(ckpt);

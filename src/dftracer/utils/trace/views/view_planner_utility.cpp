@@ -138,8 +138,8 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             candidate_checkpoints.push_back(i);
     }
 
-    // Compute byte ranges from real chunk offsets; fall back to a uniform
-    // estimate only when the chunk table is unavailable.
+    // Byte ranges come from real chunk offsets. A uniform cut of several chunks
+    // would decode the wrong bytes, so a missing table is an error.
     for (auto ckpt_idx : candidate_checkpoints) {
         ViewChunkCandidate candidate;
         candidate.checkpoint_idx = ckpt_idx;
@@ -156,16 +156,21 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
             candidate.end_byte = input.uncompressed_size;
             output.candidates.push_back(candidate);
             break;
-        } else if (input.num_checkpoints > 0) {
-            std::size_t bytes_per =
-                input.uncompressed_size / input.num_checkpoints;
-            candidate.start_byte = ckpt_idx * bytes_per;
-            candidate.end_byte = (ckpt_idx + 1 == input.num_checkpoints)
-                                     ? input.uncompressed_size
-                                     : (ckpt_idx + 1) * bytes_per;
-        } else {
+        } else if (total_checkpoints == 1) {
+            // One chunk is the whole file, so no byte cut can misplace it.
+            DFTRACER_UTILS_LOG_DEBUG(
+                "ViewPlanner: %s has no chunk table entry; read it whole",
+                input.file_path.c_str());
             candidate.start_byte = 0;
             candidate.end_byte = input.uncompressed_size;
+        } else {
+            co_return make_error(
+                ErrorCode::Indexer,
+                std::string("ViewPlanner: the chunk table of ") +
+                    input.file_path + " has " +
+                    std::to_string(chunk_spans.size()) +
+                    " chunks and cannot place chunk " +
+                    std::to_string(ckpt_idx));
         }
 
         output.candidates.push_back(candidate);

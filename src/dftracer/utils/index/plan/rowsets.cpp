@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
 #include <dftracer/utils/dstd/map.h>
@@ -101,8 +102,8 @@ void for_each_index(std::size_t n, Fn&& fn) {
 }  // namespace
 
 const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
-    // A schema that cannot be read here (an unreadable index or trace) is
-    // dftracer's; the scan itself reports a missing trace or a broken index.
+    // A missing trace with no recorded schema is read as dftracer here, and
+    // the scan reports the missing trace.
     dstd::Map<std::string, std::optional<store::IndexDatabase>> dbs;
     dstd::Vector<const store::IndexDatabase*> db_of(files.size(), nullptr);
     for (std::size_t i = 0; i < files.size(); ++i) {
@@ -111,10 +112,7 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
         auto [it, fresh] = dbs.try_emplace(f.index);
         if (fresh && fs::exists(f.index)) {
             load_index_schemas(f.index);
-            try {
-                it->second.emplace(f.index, store::IndexOpenMode::ReadOnly);
-            } catch (const std::exception&) {
-            }
+            it->second.emplace(f.index, store::IndexOpenMode::ReadOnly);
         }
         if (it->second) db_of[i] = &*it->second;
     }
@@ -128,7 +126,14 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
             // reason to detect again.
             if (db_of[i]) p = recorded_schema(*db_of[i], f.trace);
             if (!p && trace_exists(f.trace)) p = &detect_trace_schema(f);
-            schemas[i] = p ? p : &get_schema("dftracer");
+            if (!p) {
+                DFTRACER_UTILS_LOG_WARN(
+                    "rowsets: %s is missing and has no recorded schema; "
+                    "assume dftracer",
+                    f.trace.c_str());
+                p = &get_schema("dftracer");
+            }
+            schemas[i] = p;
         } catch (...) {
             errors[i] = std::current_exception();
         }
@@ -171,7 +176,12 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
         }
     }
     if (found) return *found;
-    return fallback ? *fallback : get_schema("generic");
+    // No file holds a record, so no file votes. Detection leaves such a file
+    // to the schema of its objects, else generic.
+    const RecordSchema& chosen = fallback ? *fallback : get_schema("generic");
+    DFTRACER_UTILS_LOG_DEBUG("rowsets: no file holds a record; use schema %s",
+                             chosen.id.c_str());
+    return chosen;
 }
 
 std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,

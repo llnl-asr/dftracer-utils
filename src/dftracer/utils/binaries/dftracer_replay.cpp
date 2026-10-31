@@ -29,11 +29,15 @@
 
 #include <dftracer/utils/binaries/common_cli.h>
 
+#include <charconv>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 using namespace dftracer::utils;
@@ -41,6 +45,22 @@ using namespace dftracer::utils::utilities;
 using namespace dftracer::utils::utilities::replay;
 
 namespace {
+
+// Throws std::invalid_argument on a token that is not a 32-bit unsigned
+// integer.
+std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
+    std::unordered_set<std::uint32_t> out;
+    for (const auto& token : cli::split_csv(csv)) {
+        std::uint32_t value = 0;
+        const char* end = token.data() + token.size();
+        const auto parsed = std::from_chars(token.data(), end, value);
+        if (parsed.ec != std::errc{} || parsed.ptr != end)
+            throw std::invalid_argument("\"" + token +
+                                        "\" is not an unsigned integer");
+        out.insert(value);
+    }
+    return out;
+}
 
 class ReplayArgParse : public cli::ArgParse {
    public:
@@ -247,20 +267,22 @@ class ReplayArgParse : public cli::ArgParse {
                          "Error: --sample-rate must be between 0.0 and 1.0\n");
             return false;
         }
+        const std::pair<const char*, const std::string*> id_lists[] = {
+            {"--filter-pid", &filter_pid_csv},
+            {"--exclude-pid", &exclude_pid_csv},
+            {"--filter-tid", &filter_tid_csv},
+            {"--exclude-tid", &exclude_tid_csv}};
+        for (const auto& [flag, csv] : id_lists) {
+            try {
+                (void)parse_csv_uint32(*csv);
+            } catch (const std::invalid_argument& e) {
+                std::fprintf(stderr, "Error: %s: %s\n", flag, e.what());
+                return false;
+            }
+        }
         return true;
     }
 };
-
-std::unordered_set<std::uint32_t> parse_csv_uint32(const std::string& csv) {
-    std::unordered_set<std::uint32_t> out;
-    for (const auto& token : cli::split_csv(csv)) {
-        try {
-            out.insert(static_cast<std::uint32_t>(std::stoul(token)));
-        } catch (...) {
-        }
-    }
-    return out;
-}
 
 std::unordered_set<std::string> parse_csv_string(const std::string& csv) {
     std::unordered_set<std::string> out;

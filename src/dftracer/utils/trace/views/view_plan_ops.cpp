@@ -356,29 +356,38 @@ void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
     }
 }
 
+using IndexDbs =
+    ankerl::unordered_dense::map<std::string,
+                                 dftracer::utils::index::store::IndexDatabase>;
+
+struct FileIndex {
+    const dftracer::utils::index::store::IndexDatabase* db;
+    int file_id;
+};
+
+// A root with no store opens empty and answers file_id -1, so the file is
+// read whole. A damaged index throws and fails the call.
+FileIndex find_file_index(IndexDbs& dbs, const ViewFile& f) {
+    namespace st = dftracer::utils::index::store;
+    auto it =
+        dbs.try_emplace(f.index_path, f.index_path, st::IndexOpenMode::ReadOnly)
+            .first;
+    return {&it->second, it->second.get_file_info_id(
+                             st::internal::get_logical_path(f.file_path))};
+}
+
 // Path-decoded files: the union of each file's catalog paths as written.
 ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
-    namespace st = dftracer::utils::index::store;
     ColTypeMap merged;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
+    IndexDbs dbs;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            if (!it->second) continue;
-            const int fid = it->second->get_file_info_id(
-                st::internal::get_logical_path(f.file_path));
-            if (fid < 0) continue;
-            ColTypeMap one;
-            for (auto& [path, t] : it->second->file_column_types(fid))
-                one.emplace(std::move(path), t);
-            fold_col_map(merged, one);
-        } catch (...) {
-            // A missing or unreadable index contributes nothing.
-        }
+        const FileIndex found = find_file_index(dbs, f);
+        if (found.file_id < 0) continue;
+        ColTypeMap one;
+        for (auto& [path, t] : found.db->file_column_types(found.file_id))
+            one.emplace(std::move(path), t);
+        fold_col_map(merged, one);
     }
     return merged;
 }
@@ -419,28 +428,24 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
                     namespace st = dftracer::utils::index::store;
-                    try {
-                        st::IndexDatabase db(roots[static_cast<std::size_t>(i)],
-                                             st::IndexOpenMode::ReadOnly);
-                        for (const std::string& logical :
-                             root_files[static_cast<std::size_t>(i)]) {
-                            const int fid = db.get_file_info_id(logical);
-                            if (fid < 0) continue;
-                            ColTypeMap one;
-                            for (auto& [path, t] : db.file_column_types(fid)) {
-                                std::string_view name = path;
-                                if (name.starts_with("args."))
-                                    name.remove_prefix(5);
-                                auto [at, fresh] =
-                                    one.emplace(std::string(name), t);
-                                if (!fresh)
-                                    at->second =
-                                        st::merge_column_type(at->second, t);
-                            }
-                            fold_col_map(local, one);
+                    st::IndexDatabase db(roots[static_cast<std::size_t>(i)],
+                                         st::IndexOpenMode::ReadOnly);
+                    for (const std::string& logical :
+                         root_files[static_cast<std::size_t>(i)]) {
+                        const int fid = db.get_file_info_id(logical);
+                        if (fid < 0) continue;
+                        ColTypeMap one;
+                        for (auto& [path, t] : db.file_column_types(fid)) {
+                            std::string_view name = path;
+                            if (name.starts_with("args."))
+                                name.remove_prefix(5);
+                            auto [at, fresh] =
+                                one.emplace(std::string(name), t);
+                            if (!fresh)
+                                at->second =
+                                    st::merge_column_type(at->second, t);
                         }
-                    } catch (...) {
-                        // A missing or unreadable index contributes nothing.
+                        fold_col_map(local, one);
                     }
                 }
                 return local;
@@ -531,48 +536,29 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 
 std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
+    IndexDbs dbs;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) return f.file_path;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            if (!it->second) return f.file_path;
-            const int fid = it->second->get_file_info_id(
-                st::internal::get_logical_path(f.file_path));
-            if (fid < 0 ||
-                !it->second->extension_state(fid, st::IndexExtension::Catalog))
-                return f.file_path;
-        } catch (...) {
+        const FileIndex found = find_file_index(dbs, f);
+        if (found.file_id < 0 ||
+            !found.db->extension_state(found.file_id,
+                                       st::IndexExtension::Catalog))
             return f.file_path;
-        }
     }
     return std::nullopt;
 }
 
 void ensure_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
+    IndexDbs dbs;
     auto only = std::make_shared<detail::ViewPlan>();
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
-        bool missing = true;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            if (it->second) {
-                const int fid = it->second->get_file_info_id(
-                    st::internal::get_logical_path(f.file_path));
-                missing = fid < 0 || !it->second->extension_current(
-                                         fid, st::IndexExtension::Catalog);
-            }
-        } catch (...) {
-        }
-        if (missing) only->files.push_back(f);
+        const FileIndex found = find_file_index(dbs, f);
+        if (found.file_id < 0 ||
+            !found.db->extension_current(found.file_id,
+                                         st::IndexExtension::Catalog))
+            only->files.push_back(f);
     }
     dbs.clear();
     if (only->files.empty()) return;
@@ -597,27 +583,16 @@ std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
 std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
     std::map<std::string, st::PathStat> merged;
-    ankerl::unordered_dense::map<std::string, std::optional<st::IndexDatabase>>
-        dbs;
+    IndexDbs dbs;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
-        try {
-            auto [it, fresh] = dbs.try_emplace(f.index_path);
-            if (fresh)
-                it->second.emplace(f.index_path, st::IndexOpenMode::ReadOnly);
-            // An index that failed to open stays empty for the other files.
-            if (!it->second) continue;
-            const int fid = it->second->get_file_info_id(
-                st::internal::get_logical_path(f.file_path));
-            if (fid < 0) continue;
-            for (auto& [path, stat] : it->second->catalog(fid)) {
-                auto [pos, inserted] = merged.try_emplace(path, stat);
-                if (inserted) continue;
-                pos->second.type = st::join(pos->second.type, stat.type);
-                pos->second.count += stat.count;
-            }
-        } catch (...) {
-            // A missing or unreadable index contributes nothing.
+        const FileIndex found = find_file_index(dbs, f);
+        if (found.file_id < 0) continue;
+        for (auto& [path, stat] : found.db->catalog(found.file_id)) {
+            auto [pos, inserted] = merged.try_emplace(path, stat);
+            if (inserted) continue;
+            pos->second.type = st::join(pos->second.type, stat.type);
+            pos->second.count += stat.count;
         }
     }
     std::map<std::string, SchemaLeaf> leaves;

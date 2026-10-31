@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
 #include <dftracer/utils/utilities/common/arrow/array_view.h>
@@ -58,10 +59,7 @@ ArrowExportResult attribute(const ArrowSchema* s, const ArrowArray* a,
         throw DFTUtilsException(ErrorCode::Internal,
                                 "attribute: failed to view batch");
     }
-    struct Guard {
-        ArrowArrayView* v;
-        ~Guard() { ArrowArrayViewReset(v); }
-    } guard{&av};
+    auto guard = dstd::defer([&] { ArrowArrayViewReset(&av); });
 
     const std::int64_t ncols = av.n_children;
     if (select_col >= static_cast<std::uint32_t>(ncols)) {

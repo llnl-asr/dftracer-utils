@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/runtime/io/ops.h>
 #include <dftracer/utils/server/http_connection.h>
 #include <dftracer/utils/server/http_request.h>
@@ -62,12 +63,8 @@ coro::CoroTask<void> handle_connection(int client_fd,
         // Remove the registration on every exit path, including a throw from
         // the streaming branch below, so a client-controlled req_id cannot leak
         // a CancelState for the process lifetime.
-        struct CancelRegistrationGuard {
-            const std::string& id;
-            ~CancelRegistrationGuard() {
-                CancelRegistry::instance().remove(id);
-            }
-        } cancel_guard{req_id};
+        auto cancel_guard =
+            dstd::defer([&] { CancelRegistry::instance().remove(req_id); });
 
         HttpResponse resp;
         try {

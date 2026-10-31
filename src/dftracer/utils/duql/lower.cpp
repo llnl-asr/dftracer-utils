@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/calendar.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/decorrelate.h>
 #include <dftracer/utils/duql/fields.h>
@@ -268,22 +269,14 @@ class Lowering {
     // with a source.
     duql::Pipeline lower_steps(duql::Input in,
                                const std::vector<Step>& steps) const {
-        struct UnitScope {
-            const Lowering& l;
-            decltype(col_units_) units;
-            bool record;
-            explicit UnitScope(const Lowering& lw)
-                : l(lw),
-                  units(std::move(lw.col_units_)),
-                  record(lw.record_units_) {
-                l.col_units_.clear();
-                l.record_units_ = true;
-            }
-            ~UnitScope() {
-                l.col_units_ = std::move(units);
-                l.record_units_ = record;
-            }
-        } unit_scope(*this);
+        auto units = std::move(col_units_);
+        const bool record = record_units_;
+        col_units_.clear();
+        record_units_ = true;
+        auto unit_scope = dstd::defer([&] {
+            col_units_ = std::move(units);
+            record_units_ = record;
+        });
         duql::Pipeline out;
         out.input = std::move(in);
         // Rows of a row set are no scan: every stage runs on them.
@@ -808,15 +801,9 @@ class Lowering {
     duql::PipelineItem plugin_item(
         std::string name, const Expr& value,
         std::vector<duql::PipelineStage>& sink) const {
-        struct Scope {
-            const Lowering& l;
-            decltype(plug_) prev;
-            Scope(const Lowering& lw, decltype(plug_) now)
-                : l(lw), prev(lw.plug_) {
-                l.plug_ = now;
-            }
-            ~Scope() { l.plug_ = prev; }
-        } scope(*this, side_depth_ == 0 ? &sink : nullptr);
+        const auto prev = plug_;
+        plug_ = side_depth_ == 0 ? &sink : nullptr;
+        auto scope = dstd::defer([&] { plug_ = prev; });
         return item(std::move(name), value);
     }
 

@@ -1,3 +1,4 @@
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/runtime/coro/completion_latch.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/store/committer.h>
@@ -348,11 +349,7 @@ dstd::Error Committer::error() const {
 dstd::Expected<void, dstd::Error> Committer::commit_pending() {
     std::lock_guard<std::mutex> commit_lock(commit_mutex_);
     dstd::Vector<PendingEntry> drained;
-    struct FreeOnExit {
-        Committer& owner;
-        dstd::Vector<PendingEntry>& entries;
-        ~FreeOnExit() { owner.free_entries(entries); }
-    } free_on_exit{*this, drained};
+    auto free_on_exit = dstd::defer([&] { free_entries(drained); });
     drain(drained);
 
     if (drained.empty()) {

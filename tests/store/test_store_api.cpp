@@ -431,7 +431,8 @@ TEST_SUITE("store api") {
         Rows rows;
         for (int i = 0; i < 512; ++i) {
             const std::string key = "k" + std::to_string(1000 + i);
-            rows.emplace_back(key, std::string(16 * 1024, 'a' + (i % 26)));
+            rows.emplace_back(
+                key, std::string(16 * 1024, static_cast<char>('a' + (i % 26))));
         }
         put_all(store, ns, scope, rows);
         std::optional<std::string> seen = get_value(store, ns, scope, "k1000");

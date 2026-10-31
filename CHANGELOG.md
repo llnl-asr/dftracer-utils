@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 ### Changed
 
 - Make `dftracer_event_count` read the count of a file from a fresh index and otherwise stream the file, where it built an index first, so it writes nothing and no longer takes `--checkpoint-size`.
+  The first count of the 7,742 matrix traces at 96 threads takes 1.7 s where it took 15 s, and peaks at 1.4 GB where it peaked at 5.4 GB.
 - Make a scan of one file's rows in the index decode only the part of a stored segment that can hold them, where it decoded the whole segment that the rows of many files share, and read each file's string table in the task that reads that file.
   The first `dftracer_stats` of the 2,376 amg traces at 96 threads takes 5.7 s where it took about 150 s, and peaks at 1.5 GB where it peaked at 7.2 GB.
 - Check whether the indexed files are fresh in parallel, where one thread checked them one by one, and decode only the index pages a point lookup needs.

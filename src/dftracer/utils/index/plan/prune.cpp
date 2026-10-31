@@ -3,8 +3,8 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
 #include <cmath>
@@ -38,24 +38,30 @@ std::vector<std::uint64_t> filter_by_time(
     return kept;
 }
 
-// Runs `fn(db, file_id)` on the request's index; false when the file is not
-// in it.
-template <class Fn>
-bool with_file(const PruneRequest& request, Fn&& fn) {
-    std::optional<store::IndexDatabase> owned;
-    auto* db = request.db;
-    if (!db) {
-        owned.emplace(request.index_path, store::IndexOpenMode::ReadOnly);
-        db = &*owned;
-    }
-    const int fid = db->get_file_info_id(
-        store::internal::get_logical_path(request.file_path));
-    if (fid < 0) return false;
-    fn(*db, fid);
-    return true;
-}
+// The request's snapshot, or one taken on first use and kept for the call.
+class Reads {
+   public:
+    explicit Reads(const PruneRequest& request)
+        : request_(request), snapshot_(request.snapshot) {}
 
-coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
+    Result<const index::Snapshot*> get() {
+        if (!snapshot_) {
+            auto taken = open_snapshot(request_.index_path);
+            if (!taken) return dstd::Unexpected(std::move(taken).error());
+            owned_.emplace(std::move(*taken));
+            snapshot_ = &*owned_;
+        }
+        return snapshot_;
+    }
+
+   private:
+    const PruneRequest& request_;
+    const index::Snapshot* snapshot_;
+    std::optional<index::Snapshot> owned_;
+};
+
+coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request,
+                                               Reads& reads) {
     PruneResult result;
 
     if (request.query && !request.index_path.empty()) {
@@ -63,7 +69,7 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
         // A temporary built inside the co_await expression is destroyed
         // twice by GCC 12, so the input is a named local.
         const ChunkPrunerInput input{request.index_path, request.file_path,
-                                     *request.query, request.db};
+                                     *request.query, unwrap(reads.get())};
         auto out = co_await pruner(input);
         if (out.success) {
             result.total_chunks = out.total_checkpoints;
@@ -89,20 +95,21 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
         bounds;
     ankerl::unordered_dense::set<std::uint64_t> no_starts;
     try {
-        if (!with_file(request, [&](const store::IndexDatabase& db, int fid) {
-                bounds =
-                    request.by_start
-                        ? index::extensions::kinds::chunk_start_bounds(db, fid)
-                        : index::extensions::kinds::chunk_time_bounds(db, fid);
-                // Whole bins round the window outward, so a zero is exact.
-                if (request.by_start)
-                    no_starts = index::extensions::kinds::chunks_without_starts(
-                        db, fid,
-                        static_cast<std::uint64_t>(std::max(0.0, begin)),
-                        end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
-                                : std::numeric_limits<std::uint64_t>::max());
-            }))
-            co_return result;
+        const index::Snapshot& snapshot = *unwrap(reads.get());
+        const auto file =
+            snapshot.file(store::internal::get_logical_path(request.file_path));
+        if (!file) co_return result;
+        bounds =
+            request.by_start
+                ? index::extensions::kinds::chunk_start_bounds(snapshot, *file)
+                : index::extensions::kinds::chunk_time_bounds(snapshot, *file);
+        // Whole bins round the window outward, so a zero is exact.
+        if (request.by_start)
+            no_starts = index::extensions::kinds::chunks_without_starts(
+                snapshot, *file,
+                static_cast<std::uint64_t>(std::max(0.0, begin)),
+                end > 0 ? static_cast<std::uint64_t>(std::ceil(end))
+                        : std::numeric_limits<std::uint64_t>::max());
     } catch (const std::exception& e) {
         co_return make_error(ErrorCode::Indexer,
                              "prune_file: index read failed for " +
@@ -126,10 +133,18 @@ coro::CoroTask<Result<PruneResult>> prune_data(const PruneRequest& request) {
 
 }  // namespace
 
+Result<index::Snapshot> open_snapshot(const std::string& index_path) {
+    auto opened =
+        Index::open(store::internal::normalize_index_root(index_path));
+    if (!opened) return dstd::Unexpected(std::move(opened).error());
+    return opened->snapshot();
+}
+
 coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
     PruneResult result;
+    Reads reads(request);
     if (request.metadata != MetadataUse::Records) {
-        auto data = co_await prune_data(request);
+        auto data = co_await prune_data(request, reads);
         if (!data || request.metadata == MetadataUse::None || data->all_chunks)
             co_return data;
         result = std::move(*data);
@@ -137,14 +152,13 @@ coro::CoroTask<Result<PruneResult>> prune_file(PruneRequest request) {
 
     // Data evidence says nothing about metadata records: add the chunks
     // whose records are asked for, or every chunk without evidence.
-    std::optional<
-        ankerl::unordered_dense::map<std::uint64_t, store::ChunkMetadata>>
-        meta;
+    dstd::Optional<dstd::HashMap<std::uint64_t, store::ChunkMetadata>> meta;
     if (!request.index_path.empty()) {
         try {
-            with_file(request, [&](const store::IndexDatabase& db, int fid) {
-                meta = db.chunk_metadata(fid);
-            });
+            const index::Snapshot& snapshot = *unwrap(reads.get());
+            if (const auto file = snapshot.file(
+                    store::internal::get_logical_path(request.file_path)))
+                meta = unwrap(index::chunk_meta(snapshot, *file));
         } catch (const std::exception& e) {
             co_return make_error(ErrorCode::Indexer,
                                  "prune_file: index read failed for " +

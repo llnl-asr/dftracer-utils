@@ -1,5 +1,7 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/plan/file_index_data.h>
+#include <dftracer/utils/index/tables.h>
 
 namespace dftracer::utils::index::plan {
 
@@ -23,7 +25,8 @@ bool FileIndexData::current(IndexExtension ext) {
     const auto key = static_cast<std::uint16_t>(ext);
     auto it = current_.find(key);
     if (it != current_.end()) return it->second;
-    const bool ok = db && fid >= 0 && db->extension_current(fid, ext);
+    const bool ok =
+        snapshot && file && index::extension_current(*snapshot, *file, ext);
     current_.emplace(key, ok);
     return ok;
 }
@@ -31,7 +34,8 @@ bool FileIndexData::current(IndexExtension ext) {
 const FileIndexData::Catalog& FileIndexData::catalog() {
     if (!catalog_) {
         catalog_.emplace();
-        if (current(IndexExtension::Catalog)) *catalog_ = db->catalog(fid);
+        if (current(IndexExtension::Catalog))
+            *catalog_ = unwrap(index::catalog(*snapshot, *file));
     }
     return *catalog_;
 }
@@ -56,8 +60,9 @@ const std::optional<std::string>& FileIndexData::evidence_name(
     } else if (!unrecorded(path) && !catalog().empty()) {
         name = path;
         for (const auto& [p, stat] : catalog())
-            if (p == path || (p.size() > path.size() && p.starts_with(path) &&
-                              p[path.size()] == '.')) {
+            if (std::string_view(p) == path ||
+                (p.size() > path.size() && p.starts_with(path) &&
+                 p[path.size()] == '.')) {
                 name.reset();
                 break;
             }
@@ -71,8 +76,8 @@ const FileIndexData::Zones& FileIndexData::zones(const std::string& path) {
     auto& out = zones_[path];
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Zonemap))
-        for (auto& [granule, bytes] :
-             db->path_granules(fid, IndexExtension::Zonemap, *name))
+        for (auto& [granule, bytes] : unwrap(index::granules(
+                 *snapshot, *file, IndexExtension::Zonemap, *name)))
             if (auto zone = kinds::decode_zone(bytes))
                 out.emplace(granule, std::move(*zone));
     return out;
@@ -84,8 +89,8 @@ const FileIndexData::Counts& FileIndexData::counts(const std::string& path) {
     auto& out = counts_[path];
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Counts))
-        for (auto& [granule, bytes] :
-             db->path_granules(fid, IndexExtension::Counts, *name)) {
+        for (auto& [granule, bytes] : unwrap(index::granules(
+                 *snapshot, *file, IndexExtension::Counts, *name))) {
             auto counts = kinds::decode_counts(bytes);
             if (!counts || !counts->compressed) continue;
             auto& g = out[granule];
@@ -101,8 +106,8 @@ const FileIndexData::Blooms& FileIndexData::blooms(const std::string& path) {
     auto& out = blooms_[path];
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Bloom))
-        for (auto& [granule, bytes] :
-             db->path_granules(fid, IndexExtension::Bloom, *name))
+        for (auto& [granule, bytes] : unwrap(index::granules(
+                 *snapshot, *file, IndexExtension::Bloom, *name)))
             if (auto bloom = kinds::decode_bloom(bytes))
                 out.emplace(granule, std::move(*bloom));
     return out;
@@ -115,8 +120,8 @@ const index::extensions::ScalableBloomFilter* FileIndexData::file_bloom(
         std::optional<index::extensions::ScalableBloomFilter> bloom;
         const auto& name = evidence_name(path);
         if (name && current(IndexExtension::Bloom))
-            if (auto bytes =
-                    db->path_file_value(fid, IndexExtension::Bloom, *name))
+            if (auto bytes = unwrap(index::path_file(
+                    *snapshot, *file, IndexExtension::Bloom, *name)))
                 bloom = kinds::decode_bloom(*bytes);
         it = file_blooms_.emplace(path, std::move(bloom)).first;
     }
@@ -131,7 +136,8 @@ const std::set<std::uint64_t>& FileIndexData::posting_chunks(
     auto& out = posting_chunks_[key];
     const auto& name = evidence_name(path);
     if (name && current(IndexExtension::Postings))
-        for (auto g : db->posting_granules(fid, *name, kinds::value_hash(val)))
+        for (auto g : unwrap(index::posting_granules(*snapshot, *file, *name,
+                                                     kinds::value_hash(val))))
             out.insert(g);
     return out;
 }
@@ -142,12 +148,16 @@ std::optional<bool> FileIndexData::posting_contains(const std::string& path,
     if (!name || !current(IndexExtension::Postings)) return std::nullopt;
     auto has = has_postings_.find(path);
     if (has == has_postings_.end())
-        has = has_postings_.emplace(path, db->has_postings(fid, *name)).first;
+        has = has_postings_
+                  .emplace(path,
+                           unwrap(index::has_postings(*snapshot, *file, *name)))
+                  .first;
     if (!has->second) return std::nullopt;
     auto key = path + '\0' + val;
     auto it = posting_membership_.find(key);
     if (it != posting_membership_.end()) return it->second;
-    const bool present = db->has_posting(fid, *name, kinds::value_hash(val));
+    const bool present = unwrap(
+        index::has_posting(*snapshot, *file, *name, kinds::value_hash(val)));
     posting_membership_.emplace(key, present);
     return present;
 }

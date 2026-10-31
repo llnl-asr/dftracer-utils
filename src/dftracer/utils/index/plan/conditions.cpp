@@ -6,7 +6,8 @@
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/file_index_data.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
 #include <charconv>
@@ -221,18 +222,26 @@ void collect_equality_paths(const duql_ns::QueryNode& node,
         node.data);
 }
 
+std::string_view text_of(const std::string& s) { return s; }
+std::string_view text_of(
+    const std::pair<dstd::String, index::store::PathStat>& entry) {
+    return entry.first;
+}
+
 // Whether a record carrying the fields `paths` may resolve `path` the way the
 // evaluator does: as written, under "args.", or as an object or dotted flat
 // key along the way.
-bool path_may_exist(const std::vector<std::string>& paths,
-                    const std::string& path) {
-    auto near = [&](const std::string& p) {
-        for (const auto& s : paths)
+template <class Paths>
+bool path_may_exist(const Paths& paths, const std::string& path) {
+    auto near = [&](std::string_view p) {
+        for (const auto& entry : paths) {
+            const std::string_view s = text_of(entry);
             if (s == p ||
                 (s.size() > p.size() && s.starts_with(p) &&
                  s[p.size()] == '.') ||
                 (p.size() > s.size() && p.starts_with(s) && p[s.size()] == '.'))
                 return true;
+        }
         return false;
     };
     return near(path) || (!path.starts_with("args.") && near("args." + path));
@@ -314,8 +323,8 @@ const duql_ns::FieldNode* leaf_field(const duql_ns::QueryNode& leaf) {
 /// ruled out.
 class MetadataRecords final : public Condition {
    public:
-    explicit MetadataRecords(const ankerl::unordered_dense::map<
-                             std::uint64_t, index::store::ChunkMetadata>& meta)
+    explicit MetadataRecords(
+        const dstd::HashMap<std::uint64_t, index::store::ChunkMetadata>& meta)
         : meta_(meta) {}
 
     IndexExtension extension() const override {
@@ -348,8 +357,7 @@ class MetadataRecords final : public Condition {
         return true;
     }
 
-    const ankerl::unordered_dense::map<std::uint64_t,
-                                       index::store::ChunkMetadata>& meta_;
+    const dstd::HashMap<std::uint64_t, index::store::ChunkMetadata>& meta_;
 };
 
 /// bloom kind, file level: rules the whole file out on equality leaves.
@@ -422,7 +430,7 @@ std::optional<std::string> exists_path(const duql_ns::QueryNode& node) {
 }
 
 // Whether `p` lies below `base`.
-bool under(const std::string& p, const std::string& base) {
+bool under(std::string_view p, const std::string& base) {
     return p.size() > base.size() && p.starts_with(base) &&
            p[base.size()] == '.';
 }
@@ -455,18 +463,12 @@ class CatalogPresence final : public Condition {
 
     bool may_exist(const std::string& path) {
         if (!d_.by_path && unrecorded(path)) return true;
-        if (!paths_) {
-            paths_.emplace();
-            if (d_.db->extension_current(d_.fid, IndexExtension::Catalog))
-                for (auto& [p, stat] : d_.db->catalog(d_.fid))
-                    paths_->push_back(std::move(p));
-        }
-        if (paths_->empty()) return true;
-        return path_may_exist(*paths_, path);
+        const auto& catalog = d_.catalog();
+        if (catalog.empty()) return true;
+        return path_may_exist(catalog, path);
     }
 
     FileIndexData& d_;
-    std::optional<std::vector<std::string>> paths_;
 };
 
 /// postings kind: exact chunks for equality and `in`.
@@ -746,7 +748,7 @@ class Zonemap final : public Condition {
         bool scalar = false;
         for (const auto& [p, stat] : d_.catalog()) {
             if (under(p, leaf)) return false;
-            if (p != leaf) continue;
+            if (std::string_view(p) != leaf) continue;
             scalar = (stat.seen & NULL_BIT) == 0 &&
                      stat.type != index::store::PathType::NullValue &&
                      stat.type < index::store::PathType::Mixed;
@@ -966,8 +968,7 @@ class PluginCondition final : public Condition {
     bool file_may_match(const duql_ns::QueryNode& root) override {
         if (!ext_->vt.file_may_match) return true;
         if (!file_loaded_) {
-            file_ = d_.db->path_file_value(d_.fid, IndexExtension::Plugin,
-                                           ext_->name);
+            file_ = load().file;
             file_loaded_ = true;
         }
         return !file_ || may_match_file(root);
@@ -979,8 +980,7 @@ class PluginCondition final : public Condition {
         if (!h) return std::nullopt;
         if (!granules_) {
             granules_.emplace();
-            for (auto& [g, bytes] : d_.db->path_granules(
-                     d_.fid, IndexExtension::Plugin, ext_->name))
+            for (auto& [g, bytes] : load().granules)
                 granules_->emplace(g, std::move(bytes));
         }
         ChunkSet out;
@@ -1061,12 +1061,24 @@ class PluginCondition final : public Condition {
         return ext_->vt.compile(ext_->self, &l);
     }
 
+    PluginData& load() {
+        if (!loaded_) {
+            if (auto found =
+                    unwrap(index::plugin(*d_.snapshot, *d_.file, ext_->name)))
+                data_ = std::move(*found);
+            loaded_ = true;
+        }
+        return data_;
+    }
+
     FileIndexData& d_;
     index::extensions::PluginExtensionPtr ext_;
     ankerl::unordered_dense::map<const duql_ns::QueryNode*, void*> compiled_;
-    std::optional<ankerl::unordered_dense::map<std::uint64_t, std::string>>
+    PluginData data_;
+    bool loaded_ = false;
+    std::optional<ankerl::unordered_dense::map<std::uint64_t, dstd::String>>
         granules_;
-    std::optional<std::string> file_;
+    dstd::Optional<dstd::String> file_;
     bool file_loaded_ = false;
 };
 
@@ -1080,11 +1092,19 @@ Conditions make_query_conditions(FileIndexData& data) {
     cs.push_back(std::make_unique<Counts>(data));
     cs.push_back(std::make_unique<Zonemap>(data));
     cs.push_back(std::make_unique<ChunkBloom>(data));
-    for (auto& ext : index::extensions::plugin_extensions()) {
-        auto state = data.db->plugin_extension_state(data.fid, ext->name);
-        if (state && ext->current(*state))
-            cs.push_back(
-                std::make_unique<PluginCondition>(data, std::move(ext)));
+    auto registered = index::extensions::plugin_extensions();
+    if (registered.empty()) return cs;
+    const auto copies = unwrap(index::plugins(*data.snapshot, *data.file));
+    for (auto& ext : registered) {
+        for (const auto& copy : copies) {
+            if (std::string_view(copy.name) != ext->name) continue;
+            const store::ExtensionState state{copy.version, copy.params_hash,
+                                              copy.ready};
+            if (ext->current(state))
+                cs.push_back(
+                    std::make_unique<PluginCondition>(data, std::move(ext)));
+            break;
+        }
     }
     return cs;
 }
@@ -1102,8 +1122,7 @@ ChunkSet evaluate(const duql_ns::QueryNode& root, const Conditions& conditions,
 }
 
 Conditions make_metadata_conditions(
-    const ankerl::unordered_dense::map<std::uint64_t,
-                                       index::store::ChunkMetadata>& metadata) {
+    const dstd::HashMap<std::uint64_t, index::store::ChunkMetadata>& metadata) {
     Conditions out;
     out.push_back(std::make_unique<MetadataRecords>(metadata));
     return out;

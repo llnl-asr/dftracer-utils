@@ -8,8 +8,10 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -26,13 +28,30 @@ namespace dftracer::utils::index::plan {
 
 namespace df = dftracer::utils::dataframe;
 
-const RecordSchema* recorded_schema(const store::IndexDatabase& db,
+const RecordSchema* recorded_schema(const Snapshot& snapshot,
                                     const std::string& trace) {
-    const int fid =
-        db.get_file_info_id(index::store::internal::get_logical_path(trace));
-    if (fid < 0) return nullptr;
-    const auto id = db.file_schema(fid);
+    const auto file =
+        snapshot.file(index::store::internal::get_logical_path(trace));
+    if (!file) return nullptr;
+    const auto id = unwrap(index::schema(snapshot, *file));
     return id ? &get_schema(*id) : nullptr;
+}
+
+// The file's entry in the snapshot, when the index holds it for the trace as
+// the trace is now.
+static dstd::Optional<FileRef> current_file(const Snapshot& snapshot,
+                                            const RowSetFile& f) {
+    InputFileStat st;
+    SourceStat now;
+    if (stat_input(f.trace, st)) {
+        now.mtime = static_cast<std::uint64_t>(st.mtime);
+        now.size = st.size;
+    }
+    const std::string logical =
+        index::store::internal::get_logical_path(f.trace);
+    if (snapshot.freshness(logical, now) != Freshness::Current)
+        return std::nullopt;
+    return snapshot.file(logical);
 }
 
 static SchemaDetection explain_trace_schema(const RowSetFile& f) {
@@ -104,17 +123,17 @@ void for_each_index(std::size_t n, Fn&& fn) {
 const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
     // A missing trace with no recorded schema is read as dftracer here, and
     // the scan reports the missing trace.
-    dstd::Map<std::string, std::optional<store::IndexDatabase>> dbs;
-    dstd::Vector<const store::IndexDatabase*> db_of(files.size(), nullptr);
+    dstd::Map<std::string, std::optional<Snapshot>> snapshots;
+    dstd::Vector<const Snapshot*> snapshot_of(files.size(), nullptr);
     for (std::size_t i = 0; i < files.size(); ++i) {
         const auto& f = files[i];
         if (f.index.empty()) continue;
-        auto [it, fresh] = dbs.try_emplace(f.index);
+        auto [it, fresh] = snapshots.try_emplace(f.index);
         if (fresh && fs::exists(f.index)) {
             load_index_schemas(f.index);
-            it->second.emplace(f.index, store::IndexOpenMode::ReadOnly);
+            it->second.emplace(unwrap(open_snapshot(f.index)));
         }
-        if (it->second) db_of[i] = &*it->second;
+        if (it->second) snapshot_of[i] = &*it->second;
     }
     dstd::Vector<const RecordSchema*> schemas(files.size(), nullptr);
     dstd::Vector<std::exception_ptr> errors(files.size());
@@ -124,7 +143,7 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
             const RecordSchema* p = nullptr;
             // A recorded schema that is not registered is an error, not a
             // reason to detect again.
-            if (db_of[i]) p = recorded_schema(*db_of[i], f.trace);
+            if (snapshot_of[i]) p = recorded_schema(*snapshot_of[i], f.trace);
             if (!p && trace_exists(f.trace)) p = &detect_trace_schema(f);
             if (!p) {
                 DFTRACER_UTILS_LOG_WARN(
@@ -187,22 +206,17 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
 std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
                                            std::string_view name) {
     if (files.empty()) return std::nullopt;
-    std::map<std::string, std::optional<store::IndexDatabase>, std::less<>> dbs;
+    std::map<std::string, std::optional<Snapshot>, std::less<>> snapshots;
     std::vector<df::DataFrame> parts;
     try {
         for (const auto& f : files) {
             if (f.index.empty()) return std::nullopt;
-            auto [it, fresh] = dbs.try_emplace(f.index);
-            if (fresh)
-                it->second.emplace(f.index, store::IndexOpenMode::ReadOnly);
-            const store::IndexDatabase& db = *it->second;
-            if (db.check_freshness(f.trace) !=
-                store::IndexDatabase::Freshness::Fresh)
-                return std::nullopt;
-            const int fid =
-                db.get_file_info_id(store::internal::get_logical_path(f.trace));
-            if (fid < 0) return std::nullopt;
-            auto bytes = db.rowset(fid, name);
+            auto [it, fresh] = snapshots.try_emplace(f.index);
+            if (fresh) it->second.emplace(unwrap(open_snapshot(f.index)));
+            const Snapshot& snapshot = *it->second;
+            const auto file = current_file(snapshot, f);
+            if (!file) return std::nullopt;
+            auto bytes = unwrap(index::rowset(snapshot, *file, name));
             if (!bytes) return std::nullopt;
             auto frame = df::frame_from_native(*bytes);
             if (!frame) return std::nullopt;
@@ -219,21 +233,16 @@ std::optional<df::DataFrame> stored_rowset(const std::vector<RowSetFile>& files,
 
 bool has_stored_rowsets(const std::vector<RowSetFile>& files) {
     if (files.empty()) return false;
-    std::map<std::string, std::optional<store::IndexDatabase>, std::less<>> dbs;
+    std::map<std::string, std::optional<Snapshot>, std::less<>> snapshots;
     try {
         for (const auto& f : files) {
             if (f.index.empty()) return false;
-            auto [it, fresh] = dbs.try_emplace(f.index);
-            if (fresh)
-                it->second.emplace(f.index, store::IndexOpenMode::ReadOnly);
-            const store::IndexDatabase& db = *it->second;
-            if (db.check_freshness(f.trace) !=
-                store::IndexDatabase::Freshness::Fresh)
-                return false;
-            const int fid =
-                db.get_file_info_id(store::internal::get_logical_path(f.trace));
-            if (fid < 0 ||
-                !db.extension_current(fid, store::IndexExtension::Rowset))
+            auto [it, fresh] = snapshots.try_emplace(f.index);
+            if (fresh) it->second.emplace(unwrap(open_snapshot(f.index)));
+            const Snapshot& snapshot = *it->second;
+            const auto file = current_file(snapshot, f);
+            if (!file || !index::extension_current(
+                             snapshot, *file, store::IndexExtension::Rowset))
                 return false;
         }
     } catch (const std::exception&) {

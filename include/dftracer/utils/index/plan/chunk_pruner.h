@@ -3,28 +3,30 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstdint>
 #include <string>
 #include <vector>
 
+namespace dftracer::utils::index {
+class Snapshot;
+}
+
 namespace dftracer::utils::index::plan {
 
 using duql::Query;
 
-/// Input for chunk pruning: index path, file path, query, optional cache.
+/// Input for chunk pruning: index path, file path, query, optional snapshot.
 ///
-/// If `external_db` is non-null the utility reuses that handle instead of
-/// opening the index at `index_path` itself. This lets callers that prune
-/// many files against the same directory-level index open it once per batch
-/// rather than once per file.
+/// If `snapshot` is non-null the utility reads through it instead of opening
+/// the index at `index_path` and taking its own. The caller keeps it alive for
+/// the whole query, so many files pruned against one index share one.
 struct ChunkPrunerInput {
     std::string index_path;  ///< Path to the `.dftindex` store.
     std::string file_path;   ///< Path to trace file.
     Query query;             ///< Query to evaluate for pruning.
-    index::store::IndexDatabase* external_db = nullptr;  ///< Reused DB handle.
+    const index::Snapshot* snapshot = nullptr;  ///< Borrowed.
 };
 
 /// Result of chunk pruning.
@@ -37,7 +39,7 @@ struct ChunkPrunerOutput {
 };
 
 /// Input for pruning many files that share one `.dftindex` store with one
-/// database handle.
+/// snapshot.
 struct ChunkPrunerBatchItem {
     std::string file_path;
     Query query;
@@ -46,7 +48,7 @@ struct ChunkPrunerBatchItem {
 struct ChunkPrunerBatchInput {
     std::string index_path;
     std::vector<ChunkPrunerBatchItem> items;
-    index::store::IndexDatabase* external_db = nullptr;
+    const index::Snapshot* snapshot = nullptr;  ///< Borrowed, as above.
 };
 
 struct ChunkPrunerBatchOutput {
@@ -76,7 +78,7 @@ struct ChunkExplanation {
 
 /// Explains the pruning of `file_path` for `query`. Throws on an index read
 /// error, where ChunkPruner assumes a match.
-ChunkExplanation explain_file_chunks(const index::store::IndexDatabase& db,
+ChunkExplanation explain_file_chunks(const index::Snapshot& snapshot,
                                      const std::string& file_path,
                                      const Query& query);
 
@@ -87,7 +89,7 @@ class ChunkPruner {
    public:
     coro::CoroTask<ChunkPrunerOutput> operator()(const ChunkPrunerInput& input);
 
-    /// Prune many files against the same index with one database handle.
+    /// Prune many files against the same index with one snapshot.
     Result<ChunkPrunerBatchOutput> process_batch(
         const ChunkPrunerBatchInput& input);
 };

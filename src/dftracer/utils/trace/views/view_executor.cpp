@@ -24,6 +24,7 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -1119,19 +1120,24 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     std::uint64_t global_min = std::numeric_limits<std::uint64_t>::max();
     const bool by_path = plan_by_path(plan);
     const ix::Roles& roles = plan_record_schema(plan).roles;
+    std::map<std::string, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         if (f.index_path.empty() || !input_exists(f.index_path)) continue;
         try {
-            dftracer::utils::index::store::IndexDatabase db(
-                f.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            const int fid = db.get_file_info_id(
+            auto at = snapshots.find(f.index_path);
+            if (at == snapshots.end())
+                at = snapshots
+                         .emplace(f.index_path,
+                                  unwrap(ix::plan::open_snapshot(f.index_path)))
+                         .first;
+            const ix::Snapshot& snapshot = at->second;
+            const auto file = snapshot.file(
                 dftracer::utils::index::store::internal::get_logical_path(
                     f.file_path));
-            if (fid < 0) continue;
+            if (!file) continue;
             if (by_path) {
                 const auto r = ix::extensions::kinds::file_value_range(
-                    db, fid, roles.time);
+                    snapshot, *file, roles.time);
                 if (r && r->first >= 0)
                     global_min = std::min(
                         global_min,
@@ -1141,7 +1147,7 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
             }
             const auto b =
                 dftracer::utils::index::extensions::kinds::file_time_bounds(
-                    db, fid);
+                    snapshot, *file);
             if (b.valid && b.min_timestamp_us < global_min)
                 global_min = b.min_timestamp_us;
         } catch (const std::exception&) {

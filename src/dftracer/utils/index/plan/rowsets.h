@@ -3,17 +3,20 @@
 
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+namespace dftracer::utils::index {
+class Snapshot;
+}
+
 namespace dftracer::utils::index::plan {
 
 /// The schema the index recorded for `trace`, or null.
-const RecordSchema* recorded_schema(const store::IndexDatabase& db,
+const RecordSchema* recorded_schema(const Snapshot& snapshot,
                                     const std::string& trace);
 
 /// A trace and the index that covers it.

@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_PLAN_CONDITION_H
 
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/duql/ast.h>
 #include <dftracer/utils/index/store/file.h>
 
@@ -68,8 +69,7 @@ Conditions make_query_conditions(FileIndexData& data);
 /// and, for a leaf on `name`, one of its record names satisfies it. `metadata`
 /// is borrowed and must outlive the Conditions.
 Conditions make_metadata_conditions(
-    const ankerl::unordered_dense::map<std::uint64_t,
-                                       index::store::ChunkMetadata>& metadata);
+    const dstd::HashMap<std::uint64_t, index::store::ChunkMetadata>& metadata);
 
 /// False only when some Condition proves no event of the file matches.
 bool file_may_match(const duql::QueryNode& root, const Conditions& conditions);

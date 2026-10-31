@@ -1,8 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -622,10 +624,11 @@ fields:
                            .record_schema("generic");
         CHECK(count_of(v, "where name == \"b0150\"") == 1);
         CHECK(count_of(v, "where name in [\"a0001\", \"c0999\"]") == 2);
-        ix::store::IndexDatabase db(determine_index_path(gz, ""),
-                                    ix::store::IndexOpenMode::ReadOnly);
+        const auto snapshot =
+            ix::plan::open_snapshot(determine_index_path(gz, ""));
+        REQUIRE(snapshot.has_value());
         const auto plan = ix::plan::explain_file_chunks(
-            db, gz, duql::parse_or_throw("name == \"b0150\""));
+            *snapshot, gz, duql::parse_or_throw("name == \"b0150\""));
         REQUIRE(plan.total_chunks > 3);
         CHECK(plan.read.size() < plan.total_chunks / 2);
     }

@@ -1,15 +1,18 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -43,7 +46,8 @@ namespace {
 // duration. Events without a clock sit at ts 0, so a dftracer file starts at
 // its first start above 0 when it has one.
 dftracer::utils::index::gzip::TimeBounds timeline_bounds(
-    const dftracer::utils::index::store::IndexDatabase& db, int fid,
+    const dftracer::utils::index::Snapshot& snapshot,
+    const dftracer::utils::index::FileRef& file,
     const dftracer::utils::index::RecordSchema& schema) {
     namespace ix = dftracer::utils::index;
     if (schema.decoder == ix::Decoder::Path) {
@@ -51,13 +55,13 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
         const auto& roles = schema.roles;
         if (roles.time.empty()) return bounds;
         const auto time =
-            ix::extensions::kinds::file_value_range(db, fid, roles.time);
+            ix::extensions::kinds::file_value_range(snapshot, file, roles.time);
         if (!time) return bounds;
         const double time_us = ix::micros_per(roles.time_unit);
         double end = time->second * time_us;
         if (!roles.duration.empty())
             if (const auto dur = ix::extensions::kinds::file_value_range(
-                    db, fid, roles.duration);
+                    snapshot, file, roles.duration);
                 dur && dur->second > 0)
                 end += dur->second * ix::micros_per(roles.duration_unit);
         bounds.valid = true;
@@ -67,14 +71,13 @@ dftracer::utils::index::gzip::TimeBounds timeline_bounds(
             static_cast<std::uint64_t>(std::llround(std::max(0.0, end)));
         return bounds;
     }
-    auto bounds =
-        dftracer::utils::index::extensions::kinds::file_time_bounds(db, fid);
+    auto bounds = dftracer::utils::index::extensions::kinds::file_time_bounds(
+        snapshot, file);
     if (!bounds.valid || bounds.min_timestamp_us != 0) return bounds;
-    const auto stats = db.query_file_scalar_stats_batch({fid});
-    const auto it = stats.find(fid);
-    if (it != stats.end() &&
-        it->second.stats.min_nonzero_timestamp_us <= bounds.max_timestamp_us)
-        bounds.min_timestamp_us = it->second.stats.min_nonzero_timestamp_us;
+    const auto stats = unwrap(ix::scalar_stats(snapshot, file));
+    if (stats &&
+        stats->stats.min_nonzero_timestamp_us <= bounds.max_timestamp_us)
+        bounds.min_timestamp_us = stats->stats.min_nonzero_timestamp_us;
     return bounds;
 }
 
@@ -677,30 +680,28 @@ coro::CoroTask<void> TraceIndex::initialize() {
 
                                     if (info->has_bloom_data) {
                                         try {
-                                            dftracer::utils::index::store::
-                                                IndexDatabase idx_db(
-                                                    info->index_path);
-                                            auto logical =
-                                                dftracer::utils::index::store::
-                                                    internal::get_logical_path(
-                                                        info->path);
-                                            int fid = idx_db.get_file_info_id(
-                                                logical);
-                                            if (fid >= 0) {
-                                                namespace ix =
-                                                    dftracer::utils::index;
+                                            namespace ix =
+                                                dftracer::utils::index;
+                                            const auto snapshot =
+                                                unwrap(ix::plan::open_snapshot(
+                                                    info->index_path));
+                                            const auto file = snapshot.file(
+                                                ix::store::internal::
+                                                    get_logical_path(
+                                                        info->path));
+                                            if (file) {
                                                 ix::load_index_schemas(
                                                     info->index_path);
                                                 const auto* schema =
                                                     ix::plan::recorded_schema(
-                                                        idx_db, info->path);
+                                                        snapshot, info->path);
                                                 if (!schema)
                                                     schema =
                                                         &ix::detect_file_schema(
                                                             info->path);
                                                 (*schemas_ptr)[fi] = schema;
                                                 auto bounds = timeline_bounds(
-                                                    idx_db, fid, *schema);
+                                                    snapshot, *file, *schema);
                                                 if (bounds.valid) {
                                                     info->min_timestamp_us =
                                                         bounds.min_timestamp_us;

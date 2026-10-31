@@ -2,10 +2,13 @@
 #define DFTRACER_UTILS_INDEX_PLAN_FILE_INDEX_DATA_H
 
 #include <ankerl/unordered_dense.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/store/file.h>
 
 #include <cstdint>
 #include <optional>
@@ -17,7 +20,6 @@
 
 namespace dftracer::utils::index::plan {
 
-using index::store::IndexDatabase;
 using index::store::IndexExtension;
 
 /// One granule's value counts; the map is decompressed on first use.
@@ -37,8 +39,9 @@ bool unrecorded(std::string_view path);
 /// query. Each kind's data for a path is read the first time a leaf needs it,
 /// and only when that kind is current for the file.
 struct FileIndexData {
-    const IndexDatabase* db = nullptr;
-    int fid = -1;
+    /// Borrowed; both outlive the FileIndexData.
+    const index::Snapshot* snapshot = nullptr;
+    const index::FileRef* file = nullptr;
     /// The file was indexed by path, so no field is a dftracer fixed field.
     bool by_path = false;
     std::uint64_t total_chunks = 0;
@@ -68,7 +71,8 @@ struct FileIndexData {
     const Zones& zones(const std::string& path);
     const Counts& counts(const std::string& path);
     const Blooms& blooms(const std::string& path);
-    using Catalog = std::vector<std::pair<std::string, index::store::PathStat>>;
+    using Catalog =
+        dstd::Vector<std::pair<dstd::String, index::store::PathStat>>;
     /// The file's path catalog; empty when it is not current.
     const Catalog& catalog();
 

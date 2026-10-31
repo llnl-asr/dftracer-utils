@@ -1,5 +1,7 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
 #include <charconv>
@@ -17,16 +19,16 @@ bool parse(const std::string& text, std::uint64_t& out) {
 // Per chunk, the [min, max] of the zonemap of `path`.
 ankerl::unordered_dense::map<std::uint64_t,
                              std::pair<std::uint64_t, std::uint64_t>>
-chunk_bounds(const index::store::IndexDatabase& db, int file_id,
+chunk_bounds(const index::Snapshot& snapshot, const index::FileRef& file,
              std::string_view path) {
     ankerl::unordered_dense::map<std::uint64_t,
                                  std::pair<std::uint64_t, std::uint64_t>>
         out;
-    if (!db.extension_current(file_id, index::store::IndexExtension::Zonemap))
+    if (!index::extension_current(snapshot, file,
+                                  index::store::IndexExtension::Zonemap))
         return out;
-    for (const auto& [granule, bytes] :
-         db.path_granules(file_id, index::store::IndexExtension::Zonemap,
-                          std::string(path))) {
+    for (const auto& [granule, bytes] : unwrap(index::granules(
+             snapshot, file, index::store::IndexExtension::Zonemap, path))) {
         auto zone = decode_zone(bytes);
         std::uint64_t lo = 0;
         std::uint64_t hi = 0;
@@ -40,24 +42,26 @@ chunk_bounds(const index::store::IndexDatabase& db, int file_id,
 
 ankerl::unordered_dense::map<std::uint64_t,
                              std::pair<std::uint64_t, std::uint64_t>>
-chunk_time_bounds(const index::store::IndexDatabase& db, int file_id) {
-    return chunk_bounds(db, file_id, "te");
+chunk_time_bounds(const index::Snapshot& snapshot, const index::FileRef& file) {
+    return chunk_bounds(snapshot, file, "te");
 }
 
 ankerl::unordered_dense::map<std::uint64_t,
                              std::pair<std::uint64_t, std::uint64_t>>
-chunk_start_bounds(const index::store::IndexDatabase& db, int file_id) {
-    return chunk_bounds(db, file_id, "ts");
+chunk_start_bounds(const index::Snapshot& snapshot,
+                   const index::FileRef& file) {
+    return chunk_bounds(snapshot, file, "ts");
 }
 
 ankerl::unordered_dense::set<std::uint64_t> chunks_without_starts(
-    const index::store::IndexDatabase& db, int file_id, std::uint64_t begin,
-    std::uint64_t end) {
+    const index::Snapshot& snapshot, const index::FileRef& file,
+    std::uint64_t begin, std::uint64_t end) {
     ankerl::unordered_dense::set<std::uint64_t> out;
-    if (!db.extension_current(file_id, index::store::IndexExtension::Zonemap))
+    if (!index::extension_current(snapshot, file,
+                                  index::store::IndexExtension::Zonemap))
         return out;
-    for (const auto& [granule, bytes] : db.path_granules(
-             file_id, index::store::IndexExtension::Zonemap, "ts")) {
+    for (const auto& [granule, bytes] : unwrap(index::granules(
+             snapshot, file, index::store::IndexExtension::Zonemap, "ts"))) {
         auto zone = decode_zone(bytes);
         if (zone && zone->histogram && !zone->histogram->empty() &&
             zone->histogram->count_in_range(begin, end) == 0)
@@ -66,10 +70,10 @@ ankerl::unordered_dense::set<std::uint64_t> chunks_without_starts(
     return out;
 }
 
-index::gzip::TimeBounds file_time_bounds(const index::store::IndexDatabase& db,
-                                         int file_id) {
+index::gzip::TimeBounds file_time_bounds(const index::Snapshot& snapshot,
+                                         const index::FileRef& file) {
     index::gzip::TimeBounds bounds;
-    for (const auto& [granule, range] : chunk_time_bounds(db, file_id)) {
+    for (const auto& [granule, range] : chunk_time_bounds(snapshot, file)) {
         if (range.first > range.second) continue;
         bounds.valid = true;
         bounds.min_timestamp_us =
@@ -81,18 +85,19 @@ index::gzip::TimeBounds file_time_bounds(const index::store::IndexDatabase& db,
 }
 
 std::optional<std::pair<double, double>> file_value_range(
-    const index::store::IndexDatabase& db, int file_id, std::string_view path) {
+    const index::Snapshot& snapshot, const index::FileRef& file,
+    std::string_view path) {
     std::optional<std::pair<double, double>> out;
-    if (!db.extension_current(file_id, index::store::IndexExtension::Zonemap))
+    if (!index::extension_current(snapshot, file,
+                                  index::store::IndexExtension::Zonemap))
         return out;
     auto number = [](const std::string& text, double& v) {
         char* end = nullptr;
         v = std::strtod(text.c_str(), &end);
         return !text.empty() && end == text.c_str() + text.size();
     };
-    for (const auto& [granule, bytes] :
-         db.path_granules(file_id, index::store::IndexExtension::Zonemap,
-                          std::string(path))) {
+    for (const auto& [granule, bytes] : unwrap(index::granules(
+             snapshot, file, index::store::IndexExtension::Zonemap, path))) {
         auto zone = decode_zone(bytes);
         double lo = 0;
         double hi = 0;

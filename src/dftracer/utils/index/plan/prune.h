@@ -3,7 +3,6 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/runtime/coro/task.h>
 
 #include <cstdint>
@@ -11,6 +10,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace dftracer::utils::index {
+class Snapshot;
+}
 
 namespace dftracer::utils::index::plan {
 
@@ -33,8 +36,9 @@ struct PruneRequest {
     std::string file_path;
     /// Borrowed; nullptr skips query pruning.
     const duql::Query* query = nullptr;
-    /// Borrowed open index at `index_path`; opened per call when null.
-    index::store::IndexDatabase* db = nullptr;
+    /// Borrowed snapshot of the index at `index_path`, held by the caller
+    /// for the whole query. When null, prune_file takes one for the call.
+    const index::Snapshot* snapshot = nullptr;
     /// {begin, end} in microseconds; 0 leaves that side open.
     std::optional<std::pair<double, double>> time_range;
     /// Chunk count to expand "every chunk" to when a time range applies and
@@ -57,6 +61,9 @@ struct PruneResult {
     /// Chunk count reported by the index, 0 when unknown.
     std::uint64_t total_chunks = 0;
 };
+
+/// Opens the index at `index_path` and takes one snapshot of it.
+Result<index::Snapshot> open_snapshot(const std::string& index_path);
 
 /// Decides which chunks of one file a query must read: the query's
 /// Conditions first, then the time range against per-chunk time bounds, then

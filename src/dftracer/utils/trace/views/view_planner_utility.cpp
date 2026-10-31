@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -79,13 +80,15 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                     : input.view.metadata_records ? plan::MetadataUse::All
                     : input.view.include_metadata ? plan::MetadataUse::Every
                                                   : plan::MetadataUse::None;
+                const auto snapshot =
+                    unwrap(plan::open_snapshot(input.index_path));
                 // Named, not built inside co_await: GCC 12 destroys such a
                 // temporary twice.
                 plan::PruneRequest request{
                     input.index_path,
                     input.file_path,
                     input.view.query ? &*input.view.query : nullptr,
-                    &idx_db,
+                    &snapshot,
                     input.time_range,
                     total_checkpoints,
                     !input.view.window_overlap,

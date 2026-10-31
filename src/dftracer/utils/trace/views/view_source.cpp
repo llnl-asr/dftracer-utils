@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/scalar.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -485,13 +486,26 @@ class StreamViewCursor : public dftracer::utils::dataframe::Cursor {
         if (!built.has_value()) co_return false;
 
         bool any = false;
+        std::map<std::string, dftracer::utils::index::Snapshot> snapshots;
         for (const ViewFile& f : files_) {
             namespace ip = dftracer::utils::index::plan;
+            // One snapshot per index for the whole call. A failed open leaves
+            // none, and prune_file reports it.
+            const dftracer::utils::index::Snapshot* snapshot = nullptr;
+            if (!f.index_path.empty()) {
+                auto at = snapshots.find(f.index_path);
+                if (at == snapshots.end())
+                    if (auto taken = ip::open_snapshot(f.index_path))
+                        at = snapshots.emplace(f.index_path, std::move(*taken))
+                                 .first;
+                if (at != snapshots.end()) snapshot = &at->second;
+            }
             // GCC 12 destroys a temporary built inside co_await twice.
             ip::PruneRequest prune_req{
                 .index_path = f.index_path,
                 .file_path = f.file_path,
                 .query = &built.value(),
+                .snapshot = snapshot,
                 .metadata = metadata_rows_ ? ip::MetadataUse::Records
                                            : ip::MetadataUse::None};
             auto out = co_await ip::prune_file(std::move(prune_req));

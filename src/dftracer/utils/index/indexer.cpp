@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/extensions/plugin_extension.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -408,10 +409,10 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
             }
             continue;
         }
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
+        const auto snapshot = unwrap(plan::open_snapshot(index_path));
         const duql::Query& q = *parsed;
         for (const auto* p : traces) {
-            auto e = plan::explain_file_chunks(db, *p, q);
+            auto e = plan::explain_file_chunks(snapshot, *p, q);
             FileExplain f{*p,
                           e.indexed,
                           e.file_may_match,

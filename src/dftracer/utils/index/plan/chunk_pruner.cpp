@@ -2,9 +2,10 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/index/plan/file_index_data.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 
 #include <algorithm>
 #include <map>
@@ -15,13 +16,12 @@
 
 namespace dftracer::utils::index::plan {
 
-using index::store::IndexDatabase;
 using index::store::internal::get_logical_path;
 
 namespace {
 
-bool indexed_by_path(const IndexDatabase& db, int fid) {
-    const auto id = db.file_schema(fid);
+bool indexed_by_path(const Snapshot& snapshot, const FileRef& file) {
+    const auto id = unwrap(index::schema(snapshot, file));
     const RecordSchema* schema = id ? find_schema(*id) : nullptr;
     return schema && schema->decoder == Decoder::Path;
 }
@@ -29,7 +29,7 @@ bool indexed_by_path(const IndexDatabase& db, int fid) {
 // Chunk i is gzip member i; every member is a candidate until a Condition
 // rules it out, whether or not the index holds data for it.
 void load_chunks(FileIndexData& ctx) {
-    const auto spans = ctx.db->query_chunk_spans(ctx.fid);
+    const auto spans = unwrap(index::spans(*ctx.snapshot, *ctx.file));
     ctx.total_chunks = spans.size();
     for (std::uint64_t i = 0; i < spans.size(); ++i) {
         ctx.all_chunks.insert(ctx.all_chunks.end(), i);
@@ -56,10 +56,11 @@ using Positions = std::map<std::string, std::vector<std::string>>;
 
 // For each any() path, the catalog paths `<path>.<k>` in position order
 // (`args.<path>.<k>` for a dftracer arg written without the prefix).
-Positions any_positions(const IndexDatabase& db, int fid, const Query& query) {
+Positions any_positions(const Snapshot& snapshot, const FileRef& file,
+                        const Query& query) {
     Positions out;
     std::vector<std::pair<std::uint64_t, std::string>> found;
-    const auto catalog = db.catalog(fid);
+    const auto catalog = unwrap(index::catalog(snapshot, file));
     for (const std::string& path : query.any_paths()) {
         found.clear();
         for (const std::string& base : {path, "args." + path}) {
@@ -70,7 +71,8 @@ Positions any_positions(const IndexDatabase& db, int fid, const Query& query) {
                 const std::string_view k =
                     std::string_view(p).substr(base.size() + 1);
                 if (is_position(k))
-                    found.emplace_back(std::stoull(std::string(k)), p);
+                    found.emplace_back(std::stoull(std::string(k)),
+                                       std::string(p.data(), p.size()));
             }
             if (!found.empty() || path.starts_with("args.")) break;
         }
@@ -131,29 +133,30 @@ q::QueryNodePtr expand(const q::QueryNode& node, const Positions& positions) {
 // The query with every any() leaf replaced by the OR of the leaf on each
 // array position the file's catalog holds, which matches exactly the same
 // records; nullopt when the query has no any() leaf.
-std::optional<Query> expand_any(const IndexDatabase& db, int fid,
+std::optional<Query> expand_any(const Snapshot& snapshot, const FileRef& file,
                                 const Query& query) {
     if (query.any_paths().empty()) return std::nullopt;
-    q::QueryNodePtr root = expand(query.root(), any_positions(db, fid, query));
+    q::QueryNodePtr root =
+        expand(query.root(), any_positions(snapshot, file, query));
     return q::Query::from_node(std::move(root));
 }
 
-ChunkPrunerOutput prune_file_chunks(const IndexDatabase& db,
+ChunkPrunerOutput prune_file_chunks(const Snapshot& snapshot,
                                     const std::string& file_path,
                                     const Query& query_in) {
     ChunkPrunerOutput out;
-    const int fid = db.get_file_info_id(get_logical_path(file_path));
+    const auto file = snapshot.file(get_logical_path(file_path));
     out.success = true;
     out.file_may_match = true;
-    if (fid < 0) return out;
+    if (!file) return out;
 
-    const std::optional<Query> expanded = expand_any(db, fid, query_in);
+    const std::optional<Query> expanded = expand_any(snapshot, *file, query_in);
     const Query& query = expanded ? *expanded : query_in;
 
     FileIndexData ctx;
-    ctx.db = &db;
-    ctx.fid = fid;
-    ctx.by_path = indexed_by_path(db, fid);
+    ctx.snapshot = &snapshot;
+    ctx.file = &*file;
+    ctx.by_path = indexed_by_path(snapshot, *file);
     auto conds = make_query_conditions(ctx);
     if (!file_may_match(query.root(), conds)) {
         out.file_may_match = false;
@@ -190,20 +193,20 @@ ChunkExplanation::ByExtension explain_alone(const Query& query,
 
 }  // namespace
 
-ChunkExplanation explain_file_chunks(const IndexDatabase& db,
+ChunkExplanation explain_file_chunks(const Snapshot& snapshot,
                                      const std::string& file_path,
                                      const Query& query_in) {
     ChunkExplanation out;
-    const int fid = db.get_file_info_id(get_logical_path(file_path));
-    if (fid < 0) return out;
+    const auto file = snapshot.file(get_logical_path(file_path));
+    if (!file) return out;
     out.indexed = true;
-    const std::optional<Query> expanded = expand_any(db, fid, query_in);
+    const std::optional<Query> expanded = expand_any(snapshot, *file, query_in);
     const Query& query = expanded ? *expanded : query_in;
 
     FileIndexData ctx;
-    ctx.db = &db;
-    ctx.fid = fid;
-    ctx.by_path = indexed_by_path(db, fid);
+    ctx.snapshot = &snapshot;
+    ctx.file = &*file;
+    ctx.by_path = indexed_by_path(snapshot, *file);
     auto conds = make_query_conditions(ctx);
     load_chunks(ctx);
     out.total_chunks = ctx.total_chunks;
@@ -217,7 +220,7 @@ ChunkExplanation explain_file_chunks(const IndexDatabase& db,
 
     for (auto ext : index::store::ALL_EXTENSIONS) {
         if (!index::store::PRUNING_EXTENSIONS.has(ext) ||
-            !db.extension_current(fid, ext))
+            !index::extension_current(snapshot, *file, ext))
             continue;
         Conditions own;
         for (auto& c : conds)
@@ -241,29 +244,29 @@ ChunkExplanation explain_file_chunks(const IndexDatabase& db,
 coro::CoroTask<ChunkPrunerOutput> ChunkPruner::operator()(
     const ChunkPrunerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("prune chunks");
-    std::optional<IndexDatabase> owned_db;
-    if (!input.external_db)
-        owned_db.emplace(input.index_path,
-                         index::store::IndexOpenMode::ReadOnly);
-    const IndexDatabase& db =
-        input.external_db ? *input.external_db : *owned_db;
-    co_return prune_file_chunks(db, input.file_path, input.query);
+    std::optional<Snapshot> owned;
+    const Snapshot* snapshot = input.snapshot;
+    if (!snapshot) {
+        owned.emplace(unwrap(open_snapshot(input.index_path)));
+        snapshot = &*owned;
+    }
+    co_return prune_file_chunks(*snapshot, input.file_path, input.query);
 }
 
 Result<ChunkPrunerBatchOutput> ChunkPruner::process_batch(
     const ChunkPrunerBatchInput& input) {
     ChunkPrunerBatchOutput batch_out;
     try {
-        std::optional<IndexDatabase> owned_db;
-        if (!input.external_db)
-            owned_db.emplace(input.index_path,
-                             index::store::IndexOpenMode::ReadOnly);
-        const IndexDatabase& db =
-            input.external_db ? *input.external_db : *owned_db;
+        std::optional<Snapshot> owned;
+        const Snapshot* snapshot = input.snapshot;
+        if (!snapshot) {
+            owned.emplace(unwrap(open_snapshot(input.index_path)));
+            snapshot = &*owned;
+        }
         batch_out.outputs.reserve(input.items.size());
         for (const auto& item : input.items)
             batch_out.outputs.push_back(
-                prune_file_chunks(db, item.file_path, item.query));
+                prune_file_chunks(*snapshot, item.file_path, item.query));
     } catch (const std::exception& e) {
         return make_error(
             ErrorCode::Indexer,

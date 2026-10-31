@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/member.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -61,10 +62,12 @@ struct Source {
           params_hash(s.params_hash ? *s.params_hash : default_params_hash) {
         if (path.empty() || !dftracer::utils::input_exists(path)) return;
         idx.emplace(path, index::store::IndexOpenMode::ReadOnly);
+        snapshot.emplace(unwrap(index::plan::open_snapshot(path)));
     }
 
     std::string path;
     dstd::Optional<index::store::IndexDatabase> idx;
+    dstd::Optional<index::Snapshot> snapshot;
     std::uint64_t params_hash;
 };
 
@@ -674,7 +677,7 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path, int fid,
         index::plan::PruneRequest request;
         request.index_path = src_.path;
         request.file_path = path;
-        request.db = &*src_.idx;
+        request.snapshot = &*src_.snapshot;
         request.time_range =
             std::make_pair(static_cast<double>(r_.rules.q.ts_begin),
                            r_.rules.q.ts_end == UINT64_MAX

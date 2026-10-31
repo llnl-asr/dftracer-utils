@@ -9,6 +9,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `dftracer_stats` read the per-file rows of a fresh index for every report except `detailed`, where it folded the aggregation of every chunk and wrote a rollup cache beside the index on the first run.
+  A run now writes nothing.
+  The time span ends at the end of the last event, and the duration count, mean and deviation use only the events that have a duration.
+  A file whose rows are missing or not current still goes through the aggregation.
+  The first `dftracer_stats` of the 7,742 matrix traces after a build takes 1.3 s where it took 4.6 s, and peaks at 0.3 GB where it peaked at 3.1 GB.
 - Make `dftracer_event_count` read the count of a file from a fresh index and otherwise stream the file, where it built an index first, so it writes nothing and no longer takes `--checkpoint-size`.
   The first count of the 7,742 matrix traces at 96 threads takes 1.7 s where it took 15 s, and peaks at 1.4 GB where it peaked at 5.4 GB.
   A count from an existing index reads one total per file, where it decoded the statistics of every chunk, and takes 0.6 s where it took 2.4 s on the same traces.

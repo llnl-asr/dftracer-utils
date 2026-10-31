@@ -1,3 +1,4 @@
+#include <dftracer/utils/memory/asan.h>
 #include <dftracer/utils/memory/attrib.h>
 #include <dftracer/utils/memory/debug.h>
 #include <dftracer/utils/memory/heap_page.h>
@@ -294,6 +295,9 @@ void retire(void* p, std::size_t size, bool sized) noexcept {
     if (sized && size != have) {
         die("sized free does not match the allocated size", p, have, site);
     }
+    // A caller with its own ASan annotations, such as zstd's workspace, may
+    // hand the block back still poisoned.
+    asan_unpoison(p, have + DEBUG_REDZONE_BYTES);
     auto* bytes = static_cast<unsigned char*>(p);
     for (std::size_t i = 0; i < DEBUG_REDZONE_BYTES; ++i) {
         if (bytes[have + i] != DEBUG_REDZONE_FILL) {

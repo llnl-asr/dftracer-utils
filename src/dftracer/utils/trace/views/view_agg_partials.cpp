@@ -9,6 +9,8 @@
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/term.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
@@ -17,6 +19,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -439,7 +442,7 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed,
     // and the extra keys. A root without one says nothing about either.
     bool config_seen = false;
     std::map<std::string, std::size_t> root_of;
-    std::map<std::string, std::unique_ptr<IndexDatabase>> dbs;
+    std::map<std::string, index::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         std::size_t at = q.sources.size();
         bool indexed = false;
@@ -449,9 +452,10 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed,
             try {
                 auto it = root_of.find(f.index_path);
                 if (it == root_of.end()) {
-                    auto db = std::make_unique<IndexDatabase>(
-                        f.index_path, store::IndexOpenMode::ReadOnly);
-                    const auto config = agg::tier::read_config(*db);
+                    auto snapshot =
+                        unwrap(index::plan::open_snapshot(f.index_path));
+                    const auto config =
+                        unwrap(agg::tier::read_config(snapshot));
                     if (!config && !trace)
                         return declined("an index with no aggregation config");
                     AggQuerySource src;
@@ -473,23 +477,19 @@ std::optional<Prepared> prepare(const ViewPlan& plan, bool typed,
                     }
                     it = root_of.emplace(f.index_path, q.sources.size()).first;
                     q.sources.push_back(std::move(src));
-                    dbs.emplace(f.index_path, std::move(db));
+                    snapshots.emplace(f.index_path, std::move(snapshot));
                 }
                 at = it->second;
                 indexed = true;
-                const IndexDatabase& db = *dbs.at(f.index_path);
-                const int fid =
-                    db.get_file_info_id(get_logical_path(f.file_path));
-                if (fid < 0) {
+                const index::Snapshot& snapshot = snapshots.at(f.index_path);
+                const auto file = snapshot.file(get_logical_path(f.file_path));
+                if (!file) {
                     if (!trace)
                         return declined("a file missing from its index");
                 } else if (!trace) {
-                    const auto state =
-                        db.extension_state(fid, store::IndexExtension::Agg);
-                    if (!state || !state->ready ||
-                        state->version != store::layout::ext_version(
-                                              store::layout::Ext::Agg) ||
-                        state->params_hash != *q.sources[at].params_hash)
+                    if (snapshot.extension(*file, store::IndexExtension::Agg,
+                                           *q.sources[at].params_hash) !=
+                        index::Freshness::Current)
                         return declined(
                             "a file whose aggregation data is stale");
                 }

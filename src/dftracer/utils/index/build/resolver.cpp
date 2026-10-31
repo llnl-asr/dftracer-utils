@@ -1,8 +1,11 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -268,7 +271,10 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         auto registry = db.query_all_file_registry();
 
         const std::uint64_t params = input.aggregation_config.params_hash();
-        if (auto stored = index::schemas::dft::agg::tier::read_config(db)) {
+        const auto snapshot =
+            unwrap(index::plan::open_snapshot(input.index_path));
+        if (auto stored =
+                unwrap(index::schemas::dft::agg::tier::read_config(snapshot))) {
             result.stored_time_interval_us = stored->time_interval_us;
             if (stored->params_hash != params) {
                 result.aggregation_stale = true;

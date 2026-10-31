@@ -202,6 +202,24 @@ Result<std::map<std::string, std::uint32_t>> plugin_versions(
     return versions;
 }
 
+/// The plugin namespace the file holds a copy of. Nullopt when it holds none.
+Result<dstd::Optional<kv::Namespace>> plugin_namespace(const Snapshot& snapshot,
+                                                       const FileRef& file,
+                                                       dstd::StringView name) {
+    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return dstd::Optional<kv::Namespace>{};
+    auto versions = plugin_versions(*snap);
+    if (!versions) return dstd::Unexpected<dstd::Error>(versions.error());
+    const auto known = versions->find(std::string(name));
+    if (known == versions->end()) return dstd::Optional<kv::Namespace>{};
+    const kv::Namespace ns = read_ns(plugin_spec(name, known->second));
+    const kv::CopyInfo info = snap->copy_info(ns, IndexAccess::scope(file));
+    if (info.state != kv::ScopeState::Ready &&
+        info.state != kv::ScopeState::Failed)
+        return dstd::Optional<kv::Namespace>{};
+    return dstd::Optional<kv::Namespace>(ns);
+}
+
 void put_value(FileBuild& build, Ext ext, std::uint8_t kind,
                const std::string& key, std::string_view body) {
     const std::string value = layout::with_header(ext, kind, body);
@@ -512,34 +530,43 @@ Result<dstd::Vector<PluginCopy>> plugins(const Snapshot& snapshot,
 Result<dstd::Optional<PluginData>> plugin(const Snapshot& snapshot,
                                           const FileRef& file,
                                           dstd::StringView name) {
-    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
-    if (snap == nullptr) return dstd::Optional<PluginData>{};
-    auto versions = plugin_versions(*snap);
-    if (!versions) return dstd::Unexpected<dstd::Error>(versions.error());
-    const auto known = versions->find(std::string(name));
-    if (known == versions->end()) return dstd::Optional<PluginData>{};
-    const kv::Namespace ns = read_ns(plugin_spec(name, known->second));
-    const kv::CopyInfo info = snap->copy_info(ns, IndexAccess::scope(file));
-    if (info.state != kv::ScopeState::Ready &&
-        info.state != kv::ScopeState::Failed)
-        return dstd::Optional<PluginData>{};
-    PluginData data;
-    const std::string prefix = path_prefix(Ext::Plugin, pk::DATA, name);
-    auto scanned =
-        scan_payloads(snapshot, file, ns, Ext::Plugin, pk::DATA, prefix,
-                      [&](std::string_view key, std::string_view body) {
-                          if (key.size() == prefix.size() + 4)
-                              data.granules.emplace_back(
-                                  tail_u32(key, prefix.size()), own(body));
-                          return true;
-                      });
-    if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
-    auto whole = get_decoded(snapshot, file, ns, Ext::Plugin, pk::FILE,
-                             file_key(Ext::Plugin, pk::FILE, name),
-                             [](std::string_view body) { return own(body); });
+    auto granules = plugin_granules(snapshot, file, name);
+    if (!granules) return dstd::Unexpected<dstd::Error>(granules.error());
+    if (!*granules) return dstd::Optional<PluginData>{};
+    auto whole = plugin_file(snapshot, file, name);
     if (!whole) return dstd::Unexpected<dstd::Error>(whole.error());
-    data.file = std::move(*whole);
-    return dstd::Optional<PluginData>(std::move(data));
+    return dstd::Optional<PluginData>(
+        PluginData{std::move(**granules), std::move(*whole)});
+}
+
+Result<dstd::Optional<GranuleList>> plugin_granules(const Snapshot& snapshot,
+                                                    const FileRef& file,
+                                                    dstd::StringView name) {
+    auto ns = plugin_namespace(snapshot, file, name);
+    if (!ns) return dstd::Unexpected<dstd::Error>(ns.error());
+    if (!*ns) return dstd::Optional<GranuleList>{};
+    GranuleList out;
+    const std::string prefix = path_prefix(Ext::Plugin, pk::DATA, name);
+    auto scanned = scan_payloads(
+        snapshot, file, **ns, Ext::Plugin, pk::DATA, prefix,
+        [&](std::string_view key, std::string_view body) {
+            if (key.size() == prefix.size() + 4)
+                out.emplace_back(tail_u32(key, prefix.size()), own(body));
+            return true;
+        });
+    if (!scanned) return dstd::Unexpected<dstd::Error>(scanned.error());
+    return dstd::Optional<GranuleList>(std::move(out));
+}
+
+Result<dstd::Optional<dstd::String>> plugin_file(const Snapshot& snapshot,
+                                                 const FileRef& file,
+                                                 dstd::StringView name) {
+    auto ns = plugin_namespace(snapshot, file, name);
+    if (!ns) return dstd::Unexpected<dstd::Error>(ns.error());
+    if (!*ns) return dstd::Optional<dstd::String>{};
+    return get_decoded(snapshot, file, **ns, Ext::Plugin, pk::FILE,
+                       file_key(Ext::Plugin, pk::FILE, name),
+                       [](std::string_view body) { return own(body); });
 }
 
 Result<void> for_each_agg_partial(const Snapshot& snapshot, const FileRef& file,

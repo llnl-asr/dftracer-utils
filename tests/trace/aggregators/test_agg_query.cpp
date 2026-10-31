@@ -3,8 +3,10 @@
 // the chunks that cannot be answered from the stored partials are re-read.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
@@ -13,6 +15,7 @@
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/comparator/comparison_aggregation.h>
@@ -541,21 +544,20 @@ AggQueryResult check(const Fixture& fx, const Ask& ask,
 }
 
 std::size_t partial_count(const Fixture& fx) {
-    index::store::IndexDatabase db(fx.index_path,
-                                   index::store::IndexOpenMode::ReadOnly);
+    auto snapshot = unwrap(index::plan::open_snapshot(fx.index_path));
     std::size_t n = 0;
     for (const auto& f : fx.files) {
-        const int fid =
-            db.get_file_info_id(index::store::internal::get_logical_path(f));
-        REQUIRE(fid >= 0);
-        agg::tier::for_each_partial(
-            db, fid,
+        const auto file =
+            snapshot.file(index::store::internal::get_logical_path(f));
+        REQUIRE(file);
+        unwrap(index::for_each_agg_partial(
+            snapshot, *file,
             [&](std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
                 std::uint32_t, agg::PartialKind,
                 std::span<const std::uint8_t>) {
                 ++n;
                 return true;
-            });
+            }));
     }
     return n;
 }

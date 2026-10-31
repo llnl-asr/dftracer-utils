@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
@@ -7,7 +8,6 @@
 namespace dftracer::utils::index::schemas::dft::agg {
 
 void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
-                             index::store::IndexDatabase& db,
                              const index::Index& index) {
     std::uint64_t min_bucket = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t max_bucket = 0;
@@ -21,7 +21,8 @@ void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
     if (min_bucket == std::numeric_limits<std::uint64_t>::max() ||
         min_bucket > max_bucket)
         return;
-    if (auto stored = tier::read_time_bounds(db)) {
+    if (auto stored =
+            unwrap(tier::read_time_bounds(unwrap(index.snapshot())))) {
         min_bucket = std::min(min_bucket, stored->min_bucket);
         max_bucket = std::max(max_bucket, stored->max_bucket);
     }

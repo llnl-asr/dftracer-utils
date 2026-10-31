@@ -120,6 +120,16 @@ Result<dstd::Vector<PluginCopy>> plugins(const Snapshot& snapshot,
 Result<dstd::Optional<PluginData>> plugin(const Snapshot& snapshot,
                                           const FileRef& file,
                                           dstd::StringView name);
+/// The granules alone, in granule order. Nullopt when no copy of plugin `name`
+/// exists for the file.
+Result<dstd::Optional<GranuleList>> plugin_granules(const Snapshot& snapshot,
+                                                    const FileRef& file,
+                                                    dstd::StringView name);
+/// The file payload alone. Nullopt when the file has none, or holds no copy of
+/// plugin `name`.
+Result<dstd::Optional<dstd::String>> plugin_file(const Snapshot& snapshot,
+                                                 const FileRef& file,
+                                                 dstd::StringView name);
 
 /// The aggregation tier of one file. `bytes` is the serialized AggPartial and
 /// stays valid during the call.

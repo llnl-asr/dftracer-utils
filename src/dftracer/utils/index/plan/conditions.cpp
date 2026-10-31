@@ -968,7 +968,8 @@ class PluginCondition final : public Condition {
     bool file_may_match(const duql_ns::QueryNode& root) override {
         if (!ext_->vt.file_may_match) return true;
         if (!file_loaded_) {
-            file_ = load().file;
+            file_ =
+                unwrap(index::plugin_file(*d_.snapshot, *d_.file, ext_->name));
             file_loaded_ = true;
         }
         return !file_ || may_match_file(root);
@@ -980,8 +981,11 @@ class PluginCondition final : public Condition {
         if (!h) return std::nullopt;
         if (!granules_) {
             granules_.emplace();
-            for (auto& [g, bytes] : load().granules)
-                granules_->emplace(g, std::move(bytes));
+            auto listed = unwrap(
+                index::plugin_granules(*d_.snapshot, *d_.file, ext_->name));
+            if (listed)
+                for (auto& [g, bytes] : *listed)
+                    granules_->emplace(g, std::move(bytes));
         }
         ChunkSet out;
         for (auto c : candidates) {
@@ -1061,21 +1065,9 @@ class PluginCondition final : public Condition {
         return ext_->vt.compile(ext_->self, &l);
     }
 
-    PluginData& load() {
-        if (!loaded_) {
-            if (auto found =
-                    unwrap(index::plugin(*d_.snapshot, *d_.file, ext_->name)))
-                data_ = std::move(*found);
-            loaded_ = true;
-        }
-        return data_;
-    }
-
     FileIndexData& d_;
     index::extensions::PluginExtensionPtr ext_;
     ankerl::unordered_dense::map<const duql_ns::QueryNode*, void*> compiled_;
-    PluginData data_;
-    bool loaded_ = false;
     std::optional<ankerl::unordered_dense::map<std::uint64_t, dstd::String>>
         granules_;
     dstd::Optional<dstd::String> file_;

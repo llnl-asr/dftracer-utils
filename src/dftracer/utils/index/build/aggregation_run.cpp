@@ -7,26 +7,22 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 
 namespace dftracer::utils::index::build {
 
 namespace agg = index::schemas::dft::agg;
 
 AggRun::AggRun(std::string path,
-               std::shared_ptr<index::store::IndexDatabase> database,
                IndexBuildBatchConfig::AggFoldFactory agg_factory)
-    : index_path(std::move(path)),
-      db(std::move(database)),
-      factory(std::move(agg_factory)) {}
+    : index_path(std::move(path)), factory(std::move(agg_factory)) {}
 
 AggRun start_aggregation(const std::string& index_path,
                          const agg::AggregationConfig& config) {
     auto target = unwrap(index::Index::open(
         index::store::internal::normalize_index_root(index_path)));
-    auto db = std::make_shared<index::store::IndexDatabase>(
-        index_path, index::store::IndexOpenMode::ReadWrite);
     auto intern = agg::intern_for_index(index_path);
-    agg::tier::load_dictionary(*db, *intern);
+    unwrap(agg_dictionary(unwrap(target.snapshot()), *intern));
     agg::tier::write_config(target,
                             {config.time_interval_us, config.params_hash(),
                              config.group_by_file, config.extra_group_keys});
@@ -37,13 +33,13 @@ AggRun start_aggregation(const std::string& index_path,
         return std::make_unique<agg::AggregationFold>(build_intern, intern,
                                                       *cfg, file_id);
     };
-    return AggRun(index_path, std::move(db), std::move(factory));
+    return AggRun(index_path, std::move(factory));
 }
 
 void finish_aggregation(AggRun& run, IndexBuildBatchResult& batch) {
     auto target = unwrap(index::Index::open(
         index::store::internal::normalize_index_root(run.index_path)));
-    agg::merge_aggregation_folds(batch.agg_outputs, *run.db, target);
+    agg::merge_aggregation_folds(batch.agg_outputs, target);
 }
 
 void clear_aggregation(const std::string& index_path) {

@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -12,6 +13,7 @@
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -119,11 +121,23 @@ struct Stored {
     std::set<std::uint32_t> chunks;
 };
 
-Stored read_partials(const IndexDatabase& db, int fid,
+index::Snapshot open_index(const std::string& index_path) {
+    return unwrap(index::plan::open_snapshot(index_path));
+}
+
+index::FileRef file_of(const index::Snapshot& snapshot,
+                       const std::string& path) {
+    auto file = snapshot.file(index::store::internal::get_logical_path(path));
+    REQUIRE(file.has_value());
+    return std::move(*file);
+}
+
+Stored read_partials(const index::Snapshot& snapshot,
+                     const index::FileRef& file,
                      const agg::AggInternTable& dictionary) {
     Stored out;
-    agg::tier::for_each_partial(
-        db, fid,
+    unwrap(index::for_each_agg_partial(
+        snapshot, file,
         [&](std::uint32_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t, std::uint32_t, agg::PartialKind,
             std::span<const std::uint8_t> bytes) {
@@ -136,7 +150,7 @@ Stored read_partials(const IndexDatabase& db, int fid,
                           std::string(dictionary.intern.resolve(name))};
             out.merged.try_emplace(key).first->second.merge(*p);
             return true;
-        });
+        }));
     return out;
 }
 
@@ -174,18 +188,16 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
                                             const std::string& index_dir) {
     const auto index_path =
         trace::internal::determine_index_path(file, index_dir);
-    IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+    const auto snapshot = open_index(index_path);
+    const auto stored_file = file_of(snapshot, file);
     auto dictionary = agg::make_intern_table();
-    agg::tier::load_dictionary(db, *dictionary);
-    const int fid =
-        db.get_file_info_id(index::store::internal::get_logical_path(file));
-    REQUIRE(fid >= 0);
+    unwrap(index::agg_dictionary(snapshot, *dictionary));
     const auto text = [&](std::uint32_t id) {
         return std::string(dictionary->intern.resolve(id));
     };
     std::map<std::string, std::string> rows;
-    agg::tier::for_each_partial(
-        db, fid,
+    unwrap(index::for_each_agg_partial(
+        snapshot, stored_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
             std::span<const std::uint8_t> bytes) {
@@ -194,9 +206,10 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
                              " " + std::to_string(static_cast<int>(kind)),
                          std::string(bytes.begin(), bytes.end()));
             return true;
-        });
-    agg::tier::for_each_chunk_columns(
-        db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+        }));
+    unwrap(index::for_each_agg_chunk_columns(
+        snapshot, stored_file,
+        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
             std::ostringstream value;
             value << block.rows;
             for (const auto* locals :
@@ -210,7 +223,7 @@ std::map<std::string, std::string> agg_rows(const std::string& file,
                 for (const std::uint64_t v : *numbers) value << ' ' << v;
             rows.emplace("c " + std::to_string(chunk), value.str());
             return true;
-        });
+        }));
     return rows;
 }
 
@@ -263,21 +276,20 @@ TEST_SUITE("AggPartialsStore") {
 
         const auto index_path =
             trace::internal::determine_index_path(files[0], index_dir);
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+        const auto snapshot = open_index(index_path);
         auto dictionary = agg::make_intern_table();
-        agg::tier::load_dictionary(db, *dictionary);
+        unwrap(index::agg_dictionary(snapshot, *dictionary));
 
         std::map<Key, agg::AggPartial> all;
         std::size_t stored = 0;
         std::size_t bound = 0;
         for (int n = 0; n < FILES; ++n) {
-            const int fid = db.get_file_info_id(
-                index::store::internal::get_logical_path(files[n]));
-            REQUIRE(fid >= 0);
-            const auto members = db.query_gzip_members(fid).size();
+            const auto stored_file = file_of(snapshot, files[n]);
+            const auto members =
+                unwrap(index::members(snapshot, stored_file)).size();
             REQUIRE(members > 1);
 
-            const auto file = read_partials(db, fid, *dictionary);
+            const auto file = read_partials(snapshot, stored_file, *dictionary);
             CHECK(file.count > 0);
             CHECK(file.chunks.size() <= members);
             CHECK(file.count <= members * file.merged.size());
@@ -321,13 +333,15 @@ TEST_SUITE("AggPartialsStore") {
         std::vector<std::size_t> before;
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+            const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(db, *dictionary);
+            unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 ids.push_back(db.get_file_info_id(
                     index::store::internal::get_logical_path(f)));
                 before.push_back(
-                    read_partials(db, ids.back(), *dictionary).count);
+                    read_partials(snapshot, file_of(snapshot, f), *dictionary)
+                        .count);
                 REQUIRE(before.back() > 0);
             }
         }
@@ -336,7 +350,8 @@ TEST_SUITE("AggPartialsStore") {
         {
             auto target = unwrap(index::Index::open(index_path));
             IndexDatabase db(index_path);
-            const auto config = agg::tier::read_config(db);
+            const auto config =
+                unwrap(agg::tier::read_config(unwrap(target.snapshot())));
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
@@ -380,20 +395,23 @@ TEST_SUITE("AggPartialsStore") {
             CHECK(marked);
         }
         {
-            IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+            const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(db, *dictionary);
-            for (int id : ids)
-                CHECK(read_partials(db, id, *dictionary).count == 0);
+            unwrap(index::agg_dictionary(snapshot, *dictionary));
+            for (const auto& f : files)
+                CHECK(read_partials(snapshot, file_of(snapshot, f), *dictionary)
+                          .count == 0);
         }
 
         build_seconds(files, index_dir);
 
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+        const auto rebuilt = open_index(index_path);
         auto dictionary = agg::make_intern_table();
-        agg::tier::load_dictionary(db, *dictionary);
-        for (std::size_t i = 0; i < ids.size(); ++i)
-            CHECK(read_partials(db, ids[i], *dictionary).count == before[i]);
+        unwrap(index::agg_dictionary(rebuilt, *dictionary));
+        for (std::size_t i = 0; i < files.size(); ++i)
+            CHECK(
+                read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
+                    .count == before[i]);
     }
 
     TEST_CASE("partials of an older key layout are built again, not read") {
@@ -411,13 +429,15 @@ TEST_SUITE("AggPartialsStore") {
         std::vector<std::size_t> before;
         {
             IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
+            const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(db, *dictionary);
+            unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
                 ids.push_back(db.get_file_info_id(
                     index::store::internal::get_logical_path(f)));
                 before.push_back(
-                    read_partials(db, ids.back(), *dictionary).count);
+                    read_partials(snapshot, file_of(snapshot, f), *dictionary)
+                        .count);
             }
         }
 
@@ -440,21 +460,24 @@ TEST_SUITE("AggPartialsStore") {
             w->commit();
         }
         {
-            IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(agg::tier::read_config(db));
+            const auto snapshot = open_index(index_path);
+            CHECK_FALSE(unwrap(agg::tier::read_config(snapshot)));
             auto dictionary = agg::make_intern_table();
-            agg::tier::load_dictionary(db, *dictionary);
-            CHECK_THROWS(read_partials(db, ids[0], *dictionary));
+            unwrap(index::agg_dictionary(snapshot, *dictionary));
+            CHECK_THROWS(read_partials(snapshot, file_of(snapshot, files[0]),
+                                       *dictionary));
         }
 
         build_seconds(files, index_dir);
 
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-        CHECK(agg::tier::read_config(db));
+        const auto rebuilt = open_index(index_path);
+        CHECK(unwrap(agg::tier::read_config(rebuilt)));
         auto dictionary = agg::make_intern_table();
-        agg::tier::load_dictionary(db, *dictionary);
-        for (std::size_t i = 0; i < ids.size(); ++i)
-            CHECK(read_partials(db, ids[i], *dictionary).count == before[i]);
+        unwrap(index::agg_dictionary(rebuilt, *dictionary));
+        for (std::size_t i = 0; i < files.size(); ++i)
+            CHECK(
+                read_partials(rebuilt, file_of(rebuilt, files[i]), *dictionary)
+                    .count == before[i]);
     }
 
     TEST_CASE("rows written through equal the rows held in memory") {

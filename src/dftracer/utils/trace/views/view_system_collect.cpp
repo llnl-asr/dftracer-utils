@@ -2,13 +2,14 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_system_collect.h>
@@ -44,23 +45,20 @@ bool is_hash_arg(std::string_view path) {
 
 // The plan's time_bucket and group_by do not apply here, as the counters keep
 // their own (host, name, time_bucket) grain.
-std::optional<store::IndexDatabase> covering_index(const ViewPlan& plan) {
+std::optional<index::Snapshot> covering_index(const ViewPlan& plan) {
     if (plan.files.empty()) return std::nullopt;
     const std::string& index_path = plan.files.front().index_path;
     if (index_path.empty()) return std::nullopt;
     try {
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        const auto config = agg::tier::read_config(db);
+        auto snapshot = unwrap(index::plan::open_snapshot(index_path));
+        const auto config = unwrap(agg::tier::read_config(snapshot));
         if (!config) return std::nullopt;
         std::set<std::string> current;
-        for (const auto& [path, id] : db.query_all_file_info_ids()) {
-            const auto state =
-                db.extension_state(id, store::IndexExtension::Agg);
-            if (state && state->ready &&
-                state->version ==
-                    store::layout::ext_version(store::layout::Ext::Agg) &&
-                state->params_hash == config->params_hash)
-                current.insert(path);
+        for (const auto& file : unwrap(snapshot.files())) {
+            if (snapshot.extension(file, store::IndexExtension::Agg,
+                                   config->params_hash) ==
+                index::Freshness::Current)
+                current.emplace(file.path().data(), file.path().size());
         }
         if (current.size() != plan.files.size()) return std::nullopt;
         for (const auto& f : plan.files) {
@@ -68,7 +66,7 @@ std::optional<store::IndexDatabase> covering_index(const ViewPlan& plan) {
             if (!current.count(store::internal::get_logical_path(f.file_path)))
                 return std::nullopt;
         }
-        return db;
+        return snapshot;
     } catch (const std::exception&) {
         return std::nullopt;
     }
@@ -224,18 +222,18 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
     auto index = covering_index(plan);
     if (!index) return false;
     if (shard_end <= 0) shard_end = agg::AGG_KEY_NUM_SHARDS;
-    const auto stored = agg::tier::read_config(*index);
+    const auto stored = unwrap(agg::tier::read_config(*index));
     if (!stored) return false;
     agg::AggregationConfig cfg;
     cfg.time_interval_us = stored->time_interval_us;
 
     Groups groups;
     for (const auto& f : plan.files) {
-        const int fid = index->get_file_info_id(
-            store::internal::get_logical_path(f.file_path));
-        if (fid < 0) return false;
-        agg::tier::for_each_chunk_columns(
-            *index, fid, [&](std::uint64_t, const agg::ChunkColumns& block) {
+        const auto file =
+            index->file(store::internal::get_logical_path(f.file_path));
+        if (!file) return false;
+        unwrap(index::for_each_agg_chunk_columns(
+            *index, *file, [&](std::uint64_t, const agg::ChunkColumns& block) {
                 for (std::uint64_t r = 0; r < block.rows; ++r) {
                     GroupKey key;
                     agg::SystemAggregationMetrics metrics;
@@ -248,7 +246,7 @@ bool system_collect(const ViewPlan& plan, dataframe::DataFrame& out_table,
                         it->second.merge_from(metrics);
                 }
                 return true;
-            });
+            }));
     }
 
     out_table = build_counters_frame(groups, shard_begin, shard_end);

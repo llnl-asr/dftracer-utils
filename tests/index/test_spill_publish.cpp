@@ -3,6 +3,7 @@
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -152,23 +153,22 @@ TEST_SUITE("SpillPublish") {
         std::atomic<int> without_rows{0};
         std::thread poller([&] {
             while (!stop.load()) {
-                auto snapshot = index->snapshot();
-                if (snapshot && snapshot->file(logical)) {
-                    visible.fetch_add(1);
-                    idx::store::IndexDatabase db(
-                        path, idx::store::IndexOpenMode::ReadOnly);
-                    const int id = db.get_file_info_id(logical);
-                    std::size_t rows = 0;
-                    if (id >= 0)
-                        agg::tier::for_each_partial(
-                            db, id,
+                auto read = idx::plan::open_snapshot(path);
+                if (read) {
+                    const auto ref = read->file(logical);
+                    if (ref) {
+                        visible.fetch_add(1);
+                        std::size_t rows = 0;
+                        auto scanned = idx::for_each_agg_partial(
+                            *read, *ref,
                             [&](std::uint64_t, std::uint32_t, std::uint32_t,
                                 std::uint32_t, std::uint32_t, agg::PartialKind,
                                 std::span<const std::uint8_t>) {
                                 ++rows;
                                 return false;
                             });
-                    if (rows == 0) without_rows.fetch_add(1);
+                        if (!scanned || rows == 0) without_rows.fetch_add(1);
+                    }
                 }
                 std::this_thread::yield();
             }

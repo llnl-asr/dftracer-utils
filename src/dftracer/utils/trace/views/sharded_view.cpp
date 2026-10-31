@@ -5,11 +5,11 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -215,8 +215,9 @@ namespace idx = dftracer::utils::index;
 
 // Copies the partials and column blocks of one file, re-keying their
 // dictionary ids into the consolidated table.
-void copy_agg_data(const idx::store::IndexDatabase& source_db, int source_id,
-                   idx::FileBuild& build, const agg::AggInternTable& source,
+void copy_agg_data(const idx::Snapshot& source_db,
+                   const idx::FileRef& source_file, idx::FileBuild& build,
+                   const agg::AggInternTable& source,
                    agg::AggInternTable& target) {
     std::vector<std::uint32_t> referenced;
     const auto remap = [&](std::uint32_t id) {
@@ -225,8 +226,8 @@ void copy_agg_data(const idx::store::IndexDatabase& source_db, int source_id,
         referenced.push_back(mapped);
         return mapped;
     };
-    agg::tier::for_each_partial(
-        source_db, source_id,
+    unwrap(idx::for_each_agg_partial(
+        source_db, source_file,
         [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
             std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
             std::span<const std::uint8_t> body) {
@@ -241,13 +242,13 @@ void copy_agg_data(const idx::store::IndexDatabase& source_db, int source_id,
                 std::string_view(reinterpret_cast<const char*>(body.data()),
                                  body.size()));
             return true;
-        });
+        }));
 
     // A column block keeps a block-local table of dictionary ids, which is
     // rewritten before the copy.
     dstd::Vector<std::uint8_t> bytes;
-    agg::tier::for_each_chunk_columns(
-        source_db, source_id,
+    unwrap(idx::for_each_agg_chunk_columns(
+        source_db, source_file,
         [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
             agg::ChunkColumns mapped = block;
             for (std::uint32_t& id : mapped.ids) id = remap(id);
@@ -258,7 +259,7 @@ void copy_agg_data(const idx::store::IndexDatabase& source_db, int source_id,
                 std::string_view(reinterpret_cast<const char*>(bytes.data()),
                                  bytes.size()));
             return true;
-        });
+        }));
 
     std::sort(referenced.begin(), referenced.end());
     referenced.erase(std::unique(referenced.begin(), referenced.end()),
@@ -294,12 +295,13 @@ std::size_t merge_shard_set(const std::string& root,
             for (const auto& shard : manifest->shards) {
                 if (shard.empty()) continue;
                 const std::string idx = (fs::path(root) / shard.path).string();
-                idx::store::IndexDatabase sdb(
-                    idx, idx::store::IndexOpenMode::ReadOnly);
+                auto snapshot = unwrap(idx::plan::open_snapshot(idx));
                 agg::AggInternTable shard_intern;
-                agg::tier::load_dictionary(sdb, shard_intern);
+                unwrap(idx::agg_dictionary(snapshot, shard_intern));
 
-                if (auto shard_config = agg::tier::read_config(sdb)) {
+                const auto shard_config =
+                    unwrap(agg::tier::read_config(snapshot));
+                if (shard_config) {
                     if (!config) {
                         config = shard_config;
                         agg::tier::write_config(out, *config);
@@ -313,29 +315,14 @@ std::size_t merge_shard_set(const std::string& root,
                     }
                 }
 
-                const auto registry = sdb.query_all_file_registry();
-                std::vector<std::pair<std::string_view, int>> entries;
-                entries.reserve(registry.size());
-                for (const auto& [path, entry] : registry)
-                    entries.emplace_back(path, entry.file_id);
-                std::sort(entries.begin(), entries.end());
+                for (const auto& file : unwrap(snapshot.files())) {
+                    auto build = unwrap(out.build(file.path(), file.stat()));
 
-                for (const auto& [path, source_id] : entries) {
-                    const auto stat = sdb.get_file_stat(path);
-                    const auto hash = sdb.get_file_hash(path);
-                    if (!stat || !hash)
-                        throw DFTUtilsException(
-                            ErrorCode::Parse,
-                            "shard " + shard.path +
-                                " holds a malformed file record");
-                    auto build = unwrap(out.build(
-                        path, idx::SourceStat{stat->mtime, stat->size, *hash}));
-
-                    const auto state = sdb.extension_state(
-                        source_id, idx::store::IndexExtension::Agg);
-                    if (config && state && state->ready &&
-                        state->params_hash == config->params_hash) {
-                        copy_agg_data(sdb, source_id, build, shard_intern,
+                    if (config &&
+                        snapshot.extension(
+                            file, idx::store::IndexExtension::Agg,
+                            config->params_hash) == idx::Freshness::Current) {
+                        copy_agg_data(snapshot, file, build, shard_intern,
                                       out_intern);
                         build.finish(idx::store::IndexExtension::Agg,
                                      config->params_hash);

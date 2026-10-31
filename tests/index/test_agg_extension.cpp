@@ -2,9 +2,12 @@
 // rebuild of only the tier, and readers that use it only when it is current.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/index_database.h>
@@ -191,9 +194,10 @@ TEST_SUITE("AggExtension") {
             w->commit();
         }
         {
-            IndexDatabase db(index_of(gz),
-                             index::store::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(index::schemas::dft::agg::tier::read_config(db));
+            const auto snapshot =
+                unwrap(index::plan::open_snapshot(index_of(gz)));
+            CHECK_FALSE(
+                unwrap(index::schemas::dft::agg::tier::read_config(snapshot)));
         }
         auto ix = Indexer::open({gz}, with_aggregation(1'000'000));
         ix.build();

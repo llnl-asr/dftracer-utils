@@ -1,7 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -9,6 +11,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
@@ -469,12 +472,14 @@ struct Decoded {
     std::vector<std::uint64_t> chunks;
 };
 
-Decoded read_and_check(const IndexDatabase& db, int file_id,
+Decoded read_and_check(const index::Snapshot& snapshot,
+                       const index::FileRef& file,
                        const std::vector<Row>& rows) {
     Decoded out;
     std::size_t at = 0;
-    agg::tier::for_each_chunk_columns(
-        db, file_id, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+    auto scanned = index::for_each_agg_chunk_columns(
+        snapshot, file,
+        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
             ++out.blocks;
             out.chunks.push_back(chunk);
             CHECK(block.chunk == chunk);
@@ -493,6 +498,7 @@ Decoded read_and_check(const IndexDatabase& db, int file_id,
             CHECK_FALSE(block.columns.empty());
             return true;
         });
+    REQUIRE(scanned.has_value());
     CHECK(at == rows.size());
     CHECK(std::is_sorted(out.chunks.begin(), out.chunks.end()));
     CHECK(std::adjacent_find(out.chunks.begin(), out.chunks.end()) ==
@@ -500,11 +506,17 @@ Decoded read_and_check(const IndexDatabase& db, int file_id,
     return out;
 }
 
-int file_id_of(const IndexDatabase& db, const std::string& path) {
-    const int id =
-        db.get_file_info_id(index::store::internal::get_logical_path(path));
-    REQUIRE(id >= 0);
-    return id;
+index::Snapshot open_index(const std::string& index_path) {
+    auto snapshot = index::plan::open_snapshot(index_path);
+    REQUIRE_MESSAGE(snapshot.has_value(), "the index opens");
+    return std::move(*snapshot);
+}
+
+index::FileRef file_of(const index::Snapshot& snapshot,
+                       const std::string& path) {
+    auto file = snapshot.file(index::store::internal::get_logical_path(path));
+    REQUIRE_MESSAGE(file.has_value(), "the file is in the index");
+    return std::move(*file);
 }
 
 dstd::Span<const std::uint8_t> span_of(std::string_view bytes) {
@@ -563,10 +575,11 @@ std::vector<std::pair<std::uint64_t, std::uint64_t>> first_values(
 }
 
 std::map<std::uint64_t, std::vector<ColumnShape>> columns_of(
-    const IndexDatabase& db, int file_id) {
+    const index::Snapshot& snapshot, const index::FileRef& file) {
     std::map<std::uint64_t, std::vector<ColumnShape>> out;
-    agg::tier::for_each_chunk_columns(
-        db, file_id, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+    auto scanned = index::for_each_agg_chunk_columns(
+        snapshot, file,
+        [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
             std::vector<ColumnShape> shapes;
             for (const agg::ChunkColumn& column : block.columns)
                 shapes.push_back({dstd::String(block.texts[column.path]),
@@ -578,6 +591,7 @@ std::map<std::uint64_t, std::vector<ColumnShape>> columns_of(
             out[chunk] = shapes;
             return true;
         });
+    REQUIRE(scanned.has_value());
     return out;
 }
 
@@ -769,12 +783,14 @@ TEST_SUITE("ChunkColumns") {
 
         const auto index_path =
             trace::internal::determine_index_path(gz, index_dir);
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-        const int fid = file_id_of(db, gz);
-        const auto decoded = read_and_check(db, fid, rows);
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
+        const auto decoded = read_and_check(snapshot, file, rows);
         CHECK(decoded.blocks > 1);
         CHECK(decoded.rows == rows.size());
-        CHECK(db.query_gzip_members(fid).size() >= decoded.blocks);
+        const auto stored_members = index::members(snapshot, file);
+        REQUIRE(stored_members.has_value());
+        CHECK(stored_members->size() >= decoded.blocks);
     }
 
     TEST_CASE("the file column names the file hash of a record, or no file") {
@@ -797,8 +813,8 @@ TEST_SUITE("ChunkColumns") {
 
         const auto index_path =
             trace::internal::determine_index_path(gz, index_dir);
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-        const int fid = file_id_of(db, gz);
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
         const auto rows = parse_trace(body);
         std::size_t at = 0;
         std::size_t blocks = 0;
@@ -806,8 +822,9 @@ TEST_SUITE("ChunkColumns") {
         std::uint64_t first_chunk = 0;
         dstd::Vector<std::uint32_t> first_file;
         dstd::Vector<dstd::String> first_texts;
-        agg::tier::for_each_chunk_columns(
-            db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+        const auto scanned = index::for_each_agg_chunk_columns(
+            snapshot, file,
+            [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
                 ++blocks;
                 if (blocks == 1) {
                     first_chunk = chunk;
@@ -827,19 +844,22 @@ TEST_SUITE("ChunkColumns") {
                 at += block.rows;
                 return true;
             });
+        REQUIRE(scanned.has_value());
         CHECK(blocks > 1);
         CHECK(at == rows.size());
         CHECK(texts.size() == 2);
         CHECK(texts.count("0123456789abcdef") == 1);
         CHECK(texts.count("") == 1);
 
-        agg::ChunkColumns one;
-        REQUIRE(agg::tier::get_chunk_columns(db, fid, first_chunk, one));
-        CHECK(one.chunk == first_chunk);
-        CHECK(one.file == first_file);
-        CHECK(one.texts == first_texts);
-        agg::ChunkColumns absent;
-        CHECK_FALSE(agg::tier::get_chunk_columns(db, fid, 1000, absent));
+        auto one = index::agg_chunk_columns(snapshot, file, first_chunk);
+        REQUIRE(one.has_value());
+        REQUIRE((*one).has_value());
+        CHECK((*one)->chunk == first_chunk);
+        CHECK((*one)->file == first_file);
+        CHECK((*one)->texts == first_texts);
+        auto absent = index::agg_chunk_columns(snapshot, file, 1000);
+        REQUIRE(absent.has_value());
+        CHECK_FALSE((*absent).has_value());
     }
 
     TEST_CASE("merge_shard_set copies the column blocks") {
@@ -859,10 +879,10 @@ TEST_SUITE("ChunkColumns") {
         std::map<std::uint64_t, std::vector<ColumnShape>> before_a;
         std::map<std::uint64_t, std::vector<ColumnShape>> before_b;
         {
-            IndexDatabase db(ia, index::store::IndexOpenMode::ReadOnly);
-            before_a = columns_of(db, file_id_of(db, a));
-            IndexDatabase db_b(ib, index::store::IndexOpenMode::ReadOnly);
-            before_b = columns_of(db_b, file_id_of(db_b, b));
+            const auto snapshot_a = open_index(ia);
+            before_a = columns_of(snapshot_a, file_of(snapshot_a, a));
+            const auto snapshot_b = open_index(ib);
+            before_b = columns_of(snapshot_b, file_of(snapshot_b, b));
         }
         REQUIRE_FALSE(before_a.empty());
         REQUIRE_FALSE(before_b.empty());
@@ -876,15 +896,15 @@ TEST_SUITE("ChunkColumns") {
 
         const std::string merged =
             trace::internal::determine_index_path("x", out);
-        IndexDatabase db(merged, index::store::IndexOpenMode::ReadOnly);
-        const int merged_a = file_id_of(db, a);
-        const int merged_b = file_id_of(db, b);
-        const auto decoded_a = read_and_check(db, merged_a, rows_a);
-        const auto decoded_b = read_and_check(db, merged_b, rows_b);
+        const auto snapshot = open_index(merged);
+        const auto file_a = file_of(snapshot, a);
+        const auto file_b = file_of(snapshot, b);
+        const auto decoded_a = read_and_check(snapshot, file_a, rows_a);
+        const auto decoded_b = read_and_check(snapshot, file_b, rows_b);
         CHECK(decoded_a.blocks > 1);
         CHECK(decoded_b.blocks > 1);
-        CHECK(columns_of(db, merged_a) == before_a);
-        CHECK(columns_of(db, merged_b) == before_b);
+        CHECK(columns_of(snapshot, file_a) == before_a);
+        CHECK(columns_of(snapshot, file_b) == before_b);
     }
 
     TEST_CASE("a record that repeats an arg key keeps its first value") {
@@ -897,12 +917,13 @@ TEST_SUITE("ChunkColumns") {
 
         const auto index_path =
             trace::internal::determine_index_path(gz, index_dir);
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-        const int fid = file_id_of(db, gz);
+        const auto snapshot = open_index(index_path);
+        const auto file = file_of(snapshot, gz);
         std::size_t at = 0;
         std::size_t blocks = 0;
-        agg::tier::for_each_chunk_columns(
-            db, fid, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
+        const auto scanned = index::for_each_agg_chunk_columns(
+            snapshot, file,
+            [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
                 ++blocks;
                 CHECK(block.chunk == chunk);
                 CHECK(block.rows > 0);
@@ -915,6 +936,7 @@ TEST_SUITE("ChunkColumns") {
                 at += block.rows;
                 return true;
             });
+        REQUIRE(scanned.has_value());
         CHECK(blocks > 0);
         CHECK(at == RECORDS);
     }

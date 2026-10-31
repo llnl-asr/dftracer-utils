@@ -138,22 +138,6 @@ struct PartialRow {
     std::string bytes;
 };
 
-std::vector<PartialRow> partials(const IndexDatabase& db, int file_id) {
-    std::vector<PartialRow> rows;
-    agg_tier::for_each_partial(
-        db, file_id,
-        [&](std::uint64_t chunk, std::uint32_t cat, std::uint32_t name,
-            std::uint32_t host, std::uint32_t extra, agg::PartialKind kind,
-            std::span<const std::uint8_t> bytes) {
-            rows.push_back(
-                {chunk, cat, name, host, extra, kind,
-                 std::string(reinterpret_cast<const char*>(bytes.data()),
-                             bytes.size())});
-            return true;
-        });
-    return rows;
-}
-
 std::vector<PartialRow> partials(const index::Snapshot& snapshot,
                                  const FileRef& file) {
     std::vector<PartialRow> rows;
@@ -172,16 +156,6 @@ std::vector<PartialRow> partials(const index::Snapshot& snapshot,
 }
 
 using Blocks = std::vector<std::pair<std::uint64_t, agg::ChunkColumns>>;
-
-Blocks blocks(const IndexDatabase& db, int file_id) {
-    Blocks out;
-    agg_tier::for_each_chunk_columns(
-        db, file_id, [&](std::uint64_t chunk, const agg::ChunkColumns& block) {
-            out.emplace_back(chunk, block);
-            return true;
-        });
-    return out;
-}
 
 Blocks blocks(const index::Snapshot& snapshot, const FileRef& file) {
     std::vector<std::pair<std::uint64_t, agg::ChunkColumns>> out;
@@ -361,47 +335,23 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
     const auto old_rowset = db.rowset(file_id, "missing");
     CHECK(rowset.has_value() == old_rowset.has_value());
 
-    dstd::HashMap<std::uint32_t, dstd::String> old_texts;
-    agg_tier::load_file_texts(db, file_id, old_texts);
     dstd::HashMap<std::uint32_t, dstd::String> texts;
     ok(index::agg_file_texts(snapshot, file, texts));
-    const auto text_count = old_texts.size();
-    CHECK(texts.size() == text_count);
-    for (const auto& [id, text] : old_texts) {
-        const auto at = texts.find(id);
-        REQUIRE(at != texts.end());
-        CHECK(str(at->second) == str(text));
-    }
 
-    const auto old_partials = partials(db, file_id);
-    const auto new_partials = partials(snapshot, file);
-    REQUIRE(new_partials.size() == old_partials.size());
-    for (std::size_t i = 0; i < old_partials.size(); ++i) {
-        CHECK(new_partials[i].chunk == old_partials[i].chunk);
-        CHECK(new_partials[i].cat == old_partials[i].cat);
-        CHECK(new_partials[i].name == old_partials[i].name);
-        CHECK(new_partials[i].host == old_partials[i].host);
-        CHECK(new_partials[i].extra == old_partials[i].extra);
-        CHECK(new_partials[i].kind == old_partials[i].kind);
-        CHECK(new_partials[i].bytes == old_partials[i].bytes);
-    }
-
-    const auto old_blocks = blocks(db, file_id);
-    const auto new_blocks = blocks(snapshot, file);
-    REQUIRE(new_blocks.size() == old_blocks.size());
-    for (std::size_t i = 0; i < old_blocks.size(); ++i) {
-        CHECK(new_blocks[i].first == old_blocks[i].first);
-        check_block(new_blocks[i].second, old_blocks[i].second);
-    }
-    for (const auto& [chunk, old_block] : old_blocks) {
+    const auto stored_blocks = blocks(snapshot, file);
+    for (const auto& [chunk, block] : stored_blocks) {
         const auto one = take(index::agg_chunk_columns(snapshot, file, chunk));
         REQUIRE(one.has_value());
-        check_block(*one, old_block);
+        check_block(*one, block);
+        REQUIRE(block.texts.size() == block.ids.size());
+        for (std::size_t i = 0; i < block.ids.size(); ++i) {
+            const auto at = texts.find(block.ids[i]);
+            CHECK(str(block.texts[i]) ==
+                  (at == texts.end() ? std::string() : str(at->second)));
+        }
     }
     const std::uint64_t absent_chunk =
-        old_blocks.empty() ? 0 : old_blocks.back().first + 1000;
-    agg::ChunkColumns unused;
-    CHECK_FALSE(agg_tier::get_chunk_columns(db, file_id, absent_chunk, unused));
+        stored_blocks.empty() ? 0 : stored_blocks.back().first + 1000;
     CHECK_FALSE(take(index::agg_chunk_columns(snapshot, file, absent_chunk))
                     .has_value());
 
@@ -599,35 +549,19 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
     REQUIRE(opened.has_value());
     const auto snapshot = take(opened->snapshot());
 
-    auto old_dictionary = agg::make_intern_table();
-    agg_tier::load_dictionary(db, *old_dictionary);
     auto dictionary = agg::make_intern_table();
     ok(index::agg_dictionary(snapshot, *dictionary));
-    CHECK(dictionary->intern.size() == old_dictionary->intern.size());
     CHECK(dictionary->intern.size() > 0);
-    for (std::size_t i = 0; i < old_dictionary->intern.size(); ++i) {
-        const std::uint32_t id = old_dictionary->intern.entry_id(i);
-        CHECK(dictionary->intern.entry_id(i) == id);
-        CHECK(std::string(dictionary->intern.resolve(id)) ==
-              std::string(old_dictionary->intern.resolve(id)));
-    }
 
-    const auto old_config = agg_tier::read_config(db);
-    REQUIRE(old_config.has_value());
     const auto config_read = take(agg_tier::read_config(snapshot));
     REQUIRE(config_read.has_value());
-    CHECK(config_read->time_interval_us == old_config->time_interval_us);
-    CHECK(config_read->params_hash == old_config->params_hash);
     CHECK(config_read->params_hash == config.params_hash());
-    CHECK(config_read->group_by_file == old_config->group_by_file);
-    CHECK(config_read->extra_group_keys == old_config->extra_group_keys);
+    CHECK(config_read->time_interval_us == config.time_interval_us);
+    CHECK(config_read->group_by_file);
 
-    const auto old_bounds = agg_tier::read_time_bounds(db);
-    REQUIRE(old_bounds.has_value());
     const auto bounds = take(agg_tier::read_time_bounds(snapshot));
     REQUIRE(bounds.has_value());
-    CHECK(bounds->min_bucket == old_bounds->min_bucket);
-    CHECK(bounds->max_bucket == old_bounds->max_bucket);
+    CHECK(bounds->min_bucket <= bounds->max_bucket);
 
     const auto raw_config = take(index::agg_meta(snapshot, "config"));
     REQUIRE(raw_config.has_value());
@@ -645,10 +579,8 @@ TEST_CASE("the typed agg readers read what the aggregation store reads") {
         dstd::HashMap<std::uint32_t, dstd::String> texts;
         ok(index::agg_file_texts(snapshot, file, texts));
         REQUIRE(texts.size() > 0);
-        for (const auto& [id, text] : texts) {
+        for (const auto& [id, text] : texts)
             CHECK(std::string(dictionary->intern.resolve(id)) == str(text));
-            CHECK(std::string(old_dictionary->intern.resolve(id)) == str(text));
-        }
         ok(index::for_each_agg_chunk_columns(
             snapshot, file, [&](std::uint64_t, const agg::ChunkColumns&) {
                 ++block_count;
@@ -1232,8 +1164,7 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     REQUIRE(run(index::delete_agg_meta(*opened, "config")).has_value());
     REQUIRE(run(index::put_agg_meta(*opened, "config", config)).has_value());
 
-    IndexDatabase db(root, index_store::IndexOpenMode::ReadOnly);
-    auto read = agg_tier::read_config(db);
+    auto read = take(agg_tier::read_config(take(opened->snapshot())));
     REQUIRE(read.has_value());
     CHECK(read->time_interval_us == 60);
     CHECK(read->params_hash == 7);
@@ -1242,15 +1173,14 @@ TEST_CASE("agg meta is replaced and deleted in one record at a time") {
     config[15] = 9;
     config[16] = 1;
     REQUIRE(run(index::put_agg_meta(*opened, "config", config)).has_value());
-    IndexDatabase again(root, index_store::IndexOpenMode::ReadOnly);
-    read = agg_tier::read_config(again);
+    read = take(agg_tier::read_config(take(opened->snapshot())));
     REQUIRE(read.has_value());
     CHECK(read->params_hash == 9);
     CHECK(read->group_by_file);
 
     REQUIRE(run(index::delete_agg_meta(*opened, "config")).has_value());
-    IndexDatabase gone(root, index_store::IndexOpenMode::ReadOnly);
-    CHECK_FALSE(agg_tier::read_config(gone).has_value());
+    CHECK_FALSE(
+        take(agg_tier::read_config(take(opened->snapshot()))).has_value());
     REQUIRE(run(index::delete_agg_meta(*opened, "config")).has_value());
 }
 

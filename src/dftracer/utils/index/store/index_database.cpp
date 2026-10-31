@@ -7,7 +7,6 @@
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
-#include <dftracer/utils/index/store/internal/agg_row_reader.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/internal/index_decoding.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
@@ -1398,26 +1397,6 @@ std::optional<std::string> IndexDatabase::rowset(int file_id,
                                        fid(file_id), name));
     if (!body) return std::nullopt;
     return std::string(*body);
-}
-
-}  // namespace dftracer::utils::index::store
-
-namespace dftracer::utils::index::store {
-
-void AggRowReader::for_each_row(const IndexDatabase& db, std::uint8_t kind,
-                                std::string_view prefix, const RowFn& fn) {
-    db.impl_->raw_scan(
-        prefix, [&](std::string_view key, std::string_view value) {
-            if (auto body = layout::payload(value, layout::Ext::Agg, kind))
-                return fn(key, *body);
-            return true;
-        });
-}
-
-std::optional<std::string> AggRowReader::get_row(const IndexDatabase& db,
-                                                 std::uint8_t kind,
-                                                 std::string_view key) {
-    return db.impl_->get(layout::Ext::Agg, kind, key);
 }
 
 }  // namespace dftracer::utils::index::store

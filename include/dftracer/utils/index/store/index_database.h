@@ -18,7 +18,6 @@
 namespace dftracer::utils::index::store {
 
 class IndexDatabaseWrite;
-class AggRowReader;
 
 enum class IndexOpenMode { ReadOnly, ReadWrite };
 
@@ -295,8 +294,6 @@ class IndexDatabase {
    private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
-
-    friend class AggRowReader;
 };
 
 }  // namespace dftracer::utils::index::store

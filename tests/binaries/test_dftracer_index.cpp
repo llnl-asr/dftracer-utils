@@ -1,6 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -221,9 +224,10 @@ TEST_SUITE("DFTracerIndex") {
         CHECK(out.find("Files processed: 1\n") != std::string::npos);
 
         ix::store::release_index(index_path);
-        ix::store::IndexDatabase db(index_path,
-                                    ix::store::IndexOpenMode::ReadOnly);
-        const auto config = ix::schemas::dft::agg::tier::read_config(db);
+        const auto snapshot =
+            dftracer::utils::unwrap(ix::plan::open_snapshot(index_path));
+        const auto config = dftracer::utils::unwrap(
+            ix::schemas::dft::agg::tier::read_config(snapshot));
         REQUIRE(config);
         CHECK(config->time_interval_us ==
               ix::schemas::dft::agg::standard_aggregation_config()

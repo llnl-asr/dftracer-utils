@@ -2,14 +2,17 @@
 // column blocks: the rows, their per-second means and the shard splits.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -32,7 +35,6 @@ namespace agg = dftracer::utils::index::schemas::dft::agg;
 using dftracer::utils::index::Indexer;
 using dftracer::utils::index::IndexerOptions;
 using dftracer::utils::index::schemas::dft::agg::AggregationConfig;
-using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::trace::views::View;
 using dftracer::utils::trace::views::ViewFile;
 using dftu_utils_test::TestEnvironment;
@@ -225,12 +227,12 @@ struct Blocks {
 Blocks blocks_of(const std::string& gz, const std::string& idx) {
     Blocks out;
     const auto index_path = trace::internal::determine_index_path(gz, idx);
-    IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
-    const int fid =
-        db.get_file_info_id(index::store::internal::get_logical_path(gz));
-    REQUIRE(fid >= 0);
-    agg::tier::for_each_chunk_columns(
-        db, fid, [&](std::uint64_t, const agg::ChunkColumns& block) {
+    const auto snapshot = unwrap(index::plan::open_snapshot(index_path));
+    const auto file =
+        snapshot.file(index::store::internal::get_logical_path(gz));
+    REQUIRE(file.has_value());
+    unwrap(index::for_each_agg_chunk_columns(
+        snapshot, *file, [&](std::uint64_t, const agg::ChunkColumns& block) {
             ++out.total;
             bool holds_counter = false;
             for (std::uint64_t r = 0; r < block.rows; ++r)
@@ -240,7 +242,7 @@ Blocks blocks_of(const std::string& gz, const std::string& idx) {
                     holds_counter = true;
             if (holds_counter) ++out.counters;
             return true;
-        });
+        }));
     return out;
 }
 

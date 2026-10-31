@@ -10,13 +10,12 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
-#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/store/file.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
-#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/executor/executor.h>
@@ -61,12 +60,10 @@ struct Source {
         : path(s.index_path),
           params_hash(s.params_hash ? *s.params_hash : default_params_hash) {
         if (path.empty() || !dftracer::utils::input_exists(path)) return;
-        idx.emplace(path, index::store::IndexOpenMode::ReadOnly);
         snapshot.emplace(unwrap(index::plan::open_snapshot(path)));
     }
 
     std::string path;
-    dstd::Optional<index::store::IndexDatabase> idx;
     dstd::Optional<index::Snapshot> snapshot;
     std::uint64_t params_hash;
 };
@@ -75,7 +72,8 @@ struct Source {
 /// `all` reads every group.
 struct ChunkJob {
     std::uint32_t chunk = 0;
-    int file_id = -1;
+    /// The file the chunk belongs to, absent when the index does not hold it.
+    dstd::Optional<index::FileRef> file;
     bool all = false;
     /// The file has no chunk table, so chunk 0 is the whole of it.
     bool whole_file = false;
@@ -257,7 +255,8 @@ class Task {
     bool bins_answer(const agg::AggPartial& p) const;
     void take_bins(const agg::AggPartial& p, AggKey key);
 
-    coro::CoroTask<void> whole_file_chunks(const std::string& path, int fid,
+    coro::CoroTask<void> whole_file_chunks(const std::string& path,
+                                           const index::FileRef* file,
                                            std::size_t chunk_count,
                                            dstd::Vector<ChunkJob>& jobs);
 
@@ -274,7 +273,7 @@ class Task {
                         const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
 
     /// False, with nothing added, when the index holds no column block.
-    bool add_chunk_columns(std::uint32_t chunk, int file_id,
+    bool add_chunk_columns(const ChunkJob& job,
                            const dstd::HashSet<AggGroup, AggGroupHash>* wanted);
 
     Runner& r_;
@@ -556,33 +555,28 @@ coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
 coro::CoroTask<void> Task::scan_file(
     const std::string& path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<index::gzip::ChunkSpan>& spans) {
-    if (!src_.idx)
+    if (!src_.snapshot)
         throw DFTUtilsException::cat(ErrorCode::NotFound,
                                      "aggregation query: ", src_.path,
                                      " is not an open index");
-    const auto& idx = *src_.idx;
-    const int fid =
-        idx.get_file_info_id(index::store::internal::get_logical_path(path));
-    if (fid < 0)
+    const auto file =
+        src_.snapshot->file(index::store::internal::get_logical_path(path));
+    if (!file)
         throw DFTUtilsException::cat(ErrorCode::NotFound,
                                      "aggregation query: ", path,
                                      " is not in the index ", src_.path);
     ++stats.files;
-    const auto table = idx.query_chunk_spans(fid);
-    spans.assign(table.begin(), table.end());
+    spans = unwrap(index::spans(*src_.snapshot, *file));
 
-    const auto state =
-        idx.extension_state(fid, index::store::IndexExtension::Agg);
-    const bool usable = state && state->ready &&
-                        state->version == index::store::layout::ext_version(
-                                              index::store::layout::Ext::Agg) &&
-                        state->params_hash == src_.params_hash;
+    const bool usable =
+        src_.snapshot->extension(*file, index::store::IndexExtension::Agg,
+                                 src_.params_hash) == index::Freshness::Current;
 
     std::size_t seen = 0;
     if (usable) {
-        agg::tier::load_file_texts(idx, fid, texts_);
-        agg::tier::for_each_partial(
-            *src_.idx, fid,
+        unwrap(index::agg_file_texts(*src_.snapshot, *file, texts_));
+        unwrap(index::for_each_agg_partial(
+            *src_.snapshot, *file,
             [&](std::uint32_t chunk, std::uint32_t cat_root,
                 std::uint32_t name_root, std::uint32_t host_root,
                 std::uint32_t extra_root, AggKind kind,
@@ -615,7 +609,7 @@ coro::CoroTask<void> Task::scan_file(
                     });
                 take_partial(chunk, {cat, name, host, extra, kind}, bytes);
                 return true;
-            });
+            }));
     }
 
     if (seen == 0) {
@@ -624,14 +618,14 @@ coro::CoroTask<void> Task::scan_file(
             ++stats.unanswered;
             co_return;
         }
-        co_await whole_file_chunks(path, fid, spans.size(), jobs);
+        co_await whole_file_chunks(path, &*file, spans.size(), jobs);
         co_return;
     }
 
     for (std::size_t i = 0; i < rereads_.size();) {
         ChunkJob job;
         job.chunk = rereads_[i].chunk;
-        job.file_id = fid;
+        job.file = *file;
         if (job.chunk >= spans.size())
             throw DFTUtilsException::cat(
                 ErrorCode::Parse, "aggregation query: a partial of ", path,
@@ -648,16 +642,13 @@ coro::CoroTask<void> Task::trace_jobs(
     const std::string& path, dstd::Vector<ChunkJob>& jobs,
     dstd::Vector<index::gzip::ChunkSpan>& spans) {
     ++stats.files;
-    int fid = -1;
-    if (src_.idx) {
-        const int found = src_.idx->get_file_info_id(
-            index::store::internal::get_logical_path(path));
-        if (found >= 0) {
-            fid = found;
-            const auto table = src_.idx->query_chunk_spans(fid);
-            spans.assign(table.begin(), table.end());
-        }
+    dstd::Optional<index::FileRef> file;
+    if (src_.snapshot) {
+        if (auto found = src_.snapshot->file(
+                index::store::internal::get_logical_path(path)))
+            file = std::move(*found);
     }
+    if (file) spans = unwrap(index::spans(*src_.snapshot, *file));
     if (spans.empty()) {
         ChunkJob job;
         job.all = true;
@@ -665,15 +656,17 @@ coro::CoroTask<void> Task::trace_jobs(
         jobs.push_back(std::move(job));
         co_return;
     }
-    co_await whole_file_chunks(path, fid, spans.size(), jobs);
+    const index::FileRef* held = file ? &*file : nullptr;
+    co_await whole_file_chunks(path, held, spans.size(), jobs);
 }
 
-coro::CoroTask<void> Task::whole_file_chunks(const std::string& path, int fid,
+coro::CoroTask<void> Task::whole_file_chunks(const std::string& path,
+                                             const index::FileRef* file,
                                              std::size_t chunk_count,
                                              dstd::Vector<ChunkJob>& jobs) {
     dstd::Vector<std::uint64_t> chunks;
     bool pruned_to_list = false;
-    if (r_.has_time && src_.idx) {
+    if (r_.has_time && src_.snapshot) {
         index::plan::PruneRequest request;
         request.index_path = src_.path;
         request.file_path = path;
@@ -699,7 +692,7 @@ coro::CoroTask<void> Task::whole_file_chunks(const std::string& path, int fid,
         if (c >= chunk_count) continue;
         ChunkJob job;
         job.chunk = static_cast<std::uint32_t>(c);
-        job.file_id = fid;
+        if (file != nullptr) job.file = *file;
         job.all = true;
         jobs.push_back(std::move(job));
     }
@@ -928,7 +921,7 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
         job.all ? nullptr : &wanted;
     if (!r_.rules.q.from_trace && !r_.rules.q.filter &&
         r_.rules.q.config.extra_group_keys.empty() &&
-        add_chunk_columns(job.chunk, job.file_id, filter)) {
+        add_chunk_columns(job, filter)) {
         co_return;
     }
 
@@ -970,12 +963,12 @@ coro::CoroTask<void> Task::read_chunk(const std::string& path,
 }
 
 bool Task::add_chunk_columns(
-    std::uint32_t chunk, int file_id,
-    const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
-    agg::ChunkColumns block;
-    if (!src_.idx ||
-        !agg::tier::get_chunk_columns(*src_.idx, file_id, chunk, block))
-        return false;
+    const ChunkJob& job, const dstd::HashSet<AggGroup, AggGroupHash>* wanted) {
+    if (!src_.snapshot || !job.file) return false;
+    auto found =
+        unwrap(index::agg_chunk_columns(*src_.snapshot, *job.file, job.chunk));
+    if (!found) return false;
+    agg::ChunkColumns block = std::move(*found);
     dstd::Vector<std::uint32_t> read_ids(block.ids.size(), AGG_UNSET);
     const auto read_id = [&](std::uint32_t local) {
         std::uint32_t& id = read_ids[local];

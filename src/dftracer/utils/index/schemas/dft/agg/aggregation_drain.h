@@ -1,8 +1,6 @@
 #ifndef DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_DRAIN_H
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGGREGATION_DRAIN_H
 
-#include <dftracer/utils/index/store/index_database.h>
-
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -25,9 +23,8 @@ struct AggFoldOutput {
 
 /// Widens the stored time bounds of `index` by the range of the events of
 /// `outputs`. Synchronous, so safe to call from a coroutine without suspending.
-/// `db` reads the bounds already stored.
+/// The bounds already stored are read from a snapshot of `index`.
 void merge_aggregation_folds(std::vector<AggFoldOutput>& outputs,
-                             index::store::IndexDatabase& db,
                              const index::Index& index);
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

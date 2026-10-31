@@ -10,7 +10,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/layout.h>
 
 #include <cstddef>
@@ -23,15 +22,14 @@
 #include <utility>
 #include <vector>
 
-// The only code that reads or writes the aggregation extension's storage.
+// The index-wide aggregation records. The records of one file are read through
+// tables.h.
 namespace dftracer::utils::index {
 class Index;
 class Snapshot;
 }  // namespace dftracer::utils::index
 
 namespace dftracer::utils::index::schemas::dft::agg::tier {
-
-using index::store::IndexDatabase;
 
 struct Config {
     std::uint64_t time_interval_us = 0;
@@ -50,51 +48,16 @@ struct TimeBounds {
 };
 
 /// nullopt when the index holds no config, or one in another format.
-std::optional<Config> read_config(const IndexDatabase& db);
-/// As above, read through a snapshot.
 dstd::Expected<std::optional<Config>, dstd::Error> read_config(
     const Snapshot& snapshot);
 /// Replaces the index-wide config, blocking until it is published.
 void write_config(const Index& index, const Config& config);
 
-/// Calls fn(chunk, cat_id, name_id, host_id, extra_id, kind, bytes) for each
-/// partial of `file_id` in chunk order until fn returns false. `bytes` is the
-/// serialized AggPartial, valid during the call. A host or extra id is the
-/// empty text when there is none. Throws on a read error or a malformed record.
-void for_each_partial(
-    const IndexDatabase& db, int file_id,
-    const std::function<bool(std::uint64_t, std::uint32_t, std::uint32_t,
-                             std::uint32_t, std::uint32_t, PartialKind,
-                             std::span<const std::uint8_t>)>& fn);
-
-/// Calls fn(chunk, block) for each column block of `file_id` in chunk order
-/// until fn returns false. `block.texts` holds the text of each id of
-/// `block.ids` (empty where the file holds none). Throws on a read error or a
-/// malformed record.
-void for_each_chunk_columns(
-    const IndexDatabase& db, int file_id,
-    const std::function<bool(std::uint64_t, const ChunkColumns&)>& fn);
-
-/// The column block of `chunk` of `file_id`, with its texts filled as
-/// for_each_chunk_columns fills them. False, leaving `out` alone, when the
-/// index holds no block for the chunk. Throws on a read error or a malformed
-/// record.
-bool get_chunk_columns(const IndexDatabase& db, int file_id,
-                       std::uint64_t chunk, ChunkColumns& out);
-
-std::optional<TimeBounds> read_time_bounds(const IndexDatabase& db);
-/// As above, read through a snapshot.
+/// nullopt when the index holds no time bounds, or ones in another format.
 dstd::Expected<std::optional<TimeBounds>, dstd::Error> read_time_bounds(
     const Snapshot& snapshot);
 /// Replaces the index-wide time bounds, blocking until they are published.
 void write_time_bounds(const Index& index, TimeBounds bounds);
-
-void load_dictionary(const IndexDatabase& db, AggInternTable& table);
-
-/// Adds the dictionary entries `file_id` wrote, one for each id its records
-/// use, to `texts`. Throws on a read error or a malformed entry.
-void load_file_texts(const IndexDatabase& db, int file_id,
-                     dstd::HashMap<std::uint32_t, dstd::String>& texts);
 
 /// Removes every record of the aggregation tier from `index`, the config and
 /// the time bounds included. Blocking.

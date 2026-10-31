@@ -54,6 +54,9 @@ static int run_event_count(const EventCountArgParse* cli);
 namespace {
 
 constexpr std::size_t PLAIN_READ_BYTES = std::size_t{4} << 20;
+// Each in-flight file holds this much inflated text plus its copy. At 96
+// threads 1 MiB beat the decoder's 32 MiB default in time and peak memory.
+constexpr std::size_t INFLATE_STEP_BYTES = std::size_t{1} << 20;
 
 struct IndexedCounts {
     std::size_t total_events = 0;
@@ -149,8 +152,8 @@ coro::CoroTask<std::size_t> stream_count(std::string path) {
     unsigned char magic[2] = {0, 0};
     const auto magic_read = co_await io::pread(fd.get(), magic, 2, 0);
     if (magic_read == 2 && magic[0] == 0x1f && magic[1] == 0x8b) {
-        auto members =
-            utilities::fileio::compress::decode_gzip_members(fd.get(), size);
+        auto members = utilities::fileio::compress::decode_gzip_members(
+            fd.get(), size, INFLATE_STEP_BYTES);
         for (;;) {
             auto chunk = co_await members.next();
             if (!chunk) break;

@@ -211,7 +211,7 @@ dataframe::Series key_column_to_string(const dataframe::Series& col) {
             const double* d = col.data<double>();
             for (std::int64_t i = 0; i < n; ++i)
                 vals[static_cast<std::size_t>(i)] =
-                    dftracer::utils::double_text(d[i]);
+                    dftracer::utils::dstd::double_text(d[i]);
             break;
         }
         default:

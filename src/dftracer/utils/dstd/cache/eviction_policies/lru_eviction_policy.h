@@ -8,7 +8,7 @@
 #include <optional>
 #include <unordered_map>
 
-namespace dftracer::utils::cache {
+namespace dftracer::utils::dstd::cache {
 
 /// Least-recently-used: touch moves a key to the front; the victim is the key
 /// untouched longest.
@@ -47,6 +47,6 @@ class LruEvictionPolicy final : public EvictionPolicy<Key> {
     std::unordered_map<Key, typename std::list<Key>::iterator> pos_;
 };
 
-}  // namespace dftracer::utils::cache
+}  // namespace dftracer::utils::dstd::cache
 
 #endif  // DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICIES_LRU_EVICTION_POLICY_H

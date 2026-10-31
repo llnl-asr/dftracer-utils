@@ -84,10 +84,10 @@ namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io_fault = dftracer::utils::store::io_fault;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::CoroScope;
 using dftracer::utils::FilesystemKind;
 using dftracer::utils::Runtime;
+using dftracer::utils::dstd::ByteView;
 using store::Batch;
 using store::NamespaceId;
 using store::NamespaceSpec;
@@ -433,9 +433,9 @@ std::array<std::uint8_t, KEY_BYTES> make_key(std::uint32_t coro,
                                              std::uint32_t ordinal,
                                              std::uint32_t index) {
     std::array<std::uint8_t, KEY_BYTES> key{};
-    dftracer::utils::write_u64_le(key.data(), coro);
-    dftracer::utils::write_u32_le(key.data() + 8, ordinal);
-    dftracer::utils::write_u32_le(key.data() + 12, index);
+    dftracer::utils::dstd::write_u64_le(key.data(), coro);
+    dftracer::utils::dstd::write_u32_le(key.data() + 8, ordinal);
+    dftracer::utils::dstd::write_u32_le(key.data() + 12, index);
     return key;
 }
 
@@ -1653,7 +1653,7 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
     std::vector<std::uint8_t> values(static_cast<std::size_t>(keys) *
                                      FOLD_VALUE_BYTES);
     std::array<std::uint8_t, FOLD_VALUE_BYTES> one{};
-    dftracer::utils::write_u64_le(one.data(), 1);
+    dftracer::utils::dstd::write_u64_le(one.data(), 1);
     std::atomic<bool> ok{true};
     runtime.run_blocking(
         "store_bench fold write", [&](CoroScope&) -> coro::CoroTask<void> {
@@ -1666,7 +1666,7 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
                             static_cast<std::size_t>(key) * FOLD_VALUE_BYTES;
                         const std::uint8_t* bytes = one.data();
                         if (segment == 0) {
-                            dftracer::utils::write_u64_le(
+                            dftracer::utils::dstd::write_u64_le(
                                 values.data() + at, fold_value(scope, key));
                             bytes = values.data() + at;
                         }
@@ -1736,7 +1736,7 @@ FoldScan Bench::fold_scan(const Snapshot& snapshot,
                     reinterpret_cast<const std::uint8_t*>(value->data());
                 sums[static_cast<std::size_t>(index)] +=
                     static_cast<std::int64_t>(
-                        dftracer::utils::read_u64_le(bytes));
+                        dftracer::utils::dstd::read_u64_le(bytes));
                 cursor.next();
             }
             if (cursor.error()) errors.fetch_add(1, std::memory_order_relaxed);

@@ -1147,7 +1147,7 @@ static coro::CoroTask<int> run_detailed_stats(
 // a row the report needs is missing or not current.
 static std::optional<ChunkStatistics> file_rows_to_statistics(
     const IndexDatabase& db, int file_id, const MergedStatisticsResult* scalar,
-    StringViewMap<std::uint64_t>* pid_tids, bool cats, bool names) {
+    dstd::StringViewMap<std::uint64_t>* pid_tids, bool cats, bool names) {
     if (!scalar || scalar->num_chunks == 0) return std::nullopt;
     if ((cats || names) &&
         !db.extension_current(file_id, IndexExtension::Counts))
@@ -1166,7 +1166,7 @@ static std::optional<ChunkStatistics> file_rows_to_statistics(
     cs.duration_m2 = row.duration_m2;
     if (cats) {
         // Categories are reported in lower case, as the View path groups them.
-        StringViewMap<std::uint64_t> raw;
+        dstd::StringViewMap<std::uint64_t> raw;
         add_path_counts(db, file_id, "cat", raw);
         for (const auto& [cat, count] : raw) {
             std::string lower(cat);
@@ -1219,7 +1219,8 @@ static coro::CoroTask<void> process_index_group(
             file_ids.reserve(group_ptr->size());
             for (const auto& rf : *group_ptr) file_ids.push_back(rf.file_id);
             auto scalars = idx_db.query_file_scalar_stats_batch(file_ids);
-            ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>>
+            ankerl::unordered_dense::map<int,
+                                         dstd::StringViewMap<std::uint64_t>>
                 pid_tid_rows;
             if (needs.pid_tids)
                 pid_tid_rows = idx_db.query_file_pid_tid_counts_batch(file_ids);
@@ -1229,7 +1230,7 @@ static coro::CoroTask<void> process_index_group(
                 const MergedStatisticsResult* scalar =
                     scalar_it != scalars.end() ? &scalar_it->second : nullptr;
                 if (scalar) num_chunks_map[rf.file_id] = scalar->num_chunks;
-                StringViewMap<std::uint64_t>* pid_tids = nullptr;
+                dstd::StringViewMap<std::uint64_t>* pid_tids = nullptr;
                 if (needs.pid_tids) {
                     const auto it = pid_tid_rows.find(rf.file_id);
                     if (it == pid_tid_rows.end()) {

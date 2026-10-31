@@ -24,7 +24,7 @@ static bool read_isize_last4(int fd, uint32_t& out) {
     if (end < 0) return false;
     unsigned char b[4]{};
     if (::pread(fd, b, 4, end) != 4) return false;
-    out = dftracer::utils::read_u32_le(b);
+    out = dftracer::utils::dstd::read_u32_le(b);
     return true;
 }
 
@@ -54,7 +54,7 @@ static std::string read_gzip_fname(int fd) {
     if (flg & 0x04) {
         unsigned char x[2];
         if (::pread(fd, x, 2, pos) != 2) return {};
-        auto xlen = dftracer::utils::read_u16_le(x);
+        auto xlen = dftracer::utils::dstd::read_u16_le(x);
         pos += 2 + xlen;
     }
     std::string name;
@@ -112,14 +112,16 @@ static std::size_t choose_divisible_checkpoint(
     if (U == 0) {
         // No size info: use user size or default
         std::size_t C = (S ? S : (16u << 10));
-        C = std::max(window, std::min(max_chk, dftracer::utils::bits::align_up(
-                                                   C, window)));
+        C = std::max(
+            window, std::min(max_chk,
+                             dftracer::utils::dstd::bits::align_up(C, window)));
         return C;
     }
 
     if (S == 0) S = 256u << 10;  // default 256 KiB
-    S = std::max(window,
-                 std::min(max_chk, dftracer::utils::bits::align_up(S, window)));
+    S = std::max(
+        window,
+        std::min(max_chk, dftracer::utils::dstd::bits::align_up(S, window)));
 
     long double ratio = (long double)U / (long double)S;
     std::size_t k = (std::size_t)(ratio + 0.5L);
@@ -163,7 +165,7 @@ std::size_t determine_checkpoint_size(std::size_t user_checkpoint_size,
         // No file info: use user size or default
         std::size_t S =
             user_checkpoint_size ? user_checkpoint_size : (256u << 10);
-        S = dftracer::utils::bits::align_up(std::max(window, S), window);
+        S = dftracer::utils::dstd::bits::align_up(std::max(window, S), window);
         return std::min(S, align_down(max_chk, window));
     }
 

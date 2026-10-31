@@ -1384,7 +1384,7 @@ class SampleCursor : public Cursor {
             keys.reserve(keys.size() + static_cast<std::size_t>(mrows));
             idx.reserve(idx.size() + static_cast<std::size_t>(mrows));
             for (std::int64_t i = 0; i < mrows; ++i) {
-                keys.push_back(hash::splitmix64(
+                keys.push_back(dstd::hash::splitmix64(
                     static_cast<std::uint64_t>(off + i) + seed_));
                 idx.push_back(off + i);
             }

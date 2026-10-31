@@ -32,12 +32,12 @@ constexpr std::uint8_t STAT_MOMENTS = 4;
 
 // Every element takes at least one byte, so a count above the bytes left is
 // malformed. Checking it first keeps a reserve small.
-bool get_count(LeReader& r, std::uint64_t limit, std::uint64_t& n) {
-    return read_varint(r, n) && n <= limit && n <= r.remaining();
+bool get_count(dstd::LeReader& r, std::uint64_t limit, std::uint64_t& n) {
+    return dstd::read_varint(r, n) && n <= limit && n <= r.remaining();
 }
 
 std::uint64_t mix(std::uint64_t id) {
-    return dftracer::utils::hash::splitmix64(id);
+    return dftracer::utils::dstd::hash::splitmix64(id);
 }
 
 void put_stat(dstd::Vector<std::uint8_t>& buf, const FieldStat& s) {
@@ -45,28 +45,28 @@ void put_stat(dstd::Vector<std::uint8_t>& buf, const FieldStat& s) {
                          s.cm3 != 0.0 || s.cm4 != 0.0;
     buf.push_back(static_cast<std::uint8_t>(
         static_cast<std::uint8_t>(s.domain) | (moments ? STAT_MOMENTS : 0)));
-    append_varint(buf, s.n);
-    append_f64_le(buf, s.sum);
+    dstd::append_varint(buf, s.n);
+    dstd::append_f64_le(buf, s.sum);
     if (s.domain == FieldStatDomain::F64) {
-        append_f64_le(buf, s.min);
-        append_f64_le(buf, s.max);
+        dstd::append_f64_le(buf, s.min);
+        dstd::append_f64_le(buf, s.max);
     } else {
         // min and max are the doubles of emin and emax, so they are not kept.
-        append_varint(buf, std::bit_cast<std::uint64_t>(s.esum));
-        append_varint(buf, std::bit_cast<std::uint64_t>(s.emin));
-        append_varint(buf, std::bit_cast<std::uint64_t>(s.emax));
-        append_varint(buf, std::bit_cast<std::uint64_t>(s.ecarry));
+        dstd::append_varint(buf, std::bit_cast<std::uint64_t>(s.esum));
+        dstd::append_varint(buf, std::bit_cast<std::uint64_t>(s.emin));
+        dstd::append_varint(buf, std::bit_cast<std::uint64_t>(s.emax));
+        dstd::append_varint(buf, std::bit_cast<std::uint64_t>(s.ecarry));
     }
     if (moments) {
-        append_f64_le(buf, s.shift);
-        append_f64_le(buf, s.cmean);
-        append_f64_le(buf, s.cm2);
-        append_f64_le(buf, s.cm3);
-        append_f64_le(buf, s.cm4);
+        dstd::append_f64_le(buf, s.shift);
+        dstd::append_f64_le(buf, s.cmean);
+        dstd::append_f64_le(buf, s.cm2);
+        dstd::append_f64_le(buf, s.cm3);
+        dstd::append_f64_le(buf, s.cm4);
     }
 }
 
-bool get_stat(LeReader& r, FieldStat& s) {
+bool get_stat(dstd::LeReader& r, FieldStat& s) {
     std::uint8_t b = 0;
     if (!r.u8(b) || (b & ~(STAT_DOMAIN_MASK | STAT_MOMENTS)) != 0) {
         return false;
@@ -75,13 +75,13 @@ bool get_stat(LeReader& r, FieldStat& s) {
     if (domain > static_cast<std::uint8_t>(FieldStatDomain::F64)) return false;
     s = FieldStat{};
     s.domain = static_cast<FieldStatDomain>(domain);
-    if (!read_varint(r, s.n) || !r.f64(s.sum)) return false;
+    if (!dstd::read_varint(r, s.n) || !r.f64(s.sum)) return false;
     if (s.domain == FieldStatDomain::F64) {
         if (!r.f64(s.min) || !r.f64(s.max)) return false;
     } else {
         std::uint64_t es = 0, emin = 0, emax = 0, carry = 0;
-        if (!read_varint(r, es) || !read_varint(r, emin) ||
-            !read_varint(r, emax) || !read_varint(r, carry)) {
+        if (!dstd::read_varint(r, es) || !dstd::read_varint(r, emin) ||
+            !dstd::read_varint(r, emax) || !dstd::read_varint(r, carry)) {
             return false;
         }
         s.esum = std::bit_cast<std::int64_t>(es);
@@ -112,13 +112,13 @@ void put_quantiles(dstd::Vector<std::uint8_t>& buf, const QuantileStore& q) {
     }
     buf.push_back(1);
     const std::size_t at = buf.size();
-    append_u32_le(buf, 0);
+    dstd::append_u32_le(buf, 0);
     q.serialize_into(buf);
-    write_u32_le(buf.data() + at,
-                 static_cast<std::uint32_t>(buf.size() - at - 4));
+    dstd::write_u32_le(buf.data() + at,
+                       static_cast<std::uint32_t>(buf.size() - at - 4));
 }
 
-bool get_quantiles(LeReader& r, QuantileStore& out, bool keep = true) {
+bool get_quantiles(dstd::LeReader& r, QuantileStore& out, bool keep = true) {
     std::uint8_t present = 0;
     if (!r.u8(present) || present > 1) return false;
     if (present == 0) return true;
@@ -241,10 +241,10 @@ std::uint64_t DistinctIds::count() const {
 void DistinctIds::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     if (!sketch_mode_) {
         buf.push_back(TAG_LIST);
-        append_varint(buf, list_.size());
+        dstd::append_varint(buf, list_.size());
         std::uint64_t prev = 0;
         for (std::uint64_t id : list_) {
-            append_varint(buf, id - prev);
+            dstd::append_varint(buf, id - prev);
             prev = id;
         }
         return;
@@ -260,15 +260,15 @@ void DistinctIds::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     std::sort(hashes.begin(), hashes.end());
     hashes.erase(std::unique(hashes.begin(), hashes.end()), hashes.end());
     buf.push_back(TAG_SPARSE);
-    append_varint(buf, hashes.size());
+    dstd::append_varint(buf, hashes.size());
     std::uint64_t prev = 0;
     for (std::uint64_t h : hashes) {
-        append_varint(buf, h - prev);
+        dstd::append_varint(buf, h - prev);
         prev = h;
     }
 }
 
-bool DistinctIds::read_from(LeReader& r) {
+bool DistinctIds::read_from(dstd::LeReader& r) {
     std::uint8_t tag = 0;
     if (!r.u8(tag)) return false;
     if (tag == TAG_LIST) {
@@ -279,7 +279,7 @@ bool DistinctIds::read_from(LeReader& r) {
         std::uint64_t prev = 0;
         for (std::uint64_t i = 0; i < n; ++i) {
             std::uint64_t d = 0;
-            if (!read_varint(r, d)) return false;
+            if (!dstd::read_varint(r, d)) return false;
             if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return false;
             prev += d;
             ids.push_back(prev);
@@ -296,7 +296,7 @@ bool DistinctIds::read_from(LeReader& r) {
         std::uint64_t prev = 0;
         for (std::uint64_t i = 0; i < n; ++i) {
             std::uint64_t d = 0;
-            if (!read_varint(r, d)) return false;
+            if (!dstd::read_varint(r, d)) return false;
             if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return false;
             prev += d;
             hashes.push_back(prev);
@@ -316,7 +316,7 @@ bool DistinctIds::read_from(LeReader& r) {
     return true;
 }
 
-bool DistinctIds::skip(LeReader& r) {
+bool DistinctIds::skip(dstd::LeReader& r) {
     std::uint8_t tag = 0;
     if (!r.u8(tag)) return false;
     if (tag == TAG_DENSE) return r.take(Sketch::REGISTERS) != nullptr;
@@ -327,7 +327,7 @@ bool DistinctIds::skip(LeReader& r) {
     if (!get_count(r, limit, n)) return false;
     std::uint64_t d = 0;
     for (std::uint64_t i = 0; i < n; ++i)
-        if (!read_varint(r, d)) return false;
+        if (!dstd::read_varint(r, d)) return false;
     return true;
 }
 
@@ -482,26 +482,26 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     if (offset.n != 0) flags |= HAS_OFFSET;
     if (bin_interval != 0 && !bins.empty()) flags |= HAS_BINS;
     buf.push_back(flags);
-    append_varint(buf, count);
+    dstd::append_varint(buf, count);
     if ((flags & HAS_TIMES) != 0) {
-        append_varint(buf, ts);
-        append_varint(buf, te - ts);
-        append_varint(buf, ts_last_start - ts);
+        dstd::append_varint(buf, ts);
+        dstd::append_varint(buf, te - ts);
+        dstd::append_varint(buf, ts_last_start - ts);
     }
     if ((flags & HAS_DURATION) != 0) {
         put_stat(buf, duration);
         put_quantiles(buf, duration_q);
-        append_varint(buf, duration_values);
+        dstd::append_varint(buf, duration_values);
     }
     if ((flags & HAS_SIZE) != 0) {
         put_stat(buf, size);
         put_quantiles(buf, size_q);
-        append_varint(buf, size_values);
+        dstd::append_varint(buf, size_values);
     }
     if ((flags & HAS_OFFSET) != 0) {
         put_stat(buf, offset);
         put_quantiles(buf, offset_q);
-        append_varint(buf, offset_values);
+        dstd::append_varint(buf, offset_values);
     }
     pids.serialize_into(buf);
     tids.serialize_into(buf);
@@ -509,12 +509,12 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     pid_tids.serialize_into(buf);
     pid_files.serialize_into(buf);
 
-    append_varint(buf, pid_spans.size());
+    dstd::append_varint(buf, pid_spans.size());
     std::uint64_t prev = 0;
     for (const PidSpan& s : pid_spans) {
-        append_varint(buf, s.pid - prev);
-        append_varint(buf, s.first);
-        append_varint(buf, s.last - s.first);
+        dstd::append_varint(buf, s.pid - prev);
+        dstd::append_varint(buf, s.first);
+        dstd::append_varint(buf, s.last - s.first);
         prev = s.pid;
     }
 
@@ -522,20 +522,21 @@ void AggPartial::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     // Per bin: pid delta, tid (a delta within one pid), bin (a delta within one
     // thread), count, events without a duration, duration sum, size count and
     // size sum.
-    append_varint(buf, bin_interval);
-    append_varint(buf, bins.size());
+    dstd::append_varint(buf, bin_interval);
+    dstd::append_varint(buf, bins.size());
     const TimeBin* prev_bin = nullptr;
     for (const TimeBin& b : bins) {
         const bool same_pid = prev_bin != nullptr && prev_bin->pid == b.pid;
         const bool same_tid = same_pid && prev_bin->tid == b.tid;
-        append_varint(buf, prev_bin == nullptr ? b.pid : b.pid - prev_bin->pid);
-        append_varint(buf, same_pid ? b.tid - prev_bin->tid : b.tid);
-        append_varint(buf, same_tid ? b.bin - prev_bin->bin : b.bin);
-        append_varint(buf, b.count);
-        append_varint(buf, b.count - b.duration_n);
-        append_varint(buf, b.duration_sum);
-        append_varint(buf, b.size_n);
-        append_varint(buf, b.size_sum);
+        dstd::append_varint(
+            buf, prev_bin == nullptr ? b.pid : b.pid - prev_bin->pid);
+        dstd::append_varint(buf, same_pid ? b.tid - prev_bin->tid : b.tid);
+        dstd::append_varint(buf, same_tid ? b.bin - prev_bin->bin : b.bin);
+        dstd::append_varint(buf, b.count);
+        dstd::append_varint(buf, b.count - b.duration_n);
+        dstd::append_varint(buf, b.duration_sum);
+        dstd::append_varint(buf, b.size_n);
+        dstd::append_varint(buf, b.size_sum);
         prev_bin = &b;
     }
 }
@@ -548,17 +549,17 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
 dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     dstd::Span<const std::uint8_t> bytes, double relative_accuracy,
     Fields keep) {
-    LeReader r(bytes.data(), bytes.size());
+    dstd::LeReader r(bytes.data(), bytes.size());
     AggPartial p(relative_accuracy);
     const auto bad = [] { return dstd::Unexpected(ErrorCode::Parse); };
 
     std::uint8_t flags = 0;
     if (!r.u8(flags) || (flags & ~KNOWN_FLAGS) != 0) return bad();
-    if (!read_varint(r, p.count)) return bad();
+    if (!dstd::read_varint(r, p.count)) return bad();
     if ((flags & HAS_TIMES) != 0) {
         std::uint64_t span = 0, last = 0;
-        if (!read_varint(r, p.ts) || !read_varint(r, span) ||
-            !read_varint(r, last) || span > UINT64_MAX - p.ts ||
+        if (!dstd::read_varint(r, p.ts) || !dstd::read_varint(r, span) ||
+            !dstd::read_varint(r, last) || span > UINT64_MAX - p.ts ||
             last > UINT64_MAX - p.ts) {
             return bad();
         }
@@ -568,18 +569,18 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     if ((flags & HAS_DURATION) != 0 &&
         (!get_stat(r, p.duration) ||
          !get_quantiles(r, p.duration_q, keep.quantiles) ||
-         !read_varint(r, p.duration_values))) {
+         !dstd::read_varint(r, p.duration_values))) {
         return bad();
     }
     if ((flags & HAS_SIZE) != 0 &&
         (!get_stat(r, p.size) || !get_quantiles(r, p.size_q, keep.quantiles) ||
-         !read_varint(r, p.size_values))) {
+         !dstd::read_varint(r, p.size_values))) {
         return bad();
     }
     if ((flags & HAS_OFFSET) != 0) {
         if (!get_stat(r, p.offset) ||
             !get_quantiles(r, p.offset_q, keep.quantiles && keep.offset) ||
-            !read_varint(r, p.offset_values)) {
+            !dstd::read_varint(r, p.offset_values)) {
             return bad();
         }
         if (!keep.offset) {
@@ -603,8 +604,8 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
     std::uint64_t prev = 0;
     for (std::uint64_t i = 0; i < n; ++i) {
         std::uint64_t d = 0, first = 0, len = 0;
-        if (!read_varint(r, d) || !read_varint(r, first) ||
-            !read_varint(r, len)) {
+        if (!dstd::read_varint(r, d) || !dstd::read_varint(r, first) ||
+            !dstd::read_varint(r, len)) {
             return bad();
         }
         if (i > 0 && (d == 0 || d > UINT64_MAX - prev)) return bad();
@@ -616,7 +617,7 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
 
     if ((flags & HAS_BINS) != 0) {
         std::uint64_t interval = 0;
-        if (!read_varint(r, interval) || interval == 0 ||
+        if (!dstd::read_varint(r, interval) || interval == 0 ||
             !get_count(r, UINT64_MAX, n) || n == 0) {
             return bad();
         }
@@ -628,11 +629,12 @@ dstd::Expected<AggPartial, ErrorCode> AggPartial::deserialize(
         for (std::uint64_t i = 0; i < n; ++i) {
             std::uint64_t dp = 0, t = 0, b = 0, missing = 0;
             TimeBin bin;
-            if (!read_varint(r, dp) || !read_varint(r, t) ||
-                !read_varint(r, b) || !read_varint(r, bin.count) ||
-                !read_varint(r, missing) || !read_varint(r, bin.duration_sum) ||
-                !read_varint(r, bin.size_n) || !read_varint(r, bin.size_sum) ||
-                missing > bin.count) {
+            if (!dstd::read_varint(r, dp) || !dstd::read_varint(r, t) ||
+                !dstd::read_varint(r, b) || !dstd::read_varint(r, bin.count) ||
+                !dstd::read_varint(r, missing) ||
+                !dstd::read_varint(r, bin.duration_sum) ||
+                !dstd::read_varint(r, bin.size_n) ||
+                !dstd::read_varint(r, bin.size_sum) || missing > bin.count) {
                 return bad();
             }
             const bool same_pid = i > 0 && dp == 0;

@@ -271,7 +271,7 @@ class BloomFold : public trace::views::detail::Fold {
     void chunk_started(FileState& fs, std::uint64_t cp);
     void spill(FileState& fs, std::uint64_t upto);
 
-    StringViewMap<FileState> files_;
+    dstd::StringViewMap<FileState> files_;
     std::string last_file_;
     FileState* last_state_ = nullptr;
     std::uint64_t catalog_observations_ = 0;

@@ -6,7 +6,7 @@
 #include <set>
 #include <string>
 
-using dftracer::utils::hash::partition_of;
+using dftracer::utils::dstd::hash::partition_of;
 
 TEST_CASE("a key always lands in the same partition at one depth") {
     for (int i = 0; i < 100; ++i) {

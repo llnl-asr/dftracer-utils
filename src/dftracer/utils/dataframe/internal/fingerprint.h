@@ -22,7 +22,7 @@ class Fingerprint {
         const auto* b = static_cast<const unsigned char*>(p);
         for (std::size_t i = 0; i < n; ++i) {
             h_ ^= b[i];
-            h_ *= hash::FNV1A_PRIME;
+            h_ *= dstd::hash::FNV1A_PRIME;
         }
     }
 
@@ -56,7 +56,7 @@ class Fingerprint {
     std::uint64_t value() const noexcept { return h_; }
 
    private:
-    std::uint64_t h_ = hash::FNV1A_OFFSET_BASIS;
+    std::uint64_t h_ = dstd::hash::FNV1A_OFFSET_BASIS;
 };
 
 }  // namespace dftracer::utils::dataframe::detail

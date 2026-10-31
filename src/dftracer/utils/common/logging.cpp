@@ -238,7 +238,7 @@ namespace {
 // dladdr + demangle runs once per function per thread.
 const std::string& ct_name(const void* fn) {
     static thread_local ankerl::unordered_dense::map<const void*, std::string,
-                                                     PtrHash>
+                                                     dstd::PtrHash>
         cache;
     auto it = cache.find(fn);
     if (it != cache.end()) return it->second;

@@ -28,10 +28,10 @@ std::string agg_partial_key(int file_id, std::uint64_t chunk,
                             std::uint8_t kind) {
     auto key = layout::granule_key(Ext::Agg, layout::agg_kind::PARTIAL,
                                    fid(file_id), granule(chunk));
-    append_u32_be(key, cat_id);
-    append_u32_be(key, name_id);
-    append_u32_be(key, host_id);
-    append_u32_be(key, extra_id);
+    dstd::append_u32_be(key, cat_id);
+    dstd::append_u32_be(key, name_id);
+    dstd::append_u32_be(key, host_id);
+    dstd::append_u32_be(key, extra_id);
     key.push_back(static_cast<char>(kind));
     return key;
 }
@@ -136,7 +136,7 @@ void put_path_granule(IndexWrite& w, Ext ext, int file_id,
                       std::string_view payload) {
     auto key =
         layout::path_prefix(ext, layout::path_kind::DATA, fid(file_id), path);
-    append_u32_be(key, granule(granule_idx));
+    dstd::append_u32_be(key, granule(granule_idx));
     put_value(w, ext, layout::path_kind::DATA, key, payload);
 }
 
@@ -151,7 +151,7 @@ void put_posting(IndexWrite& w, int file_id, std::string_view path,
                  std::uint64_t value_hash) {
     auto key = layout::path_prefix(Ext::Postings, layout::path_kind::IN_FILE,
                                    fid(file_id), path);
-    append_u64_be(key, value_hash);
+    dstd::append_u64_be(key, value_hash);
     w.put(key, {});
 }
 
@@ -159,8 +159,8 @@ void put_posting_granule(IndexWrite& w, int file_id, std::string_view path,
                          std::uint64_t value_hash, std::uint64_t granule_idx) {
     auto key = layout::path_prefix(Ext::Postings, layout::path_kind::IN_GRANULE,
                                    fid(file_id), path);
-    append_u64_be(key, value_hash);
-    append_u32_be(key, granule(granule_idx));
+    dstd::append_u64_be(key, value_hash);
+    dstd::append_u32_be(key, granule(granule_idx));
     w.put(key, {});
 }
 
@@ -192,7 +192,7 @@ void put_file_scalar_stats(IndexWrite& w, int file_id,
 }
 
 void put_file_pid_tid_counts(IndexWrite& w, int file_id,
-                             const StringViewMap<std::uint64_t>& counts) {
+                             const dstd::StringViewMap<std::uint64_t>& counts) {
     put_value(
         w, Ext::Stats, sk::FILE_PID_TID_COUNTS,
         layout::file_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS, fid(file_id)),
@@ -263,7 +263,7 @@ void put_agg_dictionary_entry(IndexWrite& w, int file_id, std::uint32_t id,
                               std::string_view text) {
     auto key =
         layout::file_prefix(Ext::Agg, layout::agg_kind::DICT, fid(file_id));
-    append_u32_be(key, id);
+    dstd::append_u32_be(key, id);
     put_value(w, Ext::Agg, layout::agg_kind::DICT, key, text);
 }
 

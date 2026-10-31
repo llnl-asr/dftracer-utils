@@ -197,7 +197,7 @@ class RecordBatchBuilder {
 
    private:
     std::vector<ColumnData> columns_;
-    StringViewMap<std::size_t> name_to_index_;
+    dstd::StringViewMap<std::size_t> name_to_index_;
     std::size_t num_rows_ = 0;
     std::size_t row_touched_count_ = 0;
     bool schema_declared_ = false;

@@ -63,7 +63,7 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
     int rc = -1;
     bool ran = false;
     {
-        dstd::StringIntern intern;
+        StringIntern intern;
         ::dftu_plugin* plugin =
             dftracer::utils::plugins::make_plugin<TrivialSlice>(nullptr);
         {

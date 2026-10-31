@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils::hash {
+namespace dftracer::utils::dstd::hash {
 
 /// dftracer writes file and host hashes as exactly 16 lowercase hex digits, so
 /// they are 64-bit values. Anything outside that form has no round trip and
@@ -44,6 +44,6 @@ inline std::string format_hex64(std::uint64_t v) {
     return s;
 }
 
-}  // namespace dftracer::utils::hash
+}  // namespace dftracer::utils::dstd::hash
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_HEX64_H

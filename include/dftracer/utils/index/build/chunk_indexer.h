@@ -250,7 +250,7 @@ struct ChunkIndexerInput {
 
 struct ChunkIndexerOutput {
     std::uint64_t checkpoint_idx = 0;
-    StringViewMap<index::extensions::ScalableBloomFilter> bloom_filters;
+    dstd::StringViewMap<index::extensions::ScalableBloomFilter> bloom_filters;
     index::schemas::dft::ChunkStatistics statistics;
     std::size_t events_processed = 0;
     bool success = false;

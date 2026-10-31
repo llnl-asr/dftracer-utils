@@ -1337,7 +1337,7 @@ class Lowering {
             if (!v) fail(span, "a sample size parameter must be a number");
             out.amount = *v;
         } else {
-            const auto r = from_chars_double(
+            const auto r = dstd::from_chars_double(
                 n.amount.data(), n.amount.data() + n.amount.size(), out.amount);
             if (r.ec != std::errc{}) fail(span, "Invalid sample size");
         }
@@ -1434,8 +1434,9 @@ class Lowering {
             const auto per = unit_ns(d->unit);
             if (!per) fail(e.span, "Unknown duration unit '" + d->unit + "'");
             double amount = 0;
-            if (from_chars_double(d->amount.data(),
-                                  d->amount.data() + d->amount.size(), amount)
+            if (dstd::from_chars_double(d->amount.data(),
+                                        d->amount.data() + d->amount.size(),
+                                        amount)
                     .ec != std::errc{})
                 fail(e.span, "Invalid duration");
             return amount * static_cast<double>(*per) /
@@ -2106,7 +2107,7 @@ class Lowering {
         const auto per = unit_ns(d.unit);
         if (!per) fail(dur.span, "Unknown duration unit '" + d.unit + "'");
         double amount = 0;
-        const auto r = from_chars_double(
+        const auto r = dstd::from_chars_double(
             d.amount.data(), d.amount.data() + d.amount.size(), amount);
         if (r.ec != std::errc{}) fail(dur.span, "Invalid duration");
         const auto unit = unit_of(other);

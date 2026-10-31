@@ -71,7 +71,7 @@ class ChunkWriter {
     ChunkWriter& operator=(const ChunkWriter&) = delete;
 
     coro::CoroTask<void> open();
-    coro::CoroTask<void> write_line(ByteView line);
+    coro::CoroTask<void> write_line(dstd::ByteView line);
     coro::CoroTask<void> close();
 
     std::size_t total_bytes_written() const { return total_bytes_; }

@@ -40,10 +40,11 @@ struct DensityKey {
 
 struct DensityKeyHash {
     std::uint64_t operator()(const DensityKey& k) const noexcept {
-        std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        std::uint64_t h =
+            dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         auto mix = [&](std::uint64_t v) {
             h ^= v;
-            h *= dftracer::utils::hash::FNV1A_PRIME;
+            h *= dftracer::utils::dstd::hash::FNV1A_PRIME;
         };
         mix(static_cast<std::uint64_t>(k.pid));
         mix(static_cast<std::uint64_t>(k.tid));
@@ -314,11 +315,12 @@ inline std::vector<std::uint32_t> assign_view_depths(
     };
     struct LaneHash {
         std::uint64_t operator()(const LaneKey& k) const noexcept {
-            std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+            std::uint64_t h =
+                dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
             h = (h ^ static_cast<std::uint64_t>(k.pid)) *
-                dftracer::utils::hash::FNV1A_PRIME;
+                dftracer::utils::dstd::hash::FNV1A_PRIME;
             h = (h ^ static_cast<std::uint64_t>(k.tid)) *
-                dftracer::utils::hash::FNV1A_PRIME;
+                dftracer::utils::dstd::hash::FNV1A_PRIME;
             return h;
         }
     };

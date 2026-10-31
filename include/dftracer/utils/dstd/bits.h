@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <type_traits>
 
-namespace dftracer::utils::bits {
+namespace dftracer::utils::dstd::bits {
 
 /// Count leading zero bits of `x`; 64 when `x` is 0.
 inline int clz_u64(std::uint64_t x) { return x == 0 ? 64 : __builtin_clzll(x); }
@@ -44,6 +44,6 @@ constexpr std::common_type_t<T, U> div_ceil(T n, U d) {
     return (static_cast<R>(n) + static_cast<R>(d) - 1) / static_cast<R>(d);
 }
 
-}  // namespace dftracer::utils::bits
+}  // namespace dftracer::utils::dstd::bits
 
 #endif  // DFTRACER_UTILS_DSTD_BITS_H

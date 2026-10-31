@@ -135,12 +135,12 @@ class Value {
     Value& operator=(Value&&) noexcept = default;
     ~Value() = default;
 
-    ByteView bytes() const { return view_; }
+    dstd::ByteView bytes() const { return view_; }
 
    private:
     friend class Snapshot;
 
-    ByteView view_;
+    dstd::ByteView view_;
     dstd::Vector<std::uint8_t> owned_;
 };
 
@@ -196,8 +196,8 @@ struct SegmentSlot {
     /// A larger ordinal is a later batch of the file.
     std::uint64_t ordinal = 0;
     /// Point into the file index the snapshot keeps.
-    ByteView first_key;
-    ByteView last_key;
+    dstd::ByteView first_key;
+    dstd::ByteView last_key;
 };
 
 /// What a query read of an extent: the one cached page a range lies in, or the
@@ -289,8 +289,8 @@ struct Commit {
 /// a lookup skips a commit that cannot hold its key.
 struct CopyCommit {
     std::uint64_t sequence = 0;
-    ByteView first_key;
-    ByteView last_key;
+    dstd::ByteView first_key;
+    dstd::ByteView last_key;
     /// Closed file: the segment block of this copy, owned by the group and
     /// shared by many commits. Snapshot::copy_segments returns this commit's
     /// run of it. Null for a file that is not closed, whose commit holds the
@@ -309,8 +309,8 @@ struct EraseRange {
     /// The batch ordinal the erase took: it hides the versions of the keys in
     /// [begin, end) whose version comes from a smaller ordinal of the copy.
     std::uint64_t ordinal = 0;
-    ByteView begin;
-    ByteView end;
+    dstd::ByteView begin;
+    dstd::ByteView end;
 };
 
 struct CopyData {
@@ -559,7 +559,7 @@ class ScopeCursor {
     ScopeCursor& operator=(ScopeCursor&&) noexcept = default;
 
     bool at_end() const { return at_end_; }
-    ByteView key() const { return key_; }
+    dstd::ByteView key() const { return key_; }
     /// Segment indices of the copy holding the current key, oldest batch first.
     const dstd::Vector<std::size_t>& matching() const { return matching_; }
     const detail::CopyData* copy() const { return copy_; }
@@ -576,8 +576,8 @@ class ScopeCursor {
     /// whose range meets [begin, end). Every commit of the copy not synced must
     /// be Good.
     void open(const Snapshot& snapshot, const detail::CopyData& copy,
-              const dstd::Vector<detail::HiddenRange>& hidden, ByteView begin,
-              ByteView end);
+              const dstd::Vector<detail::HiddenRange>& hidden,
+              dstd::ByteView begin, dstd::ByteView end);
     void settle();
     void advance_matching();
     /// Reads the pages of one segment and puts its cursor back on the heap.
@@ -598,7 +598,7 @@ class ScopeCursor {
     dstd::Vector<std::uint64_t> ordinals_;
     /// The current key of each cursor. For a segment not loaded yet, the lower
     /// bound its record gives.
-    dstd::Vector<ByteView> keys_;
+    dstd::Vector<dstd::ByteView> keys_;
     dstd::Vector<std::uint8_t> loaded_;
     /// Min-heap of the cursors not at their end, by key, then ordinal, then
     /// segment index.
@@ -606,9 +606,9 @@ class ScopeCursor {
     dstd::Vector<std::size_t> matching_;
     const dstd::Vector<detail::HiddenRange>* hidden_ = nullptr;
     const detail::CopyData* copy_ = nullptr;
-    ByteView key_;
-    ByteView begin_;
-    ByteView end_;
+    dstd::ByteView key_;
+    dstd::ByteView begin_;
+    dstd::ByteView end_;
     bool at_end_ = true;
     dstd::Optional<dstd::Error> error_;
 };
@@ -625,9 +625,9 @@ class ScanCursor {
     ScanCursor& operator=(ScanCursor&&) noexcept = default;
 
     bool at_end() const { return at_end_; }
-    ByteView key() const { return key_; }
+    dstd::ByteView key() const { return key_; }
     const ScopeKey& scope() const;
-    dstd::Expected<ByteView, dstd::Error> value();
+    dstd::Expected<dstd::ByteView, dstd::Error> value();
 
     /// Empty unless an extent of one of the scopes could not be read, or an
     /// extent of a synced commit failed its crc: a cursor that stopped on one
@@ -665,7 +665,7 @@ class ScanCursor {
     dstd::Vector<std::size_t> arm_heap_;
     dstd::Vector<std::size_t> at_key_;
     FoldKind fold_ = FoldKind::None;
-    ByteView key_;
+    dstd::ByteView key_;
     bool at_end_ = true;
     /// Owned copies of the bounds, which the arms read until the scan ends.
     dstd::Vector<std::uint8_t> begin_storage_;
@@ -775,21 +775,22 @@ class Snapshot {
     /// Failed or Bad, when the key is absent, or when a drop hides it. The
     /// error is the one a block of a commit of the copy failed to read with.
     dstd::Expected<dstd::Optional<Value>, dstd::Error> get(
-        const NamespaceSpec& spec, const ScopeKey& scope, ByteView key) const;
+        const NamespaceSpec& spec, const ScopeKey& scope,
+        dstd::ByteView key) const;
 
     ScanCursor scan(const NamespaceSpec& spec, const ScopeKey& scope,
-                    ByteView prefix) const;
+                    dstd::ByteView prefix) const;
     ScanCursor scan(const NamespaceSpec& spec, const ScopeKey& scope,
-                    ByteView begin, ByteView end) const;
+                    dstd::ByteView begin, dstd::ByteView end) const;
     /// Scopes one after the other in the order given, or merged by key and
     /// folded in that order for a fold namespace.
     ScanCursor scan(const NamespaceSpec& spec,
-                    dstd::Span<const ScopeKey> scopes, ByteView begin,
-                    ByteView end) const;
+                    dstd::Span<const ScopeKey> scopes, dstd::ByteView begin,
+                    dstd::ByteView end) const;
     /// Every current scope of the namespace in ScopeKey order. A directory
     /// block that does not load gives a cursor at its end with the error.
-    ScanCursor scan_all(const NamespaceSpec& spec, ByteView begin,
-                        ByteView end) const;
+    ScanCursor scan_all(const NamespaceSpec& spec, dstd::ByteView begin,
+                        dstd::ByteView end) const;
 
     /// Every scope of the namespace and version that has a current copy, in
     /// ScopeKey order, read from the scope directories alone. The error is the
@@ -849,13 +850,13 @@ class Snapshot {
     /// extent whose page table is loaded, and a view into `hold`: the pages
     /// they span from the page cache, and those it lacks read from the file in
     /// one call, checked, decoded and added to it.
-    dstd::Expected<ByteView, dstd::Error> read_raw(
+    dstd::Expected<dstd::ByteView, dstd::Error> read_raw(
         const detail::FileData& file, const detail::ExtentSlot& extent,
         std::uint32_t offset_in_extent, std::uint32_t length,
         detail::PageHold& hold) const;
     /// The header and index of a segment over pages [first_page, end_page) of
     /// `extent`, read page by page until they parse. Empty when they never do.
-    dstd::Expected<ByteView, dstd::Error> read_head(
+    dstd::Expected<dstd::ByteView, dstd::Error> read_head(
         const detail::FileData& file, const detail::ExtentSlot& extent,
         const detail::SegmentSlot& slot, std::size_t first_page,
         std::size_t end_page, detail::PageHold& hold) const;
@@ -867,7 +868,8 @@ class Snapshot {
     /// extent that failed its crc is a Parse error.
     dstd::Expected<dstd::UniquePtr<detail::SegmentBody>, dstd::Error>
     open_segment(const detail::FileData& file, detail::LazyBlock& block,
-                 std::size_t index, ByteView begin, ByteView end) const;
+                 std::size_t index, dstd::ByteView begin,
+                 dstd::ByteView end) const;
     /// The extent holding one segment, loaded once: the extent of a closed file
     /// or the block of the commit that holds it. An extent that failed its crc
     /// is a Parse error.
@@ -880,7 +882,7 @@ class Snapshot {
     /// The entry points into `holder`.
     dstd::Expected<dstd::Optional<SegmentView::Entry>, dstd::Error>
     find_in_segment(const detail::FileData& file, detail::LazyBlock& block,
-                    std::size_t index, ByteView key,
+                    std::size_t index, dstd::ByteView key,
                     detail::PageHold& holder) const;
     /// The run of one commit of one copy inside its segment block, with what it
     /// needs read first: the commit index of a file that is not closed, or the
@@ -890,9 +892,9 @@ class Snapshot {
         const detail::CopyData& copy, const detail::CopyCommit& held) const;
     dstd::Expected<void, dstd::Error> materialize(
         FoldKind fold, dstd::Span<const detail::ValueSource> sources,
-        ByteView& view, dstd::Vector<std::uint8_t>& owned) const;
+        dstd::ByteView& view, dstd::Vector<std::uint8_t>& owned) const;
     dstd::Expected<void, dstd::Error> read_big(
-        std::size_t file_index, BigRef ref, ByteView& view,
+        std::size_t file_index, BigRef ref, dstd::ByteView& view,
         dstd::Vector<std::uint8_t>& owned) const;
 
     dstd::Expected<void, dstd::Error> load(dstd::StringView dir);

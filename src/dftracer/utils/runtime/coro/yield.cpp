@@ -57,7 +57,7 @@ constinit std::atomic<bool> g_wake_sent{false};
 
 // Never destroyed: a pool thread may still wake it during static teardown.
 DriverPark& driver_park() noexcept {
-    static NoDestructor<DriverPark> park;
+    static dstd::NoDestructor<DriverPark> park;
     return *park;
 }
 

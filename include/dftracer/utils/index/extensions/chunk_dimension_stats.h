@@ -41,7 +41,8 @@ struct ChunkDimensionStats {
     std::string value_type =
         "string";           ///< "string", "uint", "int", or "double".
 
-    std::optional<dftracer::utils::StringViewMap<std::uint64_t>> value_counts;
+    std::optional<dftracer::utils::dstd::StringViewMap<std::uint64_t>>
+        value_counts;
 
     /// Skips the hash lookup when the same value is observed back-to-back.
     /// Not copied/moved: a copy would point into the original's nodes.
@@ -120,11 +121,11 @@ struct ChunkDimensionStats {
     std::optional<std::vector<std::uint8_t>> compress_value_counts(
         std::size_t cap_bytes = 4096) const;
 
-    static dftracer::utils::StringViewMap<std::uint64_t>
+    static dftracer::utils::dstd::StringViewMap<std::uint64_t>
     deserialize_value_counts(const std::uint8_t* data, std::size_t len);
 
     /// Decompress zlib-compressed value_counts, then deserialize.
-    static dftracer::utils::StringViewMap<std::uint64_t>
+    static dftracer::utils::dstd::StringViewMap<std::uint64_t>
     decompress_value_counts(const std::uint8_t* data, std::size_t len);
 };
 

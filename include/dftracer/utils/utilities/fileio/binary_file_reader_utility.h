@@ -30,7 +30,7 @@ namespace dftracer::utils::utilities::fileio {
  * }
  * @endcode
  */
-inline coro::AsyncGenerator<ByteView> read_binary_file(
+inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
     fs::path path, std::size_t chunk_size = 64 * 1024) {
     if (!fs::exists(path)) {
         throw DFTUtilsException(ErrorCode::NotFound,
@@ -52,7 +52,8 @@ inline coro::AsyncGenerator<ByteView> read_binary_file(
 
         if (bytes_read <= 0) break;
 
-        co_yield ByteView(buffer.data(), static_cast<std::size_t>(bytes_read));
+        co_yield dstd::ByteView(buffer.data(),
+                                static_cast<std::size_t>(bytes_read));
     }
 
     if (file.bad()) {

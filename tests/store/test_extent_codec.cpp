@@ -20,9 +20,9 @@ namespace {
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::ByteView;
-using dftracer::utils::read_u32_le;
-using dftracer::utils::write_u32_le;
+using dftracer::utils::dstd::ByteView;
+using dftracer::utils::dstd::read_u32_le;
+using dftracer::utils::dstd::write_u32_le;
 
 constexpr std::size_t ALIGN = 4096;
 constexpr std::uint32_t PAGE = static_cast<std::uint32_t>(store::PAGE_BYTES);

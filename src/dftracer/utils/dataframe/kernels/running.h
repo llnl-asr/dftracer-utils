@@ -23,7 +23,7 @@
 
 namespace dftracer::utils::dataframe::steps {
 
-using Wide = ::dftracer::utils::int128_t;
+using Wide = ::dftracer::utils::dstd::int128_t;
 
 [[noreturn]] inline void overflow(const char* func, const char* type) {
     throw std::overflow_error(std::string("window: ") + func + " overflows " +

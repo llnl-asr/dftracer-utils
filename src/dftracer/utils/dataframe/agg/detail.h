@@ -617,8 +617,8 @@ class AggState {
     bool dyn_has_sketch = false;
     std::vector<AggDynSpec> dyn_specs;
     dstd::Vector<dstd::String> dyn_names;
-    dstd::HashMap<std::string, std::uint32_t, TransparentStringHash,
-                  TransparentStringEqual>
+    dstd::HashMap<std::string, std::uint32_t, dstd::TransparentStringHash,
+                  dstd::TransparentStringEqual>
         dyn_ids;
     dstd::Vector<FieldStatDomain> dyn_domain;
     dstd::Vector<dstd::Vector<DynCell>> dyn_fs;            // ngroups
@@ -1406,10 +1406,11 @@ class AggState {
         std::size_t h = 0;
         for (std::size_t k = 0; k < nkeys; ++k) {
             const std::size_t cv =
-                get_null(k) ? std::size_t{dftracer::utils::hash::GOLDEN_RATIO}
+                get_null(k)
+                    ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                 : key_is_bytes[k] ? std::hash<std::string_view>{}(get_str(k))
                                   : static_cast<std::size_t>(get_int(k));
-            dftracer::utils::hash_combine(h, cv);
+            dftracer::utils::dstd::hash_combine(h, cv);
         }
         // Before the lookup: reserving rehashes key_buckets, which would leave
         // `it` below pointing at a bucket that moved.
@@ -1487,11 +1488,11 @@ class AggState {
         for (std::size_t k = 0; k < nkeys; ++k) {
             const std::size_t cv =
                 other.nkey_cols[k][sj] != 0
-                    ? std::size_t{dftracer::utils::hash::GOLDEN_RATIO}
+                    ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                 : key_is_bytes[k]
                     ? std::hash<std::string_view>{}(other.skey_cols[k][sj])
                     : static_cast<std::size_t>(other.ikey_cols[k][sj]);
-            dftracer::utils::hash_combine(h, cv);
+            dftracer::utils::dstd::hash_combine(h, cv);
         }
         const auto it = key_buckets.find(static_cast<std::uint64_t>(h));
         if (it == key_buckets.end()) return -1;
@@ -1537,13 +1538,13 @@ class AggState {
             for (std::size_t k = 0; k < nkeys; ++k) {
                 const std::size_t cv =
                     nkey_cols[k][static_cast<std::size_t>(g)]
-                        ? std::size_t{dftracer::utils::hash::GOLDEN_RATIO}
+                        ? std::size_t{dftracer::utils::dstd::hash::GOLDEN_RATIO}
                     : key_is_bytes[k]
                         ? std::hash<std::string_view>{}(
                               skey_cols[k][static_cast<std::size_t>(g)])
                         : static_cast<std::size_t>(
                               ikey_cols[k][static_cast<std::size_t>(g)]);
-                dftracer::utils::hash_combine(h, cv);
+                dftracer::utils::dstd::hash_combine(h, cv);
             }
             auto [it, fresh] =
                 key_buckets.try_emplace(static_cast<std::uint64_t>(h), g);

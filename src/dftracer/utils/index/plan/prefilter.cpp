@@ -217,7 +217,7 @@ bool number_holds(const char* p, const char* end, const Prefilter::Range& r) {
         auto [q, ec] = std::from_chars(tok, p, iv);
         if (ec != std::errc() || q != p) return true;
     } else {
-        auto [q, ec] = from_chars_double(tok, p, dv);
+        auto [q, ec] = dstd::from_chars_double(tok, p, dv);
         if (ec != std::errc() || q != p || std::fabs(dv) >= EXACT_DOUBLE)
             return true;
     }

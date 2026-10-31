@@ -274,7 +274,7 @@ Series set_list_column(const AggState& st, std::size_t spec, std::int64_t ng) {
             std::vector<double> v;
             for (const std::string_view x : sorted) {
                 double d = 0.0;
-                from_chars_double(x.data(), x.data() + x.size(), d);
+                dstd::from_chars_double(x.data(), x.data() + x.size(), d);
                 if (et == TypeId::Float32)
                     d = static_cast<double>(static_cast<float>(d));
                 v.push_back(d);

@@ -838,7 +838,7 @@ std::vector<std::pair<std::size_t, std::string>> capture_names(
     pcre2_pattern_info(p.regex->code, PCRE2_INFO_NAMETABLE, &table);
     for (std::uint32_t i = 0; i < count; ++i) {
         const PCRE2_SPTR e = table + static_cast<std::size_t>(i) * size;
-        names.emplace_back(read_u16_be(e),
+        names.emplace_back(dstd::read_u16_be(e),
                            reinterpret_cast<const char*>(e + 2));
     }
     std::sort(names.begin(), names.end());

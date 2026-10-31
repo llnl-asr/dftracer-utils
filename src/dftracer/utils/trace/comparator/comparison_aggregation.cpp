@@ -312,9 +312,9 @@ struct WindowKey {
 struct WindowKeyHash {
     using is_avalanching = void;
     std::size_t operator()(const WindowKey& k) const noexcept {
-        return static_cast<std::size_t>(hash::splitmix64(
-            hash::splitmix64((std::uint64_t{k.group.cat_id} << 32) |
-                             k.group.name_id) ^
+        return static_cast<std::size_t>(dstd::hash::splitmix64(
+            dstd::hash::splitmix64((std::uint64_t{k.group.cat_id} << 32) |
+                                   k.group.name_id) ^
             k.window));
     }
 };

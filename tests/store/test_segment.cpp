@@ -15,7 +15,7 @@ namespace {
 
 namespace dstd = dftracer::utils::dstd;
 
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 namespace store = dftracer::utils::store;
 using dftracer::utils::store::BIG_VALUE_BYTES;

@@ -413,22 +413,22 @@ void BasicDDSketch<BINS>::write_to(std::uint8_t* p) const {
     const auto num = static_cast<std::uint32_t>(
         std::min(num_bins_, static_cast<int>(MAX_BINS)));
 
-    write_f64_le(p, gamma_);
-    write_f64_le(p + 8, min_);
-    write_f64_le(p + 16, max_);
-    write_u64_le(p + 24, count_);
-    write_u64_le(p + 32, zero_count_);
-    write_u32_le(p + 40, static_cast<std::uint32_t>(offset_));
-    write_u32_le(p + 44, num);
+    dstd::write_f64_le(p, gamma_);
+    dstd::write_f64_le(p + 8, min_);
+    dstd::write_f64_le(p + 16, max_);
+    dstd::write_u64_le(p + 24, count_);
+    dstd::write_u64_le(p + 32, zero_count_);
+    dstd::write_u32_le(p + 40, static_cast<std::uint32_t>(offset_));
+    dstd::write_u32_le(p + 44, num);
     p += SERIALIZED_HEADER_SIZE;
     for (std::uint32_t i = 0; i < num; ++i)
-        write_u32_le(p + std::size_t{i} * 4, store_[i]);
+        dstd::write_u32_le(p + std::size_t{i} * 4, store_[i]);
 }
 
 template <int BINS>
 BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
                                                      std::size_t len) {
-    LeReader r(data, len);
+    dstd::LeReader r(data, len);
     BasicDDSketch s;
     std::int32_t off32 = 0;
     std::uint32_t num = 0;
@@ -451,7 +451,7 @@ BasicDDSketch<BINS> BasicDDSketch<BINS>::deserialize(const std::uint8_t* data,
 
     s.ensure_bins(static_cast<int>(num));
     for (std::uint32_t i = 0; i < num; ++i)
-        s.store_[i] = read_u32_le(bins + std::size_t{i} * 4);
+        s.store_[i] = dstd::read_u32_le(bins + std::size_t{i} * 4);
     s.min_key_ = s.offset_;
     s.max_key_ = s.offset_ + static_cast<int>(num) - 1;
     s.num_bins_ = static_cast<int>(num);

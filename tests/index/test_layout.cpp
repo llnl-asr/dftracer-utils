@@ -7,7 +7,7 @@
 #include <string_view>
 
 namespace layout = dftracer::utils::index::store::layout;
-using dftracer::utils::append_u32_be;
+using dftracer::utils::dstd::append_u32_be;
 using layout::Ext;
 
 TEST_SUITE("index layout") {

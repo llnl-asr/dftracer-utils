@@ -25,7 +25,7 @@
 #define DFTRACER_UTILS_FP_FROM_CHARS_UNAVAILABLE 1
 #endif
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /// Format a double into [first, last). Returns past-the-end pointer on
 /// success, nullptr on overflow/error. Uses std::to_chars where available
@@ -118,6 +118,6 @@ inline std::from_chars_result from_chars_double(const char* first,
 #endif
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif

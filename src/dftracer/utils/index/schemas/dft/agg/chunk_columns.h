@@ -36,7 +36,7 @@ struct ChunkColumn {
         return static_cast<std::int64_t>(bits[k]);
     }
     std::uint64_t uint64_at(std::size_t k) const { return bits[k]; }
-    double double_at(std::size_t k) const { return bits_double(bits[k]); }
+    double double_at(std::size_t k) const { return dstd::bits_double(bits[k]); }
 };
 
 /// The column block of one chunk. Row r is the r-th record of the chunk the

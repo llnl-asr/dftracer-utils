@@ -724,8 +724,8 @@ class Seeder {
                 if (k.file_text != dstd::StringIntern::NO_ID)
                     return std::string(text(k.file_text));
                 if (k.file == 0) return {};
-                char buf[::dftracer::utils::hash::HEX64_DIGITS];
-                ::dftracer::utils::hash::format_hex64(k.file, buf);
+                char buf[::dftracer::utils::dstd::hash::HEX64_DIGITS];
+                ::dftracer::utils::dstd::hash::format_hex64(k.file, buf);
                 return std::string(buf, sizeof(buf));
             }
             case GroupKey::Kind::Hhash:
@@ -904,8 +904,8 @@ coro::CoroTask<bool> partials_collect_typed(
                 joined += GROUP_SEP;
             }
             const auto shard = static_cast<int>(
-                dftracer::utils::hash::fnv1a_mix(
-                    dftracer::utils::hash::fnv1a_hash(joined)) %
+                dftracer::utils::dstd::hash::fnv1a_mix(
+                    dftracer::utils::dstd::hash::fnv1a_hash(joined)) %
                 static_cast<std::uint64_t>(shards));
             if (shard < shard_begin || shard >= shard_end) continue;
         }

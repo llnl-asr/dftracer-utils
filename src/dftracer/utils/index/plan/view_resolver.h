@@ -28,12 +28,13 @@ class GroupResolver {
                   const std::vector<Column>& columns);
 
     /// key -> value of column `name`; null when not loaded.
-    const StringViewMap<std::string>* column(std::string_view name) const;
+    const dstd::StringViewMap<std::string>* column(std::string_view name) const;
     const std::string& value(std::string_view name, std::string_view key) const;
 
    private:
     static const std::string EMPTY;
-    std::vector<std::pair<std::string, StringViewMap<std::string>>> columns_;
+    std::vector<std::pair<std::string, dstd::StringViewMap<std::string>>>
+        columns_;
 };
 
 }  // namespace dftracer::utils::index::plan

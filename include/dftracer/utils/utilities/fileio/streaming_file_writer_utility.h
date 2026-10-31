@@ -103,7 +103,7 @@ class StreamingFileWriterUtility {
      * @param chunk Data chunk to write
      * @return StreamWriteResult with current write status
      */
-    coro::CoroTask<StreamWriteResult> process(ByteView chunk) {
+    coro::CoroTask<StreamWriteResult> process(dstd::ByteView chunk) {
         if (!opened_) {
             throw DFTUtilsException(ErrorCode::Io,
                                     "Cannot write to closed file");

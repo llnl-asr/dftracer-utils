@@ -283,7 +283,7 @@ std::string run_id(const RunKeys& k) {
     const std::string key = k.app + "|" + k.system + "|" + k.unique_input +
                             "|" + std::to_string(k.nodes) + "|" +
                             std::to_string(k.ppn) + "|" + k.papi_set;
-    return hash::format_hex64(hash::fnv1a_hash(key));
+    return dstd::hash::format_hex64(dstd::hash::fnv1a_hash(key));
 }
 
 coro::CoroTask<Discovery> discover(CoroScope& ctx,

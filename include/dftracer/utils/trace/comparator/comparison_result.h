@@ -177,7 +177,7 @@ struct GroupKey {
 struct GroupKeyHash {
     using is_avalanching = void;
     std::size_t operator()(const GroupKey& k) const noexcept {
-        return static_cast<std::size_t>(hash::splitmix64(
+        return static_cast<std::size_t>(dstd::hash::splitmix64(
             (static_cast<std::uint64_t>(k.cat_id) << 32) | k.name_id));
     }
 };

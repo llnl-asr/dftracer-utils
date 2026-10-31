@@ -45,7 +45,7 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
             }
             for (; i < n; ++i)
                 out[i] = static_cast<std::uint64_t>(
-                    dftracer::utils::bits::ilog2_u64(a[i]));
+                    dftracer::utils::dstd::bits::ilog2_u64(a[i]));
             break;
         case Prim::BitWidth:
             for (; i + lanes <= n; i += lanes) {
@@ -56,7 +56,7 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
             }
             for (; i < n; ++i)
                 out[i] = static_cast<std::uint64_t>(
-                    dftracer::utils::bits::bit_width_u64(a[i]));
+                    dftracer::utils::dstd::bits::bit_width_u64(a[i]));
             break;
         case Prim::Popcount:
             for (; i + lanes <= n; i += lanes)
@@ -64,7 +64,7 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                            out + i);
             for (; i < n; ++i)
                 out[i] = static_cast<std::uint64_t>(
-                    dftracer::utils::bits::popcount_u64(a[i]));
+                    dftracer::utils::dstd::bits::popcount_u64(a[i]));
             break;
         case Prim::Clz:
             for (; i + lanes <= n; i += lanes)
@@ -72,7 +72,7 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                            out + i);
             for (; i < n; ++i)
                 out[i] = static_cast<std::uint64_t>(
-                    dftracer::utils::bits::clz_u64(a[i]));
+                    dftracer::utils::dstd::bits::clz_u64(a[i]));
             break;
         case Prim::Ctz:
             for (; i + lanes <= n; i += lanes)
@@ -80,12 +80,15 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                            out + i);
             for (; i < n; ++i)
                 out[i] = static_cast<std::uint64_t>(
-                    dftracer::utils::bits::ctz_u64(a[i]));
+                    dftracer::utils::dstd::bits::ctz_u64(a[i]));
             break;
         case Prim::Mix64: {
-            const auto k1 = hn::Set(d, dftracer::utils::hash::GOLDEN_RATIO);
-            const auto m1 = hn::Set(d, dftracer::utils::hash::SPLITMIX64_MUL1);
-            const auto m2 = hn::Set(d, dftracer::utils::hash::SPLITMIX64_MUL2);
+            const auto k1 =
+                hn::Set(d, dftracer::utils::dstd::hash::GOLDEN_RATIO);
+            const auto m1 =
+                hn::Set(d, dftracer::utils::dstd::hash::SPLITMIX64_MUL1);
+            const auto m2 =
+                hn::Set(d, dftracer::utils::dstd::hash::SPLITMIX64_MUL2);
             for (; i + lanes <= n; i += lanes) {
                 auto x = hn::Add(hn::LoadU(d, a + i), k1);
                 x = hn::Mul(hn::Xor(x, hn::ShiftRight<30>(x)), m1);
@@ -93,7 +96,8 @@ void PrimImpl(std::int32_t op, const std::uint64_t* a, std::int64_t* out_i64,
                 x = hn::Xor(x, hn::ShiftRight<31>(x));
                 hn::StoreU(x, d, out + i);
             }
-            for (; i < n; ++i) out[i] = dftracer::utils::hash::splitmix64(a[i]);
+            for (; i < n; ++i)
+                out[i] = dftracer::utils::dstd::hash::splitmix64(a[i]);
             break;
         }
         default:

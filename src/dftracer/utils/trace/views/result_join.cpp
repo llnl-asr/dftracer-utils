@@ -25,10 +25,11 @@ using Key = std::vector<std::optional<std::string>>;
 
 struct KeyHash {
     std::size_t operator()(const Key& k) const {
-        std::size_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        std::size_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         for (const std::optional<std::string>& s : k) {
             std::size_t sh = std::hash<std::optional<std::string>>{}(s);
-            h ^= sh + dftracer::utils::hash::GOLDEN_RATIO + (h << 6) + (h >> 2);
+            h ^= sh + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
+                 (h >> 2);
         }
         return h;
     }

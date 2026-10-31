@@ -76,7 +76,7 @@ std::optional<std::uint64_t> lookup_signature(
         add(std::to_string(stat->mtime));
         add(std::to_string(stat->size));
     }
-    return dftracer::utils::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }
 
 std::shared_ptr<CacheStore> open_lookup_db(const std::string& path,

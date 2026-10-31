@@ -22,8 +22,8 @@ constexpr std::int32_t DECIMAL256_MAX_PRECISION = 76;
 /// scale plus this fixed increment, rather than an unbounded exact fraction.
 constexpr std::int32_t DECIMAL_DIVIDE_SCALE_INCREMENT = 4;
 
-using i128 = ::dftracer::utils::int128_t;
-using u128 = ::dftracer::utils::uint128_t;
+using i128 = ::dftracer::utils::dstd::int128_t;
+using u128 = ::dftracer::utils::dstd::uint128_t;
 
 inline i128 load_i128(const void* bytes) noexcept {
     i128 v;

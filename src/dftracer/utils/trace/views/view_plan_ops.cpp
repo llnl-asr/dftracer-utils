@@ -344,8 +344,8 @@ std::vector<TraceConfig> config(const ScanPlan& plan_) {
 
 namespace {
 
-using ColTypeMap =
-    dftracer::utils::StringViewMap<dftracer::utils::index::store::ColumnType>;
+using ColTypeMap = dftracer::utils::dstd::StringViewMap<
+    dftracer::utils::index::store::ColumnType>;
 
 void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
     for (const auto& [name, t] : from) {

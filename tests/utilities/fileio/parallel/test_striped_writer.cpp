@@ -30,7 +30,9 @@ std::string read_all(const std::string& path) {
     return ss.str();
 }
 
-ByteView sv(const std::string& s) { return ByteView(s.data(), s.size()); }
+dstd::ByteView sv(const std::string& s) {
+    return dstd::ByteView(s.data(), s.size());
+}
 
 }  // namespace
 
@@ -79,8 +81,8 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
     auto task = [&]() -> CoroTask<int> {
         auto w = make_striped_writer();
         if (co_await w->open(path, 2, false, nullptr) != 0) co_return 1;
-        if (co_await w->write_chunk(0, ByteView()) != 0) co_return 2;
-        if (co_await w->write_chunk(1, ByteView()) != 0) co_return 3;
+        if (co_await w->write_chunk(0, dstd::ByteView()) != 0) co_return 2;
+        if (co_await w->write_chunk(1, dstd::ByteView()) != 0) co_return 3;
         if (co_await w->close() != 0) co_return 4;
         co_return 0;
     };

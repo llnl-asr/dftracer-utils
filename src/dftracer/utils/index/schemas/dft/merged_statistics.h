@@ -13,7 +13,8 @@ namespace dftracer::utils::index::schemas::dft {
 /// Adds the count granules of `path` ("cat", "name" or "pid_tid") of the
 /// `counts` kind into `into`. The caller checks that the extension is current.
 void add_path_counts(const index::store::IndexDatabase& db, int file_id,
-                     std::string_view path, StringViewMap<std::uint64_t>& into);
+                     std::string_view path,
+                     dstd::StringViewMap<std::uint64_t>& into);
 
 /// Each file's chunk statistics merged, with the category, name and pid:tid
 /// counts of the `counts` kind. Files without statistics are absent.

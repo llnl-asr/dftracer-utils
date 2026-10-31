@@ -112,7 +112,8 @@ T read_be_checked(std::string_view bytes) {
     if (bytes.size() < sizeof(T))
         throw DFTUtilsException(ErrorCode::Parse,
                                 "index layout: truncated integer");
-    return read_be<T>(reinterpret_cast<const std::uint8_t*>(bytes.data()));
+    return dstd::read_be<T>(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }
 }  // namespace
 
@@ -129,21 +130,21 @@ std::uint64_t read_u64(std::string_view bytes) {
 std::string kind_prefix(Ext ext, std::uint8_t kind) {
     std::string key;
     key.reserve(KEY_PREFIX_BYTES + 16);
-    append_u16_be(key, static_cast<std::uint16_t>(ext));
+    dstd::append_u16_be(key, static_cast<std::uint16_t>(ext));
     key.push_back(static_cast<char>(kind));
     return key;
 }
 
 std::string file_prefix(Ext ext, std::uint8_t kind, std::uint32_t file_id) {
     auto key = kind_prefix(ext, kind);
-    append_u32_be(key, file_id);
+    dstd::append_u32_be(key, file_id);
     return key;
 }
 
 std::string granule_key(Ext ext, std::uint8_t kind, std::uint32_t file_id,
                         std::uint32_t granule) {
     auto key = file_prefix(ext, kind, file_id);
-    append_u32_be(key, granule);
+    dstd::append_u32_be(key, granule);
     return key;
 }
 
@@ -171,11 +172,11 @@ std::string prefix_end(std::string_view prefix) {
 std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload) {
     std::string value;
     value.reserve(VALUE_HEADER_BYTES + payload.size());
-    append_u16_be(value, type_id(ext, kind));
+    dstd::append_u16_be(value, type_id(ext, kind));
     value.push_back(static_cast<char>(PAYLOAD_VERSION));
     value.push_back(static_cast<char>(CODEC_RAW));
     value.push_back(0);
-    append_u32_be(value, static_cast<std::uint32_t>(payload.size()));
+    dstd::append_u32_be(value, static_cast<std::uint32_t>(payload.size()));
     value.append(payload);
     return value;
 }
@@ -183,11 +184,11 @@ std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload) {
 void append_value(dstd::Vector<std::uint8_t>& out, Ext ext, std::uint8_t kind,
                   std::string_view payload) {
     out.reserve(out.size() + VALUE_HEADER_BYTES + payload.size());
-    append_u16_be(out, type_id(ext, kind));
+    dstd::append_u16_be(out, type_id(ext, kind));
     out.push_back(PAYLOAD_VERSION);
     out.push_back(CODEC_RAW);
     out.push_back(0);
-    append_u32_be(out, static_cast<std::uint32_t>(payload.size()));
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(payload.size()));
     const std::size_t at = out.size();
     out.resize(at + payload.size());
     if (!payload.empty())
@@ -212,7 +213,7 @@ std::string manifest_prefix(std::uint32_t file_id) {
 
 std::string manifest_key(std::uint32_t file_id, Ext ext) {
     auto key = manifest_prefix(file_id);
-    append_u16_be(key, static_cast<std::uint16_t>(ext));
+    dstd::append_u16_be(key, static_cast<std::uint16_t>(ext));
     return key;
 }
 
@@ -227,7 +228,7 @@ std::string encode_path_stat(const PathStat& stat) {
     std::string out;
     out.push_back(static_cast<char>(stat.type));
     out.push_back(static_cast<char>(stat.seen));
-    append_u64_be(out, stat.count);
+    dstd::append_u64_be(out, stat.count);
     return out;
 }
 
@@ -242,8 +243,8 @@ std::optional<PathStat> decode_path_stat(std::string_view body) {
 
 std::string encode_manifest(const ManifestEntry& entry) {
     std::string body;
-    append_u32_be(body, entry.version);
-    append_u64_be(body, entry.params_hash);
+    dstd::append_u32_be(body, entry.version);
+    dstd::append_u64_be(body, entry.params_hash);
     body.push_back(static_cast<char>(entry.status));
     return with_header(Ext::Host, host::MANIFEST, body);
 }
@@ -285,10 +286,10 @@ std::string file_by_id_key(std::uint32_t file_id) {
 
 std::string encode_file_record(const FileRecord& record) {
     std::string body;
-    append_u32_be(body, record.file_id);
-    append_u64_be(body, record.mtime);
-    append_u64_be(body, record.hash);
-    append_u64_be(body, record.size);
+    dstd::append_u32_be(body, record.file_id);
+    dstd::append_u64_be(body, record.mtime);
+    dstd::append_u64_be(body, record.hash);
+    dstd::append_u64_be(body, record.size);
     return with_header(Ext::Host, host::FILE_BY_PATH, body);
 }
 
@@ -312,12 +313,12 @@ constexpr std::uint32_t OVER_CAP = 0xFFFFFFFFU;
 void append_list(std::string& out,
                  const std::optional<std::vector<std::string>>& list) {
     if (!list) {
-        append_u32_be(out, OVER_CAP);
+        dstd::append_u32_be(out, OVER_CAP);
         return;
     }
-    append_u32_be(out, static_cast<std::uint32_t>(list->size()));
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(list->size()));
     for (const auto& v : *list) {
-        append_u32_be(out, static_cast<std::uint32_t>(v.size()));
+        dstd::append_u32_be(out, static_cast<std::uint32_t>(v.size()));
         out.append(v);
     }
 }
@@ -347,7 +348,7 @@ bool read_list(std::string_view& in,
 
 std::string encode_chunk_metadata(const ChunkMetadata& metadata) {
     std::string body;
-    append_u64_be(body, metadata.records);
+    dstd::append_u64_be(body, metadata.records);
     append_list(body, metadata.names);
     append_list(body, metadata.paths);
     return body;

@@ -36,12 +36,12 @@ class StripedWriter final : public ParallelWriter {
         co_return 0;
     }
 
-    coro::CoroTask<int> write_header(ByteView data) override {
+    coro::CoroTask<int> write_header(dstd::ByteView data) override {
         co_return co_await pwrite_all(data);
     }
 
     coro::CoroTask<int> write_chunk(std::size_t worker_idx,
-                                    ByteView data) override {
+                                    dstd::ByteView data) override {
         if (data.size() == 0) co_return 0;
         const auto base =
             offset_.fetch_add(data.size(), std::memory_order_relaxed);
@@ -56,7 +56,7 @@ class StripedWriter final : public ParallelWriter {
             static_cast<off_t>(base));
     }
 
-    coro::CoroTask<int> write_footer(ByteView data) override {
+    coro::CoroTask<int> write_footer(dstd::ByteView data) override {
         co_return co_await pwrite_all(data);
     }
 
@@ -99,7 +99,7 @@ class StripedWriter final : public ParallelWriter {
     }
 
    private:
-    coro::CoroTask<int> pwrite_all(ByteView data) {
+    coro::CoroTask<int> pwrite_all(dstd::ByteView data) {
         if (data.size() == 0) co_return 0;
         const auto base =
             offset_.fetch_add(data.size(), std::memory_order_relaxed);

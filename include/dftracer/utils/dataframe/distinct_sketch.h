@@ -111,8 +111,8 @@ class BasicDistinctSketch {
     void apply_dense(std::uint64_t h) {
         auto idx = static_cast<std::uint32_t>(h >> (64 - PRECISION));
         std::uint64_t rest = (h << PRECISION) | (1ULL << (PRECISION - 1));
-        auto rank =
-            static_cast<std::uint8_t>(dftracer::utils::bits::clz_u64(rest) + 1);
+        auto rank = static_cast<std::uint8_t>(
+            dftracer::utils::dstd::bits::clz_u64(rest) + 1);
         if (rank > dense_[idx]) dense_[idx] = rank;
     }
 
@@ -134,8 +134,8 @@ class BasicDistinctSketch {
     }
 
     static std::uint64_t hash64(std::string_view s) {
-        return dftracer::utils::hash::fnv1a_mix(
-            dftracer::utils::hash::fnv1a_hash(s));
+        return dftracer::utils::dstd::hash::fnv1a_mix(
+            dftracer::utils::dstd::hash::fnv1a_hash(s));
     }
 
     std::vector<std::uint64_t> sparse_;

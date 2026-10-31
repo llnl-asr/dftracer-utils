@@ -30,9 +30,9 @@ namespace coro = dftracer::utils::coro;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::Runtime;
 using dftracer::utils::TypedTaskHandle;
+using dftracer::utils::dstd::ByteView;
 using store::Batch;
 using store::FoldKind;
 using store::NamespaceId;
@@ -99,8 +99,9 @@ std::string to_std(const dstd::String& value) {
 
 std::string i64_bytes(std::int64_t value) {
     std::string bytes(8, '\0');
-    dftracer::utils::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
-                                  static_cast<std::uint64_t>(value));
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(bytes.data()),
+        static_cast<std::uint64_t>(value));
     return bytes;
 }
 

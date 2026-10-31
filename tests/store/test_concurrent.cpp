@@ -45,8 +45,8 @@ namespace {
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::Runtime;
+using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 using store::Batch;
 using store::CommitterTestHook;
@@ -99,14 +99,15 @@ std::string to_std(const dstd::String& value) {
 
 std::string i64_bytes(std::int64_t value) {
     std::string bytes(8, '\0');
-    dftracer::utils::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
-                                  static_cast<std::uint64_t>(value));
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(bytes.data()),
+        static_cast<std::uint64_t>(value));
     return bytes;
 }
 
 std::int64_t read_i64(ByteView bytes) {
     REQUIRE(bytes.size() == 8);
-    return std::bit_cast<std::int64_t>(dftracer::utils::read_u64_le(
+    return std::bit_cast<std::int64_t>(dftracer::utils::dstd::read_u64_le(
         reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
@@ -559,14 +560,14 @@ static bool marker_recorded(const std::string& path, const std::string& key) {
         read_range(path, 0, store::FILE_HEADER_BYTES);
     if (header.size() < store::FILE_HEADER_BYTES) return false;
     const std::size_t tail_at =
-        48 + dftracer::utils::read_u16_le(header.data() + 44) +
-        dftracer::utils::read_u16_le(header.data() + 46);
+        48 + dftracer::utils::dstd::read_u16_le(header.data() + 44) +
+        dftracer::utils::dstd::read_u16_le(header.data() + 46);
     const std::uint64_t tail =
-        dftracer::utils::read_u64_le(header.data() + tail_at);
+        dftracer::utils::dstd::read_u64_le(header.data() + tail_at);
     const std::vector<std::uint8_t> prefix = read_range(path, tail, 16);
     if (prefix.size() != 16) return false;
     const std::size_t record_bytes =
-        40 + dftracer::utils::read_u32_le(prefix.data() + 12) + 4;
+        40 + dftracer::utils::dstd::read_u32_le(prefix.data() + 12) + 4;
     const std::vector<std::uint8_t> bytes =
         read_range(path, tail, record_bytes);
     if (bytes.size() != record_bytes) return false;

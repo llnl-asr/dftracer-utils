@@ -97,7 +97,7 @@ inline coro::CoroTask<std::uint8_t> scan_member_ranges(
                     const std::uint64_t at =
                         from + static_cast<std::uint64_t>(p - buf.data());
                     out.push_back(
-                        {at, at >= BEHIND ? read_u32_le(p - BEHIND) : 0});
+                        {at, at >= BEHIND ? dstd::read_u32_le(p - BEHIND) : 0});
                 }
                 ++p;
             }
@@ -145,7 +145,7 @@ inline coro::CoroTask<bool> enumerate_gzip_member_candidates(
     // caveats).
     const ssize_t got = co_await dftracer::utils::io::pread(
         fd, tail, sizeof tail, static_cast<off_t>(file_size - 4));
-    if (got == 4) out.back().isize = read_u32_le(tail);
+    if (got == 4) out.back().isize = dstd::read_u32_le(tail);
 
     for (std::size_t i = 0; i + 1 < out.size(); ++i)
         out[i].c_size = out[i + 1].c_offset - out[i].c_offset;

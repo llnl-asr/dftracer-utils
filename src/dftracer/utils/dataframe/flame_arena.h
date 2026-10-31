@@ -26,7 +26,7 @@ struct FlameNode {
     double total = 0;
     double self = 0;
     std::uint64_t count = 0;
-    dftracer::utils::StringViewMap<std::uint32_t> kids;
+    dftracer::utils::dstd::StringViewMap<std::uint32_t> kids;
     std::vector<std::uint32_t> children;
 };
 

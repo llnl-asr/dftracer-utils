@@ -8,7 +8,7 @@
 #include <optional>
 #include <unordered_map>
 
-namespace dftracer::utils::cache {
+namespace dftracer::utils::dstd::cache {
 
 /// CLOCK (second chance): each key carries a reference bit set on touch. The
 /// eviction hand sweeps the ring, clearing set bits (a second chance) and
@@ -65,6 +65,6 @@ class ClockEvictionPolicy final : public EvictionPolicy<Key> {
     typename std::list<Slot>::iterator hand_ = ring_.end();
 };
 
-}  // namespace dftracer::utils::cache
+}  // namespace dftracer::utils::dstd::cache
 
 #endif  // DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICIES_CLOCK_EVICTION_POLICY_H

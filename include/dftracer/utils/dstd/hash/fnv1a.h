@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace dftracer::utils::hash {
+namespace dftracer::utils::dstd::hash {
 
 inline std::uint64_t fnv1a_hash(const void* data, std::size_t len) {
     std::uint64_t hash = FNV1A_OFFSET_BASIS;
@@ -45,6 +45,6 @@ inline std::uint64_t fnv1a_mix(std::uint64_t h) {
     return h;
 }
 
-}  // namespace dftracer::utils::hash
+}  // namespace dftracer::utils::dstd::hash
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_FNV1A_H

@@ -202,7 +202,7 @@ ChunkSet difference(const ChunkSet& a, const ChunkSet& b) {
 
 // Paths named by equality-shaped leaves, the only ones the file blooms test.
 void collect_equality_paths(const duql_ns::QueryNode& node,
-                            StringViewSet& out) {
+                            dstd::StringViewSet& out) {
     std::visit(
         [&out](auto&& n) {
             using T = std::decay_t<decltype(n)>;
@@ -358,7 +358,7 @@ class FileBloom final : public Condition {
     explicit FileBloom(FileIndexData& d) : d_(d) {}
     IndexExtension extension() const override { return IndexExtension::Bloom; }
     bool file_may_match(const duql_ns::QueryNode& root) override {
-        StringViewSet paths;
+        dstd::StringViewSet paths;
         collect_equality_paths(root, paths);
         if (paths.empty()) return true;
         return may_match_file(root);
@@ -590,13 +590,13 @@ class Counts final : public Condition {
     }
 
    private:
-    static const StringViewMap<std::uint64_t>* values(
+    static const dstd::StringViewMap<std::uint64_t>* values(
         const FileIndexData::Counts& counts, std::uint64_t ckpt) {
         auto it = counts.find(ckpt);
         return it == counts.end() ? nullptr : it->second.get();
     }
 
-    static bool all_listed(const StringViewMap<std::uint64_t>& vc,
+    static bool all_listed(const dstd::StringViewMap<std::uint64_t>& vc,
                            const duql_ns::ArrayNode& list) {
         for (const auto& entry : vc) {
             const auto& value = entry.first;
@@ -611,7 +611,7 @@ class Counts final : public Condition {
         return true;
     }
 
-    static bool none_listed(const StringViewMap<std::uint64_t>& vc,
+    static bool none_listed(const dstd::StringViewMap<std::uint64_t>& vc,
                             const duql_ns::ArrayNode& list) {
         for (const auto& elem : list.elements)
             if (vc.count(literal_to_string(elem)) > 0) return false;

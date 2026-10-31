@@ -50,7 +50,7 @@ coro::CoroTask<void> ChunkWriter::open() {
     open_ = true;
 }
 
-coro::CoroTask<void> ChunkWriter::write_line(ByteView line) {
+coro::CoroTask<void> ChunkWriter::write_line(dstd::ByteView line) {
     pending_.append(line.as<char>(), line.size());
     pending_.push_back('\n');
     total_events_++;

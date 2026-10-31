@@ -58,8 +58,8 @@ void append_canonical_json(std::string& out, simdjson::dom::element v) {
             return;
         case T::DOUBLE: {
             char buf[32];
-            char* end = to_chars_double(buf, buf + sizeof(buf),
-                                        v.get_double().value_unsafe());
+            char* end = dstd::to_chars_double(buf, buf + sizeof(buf),
+                                              v.get_double().value_unsafe());
             if (end) out.append(buf, end);
             return;
         }

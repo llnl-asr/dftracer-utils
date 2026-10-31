@@ -173,9 +173,10 @@ index::gzip::GzipMemberRecord decode_gzip_member(std::string_view key,
     return member;
 }
 
-StringViewMap<std::uint64_t> decode_count_map_value(std::string_view value) {
+dstd::StringViewMap<std::uint64_t> decode_count_map_value(
+    std::string_view value) {
     Cursor cursor(value);
-    StringViewMap<std::uint64_t> counts;
+    dstd::StringViewMap<std::uint64_t> counts;
     auto num_entries = cursor.u32();
     counts.reserve(num_entries);
     for (std::uint32_t i = 0; i < num_entries; ++i) {
@@ -253,7 +254,7 @@ constexpr std::string_view PLUGIN_NAMESPACE_PREFIX =
 
 std::string next_file_id_value(std::uint32_t next) {
     std::string body;
-    append_u32_be(body, next);
+    dstd::append_u32_be(body, next);
     return layout::with_header(layout::Ext::Host, layout::host::NEXT_FILE_ID,
                                body);
 }
@@ -552,7 +553,7 @@ std::optional<std::string> IndexDatabase::Impl::store_get(
         switch (host->kind) {
             case store_layout::HostKind::Format: {
                 std::string body;
-                append_u32_be(body, IndexDatabase::FORMAT_VERSION);
+                dstd::append_u32_be(body, IndexDatabase::FORMAT_VERSION);
                 return layout::with_header(layout::Ext::Host,
                                            layout::host::FORMAT, body);
             }
@@ -611,7 +612,7 @@ std::optional<std::string> IndexDatabase::Impl::store_get(
     }
     const auto held = snapshot();
     if (!held) return std::nullopt;
-    auto found = held->get(spec, scope, ByteView(target->inner_key));
+    auto found = held->get(spec, scope, dstd::ByteView(target->inner_key));
     if (!found) throw_store_error("store index: read a value", found.error());
     if (!*found) return std::nullopt;
     const auto bytes = (*found)->bytes();
@@ -704,7 +705,7 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
                 namespace_spec(known.name, known.version);
             const auto held = snapshot();
             if (!held) return;
-            auto cursor = held->scan(spec, root_scope(), ByteView(inner));
+            auto cursor = held->scan(spec, root_scope(), dstd::ByteView(inner));
             for (; !cursor.at_end(); cursor.next()) {
                 const auto inner_key = cursor.key();
                 auto value = cursor.value();
@@ -758,7 +759,7 @@ void IndexDatabase::Impl::store_scan(std::string_view prefix, Fn&& fn) {
         // A commit on another thread may replace the root's snapshot.
         const auto held = snapshot();
         if (!held) return false;
-        auto cursor = held->scan(spec, scope, ByteView(inner_prefix));
+        auto cursor = held->scan(spec, scope, dstd::ByteView(inner_prefix));
         for (; !cursor.at_end(); cursor.next()) {
             const auto inner = cursor.key();
             auto value = cursor.value();
@@ -941,13 +942,14 @@ void IndexDatabase::for_each_record(
                 std::to_string(static_cast<int>(entry.copy.state)) + "|" +
                 std::to_string(entry.copy.params_hash);
             fn("#copy|" + name + "|" + scope, copy);
-            auto cursor = held->scan(spec, entry.scope, ByteView{}, ByteView{});
+            auto cursor = held->scan(spec, entry.scope, dstd::ByteView{},
+                                     dstd::ByteView{});
             for (; !cursor.at_end(); cursor.next()) {
                 auto value = cursor.value();
                 if (!value)
                     throw_store_error("store index: read a value",
                                       value.error());
-                const ByteView key = cursor.key();
+                const dstd::ByteView key = cursor.key();
                 fn(name + "|" + scope + "|" +
                        std::string(reinterpret_cast<const char*>(key.data()),
                                    key.size()),
@@ -1081,7 +1083,7 @@ bool IndexDatabase::has_posting(int file_id, std::string_view path,
                                 std::uint64_t value_hash) const {
     auto key =
         layout::path_prefix(Ext::Postings, pk::IN_FILE, fid(file_id), path);
-    append_u64_be(key, value_hash);
+    dstd::append_u64_be(key, value_hash);
     return impl_->raw_get(key).has_value();
 }
 
@@ -1090,7 +1092,7 @@ std::vector<std::uint64_t> IndexDatabase::posting_granules(
     std::vector<std::uint64_t> out;
     auto prefix =
         layout::path_prefix(Ext::Postings, pk::IN_GRANULE, fid(file_id), path);
-    append_u64_be(prefix, value_hash);
+    dstd::append_u64_be(prefix, value_hash);
     impl_->scan_keys(prefix, [&](std::string_view key) {
         if (key.size() == prefix.size() + 4)
             out.push_back(tail_u32(key, prefix.size()));
@@ -1165,7 +1167,7 @@ IndexDatabase::StaleCheckResult IndexDatabase::find_stale_files(
     StaleCheckResult result;
     result.format_outdated = format_outdated();
 
-    StringViewSet seen_logical;
+    dstd::StringViewSet seen_logical;
     seen_logical.reserve(current_paths.size());
     for (const auto& path : current_paths) {
         const auto logical = index::store::internal::get_logical_path(path);
@@ -1187,16 +1189,16 @@ IndexDatabase::StaleCheckResult IndexDatabase::find_stale_files(
     return result;
 }
 
-StringViewMap<int> IndexDatabase::query_all_file_info_ids() const {
-    StringViewMap<int> results;
+dstd::StringViewMap<int> IndexDatabase::query_all_file_info_ids() const {
+    dstd::StringViewMap<int> results;
     for (const auto& [path, entry] : query_all_file_registry())
         results.emplace(path, entry.file_id);
     return results;
 }
 
-StringViewMap<FileRegistryEntry> IndexDatabase::query_all_file_registry()
+dstd::StringViewMap<FileRegistryEntry> IndexDatabase::query_all_file_registry()
     const {
-    StringViewMap<FileRegistryEntry> results;
+    dstd::StringViewMap<FileRegistryEntry> results;
     const auto prefix =
         layout::kind_prefix(Ext::Host, layout::host::FILE_BY_PATH);
     impl_->raw_scan(prefix, [&](std::string_view key, std::string_view value) {
@@ -1375,10 +1377,11 @@ IndexDatabase::query_file_metadata_batch(
     return results;
 }
 
-ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>>
+ankerl::unordered_dense::map<int, dstd::StringViewMap<std::uint64_t>>
 IndexDatabase::query_file_pid_tid_counts_batch(
     const std::vector<int>& file_ids) const {
-    ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>> results;
+    ankerl::unordered_dense::map<int, dstd::StringViewMap<std::uint64_t>>
+        results;
     impl_->scan_files(
         Ext::Stats, sk::FILE_PID_TID_COUNTS, file_ids,
         [&](int file_id, std::string_view, std::string_view body) {
@@ -1425,7 +1428,7 @@ namespace {
 // the retired manifest P| keys used to store, now derived so PID collection
 // needs no separate index tier.
 ankerl::unordered_dense::set<std::uint64_t> pids_from_pid_tid_counts(
-    const StringViewMap<std::uint64_t>& counts) {
+    const dstd::StringViewMap<std::uint64_t>& counts) {
     ankerl::unordered_dense::set<std::uint64_t> pids;
     for (const auto& [key, _] : counts) {
         std::string_view sv(key);

@@ -523,7 +523,7 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
         p.src = src;
         p.bytes = bytes;
         p.at = at;
-        at = bits::align_up(at + bytes, REGION_ALIGN);
+        at = dstd::bits::align_up(at + bytes, REGION_ALIGN);
     };
     for (std::size_t i = 0; i < cols.size(); ++i) {
         const Series& c = cols[i];
@@ -563,7 +563,7 @@ std::vector<Series> PartFile::append(const std::vector<Series>& cols) {
     const long page_size = ::sysconf(_SC_PAGESIZE);
     const std::size_t page =
         page_size > 0 ? static_cast<std::size_t>(page_size) : 4096;
-    const std::size_t region_bytes = bits::align_up(at, page);
+    const std::size_t region_bytes = dstd::bits::align_up(at, page);
     std::vector<Series> out;
     out.reserve(cols.size());
     if (region_bytes == 0) {

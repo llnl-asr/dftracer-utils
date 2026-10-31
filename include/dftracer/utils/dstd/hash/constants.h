@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-namespace dftracer::utils::hash {
+namespace dftracer::utils::dstd::hash {
 
 /// 64-bit golden ratio. The 32-bit variant (0x9e3779b9) mixes poorly when
 /// size_t is 64-bit, so prefer this everywhere hashes are combined or seeded.
@@ -26,6 +26,6 @@ inline constexpr std::uint64_t FNV1A_PRIME = 0x00000100000001b3ULL;
 inline constexpr std::uint64_t FNV1A_OFFSET_BASIS_LEGACY =
     1469598103934665603ULL;
 
-}  // namespace dftracer::utils::hash
+}  // namespace dftracer::utils::dstd::hash
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_CONSTANTS_H

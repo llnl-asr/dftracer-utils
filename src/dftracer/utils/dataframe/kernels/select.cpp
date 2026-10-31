@@ -267,8 +267,8 @@ Series sample_impl(const Series& v, std::int64_t n, std::uint64_t seed) {
     for (std::int64_t i = 0; i < len; ++i)
         order[static_cast<std::size_t>(i)] = i;
     auto key = [seed](std::int64_t i) {
-        return dftracer::utils::hash::splitmix64(static_cast<std::uint64_t>(i) +
-                                                 seed);
+        return dftracer::utils::dstd::hash::splitmix64(
+            static_cast<std::uint64_t>(i) + seed);
     };
     // The n smallest-hash rows are the sample; nth_element partitions in
     // O(len).

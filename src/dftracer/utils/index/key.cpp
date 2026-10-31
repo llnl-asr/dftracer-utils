@@ -14,7 +14,7 @@ KeyBuilder& KeyBuilder::f32(float v) {
     }
     const std::uint32_t sign_bit = 0x80000000U;
     bits = (bits & sign_bit) == 0 ? bits ^ sign_bit : ~bits;
-    append_u32_be(bytes_, bits);
+    dstd::append_u32_be(bytes_, bits);
     return *this;
 }
 
@@ -31,7 +31,7 @@ KeyBuilder& KeyBuilder::f64(double v) {
     } else {
         bits = ~bits;
     }
-    append_u64_be(bytes_, bits);
+    dstd::append_u64_be(bytes_, bits);
     return *this;
 }
 
@@ -46,7 +46,7 @@ KeyBuilder& KeyBuilder::str(dstd::StringView v) {
     return *this;
 }
 
-KeyBuilder& KeyBuilder::raw(dftracer::utils::ByteView v) {
+KeyBuilder& KeyBuilder::raw(dftracer::utils::dstd::ByteView v) {
     const auto* begin = reinterpret_cast<const std::uint8_t*>(v.data());
     bytes_.insert(bytes_.end(), begin, begin + v.size());
     return *this;

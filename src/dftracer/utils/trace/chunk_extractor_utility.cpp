@@ -114,7 +114,7 @@ ChunkExtractorUtility::extract_and_write(
                 std::string_view(line.content.data(), line.content.length()));
             if (!event.empty()) {
                 co_await writer.write_line(
-                    ByteView(event.data(), event.size()));
+                    dstd::ByteView(event.data(), event.size()));
 
                 if (input.compute_hash) {
                     hasher.reset();

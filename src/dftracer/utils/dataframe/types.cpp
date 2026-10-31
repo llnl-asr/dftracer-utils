@@ -11,7 +11,7 @@ namespace {
 struct Zones {
     std::mutex mutex;
     std::deque<std::string> names{std::string()};
-    StringViewMap<std::uint32_t> ids;
+    dstd::StringViewMap<std::uint32_t> ids;
 };
 
 Zones& zones() {

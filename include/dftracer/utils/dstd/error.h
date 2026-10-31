@@ -32,7 +32,7 @@ struct ErrorDomain {
 };
 
 constexpr ErrorDomain make_error_domain(std::string_view name) noexcept {
-    return {name, ::dftracer::utils::hash::fnv1a_hash(name)};
+    return {name, hash::fnv1a_hash(name)};
 }
 
 struct ErrorCodeInfo {

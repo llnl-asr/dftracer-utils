@@ -200,22 +200,22 @@ std::uint64_t QuantileStore::count() const {
 
 void QuantileStore::serialize_into(dstd::Vector<std::uint8_t>& buf) const {
     buf.push_back(sketch_mode_ ? TAG_SKETCH : TAG_EXACT);
-    append_f64_le(buf, accuracy_);
+    dstd::append_f64_le(buf, accuracy_);
     if (sketch_mode_) {
         const std::size_t n = sketch_->serialized_size();
-        append_u32_le(buf, static_cast<std::uint32_t>(n));
+        dstd::append_u32_le(buf, static_cast<std::uint32_t>(n));
         const std::size_t at = buf.size();
         buf.resize(at + n);
         sketch_->write_to(buf.data() + at);
         return;
     }
-    append_u32_le(buf, static_cast<std::uint32_t>(exact_.size()));
-    for (double v : exact_) append_f64_le(buf, v);
+    dstd::append_u32_le(buf, static_cast<std::uint32_t>(exact_.size()));
+    for (double v : exact_) dstd::append_f64_le(buf, v);
 }
 
 dstd::Expected<QuantileStore, ErrorCode> QuantileStore::deserialize(
     const std::uint8_t* data, std::size_t len) {
-    LeReader r(data, len);
+    dstd::LeReader r(data, len);
     std::uint8_t tag = 0;
     double accuracy = 0.0;
     std::uint32_t n = 0;

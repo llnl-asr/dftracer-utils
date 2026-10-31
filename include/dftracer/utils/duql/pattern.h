@@ -13,7 +13,7 @@ namespace dftracer::utils::duql {
 struct CompiledPattern;
 
 struct InSet {
-    dftracer::utils::StringViewSet values;
+    dftracer::utils::dstd::StringViewSet values;
 };
 
 /// Lists at least this long get an InSet.

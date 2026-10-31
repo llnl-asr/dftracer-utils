@@ -18,7 +18,7 @@ constexpr char STRING_TAG = 's';
 constexpr char BOOL_TAG = 'b';
 
 std::uint64_t get_u64(std::string_view s) {
-    return read_u64_be(reinterpret_cast<const std::uint8_t*>(s.data()));
+    return dstd::read_u64_be(reinterpret_cast<const std::uint8_t*>(s.data()));
 }
 
 }  // namespace
@@ -26,7 +26,7 @@ std::uint64_t get_u64(std::string_view s) {
 void append_int_key(std::string& out, bool negative, std::uint64_t magnitude) {
     out += INT_TAG;
     out += negative && magnitude != 0 ? '-' : '+';
-    append_u64_be(out, magnitude);
+    dstd::append_u64_be(out, magnitude);
 }
 
 bool append_double_key(std::string& out, double v) {
@@ -37,13 +37,13 @@ bool append_double_key(std::string& out, double v) {
         return true;
     }
     out += DOUBLE_TAG;
-    append_f64_be(out, v);
+    dstd::append_f64_be(out, v);
     return true;
 }
 
 void append_string_key(std::string& out, std::string_view v) {
     out += STRING_TAG;
-    append_u64_be(out, v.size());
+    dstd::append_u64_be(out, v.size());
     out += v;
 }
 
@@ -69,7 +69,7 @@ std::string key_text(std::string_view key) {
             out += std::to_string(get_u64(key.substr(1)));
             key.remove_prefix(9);
         } else if (tag == DOUBLE_TAG) {
-            const double d = bits_double(get_u64(key));
+            const double d = dstd::bits_double(get_u64(key));
             char buf[32];
             std::snprintf(buf, sizeof buf, "%.17g", d);
             out += buf;

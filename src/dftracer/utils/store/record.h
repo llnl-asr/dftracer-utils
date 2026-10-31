@@ -181,11 +181,11 @@ struct Record {
 void append_block_handle(dstd::Vector<std::uint8_t>& out,
                          const BlockHandle& handle);
 
-bool read_block_handle(ByteView bytes, std::size_t& at, BlockHandle& out);
+bool read_block_handle(dstd::ByteView bytes, std::size_t& at, BlockHandle& out);
 
 dstd::Vector<std::uint8_t> encode_items(const RecordItems& items);
 
-dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body);
+dstd::Expected<RecordItems, dstd::Error> decode_items(dstd::ByteView body);
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
     RecordKind kind, std::uint64_t sequence, std::uint64_t prev_offset,
@@ -195,7 +195,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
     RecordKind kind, std::uint64_t sequence, std::uint64_t prev_offset,
     std::uint64_t offset, std::initializer_list<RecordItem> items);
 
-dstd::Expected<Record, dstd::Error> decode_record(ByteView bytes);
+dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes);
 
 /// Moves a record encode_record built to `offset`: rewrites the offset it
 /// names and its crc, so the body is not encoded again.

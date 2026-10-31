@@ -16,7 +16,7 @@
 
 namespace {
 
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::ByteView;
 using dftracer::utils::index::KeyBuilder;
 using dftracer::utils::index::KeyReader;
 

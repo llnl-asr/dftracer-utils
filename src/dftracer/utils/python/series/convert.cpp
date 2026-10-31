@@ -1362,7 +1362,7 @@ PyObject* build_deltas(PyObject** items, Py_ssize_t n, Bits& bits) {
                                      dataframe::TimeUnit::Micro, "", 0, 0, 0));
 }
 
-using U128 = ::dftracer::utils::uint128_t;
+using U128 = ::dftracer::utils::dstd::uint128_t;
 
 constexpr int MAX_DECIMAL_DIGITS = 38;
 

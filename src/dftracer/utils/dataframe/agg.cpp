@@ -34,8 +34,8 @@ std::vector<std::string> agg_group_key(const AggState& st, std::int64_t g) {
         if (kd == FieldStatDomain::U64)
             out.push_back(std::to_string(std::bit_cast<std::uint64_t>(bits)));
         else if (kd == FieldStatDomain::F64)
-            out.push_back(
-                dftracer::utils::double_text(std::bit_cast<double>(bits)));
+            out.push_back(dftracer::utils::dstd::double_text(
+                std::bit_cast<double>(bits)));
         else
             out.push_back(std::to_string(bits));
     }
@@ -148,17 +148,17 @@ std::vector<std::vector<std::int64_t>> agg_split_groups(const AggState& st,
     for (std::int64_t g = 0; g < groups; ++g) {
         std::size_t h = 0;
         for (std::size_t k = 0; k < st.nkeys; ++k) {
-            std::size_t cell = dftracer::utils::hash::GOLDEN_RATIO;
+            std::size_t cell = dftracer::utils::dstd::hash::GOLDEN_RATIO;
             if (!st.nkey_cols[k][static_cast<std::size_t>(g)])
                 cell = st.key_is_bytes[k]
                            ? std::hash<std::string_view>{}(
                                  st.skey_cols[k][static_cast<std::size_t>(g)])
                            : std::hash<std::int64_t>{}(
                                  st.ikey_cols[k][static_cast<std::size_t>(g)]);
-            dftracer::utils::hash_combine(h, cell);
+            dftracer::utils::dstd::hash_combine(h, cell);
         }
-        out[dftracer::utils::hash::partition_of(static_cast<std::uint64_t>(h),
-                                                parts, salt)]
+        out[dftracer::utils::dstd::hash::partition_of(
+                static_cast<std::uint64_t>(h), parts, salt)]
             .push_back(g);
     }
     return out;

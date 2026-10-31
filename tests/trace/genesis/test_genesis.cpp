@@ -188,7 +188,7 @@ std::string str(const std::string& line, const std::string& pointer) {
 using Sketch = dataframe::BasicDDSketch<2048>;
 
 Sketch sketch_at(const std::string& line, const std::string& pointer) {
-    const auto raw = base64_decode(str(line, pointer));
+    const auto raw = dstd::base64_decode(str(line, pointer));
     REQUIRE(raw.has_value());
     return Sketch::deserialize(
         reinterpret_cast<const std::uint8_t*>(raw->data()), raw->size());

@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 // Big-endian fixed-width byte codec, the mirror of little_endian.h. The read_*
 // and write_* functions do not check bounds and the caller owns the buffer.
@@ -131,6 +131,6 @@ class BeReader {
     const std::uint8_t* end_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_BIG_ENDIAN_H

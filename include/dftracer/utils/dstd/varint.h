@@ -6,7 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 // LEB128 for u64: seven bits per byte, low group first, the high bit marks a
 // following byte.
@@ -86,6 +86,6 @@ inline bool read_varint(LeReader& r, std::uint64_t& out) {
     return true;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_VARINT_H

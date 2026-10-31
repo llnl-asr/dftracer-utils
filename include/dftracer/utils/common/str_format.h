@@ -45,7 +45,7 @@ void str_append(std::string& out, T v) {
 
 inline void str_append(std::string& out, double v) {
     char buf[32];
-    char* end = to_chars_double(buf, buf + sizeof(buf), v);
+    char* end = dstd::to_chars_double(buf, buf + sizeof(buf), v);
     if (end) out.append(buf, end);
 }
 inline void str_append(std::string& out, float v) {

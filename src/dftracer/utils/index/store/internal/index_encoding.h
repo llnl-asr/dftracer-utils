@@ -38,10 +38,10 @@ std::string encode_count_map_value(const Map& counts) {
     value.reserve(sizeof(std::uint32_t) +
                   counts.size() *
                       (sizeof(std::uint32_t) + sizeof(std::uint64_t)));
-    append_u32_be(value, static_cast<std::uint32_t>(counts.size()));
+    dstd::append_u32_be(value, static_cast<std::uint32_t>(counts.size()));
     for (const auto& [key, count] : counts) {
         append_string(value, key);
-        append_u64_be(value, count);
+        dstd::append_u64_be(value, count);
     }
     return value;
 }

@@ -177,7 +177,7 @@ std::pair<double, double> two_order_statistics(const T* x, std::size_t n,
     sample.reserve(BUCKETS * OVERSAMPLE);
     for (std::size_t i = 0; sample.size() < BUCKETS * OVERSAMPLE; ++i) {
         if (i >= BUCKETS * OVERSAMPLE * 4) return {std::nan(""), std::nan("")};
-        const std::size_t at = dftracer::utils::hash::splitmix64(i) % n;
+        const std::size_t at = dftracer::utils::dstd::hash::splitmix64(i) % n;
         if (!is_null(at)) sample.push_back(key(x[at]));
     }
     std::sort(sample.begin(), sample.end());

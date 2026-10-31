@@ -1,6 +1,6 @@
 #include <dftracer/utils/dstd/base64.h>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 namespace {
 
@@ -76,4 +76,4 @@ std::optional<std::string> base64_decode(std::string_view sv) {
     return out;
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd

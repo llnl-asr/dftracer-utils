@@ -92,12 +92,13 @@ inline NumCells read_cells(const Series& col) {
             break;
         case TypeId::Float32:
             fill([&](std::int64_t i) {
-                return double_bits(static_cast<double>(s.data<float>()[i]));
+                return dstd::double_bits(
+                    static_cast<double>(s.data<float>()[i]));
             });
             break;
         case TypeId::Float64:
             fill([&](std::int64_t i) {
-                return double_bits(s.data<double>()[i]);
+                return dstd::double_bits(s.data<double>()[i]);
             });
             break;
         default:
@@ -136,7 +137,7 @@ inline Series make_numeric(const std::vector<std::uint64_t>& bits,
                     v[i] = static_cast<T>(bits[i]);
                     break;
                 case NumClass::Float:
-                    v[i] = static_cast<T>(bits_double(bits[i]));
+                    v[i] = static_cast<T>(dstd::bits_double(bits[i]));
                     break;
             }
         }

@@ -14,19 +14,19 @@ namespace dftracer::utils::utilities::common::serialization {
 
 /// u16 length, then the bytes.
 inline void put_str(std::string& out, std::string_view s) {
-    append_u16_be(out, static_cast<std::uint16_t>(s.size()));
+    dstd::append_u16_be(out, static_cast<std::uint16_t>(s.size()));
     out.append(s.data(), s.size());
 }
 
 /// u32 length, then the bytes.
 inline void put_blob(std::string& out, std::span<const std::uint8_t> data) {
-    append_u32_be(out, static_cast<std::uint32_t>(data.size()));
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(data.size()));
     out.append(reinterpret_cast<const char*>(data.data()), data.size());
 }
 
 /// Writes a put_str frame at p, which has room for it, and returns the end.
 inline std::uint8_t* write_str(std::uint8_t* p, std::string_view s) {
-    write_u16_be(p, static_cast<std::uint16_t>(s.size()));
+    dstd::write_u16_be(p, static_cast<std::uint16_t>(s.size()));
     p += 2;
     std::memcpy(p, s.data(), s.size());
     return p + s.size();
@@ -40,13 +40,13 @@ class BinaryReader {
 
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
-    std::uint16_t be16() { return read_u16_be(bytes(take(2))); }
+    std::uint16_t be16() { return dstd::read_u16_be(bytes(take(2))); }
 
-    std::uint32_t be32() { return read_u32_be(bytes(take(4))); }
+    std::uint32_t be32() { return dstd::read_u32_be(bytes(take(4))); }
 
-    std::uint64_t be64() { return read_u64_be(bytes(take(8))); }
+    std::uint64_t be64() { return dstd::read_u64_be(bytes(take(8))); }
 
-    double f64() { return read_f64_be(bytes(take(8))); }
+    double f64() { return dstd::read_f64_be(bytes(take(8))); }
 
     std::string_view blob() {
         auto len = be32();
@@ -69,7 +69,7 @@ class BinaryReader {
         const auto* p = bytes(data_.substr(off_));
         const auto* end = p + (data_.size() - off_);
         std::uint64_t v = 0;
-        if (!read_varint(p, end, v))
+        if (!dstd::read_varint(p, end, v))
             throw DFTUtilsException(ErrorCode::Parse,
                                     "binary_codec: truncated varint");
         off_ = static_cast<std::size_t>(

@@ -163,8 +163,8 @@ struct function_traits {
     static constexpr bool has_context = AA::has_context;
     using input_type = typename AA::input_type;
 
-    static constexpr bool is_coroutine = coro::is_coro_task_v<raw_return>;
-    using output_type = coro::unwrap_coro_task_t<raw_return>;
+    static constexpr bool is_coroutine = dstd::is_coro_task_v<raw_return>;
+    using output_type = dstd::unwrap_coro_task_t<raw_return>;
 
     static constexpr std::size_t arity = CT::arity;
     static constexpr bool is_generic = false;

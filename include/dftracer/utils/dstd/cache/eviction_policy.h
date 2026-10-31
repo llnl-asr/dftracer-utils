@@ -5,7 +5,7 @@
 #include <memory>
 #include <optional>
 
-namespace dftracer::utils::cache {
+namespace dftracer::utils::dstd::cache {
 
 /**
  * Eviction policy for a bounded cache: tracks which keys to drop first. The
@@ -34,6 +34,6 @@ enum class EvictionKind { Lru, Clock };
 template <typename Key>
 std::unique_ptr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind);
 
-}  // namespace dftracer::utils::cache
+}  // namespace dftracer::utils::dstd::cache
 
 #endif  // DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICY_H

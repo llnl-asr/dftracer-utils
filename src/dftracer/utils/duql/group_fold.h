@@ -80,15 +80,15 @@ class GroupFold {
     std::vector<dataframe::DataType> key_types_;
     std::vector<FoldAgg> aggs_;
     ankerl::unordered_dense::map<std::string, std::int64_t> groups_;
-    StringViewMap<std::int64_t> str_groups_;
+    dstd::StringViewMap<std::int64_t> str_groups_;
     std::int64_t null_group_ = -1;
     std::int64_t num_groups_ = 0;
     std::int64_t rows_ = 0;
     std::vector<std::vector<dataframe::Series>> key_parts_;
     dataframe::AggStatePtr engine_;
     struct Distinct {
-        StringViewSet text;
-        StringViewSet tagged;
+        dstd::StringViewSet text;
+        dstd::StringViewSet tagged;
     };
     std::vector<std::vector<Distinct>> distinct_;
     std::vector<std::vector<dataframe::Series>> parts_;

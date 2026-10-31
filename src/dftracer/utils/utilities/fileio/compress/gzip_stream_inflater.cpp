@@ -251,8 +251,8 @@ struct GzipStreamInflater::Impl {
                     return first ? InflateStatus::BufError : InflateStatus::Ok;
                 }
                 phase = Phase::Done;
-                if (read_le<std::uint32_t>(trailer) != crc ||
-                    read_le<std::uint32_t>(trailer + 4) != size) {
+                if (dstd::read_le<std::uint32_t>(trailer) != crc ||
+                    dstd::read_le<std::uint32_t>(trailer + 4) != size) {
                     return InflateStatus::DataError;
                 }
             } else {

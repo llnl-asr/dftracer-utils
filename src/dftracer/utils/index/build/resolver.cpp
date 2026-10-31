@@ -163,7 +163,7 @@ struct FileDecision {
 // Reads only. Safe to run for many files at once on one database.
 FileDecision decide(
     const IndexDatabase& db,
-    const StringViewMap<index::store::FileRegistryEntry>& registry,
+    const dstd::StringViewMap<index::store::FileRegistryEntry>& registry,
     const PendingFile& f, const ResolveGroupInput& input,
     std::uint64_t params) {
     FileDecision d;
@@ -445,7 +445,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
     result.index_path = trace::internal::determine_index_path(
         result.all_files.front(), input.index_dir);
 
-    StringViewMap<std::vector<PendingFile>> groups;
+    dstd::StringViewMap<std::vector<PendingFile>> groups;
     for (std::size_t i = 0; i < result.all_files.size(); ++i) {
         const auto& file_path = result.all_files[i];
         auto idx_path =

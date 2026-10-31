@@ -7,9 +7,9 @@
 #include <cstdint>
 #include <functional>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
-/// Alias for dftracer::utils::hash::GOLDEN_RATIO, kept for existing callers.
+/// Alias for hash::GOLDEN_RATIO, kept for existing callers.
 inline constexpr std::uint64_t HASH_GOLDEN_RATIO = hash::GOLDEN_RATIO;
 
 /// Boost-style hash combine: fold value into seed.
@@ -23,6 +23,6 @@ inline void hash_combine_value(std::size_t& seed, const T& value) {
     hash_combine(seed, std::hash<T>{}(value));
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_COMBINE_H

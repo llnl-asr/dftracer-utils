@@ -35,7 +35,7 @@ class ShardedWriter final : public ParallelWriter {
         co_return 0;
     }
 
-    coro::CoroTask<int> write_header(ByteView data) override {
+    coro::CoroTask<int> write_header(dstd::ByteView data) override {
         if (shard_fds_.empty()) co_return -1;
         auto rc = co_await write_all(shard_fds_.front(), data);
         if (rc == 0) shard_offsets_.front() += data.size();
@@ -43,7 +43,7 @@ class ShardedWriter final : public ParallelWriter {
     }
 
     coro::CoroTask<int> write_chunk(std::size_t worker_idx,
-                                    ByteView data) override {
+                                    dstd::ByteView data) override {
         if (worker_idx >= shard_fds_.size()) co_return -1;
         const auto base = shard_offsets_[worker_idx];
         auto rc = co_await write_all(shard_fds_[worker_idx], data);
@@ -53,7 +53,7 @@ class ShardedWriter final : public ParallelWriter {
         co_return 0;
     }
 
-    coro::CoroTask<int> write_footer(ByteView data) override {
+    coro::CoroTask<int> write_footer(dstd::ByteView data) override {
         if (shard_fds_.empty()) co_return -1;
         auto rc = co_await write_all(shard_fds_.back(), data);
         if (rc == 0) shard_offsets_.back() += data.size();
@@ -92,7 +92,7 @@ class ShardedWriter final : public ParallelWriter {
     }
 
    private:
-    coro::CoroTask<int> write_all(int fd, ByteView data) {
+    coro::CoroTask<int> write_all(int fd, dstd::ByteView data) {
         if (data.size() == 0) co_return 0;
         const auto* bytes = reinterpret_cast<const char*>(data.data());
         std::size_t written = 0;

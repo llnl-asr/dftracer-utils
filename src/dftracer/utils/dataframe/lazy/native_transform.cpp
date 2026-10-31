@@ -158,7 +158,7 @@ class GroupTransformCore {
     NumClass step(TransformCell& st, std::size_t g, std::size_t c, NumClass cls,
                   std::uint64_t b, bool ok, std::uint64_t& out,
                   std::uint8_t& out_ok) {
-        const double x = cls == NumClass::Float ? bits_double(b) : 0.0;
+        const double x = cls == NumClass::Float ? dstd::bits_double(b) : 0.0;
         TransformCell::Step& s = st.step;
         switch (kind_) {
             case GroupwiseOp::CumSum: {
@@ -174,7 +174,7 @@ class GroupTransformCore {
                     out = s.sum_u.acc;
                 } else {
                     s.sum_f.add(x);
-                    out = double_bits(s.sum_f.acc + (x - x));
+                    out = dstd::double_bits(s.sum_f.acc + (x - x));
                 }
                 return cls;
             }
@@ -191,7 +191,7 @@ class GroupTransformCore {
                                             : static_cast<double>(b));
                 s.prod.mul(v);
                 const double d = cls == NumClass::Float ? (x - x) : 0.0;
-                out = double_bits(s.prod.acc + d);
+                out = dstd::double_bits(s.prod.acc + d);
                 return NumClass::Float;
             }
             case GroupwiseOp::CumMax:
@@ -209,7 +209,7 @@ class GroupTransformCore {
                     out = s.ext.value.u;
                 } else {
                     s.ext.offer_f(x, smallest);
-                    out = double_bits(s.ext.value.d + (x - x));
+                    out = dstd::double_bits(s.ext.value.d + (x - x));
                 }
                 return cls;
             }
@@ -239,7 +239,8 @@ class GroupTransformCore {
                                                   : NumClass::Signed;
                 }
                 if (cls == NumClass::Float) {
-                    out = double_bits(steps::delta_f64(x, bits_double(prev)));
+                    out = dstd::double_bits(
+                        steps::delta_f64(x, dstd::bits_double(prev)));
                     return NumClass::Float;
                 }
                 out = static_cast<std::uint64_t>(
@@ -271,10 +272,10 @@ class GroupTransformCore {
 // A float key groups by value: negative zero is zero and every NaN is one
 // value. `bits` are the bits of the double.
 inline std::uint64_t canonical_float_bits(std::uint64_t bits) {
-    double v = bits_double(bits);
+    double v = dstd::bits_double(bits);
     if (v == 0) v = 0.0;
     if (std::isnan(v)) v = std::numeric_limits<double>::quiet_NaN();
-    return double_bits(v);
+    return dstd::double_bits(v);
 }
 
 // Rows grouped on one numeric key column with no key string, for tests to see
@@ -319,7 +320,7 @@ class GroupKeys {
         using is_avalanching = void;
         std::size_t operator()(const Wide& k) const noexcept {
             std::uint64_t h = 0;
-            for (std::uint64_t x : k.w) h = hash::splitmix64(h ^ x);
+            for (std::uint64_t x : k.w) h = dstd::hash::splitmix64(h ^ x);
             return static_cast<std::size_t>(h);
         }
     };
@@ -453,7 +454,7 @@ class GroupKeys {
     std::string last_text_;
     ankerl::unordered_dense::map<std::uint64_t, std::int32_t> word_ids_;
     ankerl::unordered_dense::map<Wide, std::int32_t, WideHash> wide_ids_;
-    StringViewMap<std::int32_t> byte_ids_;
+    dstd::StringViewMap<std::int32_t> byte_ids_;
     ankerl::unordered_dense::map<std::string, std::int32_t> text_ids_;
 };
 

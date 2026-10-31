@@ -45,7 +45,7 @@ using Ordered =
 /// by value within a kind. NaN is not an Ordered.
 int compare_ordered(const Ordered& a, const Ordered& b);
 
-using RangeWide = ::dftracer::utils::int128_t;
+using RangeWide = ::dftracer::utils::dstd::int128_t;
 
 /// A range lookup's rows: each key's rows sorted by range value, and over
 /// them a segment tree of the RangeRead's aggregate.
@@ -63,7 +63,7 @@ struct RangeIndex {
     std::vector<Ordered> values;
     std::vector<std::optional<Ordered>> args;
     /// Each key's positions [first, second).
-    StringViewMap<std::pair<std::int64_t, std::int64_t>> keys;
+    dstd::StringViewMap<std::pair<std::int64_t, std::int64_t>> keys;
     /// The tree of the key at [b, e) is at [2b, 2e), leaf i at 2b + (e - b)
     /// + i; empty for ROWS and COUNT.
     std::vector<Node> tree;
@@ -81,7 +81,7 @@ void build_range_tree(RangeIndex& index, RangeRead read,
 struct LookupTable {
     std::string name;
     std::shared_ptr<const dataframe::DataFrame> frame;
-    StringViewMap<std::vector<std::int64_t>> rows;
+    dstd::StringViewMap<std::vector<std::int64_t>> rows;
     /// The columns the rows are keyed by.
     std::vector<std::size_t> key_columns;
     /// ARROW: the column the lookup reads, none when the row set lacks it.

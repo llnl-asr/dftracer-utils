@@ -25,7 +25,7 @@ class ChunkIterator {
         std::size_t chunk_size;
         std::ifstream file;
         std::vector<unsigned char> buffer;
-        ByteView current_view;
+        dstd::ByteView current_view;
         bool is_end = false;
 
         State(fs::path p, std::size_t cs)
@@ -44,8 +44,8 @@ class ChunkIterator {
             std::streamsize bytes_read = file.gcount();
 
             if (bytes_read > 0) {
-                current_view = ByteView(buffer.data(),
-                                        static_cast<std::size_t>(bytes_read));
+                current_view = dstd::ByteView(
+                    buffer.data(), static_cast<std::size_t>(bytes_read));
             } else {
                 is_end = true;
             }
@@ -56,10 +56,10 @@ class ChunkIterator {
 
    public:
     using iterator_category = std::input_iterator_tag;
-    using value_type = ByteView;
+    using value_type = dstd::ByteView;
     using difference_type = std::ptrdiff_t;
-    using pointer = const ByteView*;
-    using reference = const ByteView&;
+    using pointer = const dstd::ByteView*;
+    using reference = const dstd::ByteView&;
 
     ChunkIterator() : state_(nullptr) {}
 

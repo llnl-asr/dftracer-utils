@@ -32,8 +32,8 @@ namespace records = dftracer::utils::index::store::records;
 namespace gzip = dftracer::utils::index::gzip;
 namespace schemas = dftracer::utils::index::schemas::dft;
 
-using dftracer::utils::append_u32_be;
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::append_u32_be;
+using dftracer::utils::dstd::ByteView;
 using dftracer::utils::index::store::ChunkMetadata;
 using dftracer::utils::index::store::IndexWrite;
 using dftracer::utils::index::store::PathStat;

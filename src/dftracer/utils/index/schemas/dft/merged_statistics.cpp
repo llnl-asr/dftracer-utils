@@ -6,7 +6,7 @@ namespace dftracer::utils::index::schemas::dft {
 
 void add_path_counts(const index::store::IndexDatabase& db, int file_id,
                      std::string_view path,
-                     StringViewMap<std::uint64_t>& into) {
+                     dstd::StringViewMap<std::uint64_t>& into) {
     for (const auto& [granule, bytes] : db.path_granules(
              file_id, index::store::IndexExtension::Counts, path)) {
         auto counts = index::extensions::kinds::decode_counts(bytes);

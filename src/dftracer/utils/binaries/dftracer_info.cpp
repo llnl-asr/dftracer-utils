@@ -76,7 +76,7 @@ static std::string format_size(std::uint64_t bytes) {
     return human_bytes(static_cast<double>(bytes), "", 2);
 }
 
-using FileRegistry = StringViewMap<FileRegistryEntry>;
+using FileRegistry = dstd::StringViewMap<FileRegistryEntry>;
 
 struct RootInfoSummary {
     std::size_t file_count = 0;

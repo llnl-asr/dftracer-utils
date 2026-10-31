@@ -318,7 +318,7 @@ class PaddedStripedWriter : public ParallelWriter {
         co_return 0;
     }
 
-    coro::CoroTask<int> write_header(ByteView data) override {
+    coro::CoroTask<int> write_header(dstd::ByteView data) override {
         PaddedStripedImpl& s = *impl_;
         if (data.size() + PAD_MEMBER_FIXED_OVERHEAD > s.stripe_size) {
             DFTRACER_UTILS_LOG_ERROR(
@@ -336,7 +336,7 @@ class PaddedStripedWriter : public ParallelWriter {
     }
 
     coro::CoroTask<int> write_chunk(std::size_t worker_idx,
-                                    ByteView data) override {
+                                    dstd::ByteView data) override {
         PaddedStripedImpl& s = *impl_;
         if (worker_idx >= s.producers.size()) {
             DFTRACER_UTILS_LOG_ERROR("padded writer: worker_idx %zu >= %zu",
@@ -357,7 +357,7 @@ class PaddedStripedWriter : public ParallelWriter {
         co_return 0;
     }
 
-    coro::CoroTask<int> write_footer(ByteView data) override {
+    coro::CoroTask<int> write_footer(dstd::ByteView data) override {
         PaddedStripedImpl& s = *impl_;
         const auto drain_rc = co_await s.drain_packer();
         if (drain_rc != 0) co_return -1;

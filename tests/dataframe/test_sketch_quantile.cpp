@@ -48,7 +48,7 @@ DDSketch sketch_of(const std::vector<double>& values, double accuracy = 0.01) {
 
 std::string text_of(const DDSketch& s) {
     const auto bytes = s.serialize();
-    return dftracer::utils::base64_encode(bytes.data(), bytes.size());
+    return dftracer::utils::dstd::base64_encode(bytes.data(), bytes.size());
 }
 
 double clamped(const DDSketch& s, double q) {

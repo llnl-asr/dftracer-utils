@@ -29,7 +29,7 @@ GroupResolver::GroupResolver(const std::vector<RowSetFile>& files,
                              const std::vector<Column>& columns) {
     for (const auto& c : columns) {
         if (column(c.name)) continue;
-        StringViewMap<std::string> values;
+        dstd::StringViewMap<std::string> values;
         if (auto f = stored_rowset(files, c.rowset)) {
             const auto k = f->column_index(c.key);
             const auto v = f->column_index(c.value);
@@ -47,7 +47,7 @@ GroupResolver::GroupResolver(const std::vector<RowSetFile>& files,
     }
 }
 
-const StringViewMap<std::string>* GroupResolver::column(
+const dstd::StringViewMap<std::string>* GroupResolver::column(
     std::string_view name) const {
     for (const auto& [n, values] : columns_)
         if (n == name) return &values;

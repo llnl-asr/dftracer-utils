@@ -215,9 +215,9 @@ void number_texts(const void* sv, const dftu_series& v,
         if (!row_valid(v, i)) continue;
         std::string& out = owned[static_cast<std::size_t>(i)];
         if constexpr (std::is_same_v<T, float>)
-            out = float_repr(dftracer::utils::float_text(s[i]));
+            out = float_repr(dftracer::utils::dstd::float_text(s[i]));
         else if constexpr (std::is_same_v<T, double>)
-            out = float_repr(dftracer::utils::double_text(s[i]));
+            out = float_repr(dftracer::utils::dstd::double_text(s[i]));
         else if constexpr (std::is_signed_v<T>)
             out = std::to_string(static_cast<std::int64_t>(s[i]));
         else

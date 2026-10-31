@@ -42,7 +42,7 @@ namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace memory = dftracer::utils::memory;
 
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::ByteView;
 using store::CopyItem;
 using store::CopyState;
 using store::DataFileReader;
@@ -118,12 +118,12 @@ std::uint64_t read_u64_le_at(const std::vector<std::uint8_t>& bytes,
 
 void write_u32_le_at(std::vector<std::uint8_t>& bytes, std::size_t offset,
                      std::uint32_t value) {
-    dftracer::utils::write_u32_le(bytes.data() + offset, value);
+    dftracer::utils::dstd::write_u32_le(bytes.data() + offset, value);
 }
 
 void write_u64_le_at(std::vector<std::uint8_t>& bytes, std::size_t offset,
                      std::uint64_t value) {
-    dftracer::utils::write_u64_le(bytes.data() + offset, value);
+    dftracer::utils::dstd::write_u64_le(bytes.data() + offset, value);
 }
 
 std::size_t header_tail_field_offset(const std::vector<std::uint8_t>& file) {
@@ -1785,7 +1785,7 @@ TEST_SUITE("index store file") {
         REQUIRE(built.has_value());
         CHECK(store::ScopeDirectory::open(view_of(*built)).has_value());
         dstd::Vector<std::uint8_t> broken = *built;
-        dftracer::utils::write_u32_le(broken.data() + 4 + 12, 1U << 20);
+        dftracer::utils::dstd::write_u32_le(broken.data() + 4 + 12, 1U << 20);
         CHECK_FALSE(store::ScopeDirectory::open(view_of(broken)).has_value());
         CHECK(store::ScopeDirectory::open(ByteView{}).has_value());
     }

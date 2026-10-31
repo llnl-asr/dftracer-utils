@@ -287,7 +287,7 @@ df::Series column_of(const std::vector<Scalar>& vals, char kind) {
                 t = std::to_string(v.i);
                 break;
             case Scalar::K::Dbl:
-                t = double_text(v.d);
+                t = dstd::double_text(v.d);
                 break;
             default:
                 t = v.s;
@@ -643,7 +643,7 @@ std::string number_text(const FoldEvent::ArgValue& v) {
         return std::to_string(*i);
     if (const auto* u = std::get_if<std::uint64_t>(&v))
         return std::to_string(*u);
-    return dftracer::utils::double_text(std::get<double>(v));
+    return dftracer::utils::dstd::double_text(std::get<double>(v));
 }
 
 // The column of `vals` (one per row, null when absent) as `type`.

@@ -862,7 +862,7 @@ DataFrame group_by(const DataFrame& b, const std::string& key,
 
 namespace {
 
-using dftracer::utils::hash::splitmix64;
+using dftracer::utils::dstd::hash::splitmix64;
 
 std::uint64_t read_f64_bits(const Series& c, std::int64_t i) {
     if (c.type() == TypeId::Float32)
@@ -875,7 +875,7 @@ std::uint64_t read_f64_bits(const Series& c, std::int64_t i) {
 std::uint64_t hash_cell(const Series& c, std::int64_t i) {
     switch (c.type()) {
         case TypeId::String:
-            return hash::fnv1a_hash(c.string_at(i));
+            return dstd::hash::fnv1a_hash(c.string_at(i));
         case TypeId::Bool: {
             const std::uint8_t* b = c.data<std::uint8_t>();
             return splitmix64((b[i >> 3] >> (i & 7)) & 1);
@@ -918,7 +918,8 @@ Series partition_id(const DataFrame& b, const std::vector<std::string>& keys,
     constexpr std::int64_t GRAIN = 1 << 15;
     auto compute_bucket = [&](std::int64_t b0, std::int64_t e0) {
         for (std::int64_t i = b0; i < e0; ++i) {
-            std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+            std::uint64_t h =
+                dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
             for (const Series* c : key_cols)
                 h = splitmix64(h ^ hash_cell(*c, i));
             bucket_of[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(
@@ -980,9 +981,9 @@ std::string scalar_cell_to_string(const Series& s, std::int64_t i) {
         case TypeId::Uint64:
             return std::to_string(s.data<std::uint64_t>()[i]);
         case TypeId::Float32:
-            return dftracer::utils::float_text(s.data<float>()[i]);
+            return dftracer::utils::dstd::float_text(s.data<float>()[i]);
         case TypeId::Float64:
-            return dftracer::utils::double_text(s.data<double>()[i]);
+            return dftracer::utils::dstd::double_text(s.data<double>()[i]);
         case TypeId::String:
         case TypeId::Binary:
             return std::string(s.string_at(i));

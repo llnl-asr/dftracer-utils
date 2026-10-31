@@ -43,8 +43,8 @@ struct hash<dftracer::utils::utilities::reader::internal::MemberKey> {
     std::size_t operator()(
         const dftracer::utils::utilities::reader::internal::MemberKey& k)
         const noexcept {
-        std::uint64_t h = k.file * dftracer::utils::hash::GOLDEN_RATIO;
-        h ^= k.member + dftracer::utils::hash::GOLDEN_RATIO + (h << 6) +
+        std::uint64_t h = k.file * dftracer::utils::dstd::hash::GOLDEN_RATIO;
+        h ^= k.member + dftracer::utils::dstd::hash::GOLDEN_RATIO + (h << 6) +
              (h >> 2);
         return static_cast<std::size_t>(h);
     }
@@ -81,10 +81,10 @@ class MemberDecodeCache {
     /// retention but still coalesces in-flight decodes.
     explicit MemberDecodeCache(
         std::size_t capacity_bytes,
-        cache::EvictionKind kind = cache::EvictionKind::Lru)
+        dstd::cache::EvictionKind kind = dstd::cache::EvictionKind::Lru)
         : capacity_(capacity_bytes) {
         for (auto& shard : shards_) {
-            shard.policy = cache::make_eviction_policy<MemberKey>(kind);
+            shard.policy = dstd::cache::make_eviction_policy<MemberKey>(kind);
         }
     }
 
@@ -168,7 +168,7 @@ class MemberDecodeCache {
     struct Shard {
         std::mutex mu;
         ankerl::unordered_dense::map<MemberKey, std::shared_ptr<Entry>> map;
-        std::unique_ptr<cache::EvictionPolicy<MemberKey>> policy;
+        std::unique_ptr<dstd::cache::EvictionPolicy<MemberKey>> policy;
     };
 
     bool over_budget() const {
@@ -218,7 +218,7 @@ inline MemberDecodeCache* global_member_decode_cache() noexcept {
 /// instance; later calls just ensure it is published. Call once at startup.
 inline void configure_global_member_decode_cache(
     std::size_t capacity_bytes,
-    cache::EvictionKind kind = cache::EvictionKind::Lru) {
+    dstd::cache::EvictionKind kind = dstd::cache::EvictionKind::Lru) {
     static MemberDecodeCache instance(capacity_bytes, kind);
     detail::global_cache_slot().store(&instance, std::memory_order_release);
 }

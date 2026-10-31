@@ -13,17 +13,17 @@ using namespace dftracer::utils;
 TEST_SUITE("big_endian") {
     TEST_CASE("big_endian - exact byte layout") {
         std::uint8_t b[8] = {};
-        write_u16_be(b, 0x0102);
+        dstd::write_u16_be(b, 0x0102);
         CHECK(b[0] == 0x01);
         CHECK(b[1] == 0x02);
-        write_u32_be(b, 0x01020304U);
+        dstd::write_u32_be(b, 0x01020304U);
         CHECK(b[0] == 0x01);
         CHECK(b[3] == 0x04);
-        write_u64_be(b, 0x0102030405060708ULL);
+        dstd::write_u64_be(b, 0x0102030405060708ULL);
         for (int i = 0; i < 8; ++i) CHECK(b[i] == i + 1);
-        CHECK(read_u64_be(b) == 0x0102030405060708ULL);
-        CHECK(read_u32_be(b) == 0x01020304U);
-        CHECK(read_u16_be(b) == 0x0102);
+        CHECK(dstd::read_u64_be(b) == 0x0102030405060708ULL);
+        CHECK(dstd::read_u32_be(b) == 0x01020304U);
+        CHECK(dstd::read_u16_be(b) == 0x0102);
     }
 
     TEST_CASE("big_endian - integer and double round trips") {
@@ -31,23 +31,24 @@ TEST_SUITE("big_endian") {
         for (std::uint64_t v : {std::uint64_t{0}, std::uint64_t{1},
                                 std::uint64_t{0x8000000000000000ULL},
                                 std::numeric_limits<std::uint64_t>::max()}) {
-            write_u64_be(b, v);
-            CHECK(read_u64_be(b) == v);
+            dstd::write_u64_be(b, v);
+            CHECK(dstd::read_u64_be(b) == v);
         }
         for (double d : {0.0, -0.0, 1.5, -1e300, 1e-300}) {
-            write_f64_be(b, d);
-            CHECK(double_bits(read_f64_be(b)) == double_bits(d));
+            dstd::write_f64_be(b, d);
+            CHECK(dstd::double_bits(dstd::read_f64_be(b)) ==
+                  dstd::double_bits(d));
         }
-        write_f64_be(b, 1.0);
+        dstd::write_f64_be(b, 1.0);
         CHECK(b[0] == 0x3F);
         CHECK(b[1] == 0xF0);
     }
 
     TEST_CASE("big_endian - append to std::string and vectors") {
         std::string s;
-        append_u16_be(s, 0xBEEF);
-        append_u32_be(s, 0x01020304U);
-        append_u64_be(s, 0x0102030405060708ULL);
+        dstd::append_u16_be(s, 0xBEEF);
+        dstd::append_u32_be(s, 0x01020304U);
+        dstd::append_u64_be(s, 0x0102030405060708ULL);
         REQUIRE(s.size() == 14);
         CHECK(static_cast<unsigned char>(s[0]) == 0xBE);
         CHECK(static_cast<unsigned char>(s[1]) == 0xEF);
@@ -55,20 +56,20 @@ TEST_SUITE("big_endian") {
         CHECK(static_cast<unsigned char>(s[13]) == 0x08);
 
         std::vector<std::uint8_t> v;
-        append_f64_be(v, 1.0);
+        dstd::append_f64_be(v, 1.0);
         REQUIRE(v.size() == 8);
         CHECK(v[0] == 0x3F);
-        CHECK(read_f64_be(v.data()) == 1.0);
+        CHECK(dstd::read_f64_be(v.data()) == 1.0);
 
         dstd::Vector<std::uint8_t> d;
-        append_u32_be(d, 7);
+        dstd::append_u32_be(d, 7);
         REQUIRE(d.size() == 4);
         CHECK(d[3] == 7);
     }
 
     TEST_CASE("big_endian - BeReader refuses short input") {
         const std::uint8_t b[] = {0, 0, 0, 1, 0xFF};
-        BeReader r(b, sizeof b);
+        dstd::BeReader r(b, sizeof b);
         std::uint32_t u32 = 0;
         CHECK(r.u32(u32));
         CHECK(u32 == 1);
@@ -100,18 +101,18 @@ TEST_SUITE("big_endian") {
         };
         for (const auto& c : cases) {
             std::string s;
-            append_varint(s, c.value);
+            dstd::append_varint(s, c.value);
             REQUIRE(s.size() == c.bytes.size());
             for (std::size_t i = 0; i < s.size(); ++i)
                 CHECK(static_cast<std::uint8_t>(s[i]) == c.bytes[i]);
 
-            std::uint8_t buf[VARINT_MAX_BYTES];
-            CHECK(write_varint(buf, c.value) - buf ==
+            std::uint8_t buf[dstd::VARINT_MAX_BYTES];
+            CHECK(dstd::write_varint(buf, c.value) - buf ==
                   static_cast<std::ptrdiff_t>(c.bytes.size()));
 
             const std::uint8_t* p = c.bytes.data();
             std::uint64_t out = 1;
-            REQUIRE(read_varint(p, c.bytes.data() + c.bytes.size(), out));
+            REQUIRE(dstd::read_varint(p, c.bytes.data() + c.bytes.size(), out));
             CHECK(out == c.value);
             CHECK(p == c.bytes.data() + c.bytes.size());
         }
@@ -121,18 +122,18 @@ TEST_SUITE("big_endian") {
         const std::uint8_t cut[] = {0x80, 0x80};
         const std::uint8_t* p = cut;
         std::uint64_t out = 5;
-        CHECK_FALSE(read_varint(p, cut + sizeof cut, out));
+        CHECK_FALSE(dstd::read_varint(p, cut + sizeof cut, out));
         CHECK(p == cut);
         CHECK(out == 5);
-        CHECK_FALSE(read_varint(p, cut, out));
+        CHECK_FALSE(dstd::read_varint(p, cut, out));
 
         const std::uint8_t over[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                                      0xFF, 0xFF, 0xFF, 0xFF, 0x02};
         p = over;
-        CHECK_FALSE(read_varint(p, over + sizeof over, out));
+        CHECK_FALSE(dstd::read_varint(p, over + sizeof over, out));
 
         const std::uint8_t two[] = {0x80, 0x01, 0x05};
-        BeReader r(two, sizeof two);
+        dstd::BeReader r(two, sizeof two);
         std::uint64_t a = 0;
         CHECK(r.varint(a));
         CHECK(a == 128);
@@ -152,9 +153,9 @@ TEST_SUITE("big_endian") {
                               {std::uint64_t{1} << 63, 10},
                               {std::numeric_limits<std::uint64_t>::max(), 10}};
         for (const auto& c : cases) {
-            CHECK(varint_size(c.value) == c.bytes);
+            CHECK(dstd::varint_size(c.value) == c.bytes);
             std::string s;
-            append_varint(s, c.value);
+            dstd::append_varint(s, c.value);
             CHECK(s.size() == c.bytes);
         }
     }
@@ -164,33 +165,33 @@ TEST_SUITE("big_endian") {
             0, -1, 1, std::numeric_limits<std::int64_t>::min(),
             std::numeric_limits<std::int64_t>::max()};
         for (const std::int64_t v : values) {
-            CHECK(zigzag_decode(zigzag_encode(v)) == v);
+            CHECK(dstd::zigzag_decode(dstd::zigzag_encode(v)) == v);
         }
-        CHECK(zigzag_encode(0) == 0);
-        CHECK(zigzag_encode(-1) == 1);
-        CHECK(zigzag_encode(1) == 2);
-        CHECK(zigzag_encode(std::numeric_limits<std::int64_t>::min()) ==
+        CHECK(dstd::zigzag_encode(0) == 0);
+        CHECK(dstd::zigzag_encode(-1) == 1);
+        CHECK(dstd::zigzag_encode(1) == 2);
+        CHECK(dstd::zigzag_encode(std::numeric_limits<std::int64_t>::min()) ==
               std::numeric_limits<std::uint64_t>::max());
-        CHECK(zigzag_encode(std::numeric_limits<std::int64_t>::max()) ==
+        CHECK(dstd::zigzag_encode(std::numeric_limits<std::int64_t>::max()) ==
               std::numeric_limits<std::uint64_t>::max() - 1);
     }
 
     TEST_CASE("varint - LeReader overload refuses a truncated buffer") {
         const std::uint8_t cut[] = {0x80, 0x80};
-        LeReader bad(cut, sizeof cut);
+        dstd::LeReader bad(cut, sizeof cut);
         std::uint64_t value = 5;
-        CHECK_FALSE(read_varint(bad, value));
+        CHECK_FALSE(dstd::read_varint(bad, value));
         CHECK(value == 5);
         CHECK(bad.remaining() == sizeof cut);
         CHECK(bad.position() == cut);
 
         const std::uint8_t two[] = {0x80, 0x01, 0x05};
-        LeReader r(two, sizeof two);
-        REQUIRE(read_varint(r, value));
+        dstd::LeReader r(two, sizeof two);
+        REQUIRE(dstd::read_varint(r, value));
         CHECK(value == 128);
-        REQUIRE(read_varint(r, value));
+        REQUIRE(dstd::read_varint(r, value));
         CHECK(value == 5);
         CHECK(r.remaining() == 0);
-        CHECK_FALSE(read_varint(r, value));
+        CHECK_FALSE(dstd::read_varint(r, value));
     }
 }

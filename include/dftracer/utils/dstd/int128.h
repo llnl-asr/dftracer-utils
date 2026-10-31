@@ -1,7 +1,7 @@
 #ifndef DFTRACER_UTILS_DSTD_INT128_H
 #define DFTRACER_UTILS_DSTD_INT128_H
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 // The 128-bit integers of GCC and Clang, the one place they are named: wide
 // sums and differences that must not wrap before a range check, and decimal
@@ -10,6 +10,6 @@ namespace dftracer::utils {
 __extension__ typedef __int128 int128_t;
 __extension__ typedef unsigned __int128 uint128_t;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_INT128_H

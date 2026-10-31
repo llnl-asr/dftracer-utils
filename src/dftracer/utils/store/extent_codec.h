@@ -56,12 +56,12 @@ class PageDict {
     /// A dictionary to compress with, whose `bytes` lie at `ref` in the file.
     /// A Parse error when zstd rejects them.
     static dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
-    for_encode(ByteView bytes, const DictRef& ref);
+    for_encode(dstd::ByteView bytes, const DictRef& ref);
     /// A dictionary to decompress with, from the `bytes` read at `ref`. A Parse
     /// error when their length or crc disagrees with `ref` or zstd rejects
     /// them.
     static dstd::Expected<dstd::SharedPtr<const PageDict>, dstd::Error>
-    for_decode(ByteView bytes, const DictRef& ref);
+    for_decode(dstd::ByteView bytes, const DictRef& ref);
 
     PageDict(const PageDict&) = delete;
     PageDict& operator=(const PageDict&) = delete;
@@ -84,7 +84,7 @@ class PageDict {
 /// the raw pages laid end to end with `sizes` their lengths. A Parse error
 /// when zstd cannot train one from them.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> train_page_dict(
-    ByteView samples, dstd::Span<const std::size_t> sizes);
+    dstd::ByteView samples, dstd::Span<const std::size_t> sizes);
 
 struct PageEntry {
     std::uint32_t raw_offset = 0;
@@ -117,8 +117,9 @@ dstd::Vector<std::uint32_t> page_starts(dstd::Span<const SegmentSpan> segments,
 /// `raw`, a zero `align`, or starts that do not cut `raw` into pages of 1 to
 /// PAGE_BYTES.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_extent(
-    ByteView raw, dstd::Span<const std::uint32_t> starts, std::size_t align,
-    PageCodec codec = PageCodec::Zstd, const PageDict* dict = nullptr);
+    dstd::ByteView raw, dstd::Span<const std::uint32_t> starts,
+    std::size_t align, PageCodec codec = PageCodec::Zstd,
+    const PageDict* dict = nullptr);
 
 /// The zstd level of the metadata a data file writes once, at close.
 inline constexpr int META_ZSTD_LEVEL = 3;
@@ -131,18 +132,19 @@ inline constexpr int BIG_ZSTD_LEVEL = 1;
 /// entry): a PageCodec byte, then for PageCodec::Zstd the raw length as a u32
 /// and one zstd frame, else the raw bytes. Compressed when that saves at least
 /// an eighth, at zstd `level`.
-dstd::Vector<std::uint8_t> encode_meta(ByteView raw, int level);
+dstd::Vector<std::uint8_t> encode_meta(dstd::ByteView raw, int level);
 
 /// The PageCodec::Zstd stored form of `raw` in `out`, as encode_meta writes
 /// it, when that saves at least an eighth. False, with `out` left empty, when
 /// it does not, so the caller stores the PageCodec::None form itself.
-bool compress_meta(ByteView raw, int level, dstd::Vector<std::uint8_t>& out);
+bool compress_meta(dstd::ByteView raw, int level,
+                   dstd::Vector<std::uint8_t>& out);
 
 /// The raw body of a stored form encode_meta wrote. A Parse error for an
 /// unknown codec, a raw length past EXTENT_MAX_RAW_BYTES or a frame that does
 /// not decode to that length.
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> decode_meta(
-    ByteView stored);
+    dstd::ByteView stored);
 
 /// The pages of one stored extent, read in place over bytes that outlive it,
 /// or its page table alone, whose pages are read one range at a time.
@@ -151,25 +153,25 @@ class ExtentPages {
     /// The bytes of the header and the page table of the extent whose stored
     /// bytes start with `header`, or 0 when `header` is shorter than
     /// EXTENT_HEADER_BYTES or names no page.
-    static std::size_t table_length(ByteView header);
+    static std::size_t table_length(dstd::ByteView header);
 
     /// Opens the extent over `stored`, checking the header and every page table
     /// entry. A Parse error when `stored` cannot hold what the header claims,
     /// the pages leave gaps or leave `stored`, or a reserved byte is set.
-    static dstd::Expected<ExtentPages, dstd::Error> open(ByteView stored);
+    static dstd::Expected<ExtentPages, dstd::Error> open(dstd::ByteView stored);
     /// Opens the page table alone. `head` holds the header and the whole table,
     /// and every page must lie inside `stored_length`. The same Parse errors as
     /// open, and Parse when the header crc fails. decode() fails on the result,
     /// so read pages with decode_page.
     static dstd::Expected<ExtentPages, dstd::Error> open_table(
-        ByteView head, std::uint64_t stored_length);
+        dstd::ByteView head, std::uint64_t stored_length);
     /// The raw bytes of `page` from its `stored` bytes into `out` (room for its
     /// raw length), checked against the page crc. `dict` is the dictionary the
     /// extent names, needed by a ZstdDict page. A Parse error when the length,
     /// crc, codec or decoded length disagrees, or a ZstdDict page has no
     /// matching `dict`.
     static dstd::Expected<void, dstd::Error> decode_page(
-        const PageEntry& page, ByteView stored, std::uint8_t* out,
+        const PageEntry& page, dstd::ByteView stored, std::uint8_t* out,
         const PageDict* dict = nullptr);
 
     std::size_t size() const { return entries_.size(); }
@@ -192,16 +194,16 @@ class ExtentPages {
 
    private:
     static dstd::Expected<ExtentPages, dstd::Error> parse(
-        ByteView head, std::uint64_t stored_length);
+        dstd::ByteView head, std::uint64_t stored_length);
 
-    ExtentPages(ByteView stored, dstd::Vector<PageEntry> entries,
+    ExtentPages(dstd::ByteView stored, dstd::Vector<PageEntry> entries,
                 std::uint32_t raw_length, const DictRef& dict)
         : stored_(stored),
           entries_(std::move(entries)),
           dict_(dict),
           raw_length_(raw_length) {}
 
-    ByteView stored_;
+    dstd::ByteView stored_;
     dstd::Vector<PageEntry> entries_;
     DictRef dict_;
     std::uint32_t raw_length_ = 0;

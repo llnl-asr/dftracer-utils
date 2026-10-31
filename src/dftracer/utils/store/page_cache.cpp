@@ -8,7 +8,8 @@ namespace dftracer::utils::store {
 PageCache::PageCache(std::size_t capacity) : share_(capacity / SHARDS) {}
 
 std::uint64_t PageCache::KeyHash::operator()(const Key& key) const {
-    return hash::splitmix64(key.offset ^ hash::splitmix64(key.file));
+    return dstd::hash::splitmix64(key.offset ^
+                                  dstd::hash::splitmix64(key.file));
 }
 
 PageCache::Shard& PageCache::shard_of(const Key& key) {

@@ -63,8 +63,8 @@ void run_training(DictTraining& job) {
     dstd::Vector<std::uint8_t> bytes;
     try {
         auto trained = train_page_dict(
-            ByteView(reinterpret_cast<const std::byte*>(sample.data()),
-                     sample.size()),
+            dstd::ByteView(reinterpret_cast<const std::byte*>(sample.data()),
+                           sample.size()),
             dstd::Span<const std::size_t>(sizes.data(), sizes.size()));
         if (trained) bytes = std::move(*trained);
     } catch (const std::exception&) {
@@ -268,8 +268,8 @@ dstd::SharedPtr<const PageDict> ExtentWriter::page_dict(
     }
     dstd::SharedPtr<const PageDict> made;
     if (!ready.empty()) {
-        const ByteView view(reinterpret_cast<const std::byte*>(ready.data()),
-                            ready.size());
+        const dstd::ByteView view(
+            reinterpret_cast<const std::byte*>(ready.data()), ready.size());
         auto ref = file_.append_dict(view);
         if (ref) {
             auto dict = PageDict::for_encode(view, *ref);
@@ -471,8 +471,8 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
     for (const OpenSegment& open : extent->segments) {
         const auto* raw = extent->buffer.data() + open.segment.offset_in_extent;
         if (!append_segment_spans(
-                ByteView{reinterpret_cast<const std::byte*>(raw),
-                         open.segment.length},
+                dstd::ByteView{reinterpret_cast<const std::byte*>(raw),
+                               open.segment.length},
                 open.segment.offset_in_extent, spans)) {
             reject();
             return;
@@ -485,8 +485,8 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
                          extent->buffer.data(), used, starts);
     }
     auto stored = encode_extent(
-        ByteView(reinterpret_cast<const std::byte*>(extent->buffer.data()),
-                 used),
+        dstd::ByteView(
+            reinterpret_cast<const std::byte*>(extent->buffer.data()), used),
         starts, EXTENT_ALIGN_BYTES, extent->codec, dict.get());
     if (!stored) {
         reject();
@@ -512,8 +512,8 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
 }
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
-    std::uint32_t namespace_id, ByteView segment_bytes, ExtentSegment info,
-    void* context, PageCodec codec) {
+    std::uint32_t namespace_id, dstd::ByteView segment_bytes,
+    ExtentSegment info, void* context, PageCodec codec) {
     dstd::Vector<SegmentSpan> spans;
     if (!append_segment_spans(segment_bytes, 0, spans)) return invalid_error();
     const std::uint32_t length =
@@ -548,12 +548,13 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_run(
 }
 
 dstd::Expected<void, dstd::Error> ExtentWriter::append(
-    std::uint32_t namespace_id, ByteView segment_bytes, ExtentSegment info,
-    void* context, PageCodec codec) {
+    std::uint32_t namespace_id, dstd::ByteView segment_bytes,
+    ExtentSegment info, void* context, PageCodec codec) {
     return append_with(
         namespace_id, segment_bytes.size(), std::move(info), context, codec,
         [](void* bytes, std::uint8_t* out) {
-            const ByteView& view = *static_cast<const ByteView*>(bytes);
+            const dstd::ByteView& view =
+                *static_cast<const dstd::ByteView*>(bytes);
             std::memcpy(out, view.data(), view.size());
         },
         &segment_bytes);
@@ -574,8 +575,8 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
         write(write_context, run.data());
         return append_run(
             namespace_id,
-            ByteView(reinterpret_cast<const std::byte*>(run.data()),
-                     run.size()),
+            dstd::ByteView(reinterpret_cast<const std::byte*>(run.data()),
+                           run.size()),
             std::move(info), context, codec);
     }
 

@@ -228,7 +228,7 @@ class BloomCore {
 
         ChunkStatistics statistics;
         std::vector<index::extensions::ScalableBloomFilter> fixed_blooms;
-        dftracer::utils::StringViewMap<ExtraBloom> extras;
+        dftracer::utils::dstd::StringViewMap<ExtraBloom> extras;
         std::uint64_t chunks = 0;
         std::vector<unsigned char> blob;
 

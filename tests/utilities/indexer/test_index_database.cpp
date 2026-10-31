@@ -195,7 +195,7 @@ TEST_SUITE("IndexDatabase") {
             file_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xAAAA);
 
-            dftracer::utils::StringViewMap<std::uint64_t> counts;
+            dftracer::utils::dstd::StringViewMap<std::uint64_t> counts;
             counts.emplace("1234:1", 3);
             counts.emplace("1234:2", 1);  // same pid, different tid
             counts.emplace("5678:1", 2);
@@ -240,7 +240,7 @@ TEST_SUITE("IndexDatabase") {
                 *writer, "trace3.pfw.gz", 0xAAA3);
 
             auto pid_tid = [](std::initializer_list<const char*> keys) {
-                dftracer::utils::StringViewMap<std::uint64_t> m;
+                dftracer::utils::dstd::StringViewMap<std::uint64_t> m;
                 for (const char* k : keys) m.emplace(k, 1);
                 return m;
             };
@@ -281,7 +281,7 @@ TEST_SUITE("IndexDatabase") {
             file_id = dftu_utils_test::register_test_file(
                 *writer, "trace.pfw.gz", 0xBBBB);
 
-            dftracer::utils::StringViewMap<std::uint64_t> counts;
+            dftracer::utils::dstd::StringViewMap<std::uint64_t> counts;
             counts.emplace("4294967295:1", 1);            // 32-bit max
             counts.emplace("4294967296:1", 1);            // just over 32-bit
             counts.emplace("18446744073709551615:1", 1);  // 64-bit max

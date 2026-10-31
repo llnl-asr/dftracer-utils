@@ -21,15 +21,15 @@ namespace dftracer::utils::store {
 struct DirectoryCommit {
     std::uint64_t sequence = 0;
     std::uint32_t copy_id = 0;
-    ByteView first_key;
-    ByteView last_key;
+    dstd::ByteView first_key;
+    dstd::ByteView last_key;
     BlockHandle segments;
 };
 
 struct DirectoryErase {
     std::uint64_t ordinal = 0;
-    ByteView begin;
-    ByteView end;
+    dstd::ByteView begin;
+    dstd::ByteView end;
 };
 
 /// The views of a copy point into the directory.
@@ -47,8 +47,8 @@ struct DirectoryCopy {
 
 struct DirectoryDrop {
     std::uint64_t generation = 0;
-    ByteView begin;
-    ByteView end;
+    dstd::ByteView begin;
+    dstd::ByteView end;
 };
 
 struct DirectoryKey {
@@ -76,8 +76,8 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     dstd::Span<const DirectoryCommit> commits);
 
 struct TableEntry {
-    ByteView key;
-    ByteView payload;
+    dstd::ByteView key;
+    dstd::ByteView payload;
 };
 
 /// Writes one slot table over `entries`, in the order given: a count, one
@@ -89,13 +89,13 @@ struct TableBlock {
     dstd::Vector<std::uint8_t> bytes;
     std::size_t entries = 0;
 
-    ByteView first_key() const;
+    dstd::ByteView first_key() const;
 };
 
 /// Splits one slot table into blocks of at most `per_block` entries. An empty
 /// table splits into no block.
 dstd::Expected<dstd::Vector<TableBlock>, dstd::Error> split_slot_table(
-    ByteView table, std::size_t per_block);
+    dstd::ByteView table, std::size_t per_block);
 
 dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_separator_table(
     dstd::Span<const TableBlock> children,
@@ -110,22 +110,22 @@ class SlotTable {
 
     /// Checks the slot table and that every slot lies in `bytes`. Empty bytes
     /// open as an empty table.
-    static dstd::Expected<SlotTable, dstd::Error> open(ByteView bytes);
+    static dstd::Expected<SlotTable, dstd::Error> open(dstd::ByteView bytes);
 
     std::size_t size() const { return count_; }
 
-    ByteView key(std::size_t index) const;
-    ByteView payload(std::size_t index) const;
+    dstd::ByteView key(std::size_t index) const;
+    dstd::ByteView payload(std::size_t index) const;
 
    private:
-    ByteView bytes_;
+    dstd::ByteView bytes_;
     std::size_t count_ = 0;
 };
 
 /// Compares a directory key with (name, version, kind, paths) in directory
 /// order, decoding only as far as it must. A key that does not decode sorts
 /// last. Zero means the same key.
-int compare_directory_key(ByteView key, dstd::StringView name,
+int compare_directory_key(dstd::ByteView key, dstd::StringView name,
                           std::uint32_t version, ScopeKind kind,
                           dstd::Span<const dstd::String> paths);
 
@@ -138,7 +138,8 @@ class ScopeDirectory {
 
     /// Checks the slot table and that every slot lies in `bytes`. Empty bytes
     /// open as an empty directory.
-    static dstd::Expected<ScopeDirectory, dstd::Error> open(ByteView bytes);
+    static dstd::Expected<ScopeDirectory, dstd::Error> open(
+        dstd::ByteView bytes);
 
     std::size_t size() const { return count_; }
 
@@ -155,10 +156,10 @@ class ScopeDirectory {
     dstd::Expected<DirectoryEntry, dstd::Error> entry(std::size_t index) const;
 
    private:
-    ByteView key_bytes(std::size_t index) const;
-    ByteView payload_bytes(std::size_t index) const;
+    dstd::ByteView key_bytes(std::size_t index) const;
+    dstd::ByteView payload_bytes(std::size_t index) const;
 
-    ByteView bytes_;
+    dstd::ByteView bytes_;
     std::size_t count_ = 0;
 };
 

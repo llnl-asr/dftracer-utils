@@ -25,7 +25,7 @@ namespace dftracer::utils::duql {
 /// nanoseconds per unit of its value, the unit of the time role, and the
 /// paths bound to the time and duration roles (empty when unbound).
 struct Roles {
-    dftracer::utils::StringViewMap<std::int64_t> fields;
+    dftracer::utils::dstd::StringViewMap<std::int64_t> fields;
     std::int64_t time_ns_per_unit = 1000;
     std::string time;
     std::string duration;

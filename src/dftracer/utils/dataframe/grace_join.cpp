@@ -147,8 +147,8 @@ void GraceJoin::split(const DataFrame& rows, bool right_side, int level,
                 keyed = false;
                 break;
             }
-        picks[keyed ? hash::partition_of(std::string_view(text), into.size(),
-                                         level)
+        picks[keyed ? dstd::hash::partition_of(std::string_view(text),
+                                               into.size(), level)
                     : 0]
             .push_back(r);
     }
@@ -284,7 +284,7 @@ coro::CoroTask<DataFrame> GraceJoin::lookup_heads(
         std::size_t part;
         std::int64_t row;
     };
-    StringViewMap<std::size_t> index;
+    dstd::StringViewMap<std::size_t> index;
     std::vector<Head> heads;
     std::vector<DataFrame> frames;
     std::vector<std::size_t> values;

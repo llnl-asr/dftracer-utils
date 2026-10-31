@@ -3,7 +3,7 @@
 
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /**
  * @brief Get a demangled type name at compile time.
@@ -35,6 +35,6 @@ consteval std::string_view get_type_name() {
 #endif
 }
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_TYPE_NAME_H

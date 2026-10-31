@@ -375,7 +375,7 @@ bool StringIntern::bind_slot(std::uint32_t id, const char* str, bool cas) {
 /// is faster.
 std::size_t StringIntern::hash(std::string_view sv) const {
     if (deterministic_ids_.load(std::memory_order_relaxed))
-        return utils::hash::fnv1a_mix(utils::hash::fnv1a_hash(sv));
+        return hash::fnv1a_mix(hash::fnv1a_hash(sv));
     return Hash<std::string_view>{}(sv);
 }
 

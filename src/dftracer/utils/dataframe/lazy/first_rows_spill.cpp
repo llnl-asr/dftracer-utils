@@ -116,7 +116,8 @@ class FirstRowsSpill {
         for (std::int64_t i = 0; i < n; ++i) {
             std::string& key = keys[static_cast<std::size_t>(i)];
             if (already_(key) >= keep_) continue;
-            const std::size_t p = hash::partition_of(key, UNIQUE_SPILL_FANOUT);
+            const std::size_t p =
+                dstd::hash::partition_of(key, UNIQUE_SPILL_FANOUT);
             ids[p].push_back(next_id_ + i);
             ks[p].push_back(std::move(key));
         }
@@ -268,8 +269,9 @@ class FirstRowsSpill {
                 std::vector<std::vector<std::int64_t>> pick(
                     UNIQUE_SPILL_FANOUT);
                 for (std::int64_t i = 0; i < m->rows; ++i)
-                    pick[hash::partition_of(m->columns[1].string_at(i),
-                                            UNIQUE_SPILL_FANOUT, depth + 1)]
+                    pick[dstd::hash::partition_of(m->columns[1].string_at(i),
+                                                  UNIQUE_SPILL_FANOUT,
+                                                  depth + 1)]
                         .push_back(i);
                 DataFrame mf = frame_of(std::move(m->columns));
                 for (std::size_t p = 0; p < UNIQUE_SPILL_FANOUT; ++p) {
@@ -284,7 +286,7 @@ class FirstRowsSpill {
                                 depth + 1);
             co_return;
         }
-        StringViewMap<std::int64_t> emitted;
+        dstd::StringViewMap<std::int64_t> emitted;
         const std::string out_path = dir_.run_path(dir_.next_run());
         spill::Writer out(out_path);
         std::vector<std::int64_t> ids;
@@ -501,8 +503,9 @@ class UniqueCursor : public Cursor {
                                 key_off[at] = start;
                                 key_len[at] = static_cast<std::uint32_t>(
                                     buf.size() - start);
-                                hashes[at] = hash::fnv1a_mix(hash::fnv1a_hash(
-                                    buf.data() + start, buf.size() - start));
+                                hashes[at] = dstd::hash::fnv1a_mix(
+                                    dstd::hash::fnv1a_hash(buf.data() + start,
+                                                           buf.size() - start));
                             }
                         }
                     });
@@ -626,8 +629,8 @@ class UniqueCursor : public Cursor {
     }
 
     bool already_seen(const std::string& key) const {
-        const std::uint64_t h =
-            hash::fnv1a_mix(hash::fnv1a_hash(key.data(), key.size()));
+        const std::uint64_t h = dstd::hash::fnv1a_mix(
+            dstd::hash::fnv1a_hash(key.data(), key.size()));
         const auto len = static_cast<std::uint32_t>(key.size());
         if (!seen_p_.empty())
             return seen_p_[h % seen_p_.size()]->contains(h, key.data(), len);

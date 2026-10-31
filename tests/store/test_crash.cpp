@@ -35,10 +35,10 @@ namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io_fault = store::io_fault;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
+using dftracer::utils::dstd::ByteView;
 
 constexpr std::uint32_t EXTENT_BYTES = 4 * 1024;
 constexpr std::uint64_t COMMIT_BYTES = 4 * 1024;
@@ -104,8 +104,9 @@ std::string to_std(const dstd::String& value) {
 
 std::string i64_bytes(std::int64_t value) {
     std::string bytes(8, '\0');
-    dftracer::utils::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
-                                  static_cast<std::uint64_t>(value));
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(bytes.data()),
+        static_cast<std::uint64_t>(value));
     return bytes;
 }
 
@@ -498,8 +499,8 @@ std::uint64_t header_tail_end(const io_fault::Event& event) {
     const std::uint64_t size = event.bytes.size();
     if (size < 48) return size;
     const std::uint8_t* data = event.bytes.data();
-    const std::uint64_t host = dftracer::utils::read_u16_le(data + 44);
-    const std::uint64_t label = dftracer::utils::read_u16_le(data + 46);
+    const std::uint64_t host = dftracer::utils::dstd::read_u16_le(data + 44);
+    const std::uint64_t label = dftracer::utils::dstd::read_u16_le(data + 46);
     const std::uint64_t at = 48 + host + label;
     return at + 16 <= size ? at + 16 : size;
 }

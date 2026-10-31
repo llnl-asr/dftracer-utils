@@ -4,7 +4,7 @@
 #include <new>
 #include <utility>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /**
  * @brief Holds a T in aligned in-object storage, constructed on first use and
@@ -31,6 +31,6 @@ class NoDestructor {
     alignas(T) unsigned char storage_[sizeof(T)];
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_NO_DESTRUCTOR_H

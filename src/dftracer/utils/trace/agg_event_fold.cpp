@@ -20,7 +20,7 @@ constexpr char EXTRA_SEP = '\x1f';
 }  // namespace
 
 std::size_t AggGroupHash::operator()(const AggGroup& g) const noexcept {
-    using dftracer::utils::hash::splitmix64;
+    using dftracer::utils::dstd::hash::splitmix64;
     return static_cast<std::size_t>(splitmix64(
         splitmix64(splitmix64((std::uint64_t{g.cat} << 32) | g.name) ^
                    ((std::uint64_t{g.host} << 32) | g.extra)) ^
@@ -133,7 +133,7 @@ void AggEventFolder::add_event(
     if (r_.q.by_file) {
         const auto fhash = acc.arg_string("fhash");
         key.file = fhash.empty() ? 0 : agg::agg_hash_of_hex(fhash);
-        if (!fhash.empty() && !hash::parse_hex64(fhash))
+        if (!fhash.empty() && !dstd::hash::parse_hex64(fhash))
             key.file_text = r_.strings.get_or_insert(fhash);
     }
     if (r_.q.window_us != 0) key.window = r_.bucket(ev.ts);

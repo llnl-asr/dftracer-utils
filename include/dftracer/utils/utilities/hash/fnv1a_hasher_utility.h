@@ -13,10 +13,10 @@
 namespace dftracer::utils::utilities::hash {
 
 /// The primitives live in core so non-utilities code can share them.
-using dftracer::utils::hash::fnv1a_hash;
-using dftracer::utils::hash::fnv1a_mix;
-using dftracer::utils::hash::FNV1A_OFFSET_BASIS;
-using dftracer::utils::hash::FNV1A_PRIME;
+using dftracer::utils::dstd::hash::fnv1a_hash;
+using dftracer::utils::dstd::hash::fnv1a_mix;
+using dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS;
+using dftracer::utils::dstd::hash::FNV1A_PRIME;
 
 /// Incremental hash builder for combining multiple values.
 struct Fnv1aHashBuilder {

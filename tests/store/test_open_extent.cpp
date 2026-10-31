@@ -45,9 +45,9 @@ namespace store = dftracer::utils::store;
 namespace io = dftracer::utils::io;
 namespace fs = std::filesystem;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::Executor;
 using dftracer::utils::Runtime;
+using dftracer::utils::dstd::ByteView;
 using store::DataFileWriter;
 using store::ExtentSegment;
 using store::ExtentWriter;
@@ -197,11 +197,11 @@ class FaultBackend : public io::ThreadPoolBackend {
 };
 
 void write_id(std::uint8_t* out, std::uint32_t id) {
-    dftracer::utils::write_u64_le(out, static_cast<std::uint64_t>(id));
+    dftracer::utils::dstd::write_u64_le(out, static_cast<std::uint64_t>(id));
 }
 
 std::uint32_t read_id(const std::uint8_t* in) {
-    return static_cast<std::uint32_t>(dftracer::utils::read_u64_le(in));
+    return static_cast<std::uint32_t>(dftracer::utils::dstd::read_u64_le(in));
 }
 
 std::vector<std::uint8_t> make_segment(std::uint32_t id,

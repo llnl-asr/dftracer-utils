@@ -33,7 +33,7 @@ FoldFn fold_fn(FoldKind kind);
 /// InvalidArgument when a numeric fold gets a value that is not 8 bytes.
 /// FoldKind::None, Count, Last and Concat take any bytes.
 dstd::Expected<void, dstd::Error> check_fold_value(FoldKind kind,
-                                                   ByteView value);
+                                                   dstd::ByteView value);
 
 }  // namespace dftracer::utils::store
 

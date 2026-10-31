@@ -94,7 +94,7 @@ void BloomFold::observe_shape(FileState& fs,
     }
     std::uint64_t h = leaves.size();
     for (const auto& [id, tag] : leaves)
-        h = hash::splitmix64(h ^ ((std::uint64_t{id} << 8) | tag));
+        h = dstd::hash::splitmix64(h ^ ((std::uint64_t{id} << 8) | tag));
     for (;; ++h) {
         auto [it, fresh] = fs.shape_ids.try_emplace(
             h, static_cast<std::uint32_t>(fs.shapes.size()));

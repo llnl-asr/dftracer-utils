@@ -153,7 +153,8 @@ class FileDecompressorUtility {
             for (;;) {
                 auto chunk = co_await gen.next();
                 if (!chunk) break;
-                co_await writer.process(ByteView(chunk->data(), chunk->size()));
+                co_await writer.process(
+                    dstd::ByteView(chunk->data(), chunk->size()));
             }
 
             writer.close();

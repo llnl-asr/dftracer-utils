@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /// Avalanching pointer hash: one round of MurmurHash3's fmix64 finalizer by
 /// Austin Appleby (public domain, https://github.com/aappleby/smhasher).
@@ -22,6 +22,6 @@ struct PtrHash {
     }
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_PTR_HASH_H

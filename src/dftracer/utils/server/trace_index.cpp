@@ -854,12 +854,12 @@ std::string TraceIndex::viz_summary_cache_path() const {
 // A changed source is re-indexed in initialize(), shifting these per-file
 // values, so the cache invalidates itself on mismatch.
 std::string TraceIndex::viz_summary_fingerprint() const {
-    std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+    std::uint64_t h = dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
     auto mix = [&](const void* data, std::size_t n) {
         const auto* b = static_cast<const unsigned char*>(data);
         for (std::size_t i = 0; i < n; ++i) {
             h ^= b[i];
-            h *= dftracer::utils::hash::FNV1A_PRIME;
+            h *= dftracer::utils::dstd::hash::FNV1A_PRIME;
         }
     };
     std::uint32_t ver = VIZ_SUMMARY_FORMAT_VERSION;

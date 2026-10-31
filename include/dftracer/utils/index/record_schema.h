@@ -58,8 +58,8 @@ inline std::int64_t entity_id(std::string_view text) {
     if (auto [ptr, ec] = std::from_chars(text.data(), end, v);
         ec == std::errc() && ptr == end && !text.empty())
         return v;
-    return static_cast<std::int64_t>(dftracer::utils::hash::fnv1a_hash(text) &
-                                     0x7FFFFFFFULL);
+    return static_cast<std::int64_t>(
+        dftracer::utils::dstd::hash::fnv1a_hash(text) & 0x7FFFFFFFULL);
 }
 
 /// "bool", "int", "float", "string" or "json".

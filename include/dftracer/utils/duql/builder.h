@@ -253,7 +253,7 @@ inline std::string string_literal(std::string_view v) {
 inline std::string number_text(double v) {
     if (!std::isfinite(v))
         throw std::invalid_argument("duql: a number must be finite");
-    std::string s = double_text(v);
+    std::string s = dstd::double_text(v);
     if (s.find_first_of(".eE") == std::string::npos) s += ".0";
     return s;
 }

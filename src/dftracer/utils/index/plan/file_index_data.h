@@ -24,9 +24,9 @@ using index::store::IndexExtension;
 struct GranuleCounts {
     std::uint64_t observed = 0;
     std::vector<std::uint8_t> compressed;
-    mutable std::optional<StringViewMap<std::uint64_t>> values;
+    mutable std::optional<dstd::StringViewMap<std::uint64_t>> values;
 
-    const StringViewMap<std::uint64_t>* get() const;
+    const dstd::StringViewMap<std::uint64_t>* get() const;
 };
 
 /// Whether a dftracer path is a field every record carries at its top level
@@ -90,15 +90,15 @@ struct FileIndexData {
 
     ankerl::unordered_dense::map<std::uint16_t, bool> current_;
     std::optional<Catalog> catalog_;
-    StringViewMap<std::optional<std::string>> evidence_names_;
-    StringViewMap<Zones> zones_;
-    StringViewMap<Counts> counts_;
-    StringViewMap<Blooms> blooms_;
-    StringViewMap<std::optional<index::extensions::ScalableBloomFilter>>
+    dstd::StringViewMap<std::optional<std::string>> evidence_names_;
+    dstd::StringViewMap<Zones> zones_;
+    dstd::StringViewMap<Counts> counts_;
+    dstd::StringViewMap<Blooms> blooms_;
+    dstd::StringViewMap<std::optional<index::extensions::ScalableBloomFilter>>
         file_blooms_;
-    StringViewMap<std::set<std::uint64_t>> posting_chunks_;
-    StringViewMap<bool> posting_membership_;
-    StringViewMap<bool> has_postings_;
+    dstd::StringViewMap<std::set<std::uint64_t>> posting_chunks_;
+    dstd::StringViewMap<bool> posting_membership_;
+    dstd::StringViewMap<bool> has_postings_;
 };
 
 }  // namespace dftracer::utils::index::plan

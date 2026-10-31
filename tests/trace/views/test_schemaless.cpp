@@ -135,10 +135,10 @@ std::map<std::string, std::vector<std::string>> rows_by_key(
         for (const auto& c : keys) k += bstr(f, r, c) + '\x1f';
         auto& cells = out[k];
         for (std::size_t c = 0; c < f.names.size(); ++c)
-            cells.push_back(
-                f.columns[c].type() == df::TypeId::String
-                    ? bstr(f, r, f.names[c])
-                    : dftracer::utils::double_text(bnum(f, r, f.names[c])));
+            cells.push_back(f.columns[c].type() == df::TypeId::String
+                                ? bstr(f, r, f.names[c])
+                                : dftracer::utils::dstd::double_text(
+                                      bnum(f, r, f.names[c])));
     }
     return out;
 }
@@ -269,10 +269,11 @@ fields:
             return R"({"host":"h)" + std::to_string(pid) + R"(","thread":"t)" +
                    std::to_string(tid) + R"(","op":")" + name +
                    R"(","start":)" +
-                   dftracer::utils::double_text(static_cast<double>(ts) / 1e6) +
+                   dftracer::utils::dstd::double_text(static_cast<double>(ts) /
+                                                      1e6) +
                    R"(,"took":)" +
-                   dftracer::utils::double_text(static_cast<double>(dur) /
-                                                1e3) +
+                   dftracer::utils::dstd::double_text(static_cast<double>(dur) /
+                                                      1e3) +
                    "}";
         });
         const std::string c =
@@ -988,13 +989,15 @@ fields:
             const std::int64_t ts = static_cast<std::int64_t>(x % 3000) * 1000;
             const std::int64_t dur = static_cast<std::int64_t>(x % 50) * 10;
             dft.push_back(dft_line(pid, tid, "read", ts, dur));
-            secs.push_back(
-                R"({"host":"h)" + std::to_string(pid) + R"(","thread":"t)" +
-                std::to_string(tid) + R"(","start":)" +
-                dftracer::utils::double_text(static_cast<double>(ts) / 1e6) +
-                R"(,"took":)" +
-                dftracer::utils::double_text(static_cast<double>(dur) / 1e3) +
-                "}");
+            secs.push_back(R"({"host":"h)" + std::to_string(pid) +
+                           R"(","thread":"t)" + std::to_string(tid) +
+                           R"(","start":)" +
+                           dftracer::utils::dstd::double_text(
+                               static_cast<double>(ts) / 1e6) +
+                           R"(,"took":)" +
+                           dftracer::utils::dstd::double_text(
+                               static_cast<double>(dur) / 1e3) +
+                           "}");
         }
         secs.push_back(R"({"host":"h1","thread":"t1","took":1})");
         const std::string a = write_indexed(env, "sdft", dft, 4096);

@@ -2905,7 +2905,7 @@ template <class T>
 void append_number(std::string& out, T v) {
     if constexpr (std::is_floating_point_v<T>) {
         char buf[32];
-        if (char* end = to_chars_double(buf, buf + sizeof(buf), v))
+        if (char* end = dstd::to_chars_double(buf, buf + sizeof(buf), v))
             out.append(buf, end);
     } else {
         char buf[24];
@@ -2919,7 +2919,7 @@ std::optional<V> parse_number(std::string_view s) {
     V out{};
     std::from_chars_result res{};
     if constexpr (std::is_same_v<V, double>)
-        res = from_chars_double(s.data(), s.data() + s.size(), out);
+        res = dstd::from_chars_double(s.data(), s.data() + s.size(), out);
     else
         res = std::from_chars(s.data(), s.data() + s.size(), out);
     if (res.ec != std::errc{} || res.ptr != s.data() + s.size())

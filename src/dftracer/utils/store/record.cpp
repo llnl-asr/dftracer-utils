@@ -55,7 +55,7 @@ void append_item(dstd::Vector<std::uint8_t>& out, std::uint64_t tag,
     out.insert(out.end(), payload.begin(), payload.end());
 }
 
-bool read_u8(ByteView bytes, std::size_t& at, std::uint8_t& out) {
+bool read_u8(dstd::ByteView bytes, std::size_t& at, std::uint8_t& out) {
     if (bytes.size() - at < 1) return false;
     out = static_cast<std::uint8_t>(
         reinterpret_cast<const std::uint8_t*>(bytes.data())[at]);
@@ -63,16 +63,18 @@ bool read_u8(ByteView bytes, std::size_t& at, std::uint8_t& out) {
     return true;
 }
 
-bool read_u32(ByteView bytes, std::size_t& at, std::uint32_t& out) {
+bool read_u32(dstd::ByteView bytes, std::size_t& at, std::uint32_t& out) {
     if (bytes.size() - at < 4) return false;
-    out = read_u32_le(reinterpret_cast<const std::uint8_t*>(bytes.data()) + at);
+    out = dstd::read_u32_le(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()) + at);
     at += 4;
     return true;
 }
 
-bool read_u64(ByteView bytes, std::size_t& at, std::uint64_t& out) {
+bool read_u64(dstd::ByteView bytes, std::size_t& at, std::uint64_t& out) {
     if (bytes.size() - at < 8) return false;
-    out = read_u64_le(reinterpret_cast<const std::uint8_t*>(bytes.data()) + at);
+    out = dstd::read_u64_le(
+        reinterpret_cast<const std::uint8_t*>(bytes.data()) + at);
     at += 8;
     return true;
 }
@@ -82,7 +84,7 @@ bool count_fits(std::size_t remaining, std::uint64_t count,
     return count <= remaining / min_entry_bytes;
 }
 
-bool read_bytes(ByteView bytes, std::size_t& at,
+bool read_bytes(dstd::ByteView bytes, std::size_t& at,
                 dstd::Vector<std::uint8_t>& out) {
     auto length = decode_varint(bytes, at);
     if (!length) return false;
@@ -94,14 +96,15 @@ bool read_bytes(ByteView bytes, std::size_t& at,
     return true;
 }
 
-bool read_string(ByteView bytes, std::size_t& at, dstd::String& out) {
+bool read_string(dstd::ByteView bytes, std::size_t& at, dstd::String& out) {
     dstd::Vector<std::uint8_t> raw;
     if (!read_bytes(bytes, at, raw)) return false;
     out.assign(reinterpret_cast<const char*>(raw.data()), raw.size());
     return true;
 }
 
-dstd::Expected<NamespaceItem, dstd::Error> decode_namespace(ByteView bytes) {
+dstd::Expected<NamespaceItem, dstd::Error> decode_namespace(
+    dstd::ByteView bytes) {
     NamespaceItem item;
     std::size_t at = 0;
     if (!read_u32(bytes, at, item.local_id) ||
@@ -115,7 +118,7 @@ dstd::Expected<NamespaceItem, dstd::Error> decode_namespace(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<ScopeItem, dstd::Error> decode_scope(ByteView bytes) {
+dstd::Expected<ScopeItem, dstd::Error> decode_scope(dstd::ByteView bytes) {
     ScopeItem item;
     std::uint32_t path_count = 0;
     std::uint8_t kind = 0;
@@ -138,7 +141,7 @@ dstd::Expected<ScopeItem, dstd::Error> decode_scope(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<CopyItem, dstd::Error> decode_copy(ByteView bytes) {
+dstd::Expected<CopyItem, dstd::Error> decode_copy(dstd::ByteView bytes) {
     CopyItem item;
     std::uint8_t state = 0;
     std::uint32_t source_count = 0;
@@ -170,7 +173,7 @@ dstd::Expected<CopyItem, dstd::Error> decode_copy(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<DropItem, dstd::Error> decode_drop(ByteView bytes) {
+dstd::Expected<DropItem, dstd::Error> decode_drop(dstd::ByteView bytes) {
     DropItem item;
     std::size_t at = 0;
     if (!read_u32(bytes, at, item.namespace_id) ||
@@ -183,7 +186,7 @@ dstd::Expected<DropItem, dstd::Error> decode_drop(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<EraseItem, dstd::Error> decode_erase(ByteView bytes) {
+dstd::Expected<EraseItem, dstd::Error> decode_erase(dstd::ByteView bytes) {
     EraseItem item;
     std::size_t at = 0;
     if (!read_u32(bytes, at, item.copy_id) ||
@@ -196,7 +199,8 @@ dstd::Expected<EraseItem, dstd::Error> decode_erase(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(ByteView bytes) {
+dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(
+    dstd::ByteView bytes) {
     ExtentRefItem item;
     std::uint32_t segment_count = 0;
     std::size_t at = 0;
@@ -230,7 +234,8 @@ dstd::Expected<ExtentRefItem, dstd::Error> decode_extent_ref(ByteView bytes) {
     return item;
 }
 
-dstd::Expected<CommitRefItem, dstd::Error> decode_commit_ref(ByteView bytes) {
+dstd::Expected<CommitRefItem, dstd::Error> decode_commit_ref(
+    dstd::ByteView bytes) {
     CommitRefItem item;
     std::uint32_t copy_count = 0;
     std::size_t at = 0;
@@ -264,62 +269,64 @@ dstd::Expected<CommitRefItem, dstd::Error> decode_commit_ref(ByteView bytes) {
 
 void encode_namespace(dstd::Vector<std::uint8_t>& payload,
                       const NamespaceItem& item) {
-    append_u32_le(payload, item.local_id);
+    dstd::append_u32_le(payload, item.local_id);
     append_byte_string(payload, item.name);
-    append_u32_le(payload, item.format_version);
+    dstd::append_u32_le(payload, item.format_version);
     payload.push_back(item.fold_kind);
     payload.push_back(item.codec);
     payload.push_back(item.durable);
 }
 
 void encode_scope(dstd::Vector<std::uint8_t>& payload, const ScopeItem& item) {
-    append_u32_le(payload, item.local_id);
+    dstd::append_u32_le(payload, item.local_id);
     payload.push_back(static_cast<std::uint8_t>(item.kind));
-    append_u32_le(payload, static_cast<std::uint32_t>(item.paths.size()));
+    dstd::append_u32_le(payload, static_cast<std::uint32_t>(item.paths.size()));
     for (const dstd::String& path : item.paths) {
         append_byte_string(payload, path);
     }
 }
 
 void encode_copy(dstd::Vector<std::uint8_t>& payload, const CopyItem& item) {
-    append_u32_le(payload, item.local_id);
-    append_u32_le(payload, item.namespace_id);
-    append_u32_le(payload, item.scope_id);
-    append_u64_le(payload, item.params_hash);
-    append_u64_le(payload, item.generation);
+    dstd::append_u32_le(payload, item.local_id);
+    dstd::append_u32_le(payload, item.namespace_id);
+    dstd::append_u32_le(payload, item.scope_id);
+    dstd::append_u64_le(payload, item.params_hash);
+    dstd::append_u64_le(payload, item.generation);
     payload.push_back(static_cast<std::uint8_t>(item.state));
-    append_u32_le(payload, static_cast<std::uint32_t>(item.sources.size()));
+    dstd::append_u32_le(payload,
+                        static_cast<std::uint32_t>(item.sources.size()));
     for (const SourceStat& source : item.sources) {
-        append_u64_le(payload, source.mtime);
-        append_u64_le(payload, source.size);
-        append_u64_le(payload, source.hash);
+        dstd::append_u64_le(payload, source.mtime);
+        dstd::append_u64_le(payload, source.size);
+        dstd::append_u64_le(payload, source.hash);
     }
 }
 
 void encode_drop(dstd::Vector<std::uint8_t>& payload, const DropItem& item) {
-    append_u32_le(payload, item.namespace_id);
-    append_u32_le(payload, item.scope_id);
-    append_u64_le(payload, item.generation);
+    dstd::append_u32_le(payload, item.namespace_id);
+    dstd::append_u32_le(payload, item.scope_id);
+    dstd::append_u64_le(payload, item.generation);
     append_byte_vector(payload, item.begin_key);
     append_byte_vector(payload, item.end_key);
 }
 
 void encode_erase(dstd::Vector<std::uint8_t>& payload, const EraseItem& item) {
-    append_u32_le(payload, item.copy_id);
-    append_u64_le(payload, item.ordinal);
+    dstd::append_u32_le(payload, item.copy_id);
+    dstd::append_u64_le(payload, item.ordinal);
     append_byte_vector(payload, item.begin_key);
     append_byte_vector(payload, item.end_key);
 }
 
 void encode_commit_ref(dstd::Vector<std::uint8_t>& payload,
                        const CommitRefItem& item) {
-    append_u64_le(payload, item.sequence);
-    append_u64_le(payload, item.record_offset);
-    append_u32_le(payload, item.record_crc);
+    dstd::append_u64_le(payload, item.sequence);
+    dstd::append_u64_le(payload, item.record_offset);
+    dstd::append_u32_le(payload, item.record_crc);
     payload.push_back(item.synced);
-    append_u32_le(payload, static_cast<std::uint32_t>(item.copies.size()));
+    dstd::append_u32_le(payload,
+                        static_cast<std::uint32_t>(item.copies.size()));
     for (const CommitCopy& copy : item.copies) {
-        append_u32_le(payload, copy.copy_id);
+        dstd::append_u32_le(payload, copy.copy_id);
         append_byte_vector(payload, copy.first_key);
         append_byte_vector(payload, copy.last_key);
     }
@@ -327,18 +334,19 @@ void encode_commit_ref(dstd::Vector<std::uint8_t>& payload,
 
 void encode_extent_ref(dstd::Vector<std::uint8_t>& payload,
                        const ExtentRefItem& item) {
-    append_u64_le(payload, item.offset);
-    append_u32_le(payload, item.length);
-    append_u32_le(payload, item.crc);
-    append_u64_le(payload, item.sequence);
+    dstd::append_u64_le(payload, item.offset);
+    dstd::append_u32_le(payload, item.length);
+    dstd::append_u32_le(payload, item.crc);
+    dstd::append_u64_le(payload, item.sequence);
     payload.push_back(item.synced);
-    append_u32_le(payload, static_cast<std::uint32_t>(item.segments.size()));
+    dstd::append_u32_le(payload,
+                        static_cast<std::uint32_t>(item.segments.size()));
     for (const ExtentSegment& segment : item.segments) {
-        append_u32_le(payload, segment.copy_id);
-        append_u32_le(payload, segment.offset_in_extent);
-        append_u32_le(payload, segment.length);
-        append_u64_le(payload, segment.entry_count);
-        append_u64_le(payload, segment.ordinal);
+        dstd::append_u32_le(payload, segment.copy_id);
+        dstd::append_u32_le(payload, segment.offset_in_extent);
+        dstd::append_u32_le(payload, segment.length);
+        dstd::append_u64_le(payload, segment.entry_count);
+        dstd::append_u64_le(payload, segment.ordinal);
         append_byte_vector(payload, segment.first_key);
         append_byte_vector(payload, segment.last_key);
     }
@@ -346,21 +354,21 @@ void encode_extent_ref(dstd::Vector<std::uint8_t>& payload,
 
 void encode_file_tail(dstd::Vector<std::uint8_t>& payload,
                       const FileTail& item) {
-    append_u32_le(payload, item.format_version);
-    append_u32_le(payload, item.extent_size);
-    append_u64_le(payload, item.writer_random);
-    append_u32_le(payload, item.pid);
+    dstd::append_u32_le(payload, item.format_version);
+    dstd::append_u32_le(payload, item.extent_size);
+    dstd::append_u64_le(payload, item.writer_random);
+    dstd::append_u32_le(payload, item.pid);
     append_byte_string(payload, item.host);
     append_byte_string(payload, item.label);
-    append_u64_le(payload, item.creation_time);
+    dstd::append_u64_le(payload, item.creation_time);
     append_block_handle(payload, item.items);
-    append_u32_le(payload, item.extent_count);
-    append_u32_le(payload, item.directory_levels);
+    dstd::append_u32_le(payload, item.extent_count);
+    dstd::append_u32_le(payload, item.directory_levels);
     append_byte_vector(payload, item.top_table);
     append_byte_vector(payload, item.scope_filter);
 }
 
-dstd::Expected<FileTail, dstd::Error> decode_file_tail(ByteView bytes) {
+dstd::Expected<FileTail, dstd::Error> decode_file_tail(dstd::ByteView bytes) {
     FileTail item;
     std::size_t at = 0;
     if (!read_u32(bytes, at, item.format_version) ||
@@ -388,12 +396,13 @@ dstd::Expected<FileTail, dstd::Error> decode_file_tail(ByteView bytes) {
 
 void append_block_handle(dstd::Vector<std::uint8_t>& out,
                          const BlockHandle& handle) {
-    append_u64_le(out, handle.offset);
-    append_u32_le(out, handle.length);
-    append_u32_le(out, handle.crc);
+    dstd::append_u64_le(out, handle.offset);
+    dstd::append_u32_le(out, handle.length);
+    dstd::append_u32_le(out, handle.crc);
 }
 
-bool read_block_handle(ByteView bytes, std::size_t& at, BlockHandle& out) {
+bool read_block_handle(dstd::ByteView bytes, std::size_t& at,
+                       BlockHandle& out) {
     return read_u64(bytes, at, out.offset) && read_u32(bytes, at, out.length) &&
            read_u32(bytes, at, out.crc);
 }
@@ -452,7 +461,7 @@ dstd::Vector<std::uint8_t> encode_items(const RecordItems& items) {
     return body;
 }
 
-dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body) {
+dstd::Expected<RecordItems, dstd::Error> decode_items(dstd::ByteView body) {
     RecordItems items;
     std::size_t at = 0;
     while (at < body.size()) {
@@ -461,7 +470,7 @@ dstd::Expected<RecordItems, dstd::Error> decode_items(ByteView body) {
         auto item_length = decode_varint(body, at);
         if (!item_length || *item_length > body.size() - at)
             return parse_error();
-        const ByteView item_bytes = body.subspan(at, *item_length);
+        const dstd::ByteView item_bytes = body.subspan(at, *item_length);
         at += static_cast<std::size_t>(*item_length);
 
         switch (*tag) {
@@ -537,8 +546,8 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
 
     const dstd::Vector<std::uint8_t> raw_body = encode_items(items);
     const dstd::Vector<std::uint8_t> body = encode_meta(
-        ByteView{reinterpret_cast<const std::byte*>(raw_body.data()),
-                 raw_body.size()},
+        dstd::ByteView{reinterpret_cast<const std::byte*>(raw_body.data()),
+                       raw_body.size()},
         RECORD_ZSTD_LEVEL);
     if (body.size() > std::numeric_limits<std::uint32_t>::max()) {
         return invalid_error();
@@ -547,14 +556,14 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
     dstd::Vector<std::uint8_t> out;
     out.reserve(RECORD_BYTES);
     append_magic(out, RECORD_MAGIC);
-    append_u32_le(out, static_cast<std::uint32_t>(kind));
-    append_u32_le(out, static_cast<std::uint32_t>(body.size()));
-    append_u64_le(out, sequence);
-    append_u64_le(out, prev_offset);
-    append_u64_le(out, offset);
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(kind));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(body.size()));
+    dstd::append_u64_le(out, sequence);
+    dstd::append_u64_le(out, prev_offset);
+    dstd::append_u64_le(out, offset);
     out.insert(out.end(), body.begin(), body.end());
     const std::uint32_t crc = crc32(0, out.data(), out.size());
-    append_u32_le(out, crc);
+    dstd::append_u32_le(out, crc);
     const std::size_t padded_size =
         (out.size() + RECORD_BYTES - 1) / RECORD_BYTES * RECORD_BYTES;
     out.resize(padded_size, 0);
@@ -573,30 +582,31 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_record(
 void set_record_offset(dstd::Vector<std::uint8_t>& encoded,
                        std::uint64_t offset) {
     std::uint8_t* data = encoded.data();
-    write_u64_le(data + 32, offset);
-    const std::size_t body_end = RECORD_HEADER_BYTES + read_u32_le(data + 12);
-    write_u32_le(data + body_end, crc32(0, data, body_end));
+    dstd::write_u64_le(data + 32, offset);
+    const std::size_t body_end =
+        RECORD_HEADER_BYTES + dstd::read_u32_le(data + 12);
+    dstd::write_u32_le(data + body_end, crc32(0, data, body_end));
 }
 
-dstd::Expected<Record, dstd::Error> decode_record(ByteView bytes) {
+dstd::Expected<Record, dstd::Error> decode_record(dstd::ByteView bytes) {
     if (bytes.size() < RECORD_HEADER_BYTES + 4) return parse_error();
     const auto* data = reinterpret_cast<const std::uint8_t*>(bytes.data());
     if (std::memcmp(data, RECORD_MAGIC.data(), RECORD_MAGIC.size()) != 0) {
         return parse_error();
     }
 
-    const std::uint32_t kind_raw = read_u32_le(data + 8);
+    const std::uint32_t kind_raw = dstd::read_u32_le(data + 8);
     if (kind_raw < 1 || kind_raw > 3) return parse_error();
-    const std::uint32_t body_length = read_u32_le(data + 12);
-    const std::uint64_t sequence = read_u64_le(data + 16);
+    const std::uint32_t body_length = dstd::read_u32_le(data + 12);
+    const std::uint64_t sequence = dstd::read_u64_le(data + 16);
     if (sequence == 0) return parse_error();
-    const std::uint64_t prev_offset = read_u64_le(data + 24);
-    const std::uint64_t offset = read_u64_le(data + 32);
+    const std::uint64_t prev_offset = dstd::read_u64_le(data + 24);
+    const std::uint64_t offset = dstd::read_u64_le(data + 32);
 
     const std::uint64_t body_end =
         static_cast<std::uint64_t>(RECORD_HEADER_BYTES) + body_length;
     if (body_end + 4 > bytes.size()) return parse_error();
-    const std::uint32_t stored_crc = read_u32_le(data + body_end);
+    const std::uint32_t stored_crc = dstd::read_u32_le(data + body_end);
     const std::uint32_t crc =
         crc32(0, data, static_cast<std::size_t>(body_end));
     if (stored_crc != crc) return parse_error();
@@ -612,8 +622,8 @@ dstd::Expected<Record, dstd::Error> decode_record(ByteView bytes) {
         decode_meta(bytes.subspan(RECORD_HEADER_BYTES, body_length));
     if (!raw_body) return dstd::Unexpected<dstd::Error>(raw_body.error());
     auto decoded = decode_items(
-        ByteView{reinterpret_cast<const std::byte*>(raw_body->data()),
-                 raw_body->size()});
+        dstd::ByteView{reinterpret_cast<const std::byte*>(raw_body->data()),
+                       raw_body->size()});
     if (!decoded) return dstd::Unexpected<dstd::Error>(decoded.error());
     record.items = std::move(*decoded);
     return record;

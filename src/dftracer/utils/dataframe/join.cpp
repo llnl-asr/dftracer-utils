@@ -207,7 +207,8 @@ std::uint64_t row_hash(const std::vector<KeyView>& keys, std::int64_t i) {
     if (keys.size() == 1) return keys[0].hash(i);
     std::size_t h = 0;
     for (const KeyView& k : keys)
-        dftracer::utils::hash_combine(h, static_cast<std::size_t>(k.hash(i)));
+        dftracer::utils::dstd::hash_combine(
+            h, static_cast<std::size_t>(k.hash(i)));
     return h;
 }
 

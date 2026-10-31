@@ -37,13 +37,13 @@ struct RowBuildOptions {
 // every field is passed through with its native type. Returns false when the
 // row should be skipped.
 bool build_arrow_row(common::arrow::RecordBatchBuilder &builder,
-                     json::JsonParser &parser, StringArena &arena,
+                     json::JsonParser &parser, dstd::StringArena &arena,
                      bool normalize, TimeScaleState &time_scale,
                      const RowBuildOptions &opts = {});
 
 // Flatten a simdjson object into "prefix.key" columns using native types.
 bool process_json_line(common::arrow::RecordBatchBuilder &builder,
-                       json::JsonParser &parser, StringArena &arena,
+                       json::JsonParser &parser, dstd::StringArena &arena,
                        std::string_view content, bool normalize,
                        TimeScaleState &time_scale,
                        const RowBuildOptions &opts = {});

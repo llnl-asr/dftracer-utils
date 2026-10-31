@@ -1199,10 +1199,12 @@ TEST_SUITE("vec") {
 
         Series hashed = Series::strings({"POSIX", "read"}).fnv1a();
         CHECK(hashed.type() == TypeId::Uint64);
-        CHECK(hashed.data<std::uint64_t>()[0] ==
-              dftracer::utils::hash::fnv1a_hash(std::string_view{"POSIX"}));
-        CHECK(hashed.data<std::uint64_t>()[1] ==
-              dftracer::utils::hash::fnv1a_hash(std::string_view{"read"}));
+        CHECK(
+            hashed.data<std::uint64_t>()[0] ==
+            dftracer::utils::dstd::hash::fnv1a_hash(std::string_view{"POSIX"}));
+        CHECK(
+            hashed.data<std::uint64_t>()[1] ==
+            dftracer::utils::dstd::hash::fnv1a_hash(std::string_view{"read"}));
 
         Series parsed = Series::strings({"00000000000000ff", "00000000deadbeef",
                                          "deadbeef"})

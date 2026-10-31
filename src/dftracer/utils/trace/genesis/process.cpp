@@ -510,8 +510,8 @@ void append_stats(string_builder& sb, const Stats& s, bool with_n,
     }
     s.sketch.serialize_into(buf);
     sb.append_comma();
-    sb.append_key_value(
-        "sketch", std::string_view(base64_encode(buf.data(), buf.size())));
+    sb.append_key_value("sketch", std::string_view(dstd::base64_encode(
+                                      buf.data(), buf.size())));
     sb.end_object();
 }
 
@@ -645,7 +645,7 @@ class GroupReader {
 
     std::vector<Proc> procs_;
     std::vector<std::string> strings_;
-    StringViewMap<std::map<std::string, Series>> hosts_;
+    dstd::StringViewMap<std::map<std::string, Series>> hosts_;
     std::map<std::string, std::string> host_hash_;
     std::vector<Chunk> chunks_;
     std::set<std::pair<std::uint32_t, std::int64_t>> gpu_threads_;
@@ -859,8 +859,9 @@ class GroupReader {
     Charge charge_;
     std::vector<Call> cur_;
     simdjson::dom::parser parser_;
-    StringViewMap<std::uint32_t> string_ids_;
-    StringViewMap<ankerl::unordered_dense::map<std::int64_t, std::uint32_t>>
+    dstd::StringViewMap<std::uint32_t> string_ids_;
+    dstd::StringViewMap<
+        ankerl::unordered_dense::map<std::int64_t, std::uint32_t>>
         proc_ids_;
 };
 
@@ -916,7 +917,7 @@ class SetAcc {
         }
         if (failed_) return;
         // Views into recs_, whose paths outlive the map.
-        InternedStringViewMap<std::uint32_t> by_path;
+        dstd::InternedStringViewMap<std::uint32_t> by_path;
         by_path.reserve(recs_.size());
         for (std::uint32_t i = 0; i < recs_.size(); ++i)
             by_path.emplace(recs_[i]->path, i);
@@ -1234,7 +1235,7 @@ class SetAcc {
     std::vector<std::string> counter_keys_;
     std::vector<std::uint32_t> counter_order_;
     std::string id_;
-    StringViewMap<std::uint32_t> counter_ids_;
+    dstd::StringViewMap<std::uint32_t> counter_ids_;
 
     bool lane_open_ = false;
     std::uint32_t lane_proc_ = 0;

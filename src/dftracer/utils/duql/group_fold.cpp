@@ -423,7 +423,7 @@ void GroupFold::sketches(std::size_t a, const df::Series& in,
     if (in.type() != TypeId::String) return;
     for (std::int64_t r = 0; r < n; ++r) {
         if (in.is_null(r)) continue;
-        const auto bytes = base64_decode(in.string_at(r));
+        const auto bytes = dstd::base64_decode(in.string_at(r));
         if (!bytes) continue;
         Sketch one = Sketch::deserialize(
             reinterpret_cast<const std::uint8_t*>(bytes->data()),
@@ -581,7 +581,7 @@ df::DataFrame GroupFold::finish(std::vector<std::string> names) {
                     if (!state[g]) continue;
                     buf.clear();
                     state[g]->serialize_into(buf);
-                    text[g] = base64_encode(buf.data(), buf.size());
+                    text[g] = dstd::base64_encode(buf.data(), buf.size());
                     valid[g] = true;
                 }
                 const std::vector<std::string_view> views(text.begin(),

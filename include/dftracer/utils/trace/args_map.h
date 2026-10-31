@@ -161,7 +161,7 @@ class ArgsMap {
     // (not a copy) is what makes interning actually reduce memory.
     // INVARIANT: only insert a view from key_intern().intern(); a transient
     // string_view would dangle.
-    using Map = dftracer::utils::InternedStringViewMap<ArgsValue>;
+    using Map = dftracer::utils::dstd::InternedStringViewMap<ArgsValue>;
     Map data_;
     bool valid_ = false;
 

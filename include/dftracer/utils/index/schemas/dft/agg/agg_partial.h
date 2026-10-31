@@ -60,9 +60,9 @@ class DistinctIds {
     }
 
     void serialize_into(dstd::Vector<std::uint8_t>& buf) const;
-    bool read_from(LeReader& r);
+    bool read_from(dstd::LeReader& r);
     /// Reads past one serialized set and keeps nothing.
-    static bool skip(LeReader& r);
+    static bool skip(dstd::LeReader& r);
 
    private:
     using List = dstd::Vector<std::uint64_t>;
@@ -84,7 +84,7 @@ inline std::uint64_t pid_tid_id(std::uint64_t pid, std::uint64_t tid) noexcept {
 
 inline std::uint64_t pid_file_id(std::uint64_t pid,
                                  std::uint64_t file) noexcept {
-    return file ^ (pid * hash::GOLDEN_RATIO);
+    return file ^ (pid * dstd::hash::GOLDEN_RATIO);
 }
 
 /// The smallest ts and the largest ts + duration of the events of one pid.

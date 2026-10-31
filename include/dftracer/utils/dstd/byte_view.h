@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /**
  * @brief Non-owning view over a contiguous byte range.
@@ -96,6 +96,6 @@ class MutableByteView {
     std::size_t size_ = 0;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_BYTE_VIEW_H

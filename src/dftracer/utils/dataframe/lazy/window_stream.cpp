@@ -32,7 +32,7 @@ void order_values(const Series& col, std::vector<double>& ov,
                 v = static_cast<double>(cells.bits[i]);
                 break;
             case NumClass::Float:
-                v = bits_double(cells.bits[i]);
+                v = dstd::bits_double(cells.bits[i]);
                 break;
         }
         ov[i] = v;
@@ -42,7 +42,7 @@ void order_values(const Series& col, std::vector<double>& ov,
 
 double cell_double(NumClass cls, std::uint64_t bits) {
     return cls == NumClass::Float
-               ? bits_double(bits)
+               ? dstd::bits_double(bits)
                : (cls == NumClass::Signed
                       ? static_cast<double>(static_cast<std::int64_t>(bits))
                       : static_cast<double>(bits));
@@ -230,7 +230,7 @@ struct PartitionStats {
                 if (by_nm) col.nm_sum.enter_u(b);
                 x = static_cast<double>(b);
             } else {
-                x = bits_double(b);
+                x = dstd::bits_double(b);
             }
             if (in_order) {
                 col.shift += (x - col.shift) / static_cast<double>(col.nonnull);
@@ -1600,7 +1600,7 @@ class WindowStreamCursor : public Cursor {
                 out = static_cast<double>(row.group_end[r]) /
                       static_cast<double>(sz);
             }
-            bits[r] = double_bits(out);
+            bits[r] = dstd::double_bits(out);
         }
         put(res, w.out,
             make_numeric(bits, okv, NumClass::Float, TypeId::Float64));
@@ -1885,7 +1885,7 @@ class WindowStreamCursor : public Cursor {
                 case NumClass::Float:
                     break;
             }
-            return compare_doubles(bits_double(a), bits_double(b));
+            return compare_doubles(dstd::bits_double(a), dstd::bits_double(b));
         };
         const bool suffix = w.to_end && extreme_fn;
         NumCells apart_cells;
@@ -2113,7 +2113,7 @@ class WindowStreamCursor : public Cursor {
                                            ? 0.0
                                            : std::max(s.m2, 0.0) /
                                                  static_cast<double>(cnt - 1);
-                    bits[r] = double_bits(
+                    bits[r] = dstd::double_bits(
                         w.func == DFTU_WINDOW_FRAME_STD ? std::sqrt(var) : var);
                 }
             } else if (cnt == 0 || cnt < w.min_count) {
@@ -2121,9 +2121,9 @@ class WindowStreamCursor : public Cursor {
             } else if (suffix) {
                 src[r] = hist_len + ri - std::min(w.before, local);
             } else if (mean_fn) {
-                bits[r] = double_bits(s.win_sum.mean(cnt));
+                bits[r] = dstd::double_bits(s.win_sum.mean(cnt));
             } else if (float_acc) {
-                bits[r] = double_bits(s.win_sum.sum);
+                bits[r] = dstd::double_bits(s.win_sum.sum);
             } else if (sum_fn) {
                 bits[r] = cls == NumClass::Unsigned
                               ? s.win_isum.u64()

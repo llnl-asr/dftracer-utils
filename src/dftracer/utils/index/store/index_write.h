@@ -136,7 +136,7 @@ void put_file_scalar_stats(IndexWrite& w, int file_id,
                            const index::schemas::dft::ChunkStatistics& stats,
                            std::uint64_t num_chunks);
 void put_file_pid_tid_counts(IndexWrite& w, int file_id,
-                             const StringViewMap<std::uint64_t>& counts);
+                             const dstd::StringViewMap<std::uint64_t>& counts);
 /// Range-deletes every record of `path` of a path-keyed extension for the
 /// file, in every kind keyed by path.
 void clear_path(IndexWrite& w, layout::Ext ext, int file_id,

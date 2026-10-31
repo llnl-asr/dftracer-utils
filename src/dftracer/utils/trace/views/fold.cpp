@@ -344,7 +344,7 @@ std::string arg_json(const FoldEvent::ArgValue& v,
     } else if (const auto* u = std::get_if<std::uint64_t>(&v)) {
         out = std::to_string(*u);
     } else {
-        out = double_text(std::get<double>(v));
+        out = dstd::double_text(std::get<double>(v));
     }
     return out;
 }

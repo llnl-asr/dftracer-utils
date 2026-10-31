@@ -170,19 +170,19 @@ class DomSource {
         char buf[24];
         std::int64_t i;
         if (e.get_int64().get(i) == simdjson::SUCCESS) {
-            char* p = to_chars_i64(buf, buf + sizeof(buf), i);
+            char* p = dstd::to_chars_i64(buf, buf + sizeof(buf), i);
             out.append(buf, static_cast<std::size_t>(p - buf));
             return;
         }
         std::uint64_t u;
         if (e.get_uint64().get(u) == simdjson::SUCCESS) {
-            char* p = to_chars_u64(buf, buf + sizeof(buf), u);
+            char* p = dstd::to_chars_u64(buf, buf + sizeof(buf), u);
             out.append(buf, static_cast<std::size_t>(p - buf));
             return;
         }
         double d;
         if (e.get_double().get(d) == simdjson::SUCCESS) {
-            out.append(dftracer::utils::double_text(d));
+            out.append(dftracer::utils::dstd::double_text(d));
             return;
         }
         bool b;
@@ -402,14 +402,14 @@ class PodSource {
 
     static bool append_u64(std::string& out, std::uint64_t v) {
         char buf[24];
-        char* p = to_chars_u64(buf, buf + sizeof(buf), v);
+        char* p = dstd::to_chars_u64(buf, buf + sizeof(buf), v);
         out.append(buf, static_cast<std::size_t>(p - buf));
         return true;
     }
 
     static void append_i64(std::string& out, std::int64_t v) {
         char buf[24];
-        char* p = to_chars_i64(buf, buf + sizeof(buf), v);
+        char* p = dstd::to_chars_i64(buf, buf + sizeof(buf), v);
         out.append(buf, static_cast<std::size_t>(p - buf));
     }
 
@@ -419,10 +419,10 @@ class PodSource {
         auto i = static_cast<std::int64_t>(d);
         if (static_cast<double>(i) == d) {
             char buf[24];
-            char* p = to_chars_i64(buf, buf + sizeof(buf), i);
+            char* p = dstd::to_chars_i64(buf, buf + sizeof(buf), i);
             out.append(buf, static_cast<std::size_t>(p - buf));
         } else {
-            out.append(dftracer::utils::double_text(d));
+            out.append(dftracer::utils::dstd::double_text(d));
         }
     }
 

@@ -688,7 +688,7 @@ static PyObject* Indexer_query_file_info(IndexerObject* self,
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    dftracer::utils::StringViewMap<int> file_ids;
+    dftracer::utils::dstd::StringViewMap<int> file_ids;
     ankerl::unordered_dense::map<int,
                                  ankerl::unordered_dense::set<std::uint64_t>>
         all_pids;

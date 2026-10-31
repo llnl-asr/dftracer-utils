@@ -23,17 +23,17 @@ class KeyBuilder {
     }
 
     KeyBuilder& u16(std::uint16_t v) {
-        append_u16_be(bytes_, v);
+        dstd::append_u16_be(bytes_, v);
         return *this;
     }
 
     KeyBuilder& u32(std::uint32_t v) {
-        append_u32_be(bytes_, v);
+        dstd::append_u32_be(bytes_, v);
         return *this;
     }
 
     KeyBuilder& u64(std::uint64_t v) {
-        append_u64_be(bytes_, v);
+        dstd::append_u64_be(bytes_, v);
         return *this;
     }
 
@@ -43,19 +43,21 @@ class KeyBuilder {
     }
 
     KeyBuilder& i16(std::int16_t v) {
-        append_u16_be(bytes_, static_cast<std::uint16_t>(
-                                  static_cast<std::uint16_t>(v) ^ 0x8000U));
+        dstd::append_u16_be(
+            bytes_, static_cast<std::uint16_t>(static_cast<std::uint16_t>(v) ^
+                                               0x8000U));
         return *this;
     }
 
     KeyBuilder& i32(std::int32_t v) {
-        append_u32_be(bytes_, static_cast<std::uint32_t>(v) ^ 0x80000000U);
+        dstd::append_u32_be(bytes_,
+                            static_cast<std::uint32_t>(v) ^ 0x80000000U);
         return *this;
     }
 
     KeyBuilder& i64(std::int64_t v) {
         const auto bits = std::bit_cast<std::uint64_t>(v);
-        append_u64_be(bytes_, bits ^ (std::uint64_t{1} << 63));
+        dstd::append_u64_be(bytes_, bits ^ (std::uint64_t{1} << 63));
         return *this;
     }
 
@@ -70,9 +72,9 @@ class KeyBuilder {
     KeyBuilder& str(dstd::StringView v);
 
     // raw must be the final part of the key.
-    KeyBuilder& raw(dftracer::utils::ByteView v);
+    KeyBuilder& raw(dftracer::utils::dstd::ByteView v);
 
-    dftracer::utils::ByteView view() const {
+    dftracer::utils::dstd::ByteView view() const {
         return {reinterpret_cast<const std::byte*>(bytes_.data()),
                 bytes_.size()};
     }
@@ -87,7 +89,7 @@ class KeyBuilder {
 
 class KeyReader {
    public:
-    explicit KeyReader(dftracer::utils::ByteView data) : data_(data) {}
+    explicit KeyReader(dftracer::utils::dstd::ByteView data) : data_(data) {}
 
     dstd::Expected<std::uint8_t, dstd::Error> u8() {
         if (remaining() < 1) return parse_error();
@@ -137,7 +139,7 @@ class KeyReader {
 
     dstd::Expected<dstd::String, dstd::Error> str();
 
-    dftracer::utils::ByteView rest() {
+    dftracer::utils::dstd::ByteView rest() {
         const auto out = data_.subspan(pos_);
         pos_ = data_.size();
         return out;
@@ -152,7 +154,7 @@ class KeyReader {
         T value;
         std::memcpy(&value, position(), sizeof(T));
         if constexpr (std::endian::native == std::endian::little) {
-            value = byte_swap(value);
+            value = dstd::byte_swap(value);
         }
         pos_ += sizeof(T);
         return value;
@@ -166,7 +168,7 @@ class KeyReader {
 
     static dstd::Unexpected<dstd::Error> parse_error();
 
-    dftracer::utils::ByteView data_;
+    dftracer::utils::dstd::ByteView data_;
     std::size_t pos_ = 0;
 };
 

@@ -66,11 +66,12 @@ struct PidTid {
 
 struct PidTidHash {
     std::uint64_t operator()(const PidTid& k) const noexcept {
-        std::uint64_t h = dftracer::utils::hash::FNV1A_OFFSET_BASIS_LEGACY;
+        std::uint64_t h =
+            dftracer::utils::dstd::hash::FNV1A_OFFSET_BASIS_LEGACY;
         h = (h ^ static_cast<std::uint64_t>(k.pid)) *
-            dftracer::utils::hash::FNV1A_PRIME;
+            dftracer::utils::dstd::hash::FNV1A_PRIME;
         h = (h ^ static_cast<std::uint64_t>(k.tid)) *
-            dftracer::utils::hash::FNV1A_PRIME;
+            dftracer::utils::dstd::hash::FNV1A_PRIME;
         return h;
     }
 };
@@ -176,13 +177,13 @@ struct SumBuild {
         0};  // cfg.trace_interval_ms, if declared
 
     std::mutex name_mtx;
-    dftracer::utils::StringViewMap<std::uint32_t> name_of;
+    dftracer::utils::dstd::StringViewMap<std::uint32_t> name_of;
     std::vector<std::string> names;
 
     // Per-worker caches so the hot path never locks.
     std::vector<ankerl::unordered_dense::map<PidTid, std::uint32_t, PidTidHash>>
         lane_cache;
-    std::vector<dftracer::utils::StringViewMap<std::uint32_t>> name_cache;
+    std::vector<dftracer::utils::dstd::StringViewMap<std::uint32_t>> name_cache;
 
     // Per-worker simdjson parser + reusable buffer. Frame-local (owned here,
     // constructed on the caller's thread) rather than thread_local, which a
@@ -199,9 +200,9 @@ struct SumBuild {
     // Per-worker FH resolution (file-hash -> path) from metadata records, so
     // the "By file" grouping can show real paths without depending on the
     // client.
-    std::vector<dftracer::utils::StringViewMap<std::string>> fh_parts;
+    std::vector<dftracer::utils::dstd::StringViewMap<std::string>> fh_parts;
 
-    std::vector<dftracer::utils::StringViewMap<std::string>> sh_parts;
+    std::vector<dftracer::utils::dstd::StringViewMap<std::string>> sh_parts;
     std::vector<ankerl::unordered_dense::map<std::int64_t, std::string>>
         app_start, app_end;
 
@@ -216,22 +217,22 @@ struct SumBuild {
 
     // Per-worker column discovery: distinct column names, and the event names
     // already harvested (schema is per event name).
-    std::vector<dftracer::utils::StringViewSet> cols, col_seen;
+    std::vector<dftracer::utils::dstd::StringViewSet> cols, col_seen;
 
     // Per-worker operation-name -> category (first seen); merged after the scan
     // into VizSummary::name_cats for real layer labels.
-    std::vector<dftracer::utils::StringViewMap<std::string>> name_cat;
+    std::vector<dftracer::utils::dstd::StringViewMap<std::string>> name_cat;
 
     // Per-worker file-hashes seen on a read/write op (files with real data
     // I/O).
-    std::vector<dftracer::utils::StringViewSet> io_fh;
+    std::vector<dftracer::utils::dstd::StringViewSet> io_fh;
 
     // Per-worker process-hierarchy state (see VizSummary::procs), keyed by pid
     // so it stays small however many events a process emits.
     std::vector<ankerl::unordered_dense::map<std::int64_t, VizSummary::ProcRow>>
         procs;
     std::vector<std::vector<VizSummary::ForkEdge>> forks;
-    std::vector<dftracer::utils::StringViewMap<std::string>> hh_parts;
+    std::vector<dftracer::utils::dstd::StringViewMap<std::string>> hh_parts;
 
     // Per-worker ph="C" counter samples: series key ("name\x1fkey") -> its
     // family cat + a sparse map of fine-bucket -> {sum, count}. ph="C" is rare,
@@ -1101,7 +1102,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->by_fhash = finalize_group(b.g_fhash);
 
     // Resolve file-hash keys to real paths where a metadata record was seen.
-    dftracer::utils::StringViewMap<std::string> fh;
+    dftracer::utils::dstd::StringViewMap<std::string> fh;
     for (auto& part : b.fh_parts)
         for (auto& kv : part) fh.emplace(kv.first, kv.second);
     for (auto& r : summary->by_fhash) {
@@ -1111,7 +1112,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     summary->total_files = fh.size();
 
     {
-        dftracer::utils::StringViewMap<std::string> sh;
+        dftracer::utils::dstd::StringViewMap<std::string> sh;
         for (auto& part : b.sh_parts)
             for (auto& kv : part) sh.emplace(kv.first, kv.second);
         ankerl::unordered_dense::map<std::int64_t, std::string> starts, ends;
@@ -1123,8 +1124,9 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         for (auto& part : b.cm_app)
             for (auto& kv : part) cm_apps.emplace(kv.first, kv.second);
 
-        auto resolve = [](dftracer::utils::StringViewMap<std::string>& tbl,
-                          const std::string& h) -> std::string {
+        auto resolve =
+            [](dftracer::utils::dstd::StringViewMap<std::string>& tbl,
+               const std::string& h) -> std::string {
             auto it = tbl.find(h);
             return it != tbl.end() ? it->second : h;
         };
@@ -1218,7 +1220,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
         }
     }
 
-    dftracer::utils::StringViewSet io_fh;
+    dftracer::utils::dstd::StringViewSet io_fh;
     for (auto& part : b.io_fh)
         for (auto& k : part) io_fh.emplace(k);
     summary->io_files = io_fh.size();
@@ -1260,7 +1262,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
                   [](const VizSummary::ForkEdge& a,
                      const VizSummary::ForkEdge& x) { return a.ts < x.ts; });
 
-        dftracer::utils::StringViewMap<std::string> hh;
+        dftracer::utils::dstd::StringViewMap<std::string> hh;
         for (auto& part : b.hh_parts)
             for (auto& kv : part) hh.emplace(kv.first, kv.second);
         summary->hosts.reserve(hh.size());
@@ -1268,7 +1270,7 @@ static coro::CoroTask<void> build_viz_summary(TraceIndex& index) {
     }
 
     // Merge the per-worker name -> category maps (first writer wins).
-    dftracer::utils::StringViewMap<std::string> nc;
+    dftracer::utils::dstd::StringViewMap<std::string> nc;
     for (auto& part : b.name_cat)
         for (auto& kv : part) nc.emplace(kv.first, kv.second);
     summary->name_cats.reserve(nc.size());

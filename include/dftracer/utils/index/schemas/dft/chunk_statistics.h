@@ -26,9 +26,9 @@ namespace dftracer::utils::index::schemas::dft {
  */
 struct ChunkStatistics {
     std::uint64_t total_events = 0;
-    StringViewMap<std::uint64_t> category_counts;
-    StringViewMap<std::uint64_t> name_counts;
-    StringViewMap<std::uint64_t> pid_tid_counts;
+    dstd::StringViewMap<std::uint64_t> category_counts;
+    dstd::StringViewMap<std::uint64_t> name_counts;
+    dstd::StringViewMap<std::uint64_t> pid_tid_counts;
 
     std::uint64_t min_timestamp_us = std::numeric_limits<std::uint64_t>::max();
     /// The first start above 0: traces record events without a clock (CUDA
@@ -45,19 +45,19 @@ struct ChunkStatistics {
     dataframe::DDSketch duration_sketch{0.01};
     dataframe::Log2Histogram duration_histogram;
     dataframe::TimestampHistogram timestamp_histogram;
-    StringViewMap<dataframe::DDSketch> name_duration_sketches;
-    StringViewMap<dataframe::Log2Histogram> name_duration_histograms;
-    StringViewMap<double> name_duration_sums;
-    StringViewMap<double> name_duration_sum_sqs;
-    StringViewMap<std::string> name_category;
+    dstd::StringViewMap<dataframe::DDSketch> name_duration_sketches;
+    dstd::StringViewMap<dataframe::Log2Histogram> name_duration_histograms;
+    dstd::StringViewMap<double> name_duration_sums;
+    dstd::StringViewMap<double> name_duration_sum_sqs;
+    dstd::StringViewMap<std::string> name_category;
 
     /// Per-category and per-pid duration DDSketches + sums, so the viz stats
     /// fast path can answer group-by-cat and group-by-pid from stored
     /// aggregates. Pid keys are the decimal pid (matching the viz grouping).
-    StringViewMap<dataframe::DDSketch> cat_duration_sketches;
-    StringViewMap<double> cat_duration_sums;
-    StringViewMap<dataframe::DDSketch> pid_duration_sketches;
-    StringViewMap<double> pid_duration_sums;
+    dstd::StringViewMap<dataframe::DDSketch> cat_duration_sketches;
+    dstd::StringViewMap<double> cat_duration_sums;
+    dstd::StringViewMap<dataframe::DDSketch> pid_duration_sketches;
+    dstd::StringViewMap<double> pid_duration_sums;
 
     static constexpr std::uint32_t NO_SLOT =
         std::numeric_limits<std::uint32_t>::max();
@@ -117,14 +117,15 @@ struct ChunkStatistics {
     /// Serialize an arbitrary key -> DDSketch map to one binary blob (same
     /// format as serialize_name_duration_sketches; used for cat/pid sketches).
     static std::vector<std::uint8_t> serialize_sketch_map(
-        const StringViewMap<dataframe::DDSketch>& sketches);
+        const dstd::StringViewMap<dataframe::DDSketch>& sketches);
 
-    static StringViewMap<std::string> parse_string_map_json(
+    static dstd::StringViewMap<std::string> parse_string_map_json(
         const std::string& json);
-    static StringViewMap<double> parse_double_map_json(const std::string& json);
-    static StringViewMap<dataframe::Log2Histogram> parse_histogram_map_json(
+    static dstd::StringViewMap<double> parse_double_map_json(
         const std::string& json);
-    static StringViewMap<dataframe::DDSketch>
+    static dstd::StringViewMap<dataframe::Log2Histogram>
+    parse_histogram_map_json(const std::string& json);
+    static dstd::StringViewMap<dataframe::DDSketch>
     deserialize_name_duration_sketches(const std::uint8_t* data,
                                        std::size_t len);
 };

@@ -166,8 +166,8 @@ class IndexDatabase {
     Freshness check_freshness(const std::string& file_path, std::uint64_t size,
                               std::int64_t mtime) const;
 
-    StringViewMap<int> query_all_file_info_ids() const;
-    StringViewMap<FileRegistryEntry> query_all_file_registry() const;
+    dstd::StringViewMap<int> query_all_file_info_ids() const;
+    dstd::StringViewMap<FileRegistryEntry> query_all_file_registry() const;
 
     int find_file(std::string_view file_path) const;
 
@@ -212,7 +212,7 @@ class IndexDatabase {
     query_file_scalar_stats_batch(const std::vector<int>& file_ids) const;
     ankerl::unordered_dense::map<int, FileMetadataResult>
     query_file_metadata_batch(const std::vector<int>& file_ids) const;
-    ankerl::unordered_dense::map<int, StringViewMap<std::uint64_t>>
+    ankerl::unordered_dense::map<int, dstd::StringViewMap<std::uint64_t>>
     query_file_pid_tid_counts_batch(const std::vector<int>& file_ids) const;
 
     /// Member boundaries in file order, empty when the file has no current

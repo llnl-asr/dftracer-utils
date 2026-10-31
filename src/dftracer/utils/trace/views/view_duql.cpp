@@ -1298,8 +1298,8 @@ class Sides {
         const std::string& name = program.sides[i].name;
         std::optional<CacheKey> key = keys[i];
         if (key) {
-            key->sig = dftracer::utils::hash::splitmix64(key->sig ^
-                                                         DISTINCT_CACHE_SALT);
+            key->sig = dftracer::utils::dstd::hash::splitmix64(
+                key->sig ^ DISTINCT_CACHE_SALT);
             try {
                 if (const auto db = ix::cache::open_lookup_db(
                         key->path, ix::cache::CacheStore::Mode::ReadOnly))
@@ -1313,7 +1313,7 @@ class Sides {
         const std::uint64_t budget =
             dftracer::utils::memory::resolve_spill_budget(
                 views[i]->memory_budget_bytes());
-        dftracer::utils::StringViewSet seen;
+        dftracer::utils::dstd::StringViewSet seen;
         std::vector<df::DataFrame> parts;
         std::uint64_t bytes = 0;
         const df::LazyFrame plan = views[i]->lazy();

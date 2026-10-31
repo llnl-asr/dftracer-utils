@@ -17,12 +17,12 @@ std::string encode_zone(const Zone& zone) {
     codec::append_string(out, zone.value_type);
     codec::append_string(out, zone.min);
     codec::append_string(out, zone.max);
-    append_u64_be(out, zone.observed);
+    dstd::append_u64_be(out, zone.observed);
     std::uint8_t flags = 0;
     if (zone.present) flags |= HAS_PRESENT;
     if (zone.histogram && !zone.histogram->empty()) flags |= HAS_HISTOGRAM;
     codec::append_u8(out, flags);
-    if (zone.present) append_u64_be(out, *zone.present);
+    if (zone.present) dstd::append_u64_be(out, *zone.present);
     if (flags & HAS_HISTOGRAM) {
         const auto hist = zone.histogram->serialize();
         codec::append_blob(out, hist);
@@ -54,7 +54,7 @@ std::optional<Zone> decode_zone(std::string_view bytes) {
 
 std::string encode_counts(const CountsGranule& counts) {
     std::string out;
-    append_u64_be(out, counts.observed);
+    dstd::append_u64_be(out, counts.observed);
     codec::append_u8(out, counts.compressed ? 1 : 0);
     if (counts.compressed) codec::append_blob(out, *counts.compressed);
     return out;
@@ -78,7 +78,7 @@ std::optional<CountsGranule> decode_counts(std::string_view bytes) {
 std::string encode_bloom(std::span<const unsigned char> bloom,
                          std::uint64_t num_entries) {
     std::string out;
-    append_u64_be(out, num_entries);
+    dstd::append_u64_be(out, num_entries);
     out.append(reinterpret_cast<const char*>(bloom.data()), bloom.size());
     return out;
 }

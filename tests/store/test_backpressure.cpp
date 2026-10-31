@@ -45,10 +45,10 @@ namespace memory = dftracer::utils::memory;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
+using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 using store::Batch;
 using store::DataFileReader;
@@ -112,14 +112,15 @@ std::string to_std(const dstd::String& value) {
 
 std::string i64_bytes(std::int64_t value) {
     std::string bytes(8, '\0');
-    dftracer::utils::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
-                                  static_cast<std::uint64_t>(value));
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(bytes.data()),
+        static_cast<std::uint64_t>(value));
     return bytes;
 }
 
 std::int64_t read_i64(ByteView bytes) {
     REQUIRE(bytes.size() == 8);
-    return std::bit_cast<std::int64_t>(dftracer::utils::read_u64_le(
+    return std::bit_cast<std::int64_t>(dftracer::utils::dstd::read_u64_le(
         reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 

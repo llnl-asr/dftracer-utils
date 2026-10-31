@@ -30,7 +30,7 @@ struct IndexRoot {
     static constexpr std::uint64_t ALL_PERMITS = std::uint64_t{1} << 32;
     coro::CoroSemaphore gate{ALL_PERMITS};
     std::mutex current_mutex;
-    StringViewMap<IndexedFile> current;
+    dstd::StringViewMap<IndexedFile> current;
 };
 
 // Permits of a root's gate, returned when it goes out of scope.

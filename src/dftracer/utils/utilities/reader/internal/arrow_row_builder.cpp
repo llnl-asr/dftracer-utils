@@ -166,7 +166,7 @@ void append_system_columns(
 // Normalize a raw JSON row (parsed with simdjson) into the semantic
 // output schema.  Appends one row to `builder` with the full set of output
 // columns.  Returns false if the row should be skipped (no valid name).
-bool normalize_row(RecordBatchBuilder &builder, StringArena &arena,
+bool normalize_row(RecordBatchBuilder &builder, dstd::StringArena &arena,
                    JsonParser &parser, TimeScaleState &time_scale) {
     using SVH = JsonValueHelper;
     // --- Single-pass extraction: capture top-level fields and args in one
@@ -373,7 +373,7 @@ static bool keep_key(const RowBuildOptions &opts, std::string_view key) {
 }
 
 bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
-                     StringArena &arena, bool normalize,
+                     dstd::StringArena &arena, bool normalize,
                      TimeScaleState &time_scale, const RowBuildOptions &opts) {
     if (normalize) return normalize_row(builder, arena, parser, time_scale);
 
@@ -462,7 +462,7 @@ bool build_arrow_row(RecordBatchBuilder &builder, JsonParser &parser,
 }
 
 bool process_json_line(RecordBatchBuilder &builder, JsonParser &parser,
-                       StringArena &arena, std::string_view content,
+                       dstd::StringArena &arena, std::string_view content,
                        bool normalize, TimeScaleState &time_scale,
                        const RowBuildOptions &opts) {
     const char *trimmed;

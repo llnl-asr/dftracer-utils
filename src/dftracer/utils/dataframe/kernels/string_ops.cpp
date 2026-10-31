@@ -710,7 +710,7 @@ dftu_series* fnv1a_w(const dftu_series* v) {
     for (std::int64_t i = 0; i < v->length; ++i) {
         if (r.is_null(i)) continue;
         vals[static_cast<std::size_t>(i)] =
-            dftracer::utils::hash::fnv1a_hash(r.at(i));
+            dftracer::utils::dstd::hash::fnv1a_hash(r.at(i));
     }
     return make_u64(v, vals, nullptr);
 }
@@ -734,7 +734,8 @@ dftu_series* hex64_parse_w(const dftu_series* v) {
     std::int64_t nulls = 0;
     for (std::int64_t i = 0; i < v->length; ++i) {
         std::optional<std::uint64_t> parsed;
-        if (!r.is_null(i)) parsed = dftracer::utils::hash::parse_hex64(r.at(i));
+        if (!r.is_null(i))
+            parsed = dftracer::utils::dstd::hash::parse_hex64(r.at(i));
         if (!parsed) {
             ++nulls;
             continue;
@@ -759,8 +760,8 @@ dftu_series* dftu_series_hex64_parse(const dftu_series* v) {
 dftu_series* dftu_series_hex64_format(const dftu_series* v) {
     DFTU_FLAT_OPERAND(v, flat_v, dftu_series_hex64_format(flat_v));
 
-    using dftracer::utils::hash::format_hex64;
-    using dftracer::utils::hash::HEX64_DIGITS;
+    using dftracer::utils::dstd::hash::format_hex64;
+    using dftracer::utils::dstd::hash::HEX64_DIGITS;
     if (!v || (v->type != TypeId::Uint64 && v->type != TypeId::Int64)) {
         return nullptr;
     }

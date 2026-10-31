@@ -242,8 +242,9 @@ struct GzipLineWriter::Impl {
                 co_return false;
             }
         }
-        ByteView chunk = opts.compress ? ByteView(comp.data(), comp.size())
-                                       : ByteView(bytes.data(), bytes.size());
+        dstd::ByteView chunk = opts.compress
+                                   ? dstd::ByteView(comp.data(), comp.size())
+                                   : dstd::ByteView(bytes.data(), bytes.size());
         if (unordered()) {
             const int rc = header ? co_await writer->write_header(chunk)
                                   : co_await writer->write_footer(chunk);
@@ -291,8 +292,9 @@ struct GzipLineWriter::Impl {
             if (!open_part_ok) co_return;
         }
         const bool gz = opts.compress;
-        ByteView chunk = gz ? ByteView(d.comp.data(), d.comp.size())
-                            : ByteView(d.plain.data(), d.plain.size());
+        dstd::ByteView chunk =
+            gz ? dstd::ByteView(d.comp.data(), d.comp.size())
+               : dstd::ByteView(d.plain.data(), d.plain.size());
         const auto write_chunk_rc = co_await writer->write_chunk(0, chunk);
         if (write_chunk_rc != 0) {
             set_error(ErrorCode::Io, "write failed for " + cur_path);
@@ -323,9 +325,9 @@ struct GzipLineWriter::Impl {
     }
 
     coro::CoroTask<void> write_unordered(std::size_t slot, Done& d) {
-        ByteView chunk = opts.compress
-                             ? ByteView(d.comp.data(), d.comp.size())
-                             : ByteView(d.plain.data(), d.plain.size());
+        dstd::ByteView chunk =
+            opts.compress ? dstd::ByteView(d.comp.data(), d.comp.size())
+                          : dstd::ByteView(d.plain.data(), d.plain.size());
         const auto write_chunk_rc = co_await writer->write_chunk(slot, chunk);
         if (write_chunk_rc != 0) {
             set_error(ErrorCode::Io, "write failed for " + cur_path);

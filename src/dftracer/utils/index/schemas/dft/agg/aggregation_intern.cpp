@@ -9,7 +9,7 @@ namespace dftracer::utils::index::schemas::dft::agg {
 namespace {
 struct Registry {
     std::mutex mutex;
-    StringViewMap<std::weak_ptr<AggInternTable>> tables;
+    dstd::StringViewMap<std::weak_ptr<AggInternTable>> tables;
 };
 
 Registry& registry() {

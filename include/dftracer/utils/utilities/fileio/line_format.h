@@ -166,7 +166,8 @@ char* put_arg(char* d, const T& v) {
         return std::to_chars(d, d + INT_MAX_CHARS, v).ptr;
     } else if constexpr (IS_FLOAT<T>) {
 #ifdef DFTRACER_UTILS_FP_TO_CHARS_UNAVAILABLE
-        return to_chars_double(d, d + FLOAT_MAX_CHARS, static_cast<double>(v));
+        return dstd::to_chars_double(d, d + FLOAT_MAX_CHARS,
+                                     static_cast<double>(v));
 #else
         return std::to_chars(d, d + FLOAT_MAX_CHARS, v).ptr;
 #endif

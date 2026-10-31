@@ -72,11 +72,11 @@ struct ShortKeyHash {
     using is_avalanching = void;
     std::uint64_t operator()(const ShortKey& k) const noexcept {
         std::size_t h = 0;
-        dftracer::utils::hash_combine(h,
-                                      dftracer::utils::hash::splitmix64(k.a));
-        dftracer::utils::hash_combine(h,
-                                      dftracer::utils::hash::splitmix64(k.b));
-        dftracer::utils::hash_combine(h, k.len);
+        dftracer::utils::dstd::hash_combine(
+            h, dftracer::utils::dstd::hash::splitmix64(k.a));
+        dftracer::utils::dstd::hash_combine(
+            h, dftracer::utils::dstd::hash::splitmix64(k.b));
+        dftracer::utils::dstd::hash_combine(h, k.len);
         return h;
     }
 };

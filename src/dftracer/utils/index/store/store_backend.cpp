@@ -1081,10 +1081,11 @@ coro::CoroTask<void> StoreIndexWrite::stage_body(kv::Writer& writer) {
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =
             root_->namespace_id(erase.name, erase.version);
-        check("store index: erase the keys of a copy",
-              writer.erase(id, erase.scope,
-                           ByteView{erase.begin.data(), erase.begin.size()},
-                           ByteView{erase.end.data(), erase.end.size()}));
+        check(
+            "store index: erase the keys of a copy",
+            writer.erase(id, erase.scope,
+                         dstd::ByteView{erase.begin.data(), erase.begin.size()},
+                         dstd::ByteView{erase.end.data(), erase.end.size()}));
     }
     erases_.clear();
     for (auto& entry : pending_) {
@@ -1105,13 +1106,13 @@ coro::CoroTask<void> StoreIndexWrite::stage_body(kv::Writer& writer) {
         kv::Batch batch = writer.building_batch(id, copy.scope);
         for (const PendingKey& key : keys) {
             batch.put_ref(
-                ByteView(key.bytes, key.key_length),
-                ByteView(key.bytes + key.key_length, key.value_length));
+                dstd::ByteView(key.bytes, key.key_length),
+                dstd::ByteView(key.bytes + key.key_length, key.value_length));
         }
         if (keys.empty()) {
-            batch.put(
-                ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
-                ByteView());
+            batch.put(dstd::ByteView(EMPTY_COPY_MARKER.data(),
+                                     EMPTY_COPY_MARKER.size()),
+                      dstd::ByteView());
         }
         const auto staged =
             co_await commit_with_space(writer, std::move(batch));
@@ -1140,10 +1141,11 @@ std::size_t StoreIndexWrite::carry_keys(const PendingCopy& copy,
         return false;
     };
     std::size_t carried = 0;
-    auto cursor = foreign.snapshot->scan(make_spec(copy.name, copy.version),
-                                         copy.scope, ByteView{}, ByteView{});
+    auto cursor =
+        foreign.snapshot->scan(make_spec(copy.name, copy.version), copy.scope,
+                               dstd::ByteView{}, dstd::ByteView{});
     for (; !cursor.at_end(); cursor.next()) {
-        const ByteView key = cursor.key();
+        const dstd::ByteView key = cursor.key();
         const std::string_view text(reinterpret_cast<const char*>(key.data()),
                                     key.size());
         if (skipped(text)) continue;
@@ -1217,10 +1219,11 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
     for (const PendingErase& erase : erases_) {
         const kv::NamespaceId id =
             root_->namespace_id(erase.name, erase.version);
-        check("store index: erase the keys of a copy",
-              writer.erase(id, erase.scope,
-                           ByteView{erase.begin.data(), erase.begin.size()},
-                           ByteView{erase.end.data(), erase.end.size()}));
+        check(
+            "store index: erase the keys of a copy",
+            writer.erase(id, erase.scope,
+                         dstd::ByteView{erase.begin.data(), erase.begin.size()},
+                         dstd::ByteView{erase.end.data(), erase.end.size()}));
     }
     for (auto& entry : pending_) {
         PendingCopy& copy = entry.second;
@@ -1296,15 +1299,15 @@ coro::CoroTask<void> StoreIndexWrite::commit_body() {
         // takes them in place.
         for (const PendingKey& key : keys) {
             batch.put_ref(
-                ByteView(key.bytes, key.key_length),
-                ByteView(key.bytes + key.key_length, key.value_length));
+                dstd::ByteView(key.bytes, key.key_length),
+                dstd::ByteView(key.bytes + key.key_length, key.value_length));
         }
         const std::size_t carried =
             carry ? carry_keys(copy, *foreign, batch) : 0;
         if (keys.empty() && carried == 0) {
-            batch.put(
-                ByteView(EMPTY_COPY_MARKER.data(), EMPTY_COPY_MARKER.size()),
-                ByteView());
+            batch.put(dstd::ByteView(EMPTY_COPY_MARKER.data(),
+                                     EMPTY_COPY_MARKER.size()),
+                      dstd::ByteView());
         }
         const auto done = co_await commit_with_space(writer, std::move(batch));
         check("store index: commit a copy", done);

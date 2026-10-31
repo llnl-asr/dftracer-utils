@@ -6,37 +6,40 @@
 
 namespace dftracer::utils::coro {
 
-/// Forward declarations
 template <typename T>
 class CoroTask;
 
 template <typename T>
 class Generator;
 
+}  // namespace dftracer::utils::coro
+
+namespace dftracer::utils::dstd {
+
 // ============================================================================
 // Type trait: is_coro_task
-// Detect if a type is CoroTask<T>
+// Detect if a type is coro::CoroTask<T>
 // ============================================================================
 
 template <typename T>
 struct is_coro_task : std::false_type {};
 
 template <typename T>
-struct is_coro_task<CoroTask<T>> : std::true_type {};
+struct is_coro_task<coro::CoroTask<T>> : std::true_type {};
 
 template <typename T>
 inline constexpr bool is_coro_task_v = is_coro_task<T>::value;
 
 // ============================================================================
 // Type trait: is_generator
-// Detect if a type is Generator<T>
+// Detect if a type is coro::Generator<T>
 // ============================================================================
 
 template <typename T>
 struct is_generator : std::false_type {};
 
 template <typename T>
-struct is_generator<Generator<T>> : std::true_type {};
+struct is_generator<coro::Generator<T>> : std::true_type {};
 
 template <typename T>
 inline constexpr bool is_generator_v = is_generator<T>::value;
@@ -70,14 +73,14 @@ inline constexpr bool is_awaitable_v = is_awaitable<T>::value;
 
 // ============================================================================
 // Type trait: coro_task_value_type
-// Extract T from CoroTask<T>
+// Extract T from coro::CoroTask<T>
 // ============================================================================
 
 template <typename T>
 struct coro_task_value_type;
 
 template <typename T>
-struct coro_task_value_type<CoroTask<T>> {
+struct coro_task_value_type<coro::CoroTask<T>> {
     using type = T;
 };
 
@@ -86,14 +89,14 @@ using coro_task_value_type_t = typename coro_task_value_type<T>::type;
 
 // ============================================================================
 // Type trait: generator_value_type
-// Extract T from Generator<T>
+// Extract T from coro::Generator<T>
 // ============================================================================
 
 template <typename T>
 struct generator_value_type;
 
 template <typename T>
-struct generator_value_type<Generator<T>> {
+struct generator_value_type<coro::Generator<T>> {
     using type = T;
 };
 
@@ -129,7 +132,7 @@ using awaitable_result_type_t = typename awaitable_result_type<T>::type;
 
 // ============================================================================
 // Type trait: unwrap_coro_task
-// Unwrap CoroTask<T> to T, otherwise return as-is
+// Unwrap coro::CoroTask<T> to T, otherwise return as-is
 // Useful for type deduction in make_task()
 // ============================================================================
 
@@ -139,7 +142,7 @@ struct unwrap_coro_task {
 };
 
 template <typename T>
-struct unwrap_coro_task<CoroTask<T>> {
+struct unwrap_coro_task<coro::CoroTask<T>> {
     using type = T;
 };
 
@@ -189,7 +192,8 @@ auto get_awaitable(T&& value) {
 
 // ============================================================================
 // Type trait: is_coroutine_function
-// Detect if a function returns a coroutine type (CoroTask, Generator, etc.)
+// Detect if a function returns a coroutine type (coro::CoroTask,
+// coro::Generator, etc.)
 // ============================================================================
 
 template <typename Func, typename = void>
@@ -249,6 +253,6 @@ inline ReadyAwaitable<void> make_ready_awaitable() {
     return ReadyAwaitable<void>();
 }
 
-}  // namespace dftracer::utils::coro
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_COROUTINE_TRAITS_H

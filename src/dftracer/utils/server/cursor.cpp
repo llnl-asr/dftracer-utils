@@ -14,11 +14,11 @@ std::string QueryCursor::encode() const {
     std::memcpy(raw, &file_index, 8);
     std::memcpy(raw + 8, &chunk_index, 4);
     std::memcpy(raw + 12, &line_offset, 4);
-    return base64_encode(raw, CURSOR_BYTES);
+    return dstd::base64_encode(raw, CURSOR_BYTES);
 }
 
 std::optional<QueryCursor> QueryCursor::decode(std::string_view cursor) {
-    auto raw = base64_decode(cursor);
+    auto raw = dstd::base64_decode(cursor);
     if (!raw || raw->size() != CURSOR_BYTES) return std::nullopt;
     QueryCursor c;
     std::memcpy(&c.file_index, raw->data(), 8);

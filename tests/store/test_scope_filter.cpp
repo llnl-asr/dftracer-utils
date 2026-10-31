@@ -15,7 +15,7 @@ namespace {
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::ByteView;
 using store::ScopeKind;
 
 ByteView view_of(const dstd::Vector<std::uint8_t>& bytes) {

@@ -104,16 +104,16 @@ void ScalableBloomFilter::serialize_into(
     result.clear();
     result.insert(result.end(), MAGIC, MAGIC + MAGIC_SIZE);
     result.resize(CHAIN_HEADER_SIZE);
-    write_u32_le(result.data() + MAGIC_SIZE,
-                 static_cast<std::uint32_t>(levels_.size()));
+    dstd::write_u32_le(result.data() + MAGIC_SIZE,
+                       static_cast<std::uint32_t>(levels_.size()));
 
     std::vector<unsigned char> blob;
     for (const auto& level : levels_) {
         level.filter.serialize_into(blob);
         const auto offset = result.size();
         result.resize(offset + sizeof(std::uint32_t) + blob.size());
-        write_u32_le(result.data() + offset,
-                     static_cast<std::uint32_t>(blob.size()));
+        dstd::write_u32_le(result.data() + offset,
+                           static_cast<std::uint32_t>(blob.size()));
         std::memcpy(result.data() + offset + sizeof(std::uint32_t), blob.data(),
                     blob.size());
     }
@@ -133,7 +133,7 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
         return result;
     }
 
-    const std::uint32_t count = read_u32_le(data + MAGIC_SIZE);
+    const std::uint32_t count = dstd::read_u32_le(data + MAGIC_SIZE);
     std::size_t cursor = CHAIN_HEADER_SIZE;
     for (std::uint32_t i = 0; i < count; ++i) {
         if (cursor + sizeof(std::uint32_t) > size) {
@@ -141,7 +141,7 @@ ScalableBloomFilter ScalableBloomFilter::from_blob(const unsigned char* data,
                 ErrorCode::Parse,
                 "ScalableBloomFilter::from_blob: truncated level header");
         }
-        const std::size_t blob_size = read_u32_le(data + cursor);
+        const std::size_t blob_size = dstd::read_u32_le(data + cursor);
         cursor += sizeof(std::uint32_t);
         if (cursor + blob_size > size) {
             throw DFTUtilsException(

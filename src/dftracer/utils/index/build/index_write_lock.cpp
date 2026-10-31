@@ -7,7 +7,7 @@ namespace dftracer::utils::index::build {
 
 std::mutex& index_write_mutex(const std::string& index_path) {
     static std::mutex registry_mtx;
-    static StringViewMap<std::unique_ptr<std::mutex>> mutexes;
+    static dstd::StringViewMap<std::unique_ptr<std::mutex>> mutexes;
     std::lock_guard<std::mutex> lk(registry_mtx);
     auto& slot = mutexes[index_path];
     if (!slot) slot = std::make_unique<std::mutex>();

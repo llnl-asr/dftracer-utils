@@ -220,7 +220,7 @@ class AggregationFold : public trace::views::detail::Fold {
     struct SlotKeyHash {
         using is_avalanching = void;
         std::size_t operator()(const SlotKey& k) const noexcept {
-            using dftracer::utils::hash::splitmix64;
+            using dftracer::utils::dstd::hash::splitmix64;
             return static_cast<std::size_t>(splitmix64(
                 splitmix64(splitmix64((std::uint64_t{k.cat} << 32) | k.name) ^
                            ((std::uint64_t{k.host} << 32) | k.extra)) ^

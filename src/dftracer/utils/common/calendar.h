@@ -16,7 +16,7 @@
 
 namespace dftracer::utils {
 
-using CalendarWide = int128_t;
+using CalendarWide = dstd::int128_t;
 
 constexpr std::int64_t NS_PER_SECOND = 1'000'000'000;
 constexpr std::int64_t NS_PER_DAY = 86'400 * NS_PER_SECOND;

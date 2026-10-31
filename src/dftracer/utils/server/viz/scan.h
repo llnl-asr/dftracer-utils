@@ -345,7 +345,8 @@ inline ViewDefinition build_viz_view(const QueryParams& params, double begin,
     dsl.reserve(128);
     char numbuf[20];  // max digits of a uint64_t
     auto append_u64 = [&](std::uint64_t v) {
-        dsl.append(numbuf, to_chars_u64(numbuf, numbuf + sizeof(numbuf), v));
+        dsl.append(numbuf,
+                   dstd::to_chars_u64(numbuf, numbuf + sizeof(numbuf), v));
     };
     auto conjoin = [&dsl]() {
         if (!dsl.empty()) dsl += " and ";

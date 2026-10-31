@@ -11,7 +11,7 @@ void mix_bytes(std::uint64_t& hash, const void* data, std::size_t length) {
     const auto* bytes = static_cast<const std::uint8_t*>(data);
     for (std::size_t i = 0; i < length; ++i) {
         hash ^= bytes[i];
-        hash *= hash::FNV1A_PRIME;
+        hash *= dstd::hash::FNV1A_PRIME;
     }
 }
 
@@ -28,7 +28,7 @@ void mix_u32(std::uint64_t& hash, std::uint32_t value) {
 template <class Path>
 std::uint64_t hash_key(dstd::StringView name, std::uint32_t version,
                        ScopeKind kind, dstd::Span<const Path> paths) {
-    std::uint64_t hash = hash::FNV1A_OFFSET_BASIS;
+    std::uint64_t hash = dstd::hash::FNV1A_OFFSET_BASIS;
     mix_u32(hash, static_cast<std::uint32_t>(name.size()));
     mix_bytes(hash, name.data(), name.size());
     mix_u32(hash, version);
@@ -38,12 +38,12 @@ std::uint64_t hash_key(dstd::StringView name, std::uint32_t version,
         mix_u32(hash, static_cast<std::uint32_t>(path.size()));
         mix_bytes(hash, path.data(), path.size());
     }
-    return hash::fnv1a_mix(hash);
+    return dstd::hash::fnv1a_mix(hash);
 }
 
 std::uint64_t probe_bit(std::uint64_t hash, std::size_t probe,
                         std::uint64_t bits) {
-    const std::uint64_t step = hash::splitmix64(hash) | 1U;
+    const std::uint64_t step = dstd::hash::splitmix64(hash) | 1U;
     return (hash + probe * step) % bits;
 }
 
@@ -77,7 +77,7 @@ dstd::Vector<std::uint8_t> build_scope_filter(
     return filter;
 }
 
-bool scope_filter_may_hold(ByteView filter, std::uint64_t hash) {
+bool scope_filter_may_hold(dstd::ByteView filter, std::uint64_t hash) {
     if (filter.empty() || filter.size() % 8U != 0) return true;
     const auto* data = reinterpret_cast<const std::uint8_t*>(filter.data());
     const std::uint64_t bits = static_cast<std::uint64_t>(filter.size()) * 8U;

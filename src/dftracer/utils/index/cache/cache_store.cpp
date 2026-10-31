@@ -48,8 +48,8 @@ const kv::NamespaceSpec& usage_spec() {
 }
 
 kv::ScopeKey scope_of(std::uint64_t sig) {
-    char hex[hash::HEX64_DIGITS];
-    hash::format_hex64(sig, hex);
+    char hex[dstd::hash::HEX64_DIGITS];
+    dstd::hash::format_hex64(sig, hex);
     return kv::ScopeKey::file(dstd::StringView(hex, sizeof(hex)));
 }
 
@@ -57,17 +57,20 @@ std::optional<std::uint64_t> sig_of(const kv::ScopeKey& scope) {
     if (scope.kind != kv::ScopeKind::File || scope.paths.size() != 1)
         return std::nullopt;
     const dstd::String& path = scope.paths[0];
-    return hash::parse_hex64(std::string_view(path.data(), path.size()));
+    return dstd::hash::parse_hex64(std::string_view(path.data(), path.size()));
 }
 
-ByteView view_of(std::string_view s) { return ByteView(s.data(), s.size()); }
+dstd::ByteView view_of(std::string_view s) {
+    return dstd::ByteView(s.data(), s.size());
+}
 
-std::string_view text_of(ByteView b) {
+std::string_view text_of(dstd::ByteView b) {
     return std::string_view(reinterpret_cast<const char*>(b.data()), b.size());
 }
 
-std::uint64_t u64_at(ByteView b, std::size_t at) {
-    return read_u64_be(reinterpret_cast<const std::uint8_t*>(b.data()) + at);
+std::uint64_t u64_at(dstd::ByteView b, std::size_t at) {
+    return dstd::read_u64_be(reinterpret_cast<const std::uint8_t*>(b.data()) +
+                             at);
 }
 
 [[noreturn]] void throw_io(std::string_view what, const dstd::Error& error) {
@@ -84,8 +87,8 @@ void check(std::string_view what,
 
 std::string usage_value(std::uint64_t bytes, std::uint64_t last_used) {
     std::string v;
-    append_u64_be(v, bytes);
-    append_u64_be(v, last_used);
+    dstd::append_u64_be(v, bytes);
+    dstd::append_u64_be(v, last_used);
     return v;
 }
 
@@ -218,7 +221,8 @@ std::vector<CacheStore::Usage> CacheStore::usage() const {
     std::vector<Usage> out;
     const auto held = root_->snapshot();
     if (!held) return out;
-    auto cursor = held->scan_all(usage_spec(), ByteView{}, ByteView{});
+    auto cursor =
+        held->scan_all(usage_spec(), dstd::ByteView{}, dstd::ByteView{});
     for (; !cursor.at_end(); cursor.next()) {
         const auto sig = sig_of(cursor.scope());
         if (!sig || text_of(cursor.key()) != USAGE_KEY) continue;

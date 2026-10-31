@@ -86,7 +86,7 @@ class RowSetFold : public trace::views::detail::Fold {
     std::vector<Rows> pending_;
     std::vector<Rows> sealed_;
     // Per distinct row set, the keys of its sealed rows.
-    std::vector<dftracer::utils::StringViewSet> seen_;
+    std::vector<dftracer::utils::dstd::StringViewSet> seen_;
     duql::ValueMap scratch_;
 };
 

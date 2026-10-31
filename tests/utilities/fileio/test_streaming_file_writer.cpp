@@ -16,7 +16,7 @@
 
 using namespace dftracer::utils::utilities::fileio;
 using namespace dftu_utils_test;
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::ByteView;
 
 TEST_CASE("StreamingFileWriterUtility - Basic Operations") {
     fs::path test_file = make_unique_test_path("test_streaming_writer.txt");

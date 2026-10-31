@@ -7,8 +7,8 @@ namespace dftracer::utils::trace::internal {
 
 std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
     static std::mutex guard;
-    static StringViewMap<std::shared_ptr<IndexRoot>> roots;
-    static StringViewMap<std::shared_ptr<IndexRoot>> by_spelling;
+    static dstd::StringViewMap<std::shared_ptr<IndexRoot>> roots;
+    static dstd::StringViewMap<std::shared_ptr<IndexRoot>> by_spelling;
     {
         const std::lock_guard<std::mutex> lock(guard);
         const auto it = by_spelling.find(index_path);

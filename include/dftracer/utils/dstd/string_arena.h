@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /// Bump arena for string_views that must survive until a later flush point
 /// (e.g. an Arrow builder.finish()).  Not thread-safe.
@@ -49,6 +49,6 @@ struct StringArena {
     }
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_STRING_ARENA_H

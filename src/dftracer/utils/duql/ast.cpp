@@ -37,8 +37,8 @@ void for_each_field(const QueryNode& node, Fn&& fn) {
 
 }  // namespace
 
-dftracer::utils::StringViewSet collect_fields(const QueryNode& node) {
-    dftracer::utils::StringViewSet fields;
+dftracer::utils::dstd::StringViewSet collect_fields(const QueryNode& node) {
+    dftracer::utils::dstd::StringViewSet fields;
     for_each_field(node,
                    [&](std::string_view path, bool) { fields.insert(path); });
     return fields;

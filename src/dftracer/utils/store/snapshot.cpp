@@ -27,11 +27,11 @@
 namespace dftracer::utils::store {
 namespace {
 
-using dftracer::utils::ByteView;
 using dftracer::utils::Executor;
-using dftracer::utils::read_u32_le;
-using dftracer::utils::read_u64_le;
 using dftracer::utils::Runtime;
+using dftracer::utils::dstd::ByteView;
+using dftracer::utils::dstd::read_u32_le;
+using dftracer::utils::dstd::read_u64_le;
 
 dstd::Unexpected<dstd::Error> io_error() {
     return dstd::Unexpected<dstd::Error>(dstd::Error(dstd::Condition::Io));
@@ -136,7 +136,7 @@ dstd::String group_key(dstd::StringView name, std::uint32_t version,
     dstd::String key;
     const auto add_u32 = [&key](std::uint32_t value) {
         char bytes[4];
-        write_u32_le(reinterpret_cast<std::uint8_t*>(bytes), value);
+        dstd::write_u32_le(reinterpret_cast<std::uint8_t*>(bytes), value);
         key.append(bytes, sizeof(bytes));
     };
     add_u32(static_cast<std::uint32_t>(name.size()));

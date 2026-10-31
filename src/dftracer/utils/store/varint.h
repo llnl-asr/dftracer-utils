@@ -14,19 +14,19 @@ namespace dftracer::utils::store {
 
 inline void encode_varint(dstd::Vector<std::uint8_t>& out,
                           std::uint64_t value) {
-    append_varint(out, value);
+    dstd::append_varint(out, value);
 }
 
 /// Decodes one varint at offset and moves offset past it. Truncated or
 /// over-long input returns Parse and leaves offset where it was.
 inline dstd::Expected<std::uint64_t, dstd::Error> decode_varint(
-    dftracer::utils::ByteView bytes, std::size_t& offset) {
+    dftracer::utils::dstd::ByteView bytes, std::size_t& offset) {
     const std::size_t start = offset;
     std::uint64_t value = 0;
     if (start < bytes.size()) {
         const auto* begin = reinterpret_cast<const std::uint8_t*>(bytes.data());
         const std::uint8_t* p = begin + start;
-        if (read_varint(p, begin + bytes.size(), value)) {
+        if (dstd::read_varint(p, begin + bytes.size(), value)) {
             offset = static_cast<std::size_t>(p - begin);
             return value;
         }

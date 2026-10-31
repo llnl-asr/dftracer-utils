@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 struct TransparentStringHash {
     using is_transparent = void;
@@ -47,6 +47,6 @@ using StringViewSet =
     ankerl::unordered_dense::set<std::string, TransparentStringHash,
                                  TransparentStringEqual>;
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_TRANSPARENT_STRING_HASH_H

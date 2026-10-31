@@ -44,12 +44,12 @@ inline void append_u8(std::string& out, std::uint8_t value) {
 }
 
 inline void append_string(std::string& out, std::string_view value) {
-    append_u32_be(out, static_cast<std::uint32_t>(value.size()));
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(value.size()));
     out.append(value.data(), value.size());
 }
 
 inline void append_blob(std::string& out, std::span<const unsigned char> blob) {
-    append_u32_be(out, static_cast<std::uint32_t>(blob.size()));
+    dstd::append_u32_be(out, static_cast<std::uint32_t>(blob.size()));
     out.append(reinterpret_cast<const char*>(blob.data()), blob.size());
 }
 
@@ -60,18 +60,18 @@ class Cursor {
     std::uint8_t u8() { return static_cast<std::uint8_t>(take(1)[0]); }
 
     std::uint32_t u32() {
-        return read_u32_be(
+        return dstd::read_u32_be(
             reinterpret_cast<const std::uint8_t*>(take(4).data()));
     }
 
     std::uint64_t u64() {
-        return read_u64_be(
+        return dstd::read_u64_be(
             reinterpret_cast<const std::uint8_t*>(take(8).data()));
     }
 
     std::int64_t i64() { return static_cast<std::int64_t>(u64()); }
 
-    double f64() { return bits_double(u64()); }
+    double f64() { return dstd::bits_double(u64()); }
 
     std::string_view str_view() {
         auto len = static_cast<std::size_t>(u32());

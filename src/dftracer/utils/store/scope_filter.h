@@ -37,7 +37,7 @@ dstd::Vector<std::uint8_t> build_scope_filter(
 /// False only when the file whose filter is `filter` cannot hold the scope of
 /// `hash`. An empty filter, or one that is not a multiple of 8 bytes, holds
 /// every scope.
-bool scope_filter_may_hold(ByteView filter, std::uint64_t hash);
+bool scope_filter_may_hold(dstd::ByteView filter, std::uint64_t hash);
 
 }  // namespace dftracer::utils::store
 

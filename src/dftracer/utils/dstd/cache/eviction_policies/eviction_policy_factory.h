@@ -7,7 +7,7 @@
 
 #include <memory>
 
-namespace dftracer::utils::cache {
+namespace dftracer::utils::dstd::cache {
 
 // Definition of the make_eviction_policy factory declared in the public
 // header. A translation unit that needs it for a concrete Key includes this
@@ -24,6 +24,6 @@ std::unique_ptr<EvictionPolicy<Key>> make_eviction_policy(EvictionKind kind) {
     }
 }
 
-}  // namespace dftracer::utils::cache
+}  // namespace dftracer::utils::dstd::cache
 
 #endif  // DFTRACER_UTILS_DSTD_CACHE_EVICTION_POLICIES_EVICTION_POLICY_FACTORY_H

@@ -98,8 +98,8 @@ std::optional<Config> read_config(const IndexDatabase& db) {
 
 void write_config(IndexDatabase& db, const Config& config) {
     std::string value;
-    append_u64_be(value, config.time_interval_us);
-    append_u64_be(value, config.params_hash);
+    dstd::append_u64_be(value, config.time_interval_us);
+    dstd::append_u64_be(value, config.params_hash);
     value.push_back(
         static_cast<char>(config.group_by_file ? FLAG_GROUP_BY_FILE : 0));
     for (std::size_t i = 0; i < config.extra_group_keys.size(); ++i) {
@@ -220,8 +220,8 @@ void widen_time_bounds(IndexDatabase& db, TimeBounds bounds) {
         bounds.max_bucket = std::max(bounds.max_bucket, stored->max_bucket);
     }
     std::string value;
-    append_u64_be(value, bounds.min_bucket);
-    append_u64_be(value, bounds.max_bucket);
+    dstd::append_u64_be(value, bounds.min_bucket);
+    dstd::append_u64_be(value, bounds.max_bucket);
     put_meta(db, TIME_BOUNDS_NAME, value);
 }
 

@@ -248,7 +248,7 @@ int PartitionRouter::compute_bucket(
         combined += v;
         combined += '\0';
     }
-    return static_cast<int>(dftracer::utils::hash::fnv1a_hash(combined) %
+    return static_cast<int>(dftracer::utils::dstd::hash::fnv1a_hash(combined) %
                             static_cast<uint64_t>(config_.num_buckets));
 }
 

@@ -213,10 +213,10 @@ std::string set_text(const Series& c, std::int64_t i) {
         case TypeId::String:
             return std::string(c.string_at(i));
         case TypeId::Float32:
-            return dftracer::utils::float_text(
+            return dftracer::utils::dstd::float_text(
                 static_cast<float>(read_f64(c, i)));
         case TypeId::Float64:
-            return dftracer::utils::double_text(read_f64(c, i));
+            return dftracer::utils::dstd::double_text(read_f64(c, i));
         default:
             return cell_repr(c, i);
     }
@@ -236,8 +236,8 @@ void set_insert(AggState::StringSet& set, std::string v, std::size_t group,
 // bottom-k order (and the [0,1) normalization the estimator divides by)
 // uniform.
 std::uint64_t kmv_hash(std::string_view v) {
-    return dftracer::utils::hash::fnv1a_mix(
-        dftracer::utils::hash::fnv1a_hash(v));
+    return dftracer::utils::dstd::hash::fnv1a_mix(
+        dftracer::utils::dstd::hash::fnv1a_hash(v));
 }
 
 }  // namespace
@@ -491,10 +491,10 @@ bool key_words(const std::vector<PlainKey>& k, std::int64_t i,
 // Independent products summed, so the words hash in parallel, then one mix.
 std::uint64_t hash_words(const std::uint64_t* w, std::size_t W) {
     std::uint64_t h = 0;
-    constexpr std::uint64_t K = dftracer::utils::hash::GOLDEN_RATIO;
+    constexpr std::uint64_t K = dftracer::utils::dstd::hash::GOLDEN_RATIO;
     std::uint64_t m = K;
     for (std::size_t j = 0; j < W; ++j, m += 2 * K) h += w[j] * m;
-    return dftracer::utils::hash::splitmix64(h);
+    return dftracer::utils::dstd::hash::splitmix64(h);
 }
 
 // The group in the word table with these words, or -1.
@@ -1474,7 +1474,7 @@ void agg_accumulate(AggState& st, const std::vector<const Series*>& keys,
                 const Series* vc =
                     values[static_cast<std::size_t>(st.msk_val_col[slot])];
                 if (vc->is_null(i)) continue;
-                if (!base64_decode_into(vc->string_at(i), sketch_bytes))
+                if (!dstd::base64_decode_into(vc->string_at(i), sketch_bytes))
                     continue;
                 const MergeSketch one = MergeSketch::deserialize(
                     reinterpret_cast<const std::uint8_t*>(sketch_bytes.data()),

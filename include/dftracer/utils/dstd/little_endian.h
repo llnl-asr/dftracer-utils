@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 // Little-endian fixed-width byte codec. The read_* and write_* functions do not
 // check bounds and the caller owns the buffer. LeReader is the checked form.
@@ -151,6 +151,6 @@ class LeReader {
     const std::uint8_t* end_;
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_LITTLE_ENDIAN_H

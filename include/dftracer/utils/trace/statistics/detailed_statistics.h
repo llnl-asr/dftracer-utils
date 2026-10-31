@@ -47,14 +47,14 @@ struct DetailedStatistics {
     /// Global duration over all events.
     DistributionStats duration;
 
-    StringViewMap<DistributionStats> grouped_duration;
+    dstd::StringViewMap<DistributionStats> grouped_duration;
 
     /// Only groups that have I/O events.
-    StringViewMap<IOEventMetrics> grouped_io;
+    dstd::StringViewMap<IOEventMetrics> grouped_io;
 
     /// Group key -> category (e.g. "POSIX", "dlio_benchmark"); the display
     /// layer splits events by category on this.
-    StringViewMap<std::string> group_key_category;
+    dstd::StringViewMap<std::string> group_key_category;
 
     std::uint64_t events_scanned = 0;
     std::uint64_t chunks_scanned = 0;

@@ -96,7 +96,7 @@ const ::dftu_svc_agg g_build_agg = {build_agg_new, build_agg_accumulate,
 // A port key is a pure hash of the name, so wiring a port up is available at
 // load; moving bytes through one needs a batch that does not exist yet.
 std::uint64_t build_port_key(void*, const char* name) {
-    return name ? dftracer::utils::hash::fnv1a_hash(name) : 0;
+    return name ? dftracer::utils::dstd::hash::fnv1a_hash(name) : 0;
 }
 
 void build_port_publish(void* h, std::uint64_t, const void*, std::uint32_t) {

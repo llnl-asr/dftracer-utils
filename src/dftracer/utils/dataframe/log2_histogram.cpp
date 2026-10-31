@@ -10,7 +10,7 @@ namespace dftracer::utils::dataframe {
 
 std::size_t Log2Histogram::bin_index(std::uint64_t value) {
     // floor(log2(value)) + 1, and 0 for value 0.
-    return static_cast<std::size_t>(bits::bit_width_u64(value));
+    return static_cast<std::size_t>(dstd::bits::bit_width_u64(value));
 }
 
 std::uint64_t Log2Histogram::bin_lower(std::size_t bin) {

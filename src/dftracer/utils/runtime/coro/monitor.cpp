@@ -55,7 +55,7 @@ struct Done {
 // for the end-of-run report. Both live under one shard lock, so a completion
 // (erase live + append done) takes a single lock, not two.
 struct ShardData {
-    ankerl::unordered_dense::map<const void*, Live, PtrHash> live;
+    ankerl::unordered_dense::map<const void*, Live, dstd::PtrHash> live;
     std::vector<Done> done;
 };
 
@@ -72,7 +72,7 @@ Registry& registry() {
     return r;
 }
 
-std::size_t shard_key(const void* handle) { return PtrHash{}(handle); }
+std::size_t shard_key(const void* handle) { return dstd::PtrHash{}(handle); }
 
 // The coroutine currently resuming on this worker thread (its monitor id), so
 // work it enqueues attributes as a child. -1 = none/untracked.

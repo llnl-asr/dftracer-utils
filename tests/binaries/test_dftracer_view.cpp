@@ -5,6 +5,7 @@
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -132,9 +133,6 @@ std::size_t count_lines(const std::string& s) {
 namespace df = dftracer::utils::dataframe;
 namespace cli = dftracer::utils::binaries;
 
-__extension__ typedef unsigned __int128 uint128_t;
-__extension__ typedef __int128 int128_t;
-
 df::Series make_bool_series(const std::vector<bool>& bits) {
     std::vector<std::uint8_t> packed((bits.size() + 7) / 8, 0);
     for (std::size_t i = 0; i < bits.size(); ++i)
@@ -168,7 +166,8 @@ df::Series make_float16_series(const std::vector<float>& values) {
 // Decimal128: exact little-endian two's-complement payload, decimal_scale 0
 // (the only scale a FLAT-constructed decimal column carries; nonzero scale
 // only reaches the engine via Arrow import, unreachable from this CLI).
-df::Series make_decimal128_series(const std::vector<int128_t>& values) {
+df::Series make_decimal128_series(
+    const std::vector<dftracer::utils::dstd::int128_t>& values) {
     std::vector<std::uint8_t> bytes(values.size() * 16);
     for (std::size_t i = 0; i < values.size(); ++i)
         std::memcpy(bytes.data() + i * 16, &values[i], 16);
@@ -177,7 +176,8 @@ df::Series make_decimal128_series(const std::vector<int128_t>& values) {
 }
 
 // Decimal256: `values` sign-extended from 128 to 256 bits.
-df::Series make_decimal256_series(const std::vector<int128_t>& values) {
+df::Series make_decimal256_series(
+    const std::vector<dftracer::utils::dstd::int128_t>& values) {
     std::vector<std::uint8_t> bytes(values.size() * 32, 0);
     for (std::size_t i = 0; i < values.size(); ++i) {
         std::memcpy(bytes.data() + i * 32, &values[i], 16);
@@ -1037,8 +1037,11 @@ TEST_SUITE("DFTracerView JSON cell printer") {
     TEST_CASE("Decimal128/256 render the exact value, not a lossy double") {
         // INT64_MAX * 1000 + 807: 22 digits, well past a double's ~17
         // significant digits, so a lossy path would visibly round this.
-        const int128_t big =
-            static_cast<int128_t>(9223372036854775807LL) * 1000 + 807;
+        const dftracer::utils::dstd::int128_t big =
+            static_cast<dftracer::utils::dstd::int128_t>(
+                9223372036854775807LL) *
+                1000 +
+            807;
         // Rendered as a quoted JSON string: a JSON number cannot hold a
         // precision-38 decimal exactly once a double consumer parses it.
         auto d128 = make_decimal128_series({big, -big, 0});

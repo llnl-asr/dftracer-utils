@@ -86,9 +86,9 @@ BloomFilter BloomFilter::from_blob(const unsigned char* data,
             "BloomFilter::from_blob: data too small for header");
     }
 
-    std::uint32_t num_hashes = read_u32_le(data);
-    std::uint32_t num_entries = read_u32_le(data + 4);
-    std::uint32_t num_bits = read_u32_le(data + 8);
+    std::uint32_t num_hashes = dstd::read_u32_le(data);
+    std::uint32_t num_entries = dstd::read_u32_le(data + 4);
+    std::uint32_t num_bits = dstd::read_u32_le(data + 8);
 
     std::size_t bit_bytes = size - HEADER_SIZE;
 
@@ -108,12 +108,12 @@ BloomFilter::Hashes BloomFilter::hash(std::string_view value) {
     // breaks Lemire reduction in the blocked path. Run a SplitMix64-style
     // finisher to fully avalanche, then derive a second hash for masking.
     std::uint64_t h1 = raw;
-    h1 = (h1 ^ (h1 >> 30)) * hash::SPLITMIX64_MUL1;
-    h1 = (h1 ^ (h1 >> 27)) * hash::SPLITMIX64_MUL2;
+    h1 = (h1 ^ (h1 >> 30)) * dstd::hash::SPLITMIX64_MUL1;
+    h1 = (h1 ^ (h1 >> 27)) * dstd::hash::SPLITMIX64_MUL2;
     h1 ^= (h1 >> 31);
-    std::uint64_t h2 = raw + hash::GOLDEN_RATIO;
-    h2 = (h2 ^ (h2 >> 30)) * hash::SPLITMIX64_MUL1;
-    h2 = (h2 ^ (h2 >> 27)) * hash::SPLITMIX64_MUL2;
+    std::uint64_t h2 = raw + dstd::hash::GOLDEN_RATIO;
+    h2 = (h2 ^ (h2 >> 30)) * dstd::hash::SPLITMIX64_MUL1;
+    h2 = (h2 ^ (h2 >> 27)) * dstd::hash::SPLITMIX64_MUL2;
     h2 ^= (h2 >> 31);
     return {h1, h2};
 }
@@ -168,9 +168,11 @@ std::vector<unsigned char> BloomFilter::serialize() const {
 
 void BloomFilter::serialize_into(std::vector<unsigned char>& result) const {
     result.resize(HEADER_SIZE + bits_.size());
-    write_u32_le(result.data(), static_cast<std::uint32_t>(num_hashes_));
-    write_u32_le(result.data() + 4, static_cast<std::uint32_t>(num_entries_));
-    write_u32_le(result.data() + 8, static_cast<std::uint32_t>(num_bits_));
+    dstd::write_u32_le(result.data(), static_cast<std::uint32_t>(num_hashes_));
+    dstd::write_u32_le(result.data() + 4,
+                       static_cast<std::uint32_t>(num_entries_));
+    dstd::write_u32_le(result.data() + 8,
+                       static_cast<std::uint32_t>(num_bits_));
     std::memcpy(result.data() + HEADER_SIZE, bits_.data(), bits_.size());
 }
 

@@ -151,7 +151,7 @@ struct AggKey {
 struct AggKeyHash {
     using is_avalanching = void;
     std::size_t operator()(const AggKey& k) const noexcept {
-        using dftracer::utils::hash::splitmix64;
+        using dftracer::utils::dstd::hash::splitmix64;
         std::uint64_t h = splitmix64(k.window ^ k.extra);
         h = splitmix64(h ^ k.file ^ (std::uint64_t{k.file_text} << 1));
         h = splitmix64(h ^ (std::uint64_t{k.host} << 2 |

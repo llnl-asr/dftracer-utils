@@ -110,13 +110,13 @@ std::vector<std::uint8_t> TimestampHistogram::serialize() const {
     std::vector<std::uint8_t> out;
     out.reserve(bins_.size() * 6 + 16);
 
-    append_varint(out, total_count_);
-    append_varint(out, bins_.size());
+    dstd::append_varint(out, total_count_);
+    dstd::append_varint(out, bins_.size());
 
     std::uint64_t prev_idx = 0;
     for (const auto& [idx, count] : bins_) {
-        append_varint(out, idx - prev_idx);
-        append_varint(out, count);
+        dstd::append_varint(out, idx - prev_idx);
+        dstd::append_varint(out, count);
         prev_idx = idx;
     }
 
@@ -132,15 +132,16 @@ TimestampHistogram TimestampHistogram::deserialize(const std::uint8_t* data,
     const auto* end = data + len;
 
     std::uint64_t num_bins = 0;
-    if (!read_varint(ptr, end, hist.total_count_)) return hist;
-    if (!read_varint(ptr, end, num_bins)) return hist;
+    if (!dstd::read_varint(ptr, end, hist.total_count_)) return hist;
+    if (!dstd::read_varint(ptr, end, num_bins)) return hist;
 
     hist.bins_.reserve(static_cast<std::size_t>(num_bins));
     std::uint64_t prev_idx = 0;
     for (std::uint64_t i = 0; i < num_bins; ++i) {
         std::uint64_t delta = 0;
         std::uint64_t count = 0;
-        if (!read_varint(ptr, end, delta) || !read_varint(ptr, end, count)) {
+        if (!dstd::read_varint(ptr, end, delta) ||
+            !dstd::read_varint(ptr, end, count)) {
             break;
         }
         prev_idx += delta;

@@ -37,7 +37,7 @@ class DuqlParseError : public DFTUtilsException {
 };
 
 /// Values bound to `$name` parameters, by name without the `$`.
-using Params = StringViewMap<ParamValue>;
+using Params = dstd::StringViewMap<ParamValue>;
 
 /// Parse a duql filter into an AST. Throws nothing; a syntax error, or a
 /// construct this engine cannot evaluate yet, is the error value.

@@ -138,7 +138,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
         ankerl::unordered_dense::map<std::int64_t, std::string> rank;
         // pid -> entity value, for a path schema's text entities.
         ankerl::unordered_dense::map<std::int64_t, std::string> label;
-        dftracer::utils::StringViewMap<std::string> hh;
+        dftracer::utils::dstd::StringViewMap<std::string> hh;
     };
     std::size_t slots = std::max<std::size_t>(1, index.max_concurrent());
     std::vector<Acc> accs(slots);
@@ -297,7 +297,7 @@ coro::CoroTask<HttpResponse> handle_viz_proctree(const HttpRequest& req,
     std::sort(inf_forks.begin(), inf_forks.end());
 
     // Merge host (hhash -> hostname resolved) and I/O bytes per process.
-    dftracer::utils::StringViewMap<std::string> hh;
+    dftracer::utils::dstd::StringViewMap<std::string> hh;
     ankerl::unordered_dense::map<std::int64_t, std::string> pid_hhash;
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> bytes;
     ankerl::unordered_dense::map<std::int64_t, std::uint64_t> io_ops;

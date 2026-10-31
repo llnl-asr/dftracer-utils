@@ -148,7 +148,7 @@ class HashJoin {
     std::uint64_t direct_base_ = 0;
     std::vector<std::int64_t> next_;
     // Lookup and Nest by value: the rows of each value key, in order.
-    StringViewMap<std::vector<std::int64_t>> by_value_;
+    dstd::StringViewMap<std::vector<std::int64_t>> by_value_;
     bool value_index_ = false;
     bool conflicts_given_ = false;
     std::vector<std::int64_t> typed_conflicts_;

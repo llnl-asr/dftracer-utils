@@ -151,7 +151,7 @@ std::uint64_t identity_hash(const trace::views::detail::ViewPlan& plan) {
     k += plan.query ? plan.query->source() : "";
     k += phase_tag(plan);
     k += window_tag(plan);
-    return dftracer::utils::hash::fnv1a_hash(k);
+    return dftracer::utils::dstd::hash::fnv1a_hash(k);
 }
 
 std::string hex8(std::uint64_t h) {

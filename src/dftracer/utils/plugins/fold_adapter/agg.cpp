@@ -82,7 +82,7 @@ const void* detail::agg_ext_vtable() { return &g_agg; }
             name);
         return nullptr;
     }
-    std::uint64_t key = dftracer::utils::hash::fnv1a_hash(name);
+    std::uint64_t key = dftracer::utils::dstd::hash::fnv1a_hash(name);
     if (std::unique_ptr<AggAccum>* slot = aggs_.find(key))
         return reinterpret_cast<::dftu_agg*>(slot->get());
 
@@ -182,14 +182,15 @@ void PluginFold::agg_accumulate(::dftu_agg* a, const ::dftu_dataframe* df) {
 // own partial state.
 ::dftu_dataframe* PluginFold::agg_result(const char* name) const {
     if (!name || !results_) return nullptr;
-    auto it = results_->aggs.find(dftracer::utils::hash::fnv1a_hash(name));
+    auto it =
+        results_->aggs.find(dftracer::utils::dstd::hash::fnv1a_hash(name));
     if (it == results_->aggs.end() || !it->second) return nullptr;
     return finalize_to_frame(*it->second);
 }
 
 std::size_t PluginFold::agg_spill_runs(const char* name) const {
     if (!name) return 0;
-    const std::uint64_t key = dftracer::utils::hash::fnv1a_hash(name);
+    const std::uint64_t key = dftracer::utils::dstd::hash::fnv1a_hash(name);
     auto it = aggs_.index().find(key);
     if (it == aggs_.index().end()) return 0;
     const std::unique_ptr<AggAccum>& acc = aggs_[it->second];

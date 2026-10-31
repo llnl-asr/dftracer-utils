@@ -4,8 +4,8 @@
 
 #include <string>
 
-using dftracer::utils::hash::format_hex64;
-using dftracer::utils::hash::parse_hex64;
+using dftracer::utils::dstd::hash::format_hex64;
+using dftracer::utils::dstd::hash::parse_hex64;
 
 TEST_SUITE("hex64") {
     TEST_CASE("hex64 - round trips every value") {

@@ -85,7 +85,7 @@ class ExtentWriter {
     /// WrittenExtent::contexts. An empty segment is InvalidArgument. Once a
     /// write failed, returns its error.
     dstd::Expected<void, dstd::Error> append(std::uint32_t namespace_id,
-                                             ByteView segment_bytes,
+                                             dstd::ByteView segment_bytes,
                                              ExtentSegment info, void* context,
                                              PageCodec codec = PageCodec::Zstd);
 
@@ -147,7 +147,7 @@ class ExtentWriter {
     /// deleted with the writer.
     void retire(OpenExtent* extent);
     dstd::Expected<void, dstd::Error> append_run(std::uint32_t namespace_id,
-                                                 ByteView segment_bytes,
+                                                 dstd::ByteView segment_bytes,
                                                  ExtentSegment info,
                                                  void* context,
                                                  PageCodec codec);

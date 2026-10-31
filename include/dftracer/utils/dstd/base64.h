@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /// Standard base64 (RFC 4648 alphabet) with `=` padding.
 std::string base64_encode(const void* data, std::size_t len);
@@ -18,6 +18,6 @@ std::optional<std::string> base64_decode(std::string_view sv);
 /// when `sv` is not padded base64.
 bool base64_decode_into(std::string_view sv, std::string& out);
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_BASE64_H

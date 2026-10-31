@@ -30,7 +30,9 @@ std::string read_all(const std::string& path) {
     return ss.str();
 }
 
-ByteView sv(const std::string& s) { return ByteView(s.data(), s.size()); }
+dstd::ByteView sv(const std::string& s) {
+    return dstd::ByteView(s.data(), s.size());
+}
 
 void cleanup(const std::vector<std::string>& paths) {
     for (const auto& p : paths) std::remove(p.c_str());

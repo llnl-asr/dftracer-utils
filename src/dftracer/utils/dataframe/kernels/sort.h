@@ -64,7 +64,7 @@ bool bucket_packed_sort(T* data, std::size_t n, std::size_t buckets,
     sample.reserve(buckets * OVERSAMPLE);
     for (std::size_t i = 0; i < buckets * OVERSAMPLE; ++i)
         sample.push_back(
-            key_of(data[dftracer::utils::hash::splitmix64(i) % n]));
+            key_of(data[dftracer::utils::dstd::hash::splitmix64(i) % n]));
     std::sort(sample.begin(), sample.end());
     std::vector<std::uint64_t> splitters;  // buckets - 1 of them, ascending
     splitters.reserve(buckets - 1);

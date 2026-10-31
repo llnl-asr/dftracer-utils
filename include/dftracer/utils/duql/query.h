@@ -44,7 +44,9 @@ class Query {
     /// Serialize AST back to query DSL string.
     std::string to_string() const;
     /// Fields referenced by this query, precomputed at construction.
-    const dftracer::utils::StringViewSet& fields() const { return fields_; }
+    const dftracer::utils::dstd::StringViewSet& fields() const {
+        return fields_;
+    }
     bool references(std::string_view field) const {
         return fields_.count(field) > 0;
     }
@@ -64,7 +66,7 @@ class Query {
 
     QueryNodePtr root_;
     std::string source_;
-    dftracer::utils::StringViewSet fields_;
+    dftracer::utils::dstd::StringViewSet fields_;
     std::vector<std::string> any_paths_;
     bool has_expressions_ = false;
 };

@@ -11,7 +11,7 @@ bool unrecorded(std::string_view path) {
            head == "ph" || head == "id";
 }
 
-const StringViewMap<std::uint64_t>* GranuleCounts::get() const {
+const dstd::StringViewMap<std::uint64_t>* GranuleCounts::get() const {
     if (!values && !compressed.empty())
         values =
             index::extensions::ChunkDimensionStats::decompress_value_counts(

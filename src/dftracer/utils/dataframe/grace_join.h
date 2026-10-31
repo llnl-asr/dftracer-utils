@@ -109,7 +109,7 @@ class GraceJoin {
         std::unique_ptr<Cursor> right;      // the right spool, read in blocks
         std::vector<std::uint8_t> matched;  // per left row: a block matched
         // Nest only: the group of each key, and the group joined now.
-        StringViewMap<std::uint64_t> group_of;
+        dstd::StringViewMap<std::uint64_t> group_of;
         std::uint64_t group = 0;
         std::uint64_t groups = 0;
         bool last_pass = false;  // probing done: the deferred left rows leave

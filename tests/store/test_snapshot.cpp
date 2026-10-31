@@ -41,8 +41,8 @@ namespace {
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::ByteView;
 using dftracer::utils::Runtime;
+using dftracer::utils::dstd::ByteView;
 using dftracer::utils::dstd::Condition;
 using store::Batch;
 using store::CopyInfo;
@@ -93,25 +93,26 @@ std::string value_of(int index) { return "value-" + std::to_string(index); }
 
 std::string i64_bytes(std::int64_t value) {
     std::string bytes(8, '\0');
-    dftracer::utils::write_u64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
-                                  static_cast<std::uint64_t>(value));
+    dftracer::utils::dstd::write_u64_le(
+        reinterpret_cast<std::uint8_t*>(bytes.data()),
+        static_cast<std::uint64_t>(value));
     return bytes;
 }
 
 std::string f64_bytes(double value) {
     std::string bytes(8, '\0');
-    dftracer::utils::write_f64_le(reinterpret_cast<std::uint8_t*>(bytes.data()),
-                                  value);
+    dftracer::utils::dstd::write_f64_le(
+        reinterpret_cast<std::uint8_t*>(bytes.data()), value);
     return bytes;
 }
 
 std::int64_t read_i64(ByteView bytes) {
-    return std::bit_cast<std::int64_t>(dftracer::utils::read_u64_le(
+    return std::bit_cast<std::int64_t>(dftracer::utils::dstd::read_u64_le(
         reinterpret_cast<const std::uint8_t*>(bytes.data())));
 }
 
 double read_f64(ByteView bytes) {
-    return dftracer::utils::read_f64_le(
+    return dftracer::utils::dstd::read_f64_le(
         reinterpret_cast<const std::uint8_t*>(bytes.data()));
 }
 
@@ -221,7 +222,7 @@ std::vector<store::IndexedExtentRef> extent_refs_of(
 /// commit that was not durable counts as not synced.
 std::vector<std::uint8_t> without_footer(std::vector<std::uint8_t> bytes) {
     REQUIRE(bytes.size() >= store::FILE_TRAILER_BYTES);
-    const std::uint64_t footer = dftracer::utils::read_u64_le(
+    const std::uint64_t footer = dftracer::utils::dstd::read_u64_le(
         bytes.data() + bytes.size() - store::FILE_TRAILER_BYTES + 8U);
     REQUIRE(footer >= store::FILE_HEADER_BYTES);
     REQUIRE(footer < bytes.size());
@@ -252,8 +253,9 @@ std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
     REQUIRE(bytes.size() >= store::FILE_TRAILER_BYTES);
     const std::uint8_t* trailer =
         bytes.data() + bytes.size() - store::FILE_TRAILER_BYTES;
-    const std::uint64_t at = dftracer::utils::read_u64_le(trailer + 8U);
-    const std::uint32_t length = dftracer::utils::read_u32_le(trailer + 16U);
+    const std::uint64_t at = dftracer::utils::dstd::read_u64_le(trailer + 8U);
+    const std::uint32_t length =
+        dftracer::utils::dstd::read_u32_le(trailer + 16U);
     REQUIRE(at + length <= bytes.size());
     auto footer = store::decode_record(ByteView{
         reinterpret_cast<const std::byte*>(bytes.data() + at), length});
@@ -278,10 +280,10 @@ std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
 
 void rewrite_header_crc(std::vector<std::uint8_t>& bytes) {
     REQUIRE(bytes.size() >= store::FILE_HEADER_BYTES);
-    dftracer::utils::write_u32_le(bytes.data() + HEADER_CRC_AT, 0);
+    dftracer::utils::dstd::write_u32_le(bytes.data() + HEADER_CRC_AT, 0);
     const std::uint32_t crc =
         store::crc32(0, bytes.data(), store::FILE_HEADER_BYTES);
-    dftracer::utils::write_u32_le(bytes.data() + HEADER_CRC_AT, crc);
+    dftracer::utils::dstd::write_u32_le(bytes.data() + HEADER_CRC_AT, crc);
 }
 
 /// Copies `source` into `target` under `name`, with the header writer id and
@@ -292,8 +294,8 @@ std::string forge_copy(const std::string& source,
                        const std::string& name, std::uint64_t writer_random) {
     std::vector<std::uint8_t> bytes = read_file(source);
     REQUIRE(bytes.size() > store::FILE_HEADER_BYTES);
-    dftracer::utils::write_u64_le(bytes.data() + HEADER_WRITER_RANDOM_AT,
-                                  writer_random);
+    dftracer::utils::dstd::write_u64_le(bytes.data() + HEADER_WRITER_RANDOM_AT,
+                                        writer_random);
     rewrite_header_crc(bytes);
     const std::string path = target.file(name);
     write_file(path, without_footer(bytes));
@@ -1248,7 +1250,7 @@ TEST_SUITE("index store snapshot") {
             CHECK(corrupt->state(spec, scope) == ScopeState::Ready);
             auto bad = corrupt->get(spec, scope, view_of(std::string("big")));
             REQUIRE_FALSE(bad.has_value());
-            CHECK(bad.error().is(dstd::Condition::Parse));
+            CHECK(bad.error().is(Condition::Parse));
             auto other =
                 corrupt->get(spec, scope, view_of(std::string("small")));
             REQUIRE(other.has_value());
@@ -2047,14 +2049,14 @@ TEST_SUITE("index store snapshot") {
                             view_of(std::string("b")));
         auto rejected = writer->commit(std::move(sources_changed));
         REQUIRE_FALSE(rejected.has_value());
-        CHECK(rejected.error().is(dstd::Condition::InvalidArgument));
+        CHECK(rejected.error().is(Condition::InvalidArgument));
 
         Batch hash_changed = writer->batch(*id, scope, 10, &kept_sources);
         hash_changed.put(view_of(std::string("key-c")),
                          view_of(std::string("c")));
         auto rejected_hash = writer->commit(std::move(hash_changed));
         REQUIRE_FALSE(rejected_hash.has_value());
-        CHECK(rejected_hash.error().is(dstd::Condition::InvalidArgument));
+        CHECK(rejected_hash.error().is(Condition::InvalidArgument));
 
         Batch again = writer->batch(*id, scope, 9, &kept_sources);
         again.put(view_of(std::string("key-d")), view_of(std::string("d")));
@@ -2231,7 +2233,7 @@ TEST_SUITE("index store snapshot") {
 
         std::vector<std::uint8_t> bytes = read_file(to_std(writer->path()));
         std::vector<std::uint8_t> header_one = bytes;
-        dftracer::utils::write_u32_le(header_one.data() + 8, 1);
+        dftracer::utils::dstd::write_u32_le(header_one.data() + 8, 1);
         rewrite_header_crc(header_one);
         write_file(dir.file("w-header-one.dfs"), without_footer(header_one));
         write_file(dir.file("w-tail-one.dfs"), with_tail_version(bytes, 1));
@@ -3164,11 +3166,11 @@ TEST_SUITE("index store snapshot") {
         const std::string late_key = "late-" + key_of(0);
         auto failed = snapshot->get(spec, late, view_of(late_key));
         REQUIRE_FALSE(failed.has_value());
-        CHECK(failed.error().is(dstd::Condition::Parse));
+        CHECK(failed.error().is(Condition::Parse));
         auto late_cursor = snapshot->scan(spec, late, ByteView{}, ByteView{});
         CHECK(late_cursor.at_end());
         REQUIRE(late_cursor.error().has_value());
-        CHECK(late_cursor.error()->is(dstd::Condition::Parse));
+        CHECK(late_cursor.error()->is(Condition::Parse));
 
         const std::string both_key = "b1-" + key_of(0);
         auto found = snapshot->get(spec, both, view_of(both_key));
@@ -3187,13 +3189,13 @@ TEST_SUITE("index store snapshot") {
         const std::string first_key = "b0-" + key_of(0);
         auto unreadable = snapshot->get(spec, both, view_of(first_key));
         REQUIRE_FALSE(unreadable.has_value());
-        CHECK(unreadable.error().is(dstd::Condition::Io));
+        CHECK(unreadable.error().is(Condition::Io));
         REQUIRE(::dup2(saved_fd, data_fd) == data_fd);
         ::close(saved_fd);
         ::close(dir_fd);
         auto still = snapshot->get(spec, both, view_of(first_key));
         REQUIRE_FALSE(still.has_value());
-        CHECK(still.error().is(dstd::Condition::Io));
+        CHECK(still.error().is(Condition::Io));
         auto again = snapshot->get(spec, both, view_of(both_key));
         REQUIRE(again.has_value());
         CHECK(again->has_value());
@@ -3666,7 +3668,7 @@ TEST_SUITE("index store snapshot") {
         };
         SUBCASE("a torn entry ends the summary") {
             const std::size_t first =
-                12 + dftracer::utils::read_u32_le(bytes.data() + 4);
+                12 + dftracer::utils::dstd::read_u32_le(bytes.data() + 4);
             bytes[first + 20] ^= 0xFFU;
             write_file(summary, bytes);
             reads_all(1);
@@ -3721,7 +3723,7 @@ TEST_SUITE("index store snapshot") {
         CHECK(snapshot->open_stats().files_summarized == 1);
         auto failed = snapshot->get(spec, scope, view_of("b0-" + key_of(3)));
         REQUIRE_FALSE(failed.has_value());
-        CHECK(failed.error().is(dstd::Condition::Parse));
+        CHECK(failed.error().is(Condition::Parse));
     }
 
     TEST_CASE("a summary entry holds when a crash loses the footer") {
@@ -3814,7 +3816,7 @@ TEST_SUITE("index store snapshot") {
         auto refused = Snapshot::open(dir.str());
         ::unsetenv(name);
         REQUIRE_FALSE(refused.has_value());
-        CHECK(refused.error().is(dstd::Condition::InvalidArgument));
+        CHECK(refused.error().is(Condition::InvalidArgument));
 
         ::setenv(name, "0", 1);
         auto tiny = Snapshot::open(dir.str());

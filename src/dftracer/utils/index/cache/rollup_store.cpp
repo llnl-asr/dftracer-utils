@@ -170,11 +170,11 @@ void persist_rollup(CacheStore& db, std::uint64_t sig, std::uint64_t rest_sig,
     // time bucket (for coarsening) + this view's grouping (kind + key identity
     // per key, in order).
     std::string desc;
-    append_u64_be(desc, rest_sig);
-    append_u64_be(desc, time_bucket_us);
-    append_u32_be(desc, static_cast<std::uint32_t>(group_by.size()));
+    dstd::append_u64_be(desc, rest_sig);
+    dstd::append_u64_be(desc, time_bucket_us);
+    dstd::append_u32_be(desc, static_cast<std::uint32_t>(group_by.size()));
     for (const auto& gk : group_by) {
-        append_u32_be(desc, static_cast<std::uint32_t>(gk.kind));
+        dstd::append_u32_be(desc, static_cast<std::uint32_t>(gk.kind));
         codec::put_str(desc, key_identity(gk));
     }
     bytes += 2 * (1 + SIG_BYTES) + desc.size() + USAGE_BYTES;
@@ -201,7 +201,7 @@ dataframe::AggStatePtr read_rollup(const CacheStore& db, std::uint64_t sig) {
 std::uint64_t rest_signature(const trace::views::detail::ViewPlan& plan) {
     std::string sig;
     add_rest_fields(sig, plan);
-    return dftracer::utils::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }
 
 std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
@@ -215,7 +215,7 @@ std::uint64_t plan_signature(const trace::views::detail::ViewPlan& plan) {
         sig.append(key_identity(g));
         sig.push_back('\0');
     }
-    return dftracer::utils::hash::fnv1a_hash(sig);
+    return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }
 
 std::optional<dataframe::DataFrame> find_subsuming_rollup(

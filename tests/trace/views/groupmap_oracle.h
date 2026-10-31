@@ -122,7 +122,7 @@ void append_group_dim(std::string& out, const Src& src, const GroupKey& gk) {
             break;
         case GroupKey::Kind::IoCat: {
             char buf[8];
-            char* p = dftracer::utils::to_chars_i64(
+            char* p = dftracer::utils::dstd::to_chars_i64(
                 buf, buf + sizeof(buf),
                 static_cast<int>(dftracer::utils::trace::internal::io_category(
                     src.value("name"))));
@@ -185,7 +185,7 @@ void fold_event_over(GroupMap& map, const Src& src, const ViewPlan& plan,
         bucket =
             static_cast<std::int64_t>(std::floor(rel / interval)) * w + origin;
         char b[24];
-        char* p = dftracer::utils::to_chars_i64(b, b + sizeof(b), bucket);
+        char* p = dftracer::utils::dstd::to_chars_i64(b, b + sizeof(b), bucket);
         keybuf.append(b, static_cast<std::size_t>(p - b));
         keybuf += GROUP_SEP;
     }

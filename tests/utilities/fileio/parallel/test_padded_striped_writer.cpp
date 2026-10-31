@@ -47,8 +47,9 @@ std::vector<std::uint8_t> gzip_member(const std::string& data) {
     return out;
 }
 
-ByteView as_bv(const std::vector<std::uint8_t>& v) {
-    return ByteView(reinterpret_cast<const std::byte*>(v.data()), v.size());
+dstd::ByteView as_bv(const std::vector<std::uint8_t>& v) {
+    return dstd::ByteView(reinterpret_cast<const std::byte*>(v.data()),
+                          v.size());
 }
 
 // Decompress the whole file via gzread (spans concatenated members natively).

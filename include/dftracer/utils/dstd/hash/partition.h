@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace dftracer::utils::hash {
+namespace dftracer::utils::dstd::hash {
 
 /// The partition, out of `parts`, that a hash falls in at fan-out level
 /// `depth`. The same hash lands in the same partition on every call, and each
@@ -28,6 +28,6 @@ inline std::size_t partition_of(std::string_view key, std::size_t parts,
     return partition_of(fnv1a_hash(key), parts, depth);
 }
 
-}  // namespace dftracer::utils::hash
+}  // namespace dftracer::utils::dstd::hash
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_PARTITION_H

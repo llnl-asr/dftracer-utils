@@ -330,7 +330,7 @@ std::string number(const Literal& lit) {
     if (const auto* u = std::get_if<std::uint64_t>(&lit.value)) {
         return std::to_string(*u);
     }
-    std::string s = double_text(std::get<double>(lit.value));
+    std::string s = dstd::double_text(std::get<double>(lit.value));
     if (s.find_first_of(".eEn") == std::string::npos) s += ".0";
     return s;
 }

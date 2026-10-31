@@ -47,7 +47,7 @@ struct Cell {
 
 /// Typed key-value map for non-JSON evaluation contexts. A key absent from
 /// the map is a missing field.
-using ValueMap = dftracer::utils::StringViewMap<Cell>;
+using ValueMap = dftracer::utils::dstd::StringViewMap<Cell>;
 
 /// The result of `node` on a JSON record. With `args_fallback`, a bare name
 /// the record lacks reads the field of that name under `args`.

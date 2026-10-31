@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <string_view>
 
-namespace dftracer::utils {
+namespace dftracer::utils::dstd {
 
 /**
  * @brief Compile-time string buffer for consteval string concatenation.
@@ -32,6 +32,6 @@ struct ConstString {
     constexpr operator std::string_view() const { return {data, len}; }
 };
 
-}  // namespace dftracer::utils
+}  // namespace dftracer::utils::dstd
 
 #endif  // DFTRACER_UTILS_DSTD_CONST_STRING_H

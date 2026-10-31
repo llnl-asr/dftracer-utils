@@ -314,7 +314,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
         // Fallback: drive the per-line read_json path and build rows.
         auto json_gen = read_json(config);
         RecordBatchBuilder builder;
-        StringArena arena;
+        dstd::StringArena arena;
         std::vector<ArrowKeyHint> hints;
         builder.reserve(batch_size);
         for (;;) {
@@ -366,7 +366,7 @@ coro::AsyncGenerator<ArrowExportResult> TraceReader::read_arrow(
     dftracer::utils::json::RecordParser expr_parser;
     simdjson::ondemand::parser bulk_parser;
     RecordBatchBuilder builder;
-    StringArena arena;
+    dstd::StringArena arena;
     std::vector<ArrowKeyHint> hints;
     builder.reserve(batch_size);
 

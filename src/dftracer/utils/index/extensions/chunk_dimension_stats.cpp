@@ -117,17 +117,17 @@ std::vector<std::uint8_t> ChunkDimensionStats::serialize_value_counts() const {
 
     buf.reserve(4 + num * 20);
 
-    append_u32_le(buf, num);
+    dstd::append_u32_le(buf, num);
 
     for (const auto& [key, count] : *value_counts) {
         auto key_len = static_cast<std::uint16_t>(
             std::min<std::size_t>(key.size(), 0xFFFF));
 
-        append_u16_le(buf, key_len);
+        dstd::append_u16_le(buf, key_len);
 
         buf.insert(buf.end(), key.data(), key.data() + key_len);
 
-        append_u64_le(buf, static_cast<std::uint64_t>(count));
+        dstd::append_u64_le(buf, static_cast<std::uint64_t>(count));
     }
 
     return buf;
@@ -149,25 +149,25 @@ ChunkDimensionStats::compress_value_counts(std::size_t cap_bytes) const {
     // exactly instead of guessing.
     if (4 + member->size() > cap_bytes) return std::nullopt;
     std::vector<std::uint8_t> out(4 + member->size());
-    write_u32_le(out.data(), static_cast<std::uint32_t>(raw.size()));
+    dstd::write_u32_le(out.data(), static_cast<std::uint32_t>(raw.size()));
     std::copy(member->begin(), member->end(), out.begin() + 4);
 
     return out;
 }
 
-dftracer::utils::StringViewMap<std::uint64_t>
+dftracer::utils::dstd::StringViewMap<std::uint64_t>
 ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
                                               std::size_t len) {
-    dftracer::utils::StringViewMap<std::uint64_t> result;
+    dftracer::utils::dstd::StringViewMap<std::uint64_t> result;
     if (!data || len < 4) return result;
 
     std::size_t pos = 0;
 
-    std::uint32_t num = read_u32_le(data + pos);
+    std::uint32_t num = dstd::read_u32_le(data + pos);
     pos += 4;
 
     for (std::uint32_t i = 0; i < num && pos + 2 <= len; ++i) {
-        std::uint16_t key_len = read_u16_le(data + pos);
+        std::uint16_t key_len = dstd::read_u16_le(data + pos);
         pos += 2;
 
         if (pos + key_len + 8 > len) break;
@@ -175,7 +175,7 @@ ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
         std::string key(reinterpret_cast<const char*>(data + pos), key_len);
         pos += key_len;
 
-        std::uint64_t count = read_u64_le(data + pos);
+        std::uint64_t count = dstd::read_u64_le(data + pos);
         pos += 8;
 
         result[std::move(key)] = count;
@@ -184,12 +184,12 @@ ChunkDimensionStats::deserialize_value_counts(const std::uint8_t* data,
     return result;
 }
 
-dftracer::utils::StringViewMap<std::uint64_t>
+dftracer::utils::dstd::StringViewMap<std::uint64_t>
 ChunkDimensionStats::decompress_value_counts(const std::uint8_t* data,
                                              std::size_t len) {
     if (!data || len < 4) return {};
 
-    std::uint32_t decoded_len = read_u32_le(data);
+    std::uint32_t decoded_len = dstd::read_u32_le(data);
 
     namespace compress = dftracer::utils::utilities::fileio::compress;
     compress::GzipMemberDecompressor decompressor;

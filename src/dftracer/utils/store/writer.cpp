@@ -23,7 +23,7 @@
 namespace dftracer::utils::store {
 namespace {
 
-using dftracer::utils::ByteView;
+using dftracer::utils::dstd::ByteView;
 
 constexpr std::size_t SEGMENT_HEADER_BYTES = 20;
 
@@ -63,8 +63,8 @@ std::size_t encoded_entry_size(std::size_t key_length,
     const std::uint64_t stored = big ? 20U : value_length;
     const std::uint64_t value_code =
         (static_cast<std::uint64_t>(stored) << 1U) | (big ? 1U : 0U);
-    return varint_size(key_length) + varint_size(value_code) + key_length +
-           static_cast<std::size_t>(stored);
+    return dstd::varint_size(key_length) + dstd::varint_size(value_code) +
+           key_length + static_cast<std::size_t>(stored);
 }
 
 bool same_name(const dstd::String& name, dstd::StringView other) {
@@ -93,7 +93,7 @@ struct SegmentSizer {
             have_group = false;
         }
         if (!have_group) {
-            index_bytes += 8U + varint_size(key_length) + key_length;
+            index_bytes += 8U + dstd::varint_size(key_length) + key_length;
             have_group = true;
         }
         group_bytes += entry_bytes;
@@ -101,7 +101,7 @@ struct SegmentSizer {
     }
 
     std::size_t size() const {
-        return bits::align_up(index_bytes + body_bytes, SEGMENT_ALIGN);
+        return dstd::bits::align_up(index_bytes + body_bytes, SEGMENT_ALIGN);
     }
 };
 
@@ -199,7 +199,7 @@ std::atomic<WriterTestHook::SpaceSealedFn>& space_sealed_hook() {
 
 ByteView Batch::keep(ByteView bytes) {
     if (bytes.empty()) return {};
-    if (!arena_) arena_ = dstd::make_unique<StringArena>();
+    if (!arena_) arena_ = dstd::make_unique<dstd::StringArena>();
     const std::string_view kept =
         arena_->push(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     return {reinterpret_cast<const std::byte*>(kept.data()), kept.size()};

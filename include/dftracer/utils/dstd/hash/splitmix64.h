@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace dftracer::utils::hash {
+namespace dftracer::utils::dstd::hash {
 
 /// SplitMix64 finalizer: a fast, well-avalanched hash of a 64-bit value.
 ///
@@ -20,6 +20,6 @@ inline std::uint64_t splitmix64(std::uint64_t x) {
     return x ^ (x >> 31);
 }
 
-}  // namespace dftracer::utils::hash
+}  // namespace dftracer::utils::dstd::hash
 
 #endif  // DFTRACER_UTILS_DSTD_HASH_SPLITMIX64_H

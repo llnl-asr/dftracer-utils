@@ -33,14 +33,14 @@ class ParallelWriter {
                                      bool gzip_extension, CoroScope* scope) = 0;
 
     /// Prologue, written before any worker chunk.
-    virtual coro::CoroTask<int> write_header(ByteView data) = 0;
+    virtual coro::CoroTask<int> write_header(dstd::ByteView data) = 0;
 
     /// Striped: placed at an atomic offset. Sharded: appended to shard N.
     virtual coro::CoroTask<int> write_chunk(std::size_t worker_idx,
-                                            ByteView data) = 0;
+                                            dstd::ByteView data) = 0;
 
     /// Epilogue, written after all workers drain.
-    virtual coro::CoroTask<int> write_footer(ByteView data) = 0;
+    virtual coro::CoroTask<int> write_footer(dstd::ByteView data) = 0;
 
     virtual coro::CoroTask<int> close() = 0;
 

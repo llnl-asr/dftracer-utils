@@ -3,8 +3,8 @@
 #include <dftracer/utils/dstd/cache/eviction_policies/lru_eviction_policy.h>
 #include <doctest/doctest.h>
 
-using dftracer::utils::cache::ClockEvictionPolicy;
-using dftracer::utils::cache::LruEvictionPolicy;
+using dftracer::utils::dstd::cache::ClockEvictionPolicy;
+using dftracer::utils::dstd::cache::LruEvictionPolicy;
 
 TEST_SUITE("eviction_policy") {
     TEST_CASE("LRU evicts the least recently used") {

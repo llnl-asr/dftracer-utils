@@ -95,27 +95,27 @@ class Batch {
     ~Batch() = default;
 
     /// InvalidArgument on a fold namespace, reported by commit.
-    void put(ByteView key, ByteView value);
+    void put(dstd::ByteView key, dstd::ByteView value);
     /// put() without a copy: the bytes of `key` and `value` must stay valid
     /// and unchanged until the commit of this batch returns.
-    void put_ref(ByteView key, ByteView value);
+    void put_ref(dstd::ByteView key, dstd::ByteView value);
     /// InvalidArgument on a non-fold namespace, and when a numeric fold gets a
     /// value that is not 8 bytes. Reported by commit.
-    void fold(ByteView key, ByteView value);
+    void fold(dstd::ByteView key, dstd::ByteView value);
 
    private:
     friend class Writer;
 
     struct Entry {
-        ByteView key;
-        ByteView value;
+        dstd::ByteView key;
+        dstd::ByteView value;
     };
 
     Batch() = default;
 
     /// `bytes` copied into the batch's arena, which never moves them.
-    ByteView keep(ByteView bytes);
-    void add(ByteView key, ByteView value);
+    dstd::ByteView keep(dstd::ByteView bytes);
+    void add(dstd::ByteView key, dstd::ByteView value);
     void record_error(dstd::Condition condition);
 
     const Writer* writer_ = nullptr;
@@ -128,7 +128,7 @@ class Batch {
     bool building_ = false;
     dstd::Vector<Entry> entries_;
     /// Opened by the first put() that copies. put_ref() needs none.
-    dstd::UniquePtr<StringArena> arena_;
+    dstd::UniquePtr<dstd::StringArena> arena_;
 };
 
 /// One data file of one process. Entries become visible at the group commit
@@ -191,14 +191,16 @@ class Writer {
     /// `end` meaning to the last key. Both empty is a whole-scope drop.
     dstd::Expected<void, dstd::Error> drop(NamespaceId namespace_id,
                                            const ScopeKey& scope,
-                                           ByteView begin, ByteView end);
+                                           dstd::ByteView begin,
+                                           dstd::ByteView end);
     /// Hides the keys of [begin, end) that the current copy holds from earlier
     /// batches (an empty `end` means the last key). The copy stays current and
     /// a batch committed after it shows its keys again. Without a current copy
     /// of the scope in this writer the call does nothing.
     dstd::Expected<void, dstd::Error> erase(NamespaceId namespace_id,
                                             const ScopeKey& scope,
-                                            ByteView begin, ByteView end);
+                                            dstd::ByteView begin,
+                                            dstd::ByteView end);
 
     /// Covers every batch whose commit returned before this call: seals the
     /// open extents, waits for their writes and runs one group commit, syncing
@@ -245,7 +247,7 @@ class Writer {
             std::size_t seed = static_cast<std::uint8_t>(scope.kind);
             for (const dstd::String& path : scope.paths) {
                 seed = static_cast<std::size_t>(
-                    hash::splitmix64(seed ^ dstd::StringHash{}(path)));
+                    dstd::hash::splitmix64(seed ^ dstd::StringHash{}(path)));
             }
             return seed;
         }
@@ -303,7 +305,7 @@ class Writer {
         Writer* writer = nullptr;
         dstd::Vector<ExtentRef>* runs = nullptr;
     };
-    static BigRef place_big(void* context, ByteView value);
+    static BigRef place_big(void* context, dstd::ByteView value);
     /// Runs on an I/O backend thread.
     static void wrote_extent(void* context, WrittenExtent&& extent);
     static void extents_idle(void* context);

@@ -431,8 +431,8 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
     return static_cast<PluginFold*>(h)->emplace_task(
         [](PluginWriter* pw, std::uint32_t wk, const void* d,
            std::uint64_t l) -> coro::CoroTask<void> {
-            ByteView bv(static_cast<const unsigned char*>(d),
-                        static_cast<std::size_t>(l));
+            dstd::ByteView bv(static_cast<const unsigned char*>(d),
+                              static_cast<std::size_t>(l));
             co_await pw->writer->write_chunk(static_cast<std::size_t>(wk), bv);
         }(reinterpret_cast<PluginWriter*>(w), worker, data, len));
 }
@@ -831,7 +831,7 @@ int host_query_matches(void* h, const dftu_duql* q, const dftu_dataframe* df,
 }
 
 std::uint64_t host_port_key(void*, const char* cap_id) {
-    return cap_id ? dftracer::utils::hash::fnv1a_hash(cap_id) : 0;
+    return cap_id ? dftracer::utils::dstd::hash::fnv1a_hash(cap_id) : 0;
 }
 
 void host_port_publish(void* h, std::uint64_t key, const void* data,

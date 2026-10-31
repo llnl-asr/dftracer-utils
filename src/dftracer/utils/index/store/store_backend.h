@@ -349,7 +349,7 @@ class StoreIndexWrite final : public IndexDatabaseWrite {
 
     std::shared_ptr<StoreRoot> root_;
     /// Keys and values stay in place until the write ends.
-    StringArena arena_;
+    dstd::StringArena arena_;
     std::map<std::pair<std::string, kv::ScopeKey>, PendingCopy> pending_;
     std::map<std::string, kv::SourceStat> file_stats_;
     /// Hidden at commit() ahead of the copies of this write, so the write lands

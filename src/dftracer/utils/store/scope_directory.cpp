@@ -20,7 +20,7 @@ dstd::Unexpected<dstd::Error> invalid_error() {
         dstd::Error(dstd::Condition::InvalidArgument));
 }
 
-const std::uint8_t* data_of(ByteView bytes) {
+const std::uint8_t* data_of(dstd::ByteView bytes) {
     return reinterpret_cast<const std::uint8_t*>(bytes.data());
 }
 
@@ -31,13 +31,13 @@ int compare_views(dstd::StringView a, dstd::StringView b) {
 
 class Cursor {
    public:
-    explicit Cursor(ByteView bytes) : bytes_(bytes) {}
+    explicit Cursor(dstd::ByteView bytes) : bytes_(bytes) {}
 
     bool varint(std::uint64_t& out) {
         if (at_ >= bytes_.size()) return false;
         const auto* begin = data_of(bytes_);
         const std::uint8_t* p = begin + at_;
-        if (!read_varint(p, begin + bytes_.size(), out)) return false;
+        if (!dstd::read_varint(p, begin + bytes_.size(), out)) return false;
         at_ = static_cast<std::size_t>(p - begin);
         return true;
     }
@@ -50,19 +50,19 @@ class Cursor {
 
     bool u32(std::uint32_t& out) {
         if (bytes_.size() - at_ < 4) return false;
-        out = read_u32_le(data_of(bytes_) + at_);
+        out = dstd::read_u32_le(data_of(bytes_) + at_);
         at_ += 4;
         return true;
     }
 
     bool u64(std::uint64_t& out) {
         if (bytes_.size() - at_ < 8) return false;
-        out = read_u64_le(data_of(bytes_) + at_);
+        out = dstd::read_u64_le(data_of(bytes_) + at_);
         at_ += 8;
         return true;
     }
 
-    bool bytes(ByteView& out) {
+    bool bytes(dstd::ByteView& out) {
         std::uint64_t length = 0;
         if (!varint(length) || length > bytes_.size() - at_) return false;
         out = bytes_.subspan(at_, static_cast<std::size_t>(length));
@@ -71,7 +71,7 @@ class Cursor {
     }
 
     bool text(dstd::StringView& out) {
-        ByteView view;
+        dstd::ByteView view;
         if (!bytes(view)) return false;
         out = dstd::StringView(reinterpret_cast<const char*>(view.data()),
                                view.size());
@@ -83,16 +83,16 @@ class Cursor {
     std::size_t& position() { return at_; }
 
    private:
-    ByteView bytes_;
+    dstd::ByteView bytes_;
     std::size_t at_ = 0;
 };
 
 /// Compares a key with (name, version, kind, paths) in directory order,
 /// decoding only as far as it must. `prefix_only` stops after the version.
 /// A key that does not decode sorts last.
-int compare_key(ByteView key, dstd::StringView name, std::uint32_t version,
-                ScopeKind kind, dstd::Span<const dstd::String> paths,
-                bool prefix_only) {
+int compare_key(dstd::ByteView key, dstd::StringView name,
+                std::uint32_t version, ScopeKind kind,
+                dstd::Span<const dstd::String> paths, bool prefix_only) {
     Cursor cursor(key);
     dstd::StringView key_name;
     std::uint32_t key_version = 0;
@@ -170,7 +170,7 @@ void append_text(dstd::Vector<std::uint8_t>& out, dstd::StringView text) {
     out.insert(out.end(), begin, begin + text.size());
 }
 
-void append_view(dstd::Vector<std::uint8_t>& out, ByteView bytes) {
+void append_view(dstd::Vector<std::uint8_t>& out, dstd::ByteView bytes) {
     encode_varint(out, bytes.size());
     out.insert(out.end(), data_of(bytes), data_of(bytes) + bytes.size());
 }
@@ -300,7 +300,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
     for (const Draft& entry : entries) {
         const std::size_t key_at = data_start + data.size();
         append_text(data, entry.namespace_item->name);
-        append_u32_le(data, entry.namespace_item->format_version);
+        dstd::append_u32_le(data, entry.namespace_item->format_version);
         data.push_back(static_cast<std::uint8_t>(entry.scope->kind));
         encode_varint(data, entry.scope->paths.size());
         for (const dstd::String& path : entry.scope->paths) {
@@ -315,23 +315,23 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         for (const DropItem* drop : entry.drops) {
             highest = std::max(highest, drop->generation);
         }
-        append_u64_le(data, highest);
+        dstd::append_u64_le(data, highest);
         encode_varint(data, entry.copies.size());
         for (const CopyItem* copy : entry.copies) {
             if (!copy->sources.empty() &&
                 copy->sources.size() != entry.scope->paths.size()) {
                 return invalid_error();
             }
-            append_u32_le(data, copy->local_id);
-            append_u64_le(data, copy->generation);
-            append_u64_le(data, copy->params_hash);
+            dstd::append_u32_le(data, copy->local_id);
+            dstd::append_u64_le(data, copy->generation);
+            dstd::append_u64_le(data, copy->params_hash);
             data.push_back(static_cast<std::uint8_t>(copy->state));
             data.push_back(entry.namespace_item->fold_kind);
             encode_varint(data, copy->sources.size());
             for (const SourceStat& source : copy->sources) {
-                append_u64_le(data, source.mtime);
-                append_u64_le(data, source.size);
-                append_u64_le(data, source.hash);
+                dstd::append_u64_le(data, source.mtime);
+                dstd::append_u64_le(data, source.size);
+                dstd::append_u64_le(data, source.hash);
             }
             const auto first = std::lower_bound(
                 sorted_commits.begin(), sorted_commits.end(), copy->local_id,
@@ -345,7 +345,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
             }
             encode_varint(data, static_cast<std::uint64_t>(last - first));
             for (auto at = first; at != last; ++at) {
-                append_u64_le(data, at->sequence);
+                dstd::append_u64_le(data, at->sequence);
                 append_view(data, at->first_key);
                 append_view(data, at->last_key);
                 append_block_handle(data, at->segments);
@@ -357,14 +357,14 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
             encode_varint(data, erase_count);
             for (const EraseItem* erase : entry.erases) {
                 if (erase->copy_id != copy->local_id) continue;
-                append_u64_le(data, erase->ordinal);
+                dstd::append_u64_le(data, erase->ordinal);
                 append_vector(data, erase->begin_key);
                 append_vector(data, erase->end_key);
             }
         }
         encode_varint(data, entry.drops.size());
         for (const DropItem* drop : entry.drops) {
-            append_u64_le(data, drop->generation);
+            dstd::append_u64_le(data, drop->generation);
             append_vector(data, drop->begin_key);
             append_vector(data, drop->end_key);
         }
@@ -372,34 +372,36 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> build_scope_directory(
         if (end > std::numeric_limits<std::uint32_t>::max()) {
             return invalid_error();
         }
-        append_u32_le(slots, static_cast<std::uint32_t>(key_at));
-        append_u32_le(slots, static_cast<std::uint32_t>(payload_at - key_at));
-        append_u32_le(slots, static_cast<std::uint32_t>(payload_at));
-        append_u32_le(slots, static_cast<std::uint32_t>(end - payload_at));
+        dstd::append_u32_le(slots, static_cast<std::uint32_t>(key_at));
+        dstd::append_u32_le(slots,
+                            static_cast<std::uint32_t>(payload_at - key_at));
+        dstd::append_u32_le(slots, static_cast<std::uint32_t>(payload_at));
+        dstd::append_u32_le(slots,
+                            static_cast<std::uint32_t>(end - payload_at));
     }
 
     dstd::Vector<std::uint8_t> out;
     out.reserve(data_start + data.size());
-    append_u32_le(out, static_cast<std::uint32_t>(entries.size()));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(entries.size()));
     out.insert(out.end(), slots.begin(), slots.end());
     out.insert(out.end(), data.begin(), data.end());
     return out;
 }
 
 dstd::Expected<ScopeDirectory, dstd::Error> ScopeDirectory::open(
-    ByteView bytes) {
+    dstd::ByteView bytes) {
     ScopeDirectory directory;
     if (bytes.empty()) return directory;
     if (bytes.size() < COUNT_BYTES) return parse_error();
-    const std::uint64_t count = read_u32_le(data_of(bytes));
+    const std::uint64_t count = dstd::read_u32_le(data_of(bytes));
     if (count > (bytes.size() - COUNT_BYTES) / SLOT_BYTES) return parse_error();
     for (std::uint64_t i = 0; i < count; ++i) {
         const std::uint8_t* slot =
             data_of(bytes) + COUNT_BYTES + i * SLOT_BYTES;
-        const std::uint64_t key_at = read_u32_le(slot);
-        const std::uint64_t key_length = read_u32_le(slot + 4);
-        const std::uint64_t payload_at = read_u32_le(slot + 8);
-        const std::uint64_t payload_length = read_u32_le(slot + 12);
+        const std::uint64_t key_at = dstd::read_u32_le(slot);
+        const std::uint64_t key_length = dstd::read_u32_le(slot + 4);
+        const std::uint64_t payload_at = dstd::read_u32_le(slot + 8);
+        const std::uint64_t payload_length = dstd::read_u32_le(slot + 12);
         if (key_at > bytes.size() || key_length > bytes.size() - key_at ||
             payload_at > bytes.size() ||
             payload_length > bytes.size() - payload_at) {
@@ -411,16 +413,17 @@ dstd::Expected<ScopeDirectory, dstd::Error> ScopeDirectory::open(
     return directory;
 }
 
-ByteView ScopeDirectory::key_bytes(std::size_t index) const {
+dstd::ByteView ScopeDirectory::key_bytes(std::size_t index) const {
     const std::uint8_t* slot =
         data_of(bytes_) + COUNT_BYTES + index * SLOT_BYTES;
-    return bytes_.subspan(read_u32_le(slot), read_u32_le(slot + 4));
+    return bytes_.subspan(dstd::read_u32_le(slot), dstd::read_u32_le(slot + 4));
 }
 
-ByteView ScopeDirectory::payload_bytes(std::size_t index) const {
+dstd::ByteView ScopeDirectory::payload_bytes(std::size_t index) const {
     const std::uint8_t* slot =
         data_of(bytes_) + COUNT_BYTES + index * SLOT_BYTES;
-    return bytes_.subspan(read_u32_le(slot + 8), read_u32_le(slot + 12));
+    return bytes_.subspan(dstd::read_u32_le(slot + 8),
+                          dstd::read_u32_le(slot + 12));
 }
 
 std::size_t ScopeDirectory::find(dstd::StringView name,
@@ -505,7 +508,7 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
     DirectoryEntry entry;
     entry.key = std::move(*key_result);
 
-    const ByteView payload = payload_bytes(index);
+    const dstd::ByteView payload = payload_bytes(index);
     Cursor cursor(payload);
     std::uint64_t copy_count = 0;
     if (!cursor.u64(entry.highest_generation) || !cursor.varint(copy_count) ||
@@ -586,22 +589,22 @@ dstd::Expected<DirectoryEntry, dstd::Error> ScopeDirectory::entry(
 
 namespace {
 
-ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
 void append_block(dstd::Vector<std::uint8_t>& out,
-                  dstd::Vector<std::uint8_t>& data, ByteView key,
-                  ByteView payload, std::size_t data_start) {
+                  dstd::Vector<std::uint8_t>& data, dstd::ByteView key,
+                  dstd::ByteView payload, std::size_t data_start) {
     const std::size_t key_at = data_start + data.size();
     data.insert(data.end(), data_of(key), data_of(key) + key.size());
     const std::size_t payload_at = data_start + data.size();
     data.insert(data.end(), data_of(payload),
                 data_of(payload) + payload.size());
-    append_u32_le(out, static_cast<std::uint32_t>(key_at));
-    append_u32_le(out, static_cast<std::uint32_t>(payload_at - key_at));
-    append_u32_le(out, static_cast<std::uint32_t>(payload_at));
-    append_u32_le(
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(key_at));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(payload_at - key_at));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(payload_at));
+    dstd::append_u32_le(
         out, static_cast<std::uint32_t>(data_start + data.size() - payload_at));
 }
 
@@ -614,8 +617,8 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_slot_table(
     slots.reserve(entries.size() * SLOT_BYTES);
     const std::size_t data_start = COUNT_BYTES + entries.size() * SLOT_BYTES;
     for (const TableEntry& entry : entries) {
-        const ByteView key = entry.key;
-        const ByteView payload = entry.payload;
+        const dstd::ByteView key = entry.key;
+        const dstd::ByteView payload = entry.payload;
         append_block(slots, data, key, payload, data_start);
     }
     if (data_start + data.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -623,7 +626,7 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_slot_table(
     }
     dstd::Vector<std::uint8_t> out;
     out.reserve(data_start + data.size());
-    append_u32_le(out, static_cast<std::uint32_t>(entries.size()));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(entries.size()));
     out.insert(out.end(), slots.begin(), slots.end());
     out.insert(out.end(), data.begin(), data.end());
     return out;
@@ -648,21 +651,21 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> encode_separator_table(
     }
     dstd::Vector<std::uint8_t> out;
     out.reserve(data_start + data.size());
-    append_u32_le(out, static_cast<std::uint32_t>(children.size()));
+    dstd::append_u32_le(out, static_cast<std::uint32_t>(children.size()));
     out.insert(out.end(), slots.begin(), slots.end());
     out.insert(out.end(), data.begin(), data.end());
     return out;
 }
 
-ByteView TableBlock::first_key() const {
-    auto table = SlotTable::open(ByteView{
+dstd::ByteView TableBlock::first_key() const {
+    auto table = SlotTable::open(dstd::ByteView{
         reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()});
     if (!table || table->size() == 0) return {};
     return table->key(0);
 }
 
 dstd::Expected<dstd::Vector<TableBlock>, dstd::Error> split_slot_table(
-    ByteView table, std::size_t per_block) {
+    dstd::ByteView table, std::size_t per_block) {
     if (per_block == 0) return invalid_error();
     auto opened = SlotTable::open(table);
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
@@ -685,7 +688,8 @@ dstd::Expected<dstd::Vector<TableBlock>, dstd::Error> split_slot_table(
         TableBlock block;
         block.entries = end - first;
         block.bytes.reserve(data_start + data.size());
-        append_u32_le(block.bytes, static_cast<std::uint32_t>(end - first));
+        dstd::append_u32_le(block.bytes,
+                            static_cast<std::uint32_t>(end - first));
         block.bytes.insert(block.bytes.end(), slots.begin(), slots.end());
         block.bytes.insert(block.bytes.end(), data.begin(), data.end());
         blocks.push_back(std::move(block));
@@ -693,19 +697,19 @@ dstd::Expected<dstd::Vector<TableBlock>, dstd::Error> split_slot_table(
     return blocks;
 }
 
-dstd::Expected<SlotTable, dstd::Error> SlotTable::open(ByteView bytes) {
+dstd::Expected<SlotTable, dstd::Error> SlotTable::open(dstd::ByteView bytes) {
     SlotTable table;
     if (bytes.empty()) return table;
     if (bytes.size() < COUNT_BYTES) return parse_error();
-    const std::uint64_t count = read_u32_le(data_of(bytes));
+    const std::uint64_t count = dstd::read_u32_le(data_of(bytes));
     if (count > (bytes.size() - COUNT_BYTES) / SLOT_BYTES) return parse_error();
     for (std::uint64_t i = 0; i < count; ++i) {
         const std::uint8_t* slot =
             data_of(bytes) + COUNT_BYTES + i * SLOT_BYTES;
-        const std::uint64_t key_at = read_u32_le(slot);
-        const std::uint64_t key_length = read_u32_le(slot + 4);
-        const std::uint64_t payload_at = read_u32_le(slot + 8);
-        const std::uint64_t payload_length = read_u32_le(slot + 12);
+        const std::uint64_t key_at = dstd::read_u32_le(slot);
+        const std::uint64_t key_length = dstd::read_u32_le(slot + 4);
+        const std::uint64_t payload_at = dstd::read_u32_le(slot + 8);
+        const std::uint64_t payload_length = dstd::read_u32_le(slot + 12);
         if (key_at > bytes.size() || key_length > bytes.size() - key_at ||
             payload_at > bytes.size() ||
             payload_length > bytes.size() - payload_at) {
@@ -717,19 +721,20 @@ dstd::Expected<SlotTable, dstd::Error> SlotTable::open(ByteView bytes) {
     return table;
 }
 
-ByteView SlotTable::key(std::size_t index) const {
+dstd::ByteView SlotTable::key(std::size_t index) const {
     const std::uint8_t* slot =
         data_of(bytes_) + COUNT_BYTES + index * SLOT_BYTES;
-    return bytes_.subspan(read_u32_le(slot), read_u32_le(slot + 4));
+    return bytes_.subspan(dstd::read_u32_le(slot), dstd::read_u32_le(slot + 4));
 }
 
-ByteView SlotTable::payload(std::size_t index) const {
+dstd::ByteView SlotTable::payload(std::size_t index) const {
     const std::uint8_t* slot =
         data_of(bytes_) + COUNT_BYTES + index * SLOT_BYTES;
-    return bytes_.subspan(read_u32_le(slot + 8), read_u32_le(slot + 12));
+    return bytes_.subspan(dstd::read_u32_le(slot + 8),
+                          dstd::read_u32_le(slot + 12));
 }
 
-int compare_directory_key(ByteView key, dstd::StringView name,
+int compare_directory_key(dstd::ByteView key, dstd::StringView name,
                           std::uint32_t version, ScopeKind kind,
                           dstd::Span<const dstd::String> paths) {
     return compare_key(key, name, version, kind, paths, false);

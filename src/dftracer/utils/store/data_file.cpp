@@ -113,11 +113,11 @@ dstd::Expected<dstd::Vector<std::uint8_t>, dstd::Error> pread_all(
     return out;
 }
 
-ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
+dstd::ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
+dstd::ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
@@ -147,21 +147,21 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
         return info;
     }
     info.magic_ok = true;
-    info.format_version = read_u32_le(data + 8);
+    info.format_version = dstd::read_u32_le(data + 8);
     if (info.format_version != FORMAT_VERSION) return info;
 
-    const std::uint32_t stored_crc = read_u32_le(data + 12);
+    const std::uint32_t stored_crc = dstd::read_u32_le(data + 12);
     dstd::Vector<std::uint8_t> crc_bytes = *bytes;
-    write_u32_le(crc_bytes.data() + 12, 0);
+    dstd::write_u32_le(crc_bytes.data() + 12, 0);
     const std::uint32_t crc = crc32(0, crc_bytes.data(), crc_bytes.size());
     info.header_crc_ok = stored_crc == crc;
 
-    const std::uint32_t extent_size = read_u32_le(data + 16);
-    const std::uint64_t creation_time = read_u64_le(data + 24);
-    const std::uint64_t writer_random = read_u64_le(data + 32);
-    const std::uint32_t pid = read_u32_le(data + 40);
-    const std::uint16_t host_length = read_u16_le(data + 44);
-    const std::uint16_t label_length = read_u16_le(data + 46);
+    const std::uint32_t extent_size = dstd::read_u32_le(data + 16);
+    const std::uint64_t creation_time = dstd::read_u64_le(data + 24);
+    const std::uint64_t writer_random = dstd::read_u64_le(data + 32);
+    const std::uint32_t pid = dstd::read_u32_le(data + 40);
+    const std::uint16_t host_length = dstd::read_u16_le(data + 44);
+    const std::uint16_t label_length = dstd::read_u16_le(data + 46);
 
     const std::uint64_t strings_end =
         static_cast<std::uint64_t>(48) + host_length + label_length + 16;
@@ -178,9 +178,9 @@ dstd::Expected<HeaderInfo, dstd::Error> read_header(int fd) {
                       label_length);
     info.creation_time = creation_time;
     const std::size_t tail_at = 48 + host_length + label_length;
-    info.tail_offset = read_u64_le(data + tail_at);
-    info.tail_kind = read_u32_le(data + tail_at + 8);
-    info.tail_crc = read_u32_le(data + tail_at + 12);
+    info.tail_offset = dstd::read_u64_le(data + tail_at);
+    info.tail_kind = dstd::read_u32_le(data + tail_at + 8);
+    info.tail_crc = dstd::read_u32_le(data + tail_at + 12);
     return info;
 }
 
@@ -213,19 +213,19 @@ dstd::Expected<std::uint64_t, dstd::Error> read_record_length(
     if (std::memcmp(data, RECORD_MAGIC.data(), RECORD_MAGIC.size()) != 0) {
         return parse_error();
     }
-    const std::uint32_t kind = read_u32_le(data + 8);
+    const std::uint32_t kind = dstd::read_u32_le(data + 8);
     if (kind < 1 || kind > 3) return parse_error();
-    const std::uint32_t body_length = read_u32_le(data + 12);
+    const std::uint32_t body_length = dstd::read_u32_le(data + 12);
     const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
     const std::uint64_t padded_size =
-        bits::align_up(crc_end, FILE_HEADER_BYTES);
+        dstd::bits::align_up(crc_end, FILE_HEADER_BYTES);
     if (padded_size < crc_end || padded_size > file_size - offset) {
         return parse_error();
     }
     return padded_size;
 }
 
-dstd::Expected<Record, dstd::Error> decode_record_at(ByteView bytes,
+dstd::Expected<Record, dstd::Error> decode_record_at(dstd::ByteView bytes,
                                                      std::uint64_t offset) {
     auto record = decode_record(bytes);
     if (!record) return dstd::Unexpected<dstd::Error>(record.error());
@@ -441,18 +441,18 @@ void append_summary(dstd::StringView data_path, std::uint64_t needed_bytes,
                     std::uint64_t sequence, const RecordItems& footer) {
     const auto [dir, name] = split_path(data_path);
     dstd::Vector<std::uint8_t> payload;
-    append_u32_le(payload, static_cast<std::uint32_t>(name.size()));
+    dstd::append_u32_le(payload, static_cast<std::uint32_t>(name.size()));
     payload.insert(payload.end(), name.begin(), name.end());
-    append_u64_le(payload, needed_bytes);
-    append_u64_le(payload, sequence);
+    dstd::append_u64_le(payload, needed_bytes);
+    dstd::append_u64_le(payload, sequence);
     const dstd::Vector<std::uint8_t> raw_items = encode_items(footer);
     const dstd::Vector<std::uint8_t> items =
         encode_meta(bytes_of(raw_items), META_ZSTD_LEVEL);
     payload.insert(payload.end(), items.begin(), items.end());
     dstd::Vector<std::uint8_t> entry;
     entry.insert(entry.end(), SUMMARY_MAGIC.begin(), SUMMARY_MAGIC.end());
-    append_u32_le(entry, static_cast<std::uint32_t>(payload.size()));
-    append_u32_le(entry, crc32(0, payload.data(), payload.size()));
+    dstd::append_u32_le(entry, static_cast<std::uint32_t>(payload.size()));
+    dstd::append_u32_le(entry, crc32(0, payload.data(), payload.size()));
     entry.insert(entry.end(), payload.begin(), payload.end());
     const int fd = ::open(summary_path(dir).c_str(),
                           O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
@@ -494,24 +494,24 @@ dstd::Expected<dstd::Vector<SummaryEntry>, dstd::Error> read_summary(
                         SUMMARY_MAGIC.size()) != 0) {
             break;
         }
-        const std::uint32_t length = read_u32_le(data + at + 4);
-        const std::uint32_t crc = read_u32_le(data + at + 8);
+        const std::uint32_t length = dstd::read_u32_le(data + at + 4);
+        const std::uint32_t crc = dstd::read_u32_le(data + at + 8);
         const std::size_t body = at + SUMMARY_ENTRY_HEADER_BYTES;
         if (length > size - body || crc32(0, data + body, length) != crc ||
             length < 20) {
             break;
         }
-        const std::uint32_t name_length = read_u32_le(data + body);
+        const std::uint32_t name_length = dstd::read_u32_le(data + body);
         if (name_length > length - 20) break;
         SummaryEntry entry;
         entry.name.assign(reinterpret_cast<const char*>(data + body + 4),
                           name_length);
-        entry.needed_bytes = read_u64_le(data + body + 4 + name_length);
-        entry.sequence = read_u64_le(data + body + 12 + name_length);
+        entry.needed_bytes = dstd::read_u64_le(data + body + 4 + name_length);
+        entry.sequence = dstd::read_u64_le(data + body + 12 + name_length);
         const std::size_t items_at = body + 20 + name_length;
         auto raw_items = decode_meta(
-            ByteView{reinterpret_cast<const std::byte*>(data + items_at),
-                     body + length - items_at});
+            dstd::ByteView{reinterpret_cast<const std::byte*>(data + items_at),
+                           body + length - items_at});
         if (!raw_items) break;
         auto items = decode_items(bytes_of(*raw_items));
         if (!items) break;
@@ -625,24 +625,26 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     dstd::Vector<std::uint8_t> header(FILE_HEADER_BYTES, 0);
     std::memcpy(header.data(), FILE_MAGIC.data(), FILE_MAGIC.size());
-    write_u32_le(header.data() + 8, FORMAT_VERSION);
-    write_u32_le(header.data() + 16, extent_size_);
-    write_u64_le(header.data() + 24, creation_time_);
-    write_u64_le(header.data() + 32, writer_random_);
-    write_u32_le(header.data() + 40, pid_);
-    write_u16_le(header.data() + 44, static_cast<std::uint16_t>(host_.size()));
-    write_u16_le(header.data() + 46, static_cast<std::uint16_t>(label_.size()));
+    dstd::write_u32_le(header.data() + 8, FORMAT_VERSION);
+    dstd::write_u32_le(header.data() + 16, extent_size_);
+    dstd::write_u64_le(header.data() + 24, creation_time_);
+    dstd::write_u64_le(header.data() + 32, writer_random_);
+    dstd::write_u32_le(header.data() + 40, pid_);
+    dstd::write_u16_le(header.data() + 44,
+                       static_cast<std::uint16_t>(host_.size()));
+    dstd::write_u16_le(header.data() + 46,
+                       static_cast<std::uint16_t>(label_.size()));
     std::memcpy(header.data() + 48, host_.data(), host_.size());
     std::memcpy(header.data() + 48 + host_.size(), label_.data(),
                 label_.size());
 
     const std::size_t tail_at = 48 + host_.size() + label_.size();
-    write_u64_le(header.data() + tail_at, tail_offset_);
-    write_u32_le(header.data() + tail_at + 8, tail_kind_);
-    write_u32_le(header.data() + tail_at + 12, tail_crc_);
+    dstd::write_u64_le(header.data() + tail_at, tail_offset_);
+    dstd::write_u32_le(header.data() + tail_at + 8, tail_kind_);
+    dstd::write_u32_le(header.data() + tail_at + 12, tail_crc_);
 
     const std::uint32_t crc = crc32(0, header.data(), header.size());
-    write_u32_le(header.data() + 12, crc);
+    dstd::write_u32_le(header.data() + 12, crc);
     auto written = pwrite_all(fd_, header.data(), header.size(), 0);
     if (written) {
         io_fault::on_write(fd_, io_fault::WriteKind::Header, 0, header.data(),
@@ -654,7 +656,7 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_header() {
 }
 
 dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
-    ByteView bytes) {
+    dstd::ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() || bytes.size() > extent_size_ - EXTENT_HEADER_BYTES) {
@@ -678,12 +680,13 @@ dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_extent(
 }
 
 dstd::Expected<DictRef, dstd::Error> DataFileWriter::append_dict(
-    ByteView bytes) {
+    dstd::ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() || bytes.size() > PAGE_DICT_BYTES) return invalid_error();
     dstd::Vector<std::uint8_t> padded(
-        bits::align_up(bytes.size(), EXTENT_ALIGN_BYTES), std::uint8_t{0});
+        dstd::bits::align_up(bytes.size(), EXTENT_ALIGN_BYTES),
+        std::uint8_t{0});
     std::memcpy(padded.data(), bytes.data(), bytes.size());
     DictRef ref;
     ref.offset = reserve_range(padded.size(), EXTENT_ALIGN_BYTES,
@@ -699,7 +702,7 @@ dstd::Expected<DictRef, dstd::Error> DataFileWriter::append_dict(
 }
 
 dstd::Expected<ExtentRef, dstd::Error> DataFileWriter::append_big(
-    ByteView bytes) {
+    dstd::ByteView bytes) {
     if (latched()) return dstd::Unexpected<dstd::Error>(latched_result());
     if (closed_.load(std::memory_order_acquire)) return invalid_error();
     if (bytes.empty() ||
@@ -743,7 +746,7 @@ std::uint64_t DataFileWriter::reserve_range(std::uint64_t length,
                                             io_fault::WriteKind kind) {
     std::uint64_t current = next_offset_.load(std::memory_order_relaxed);
     for (;;) {
-        const std::uint64_t start = bits::align_up(current, align);
+        const std::uint64_t start = dstd::bits::align_up(current, align);
         if (next_offset_.compare_exchange_weak(current, start + length,
                                                std::memory_order_acq_rel,
                                                std::memory_order_relaxed)) {
@@ -863,7 +866,7 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
     std::uint32_t block_copy = 0;
     const auto flush = [&block, &block_handles, &block_entries, &place]() {
         dstd::Vector<std::uint8_t> bytes;
-        append_u32_le(bytes, block_entries);
+        dstd::append_u32_le(bytes, block_entries);
         bytes.insert(bytes.end(), block.begin(), block.end());
         block_handles.push_back(place(bytes));
         block.clear();
@@ -878,15 +881,15 @@ dstd::Expected<FileTail, dstd::Error> DataFileWriter::build_blocks(
         run_bytes.clear();
         for (std::size_t at = first; at < end; ++at) {
             const Placed& entry = placed[at];
-            append_u32_le(run_bytes, entry.extent);
-            append_u64_le(run_bytes, entry.key.sequence);
-            append_u64_le(run_bytes, entry.ref->offset);
-            append_u32_le(run_bytes, entry.ref->length);
-            append_u32_le(run_bytes, entry.ref->crc);
-            append_u32_le(run_bytes, entry.segment->offset_in_extent);
-            append_u32_le(run_bytes, entry.segment->length);
-            append_u64_le(run_bytes, entry.segment->entry_count);
-            append_u64_le(run_bytes, entry.segment->ordinal);
+            dstd::append_u32_le(run_bytes, entry.extent);
+            dstd::append_u64_le(run_bytes, entry.key.sequence);
+            dstd::append_u64_le(run_bytes, entry.ref->offset);
+            dstd::append_u32_le(run_bytes, entry.ref->length);
+            dstd::append_u32_le(run_bytes, entry.ref->crc);
+            dstd::append_u32_le(run_bytes, entry.segment->offset_in_extent);
+            dstd::append_u32_le(run_bytes, entry.segment->length);
+            dstd::append_u64_le(run_bytes, entry.segment->entry_count);
+            dstd::append_u64_le(run_bytes, entry.segment->ordinal);
             for (const auto* key :
                  {&entry.segment->first_key, &entry.segment->last_key}) {
                 encode_varint(run_bytes, key->size());
@@ -1101,10 +1104,11 @@ dstd::Expected<void, dstd::Error> DataFileWriter::write_record(
     io_fault::on_write(fd_, fault_kind_of(actual_kind), offset, encoded.data(),
                        encoded.size());
 
-    const std::uint32_t body_length = read_u32_le(encoded.data() + 12);
+    const std::uint32_t body_length = dstd::read_u32_le(encoded.data() + 12);
     tail_offset_ = offset;
     tail_kind_ = static_cast<std::uint32_t>(actual_kind);
-    tail_crc_ = read_u32_le(encoded.data() + RECORD_HEADER_BYTES + body_length);
+    tail_crc_ =
+        dstd::read_u32_le(encoded.data() + RECORD_HEADER_BYTES + body_length);
     last_sequence_ = sequence;
     return {};
 }
@@ -1184,10 +1188,10 @@ dstd::Expected<void, dstd::Error> DataFileWriter::close() {
         static_cast<std::uint32_t>(trailer_offset - tail_offset_);
     dstd::Vector<std::uint8_t> trailer(FILE_TRAILER_BYTES, 0);
     std::memcpy(trailer.data(), TRAILER_MAGIC.data(), TRAILER_MAGIC.size());
-    write_u64_le(trailer.data() + 8, tail_offset_);
-    write_u32_le(trailer.data() + 16, footer_length);
+    dstd::write_u64_le(trailer.data() + 8, tail_offset_);
+    dstd::write_u32_le(trailer.data() + 16, footer_length);
     const std::uint32_t trailer_crc = crc32(0, trailer.data(), 20);
-    write_u32_le(trailer.data() + 20, trailer_crc);
+    dstd::write_u32_le(trailer.data() + 20, trailer_crc);
     auto written =
         pwrite_all(fd_, trailer.data(), trailer.size(), trailer_offset);
     if (!written) {
@@ -1337,7 +1341,7 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
     auto buffer = pread_all(fd_.load(std::memory_order_relaxed), start,
                             static_cast<std::size_t>(want));
     if (!buffer) return false;
-    const ByteView bytes = bytes_of(*buffer);
+    const dstd::ByteView bytes = bytes_of(*buffer);
 
     const std::size_t trailer_at =
         static_cast<std::size_t>(want) - FILE_TRAILER_BYTES;
@@ -1346,12 +1350,12 @@ dstd::Expected<bool, dstd::Error> DataFileReader::open_light(
     if (std::memcmp(trailer, TRAILER_MAGIC.data(), TRAILER_MAGIC.size()) != 0) {
         return false;
     }
-    if (read_u32_le(trailer + 20) !=
+    if (dstd::read_u32_le(trailer + 20) !=
         crc32(0, trailer, FILE_TRAILER_BYTES - 12)) {
         return false;
     }
-    const std::uint64_t tail_offset = read_u64_le(trailer + 8);
-    const std::uint32_t footer_length = read_u32_le(trailer + 16);
+    const std::uint64_t tail_offset = dstd::read_u64_le(trailer + 8);
+    const std::uint32_t footer_length = dstd::read_u32_le(trailer + 16);
     if (tail_offset < FILE_HEADER_BYTES ||
         tail_offset % FILE_HEADER_BYTES != 0 ||
         tail_offset > file_size - FILE_TRAILER_BYTES ||
@@ -1843,7 +1847,7 @@ dstd::Expected<void, dstd::Error> space_extents(SpaceScan& scan) {
     for (std::size_t at = 0; at < dicts.size(); ++at) {
         if (at > 0 && dicts[at - 1].offset == dicts[at].offset) continue;
         const std::uint64_t length =
-            bits::align_up(dicts[at].length, EXTENT_ALIGN_BYTES);
+            dstd::bits::align_up(dicts[at].length, EXTENT_ALIGN_BYTES);
         if (dicts[at].offset > scan.report.file_bytes ||
             length > scan.report.file_bytes - dicts[at].offset) {
             return parse_error();
@@ -1863,7 +1867,7 @@ dstd::Expected<void, dstd::Error> space_segment_block(
     scan.cover(handle.offset, handle.length);
     const dstd::Vector<std::uint8_t>& body = *bytes;
     if (body.size() < 4) return parse_error();
-    const std::uint64_t count = read_u32_le(body.data());
+    const std::uint64_t count = dstd::read_u32_le(body.data());
     if (count > (body.size() - 4) / SEGMENT_ENTRY_BYTES) return parse_error();
     std::size_t at = 4;
     for (std::uint64_t i = 0; i < count; ++i) {
@@ -1890,7 +1894,7 @@ dstd::Expected<void, dstd::Error> space_directory(
         BlockHandle handle;
         std::uint32_t level = 0;
     };
-    const auto child_of = [](ByteView payload, BlockHandle& child) {
+    const auto child_of = [](dstd::ByteView payload, BlockHandle& child) {
         std::size_t at = 0;
         return read_block_handle(payload, at, child) && at == payload.size();
     };
@@ -1953,7 +1957,7 @@ dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
         const std::uint64_t covered = space_range_end_at(
             dstd::Span<const SpaceRange>(scan.ranges), offset);
         if (covered != 0) {
-            offset = bits::align_up(covered, FILE_HEADER_BYTES);
+            offset = dstd::bits::align_up(covered, FILE_HEADER_BYTES);
             continue;
         }
         auto read =
@@ -1964,10 +1968,11 @@ dstd::Expected<void, dstd::Error> space_records(SpaceScan& scan) {
             offset += FILE_HEADER_BYTES;
             continue;
         }
-        const std::uint32_t kind = read_u32_le(data + 8);
-        const std::uint32_t body_length = read_u32_le(data + 12);
+        const std::uint32_t kind = dstd::read_u32_le(data + 8);
+        const std::uint32_t body_length = dstd::read_u32_le(data + 12);
         const std::uint64_t crc_end = RECORD_HEADER_BYTES + body_length + 4;
-        const std::uint64_t padded = bits::align_up(crc_end, FILE_HEADER_BYTES);
+        const std::uint64_t padded =
+            dstd::bits::align_up(crc_end, FILE_HEADER_BYTES);
         if (kind < 1 || kind > 3 || padded < crc_end ||
             padded > file_bytes - offset) {
             offset += FILE_HEADER_BYTES;
@@ -2016,12 +2021,12 @@ dstd::Expected<SpaceReport, dstd::Error> space_report(dstd::StringView path) {
                     TRAILER_MAGIC.size()) != 0) {
         return parse_error();
     }
-    if (read_u32_le(trailer.data() + 20) !=
+    if (dstd::read_u32_le(trailer.data() + 20) !=
         crc32(0, trailer.data(), FILE_TRAILER_BYTES - 12)) {
         return parse_error();
     }
-    const std::uint64_t footer_offset = read_u64_le(trailer.data() + 8);
-    const std::uint32_t footer_length = read_u32_le(trailer.data() + 16);
+    const std::uint64_t footer_offset = dstd::read_u64_le(trailer.data() + 8);
+    const std::uint32_t footer_length = dstd::read_u32_le(trailer.data() + 16);
     if (footer_offset < FILE_HEADER_BYTES ||
         footer_offset % FILE_HEADER_BYTES != 0 ||
         footer_length < RECORD_HEADER_BYTES + 4 ||

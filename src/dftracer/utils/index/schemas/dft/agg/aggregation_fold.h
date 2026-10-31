@@ -16,7 +16,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -184,25 +183,19 @@ class AggregationFold : public trace::views::detail::Fold {
 
     /// Emits the partials, column blocks and referenced dictionary entries into
     /// `build`, and finishes the Agg extension. The commit replaces the file's
-    /// copy of it. Throws std::logic_error on a fold that wrote through or has
-    /// no file.
+    /// copy of it. Throws std::logic_error on a fold with no file.
     void write(index::FileBuild& build);
 
-    /// Lets the fold move its closed rows into a staged write of `db` once they
-    /// pass a run's size, so a large file does not hold them all until the
-    /// end. `db` must outlive the fold.
-    void write_through(index::store::IndexDatabase& db,
-                       std::string logical_path, bool fresh_id);
-    /// Closes the last chunk. When rows went to a staged write, puts the rest,
-    /// the dictionary entries and the manifest entry into it and hands it
-    /// over in place of write(). Its commit publishes the rows whole, and
-    /// dropped uncommitted it publishes none. Null when no rows went.
-    std::unique_ptr<index::store::IndexDatabaseWrite> finish_through();
-    /// Whether rows wait in the staged write for stage_async().
-    bool stage_due() const { return stage_due_; }
-    /// Writes the rows that wait in the staged write and frees them. Rows
-    /// left waiting go with finish_through().
-    coro::CoroTask<void> stage_async();
+    /// Lets the fold put its closed rows into `build` once they pass a run's
+    /// size, so a large file does not hold them all until write(), which must
+    /// be given the same `build`.
+    void write_through(index::FileBuild& build);
+    /// Whether rows wait in the build for drain().
+    bool drain_due() const { return drain_due_; }
+    /// Puts the rows that wait and stages them, so their memory goes, waiting
+    /// for the task that writes the build now. Rows left waiting go with
+    /// write().
+    coro::CoroTask<void> drain();
 
     std::uint64_t min_time_bucket() const { return state_.min_time_bucket; }
     std::uint64_t max_time_bucket() const { return state_.max_time_bucket; }
@@ -273,12 +266,9 @@ class AggregationFold : public trace::views::detail::Fold {
                           std::uint32_t build_id, bool lower);
     void close_chunk();
     void close_columns();
-    /// Puts the closed rows into `w` and frees them.
-    void put_closed(index::store::IndexWrite& w);
+    /// Puts the closed rows into `build` and frees them.
     void put_closed(index::FileBuild& build);
     void release_closed();
-    void queue_closed();
-    void finish_rows(index::store::IndexWrite& w);
     void finish_rows(index::FileBuild& build);
 
     dftracer::utils::dstd::StringIntern* build_intern_;
@@ -313,12 +303,9 @@ class AggregationFold : public trace::views::detail::Fold {
     /// Duplicates included. Cleared once written.
     dftracer::utils::dstd::Vector<std::uint32_t> referenced_;
     std::uint64_t closed_bytes_ = 0;
-    index::store::IndexDatabase* through_db_ = nullptr;
-    std::string through_path_;
-    bool through_fresh_ = false;
-    bool stage_due_ = false;
+    index::FileBuild* through_ = nullptr;
+    bool drain_due_ = false;
     std::size_t through_runs_ = 0;
-    std::unique_ptr<index::store::IndexDatabaseWrite> staged_;
 };
 
 }  // namespace dftracer::utils::index::schemas::dft::agg

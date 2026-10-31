@@ -15,6 +15,7 @@
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/schemas/dft/statistics.h>
 #include <dftracer/utils/index/store/file.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/store.h>
 
@@ -147,6 +148,11 @@ void put_path(FileBuild& build, store::IndexExtension ext,
 void put_path_granule(FileBuild& build, store::IndexExtension ext,
                       dstd::StringView path, std::uint64_t granule,
                       dstd::StringView payload);
+
+/// Erases every record of one path of `ext`, so a run that wrote a path the
+/// file's selection did not keep leaves nothing of it.
+void erase_path(FileBuild& build, store::IndexExtension ext,
+                dstd::StringView path);
 void put_path_file(FileBuild& build, store::IndexExtension ext,
                    dstd::StringView path, dstd::StringView payload);
 void put_posting(FileBuild& build, dstd::StringView path,
@@ -207,11 +213,28 @@ Result<FileBuild> rebuild(const Index& index, dstd::StringView path);
 void fail_extension(FileBuild& build, store::IndexExtension ext,
                     std::uint64_t params_hash);
 
-/// Commits the building batches the build holds so far, so their memory is
-/// released, and publishes nothing. Later puts join the same building copies,
-/// and commit() publishes all of them. The build must stay alive until the task
-/// ends.
-coro::CoroTask<Result<void>> stage(FileBuild& build);
+/// One task writes a spilled run into a build at a time: it holds the claim
+/// while it puts the run and stages it. The build must stay alive until the
+/// task ends.
+class Claim {
+   public:
+    Claim(FileBuild& build, coro::AsyncMutexGuard held)
+        : build_(&build), held_(std::move(held)) {}
+
+    FileBuild& build() const { return *build_; }
+
+    /// Commits the building batches the claim's task put so far, so their
+    /// memory is released, and publishes nothing. Later puts join the same
+    /// building copies, and commit() publishes all of them.
+    coro::CoroTask<Result<void>> stage();
+
+   private:
+    FileBuild* build_;
+    coro::AsyncMutexGuard held_;
+};
+
+/// Waits for the build's current writer, if any, to give it up.
+coro::CoroTask<dstd::UniquePtr<Claim>> claim(FileBuild& build);
 
 // Writes that are not about one file. Each commits in one record, and its
 // arguments must stay alive until the task ends.

@@ -611,6 +611,24 @@ void put_path_granule(FileBuild& build, store::IndexExtension ext,
               payload);
 }
 
+void erase_path(FileBuild& build, store::IndexExtension ext,
+                dstd::StringView path) {
+    if (!builtin(build, ext)) return;
+    const kv::NamespaceSpec& spec = ext_spec(ext);
+    // A key is NUL free, so one NUL past it bounds exactly that key.
+    const auto erase_key = [&](std::string key) {
+        std::string end = key;
+        end.push_back('\0');
+        IndexAccess::erase(build, spec, dstd::ByteView(key),
+                           dstd::ByteView(end));
+    };
+    erase_key(file_key(ext, pk::PATHS, path));
+    erase_key(file_key(ext, pk::FILE, path));
+    const std::string data = path_prefix(ext, pk::DATA, path);
+    const std::string end = layout::prefix_end(data);
+    IndexAccess::erase(build, spec, dstd::ByteView(data), dstd::ByteView(end));
+}
+
 void put_path_file(FileBuild& build, store::IndexExtension ext,
                    dstd::StringView path, dstd::StringView payload) {
     if (!builtin(build, ext)) return;
@@ -743,10 +761,6 @@ void fail_extension(FileBuild& build, store::IndexExtension ext,
                     std::uint64_t params_hash) {
     if (!builtin(build, ext)) return;
     IndexAccess::fail(build, ext_spec(ext), params_hash);
-}
-
-coro::CoroTask<Result<void>> stage(FileBuild& build) {
-    return IndexAccess::stage(build);
 }
 
 coro::CoroTask<Result<void>> put_agg_meta(const Index& index,

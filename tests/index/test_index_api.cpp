@@ -61,6 +61,15 @@ dstd::Expected<void, dstd::Error> run(
     return dftracer::utils::default_runtime().submit(std::move(task)).get();
 }
 
+// Stages a build the way a spill task does: it claims the build, stages the
+// puts it made, and gives the build up.
+void stage(index::FileBuild& build) {
+    auto claim =
+        dftracer::utils::default_runtime().submit(index::claim(build)).get();
+    REQUIRE(claim);
+    REQUIRE(run(claim->stage()).has_value());
+}
+
 template <class T>
 T take(dstd::Expected<T, dstd::Error> result) {
     REQUIRE(result.has_value());
@@ -755,13 +764,13 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
                 index::put_chunk_statistics(build, round * PER_ROUND + i,
                                             stats);
             }
-            REQUIRE(run(index::stage(build)).has_value());
+            stage(build);
             const auto during = take(opened->snapshot());
             const auto file = during.file(path);
             REQUIRE(file.has_value());
             CHECK(take(index::chunk_stats(during, *file)).size() == 3);
         }
-        REQUIRE(run(index::stage(build)).has_value());
+        stage(build);
         build.finish(IndexExtension::Stats, 12);
         REQUIRE(run(build.commit()).has_value());
 
@@ -776,7 +785,7 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
     SUBCASE("puts after a stage join the same copy") {
         auto build = take(opened->build(path, stat));
         put_zonemap(build, "ts", 3, 15);
-        REQUIRE(run(index::stage(build)).has_value());
+        stage(build);
         index::put_path(build, IndexExtension::Zonemap, "dur");
         index::put_path_granule(build, IndexExtension::Zonemap, "dur", 0, "z");
         REQUIRE(run(build.commit()).has_value());
@@ -796,7 +805,7 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
     SUBCASE("a staged build that fails an extension leaves no half copy") {
         auto build = take(opened->build(path, stat));
         put_zonemap(build, "ts", 3, 15);
-        REQUIRE(run(index::stage(build)).has_value());
+        stage(build);
         index::fail_extension(build, IndexExtension::Zonemap, 15);
         REQUIRE(run(build.commit()).has_value());
 
@@ -813,7 +822,7 @@ TEST_CASE("staging commits the batches so far and publishes nothing") {
             auto build = take(opened->build(path, stat));
             for (std::uint64_t i = 0; i < PER_ROUND; ++i)
                 index::put_chunk_statistics(build, i, {});
-            REQUIRE(run(index::stage(build)).has_value());
+            stage(build);
         }
         const auto after = take(opened->snapshot());
         const auto file = after.file(path);

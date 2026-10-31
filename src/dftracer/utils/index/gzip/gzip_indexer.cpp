@@ -12,7 +12,6 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
@@ -1076,20 +1075,6 @@ void persist_gzip_index_artifacts(index::FileBuild& build,
                              artifacts.total_lines, artifacts.total_uc_size,
                              artifacts.truncated);
     build.finish(index::store::IndexExtension::Members, 0);
-}
-
-void persist_gzip_index_artifacts(index::store::IndexWrite& w, int file_id,
-                                  const GzipBuildArtifacts& artifacts) {
-    namespace records = index::store::records;
-    records::clear_file(w, index::store::IndexExtension::Members, file_id);
-    for (const auto& member : artifacts.members)
-        records::put_gzip_member(w, file_id, member);
-    for (const auto& [member_idx, window] : artifacts.restart_windows)
-        records::put_restart_window(w, file_id, member_idx, window);
-    records::put_file_metadata(w, file_id, artifacts.checkpoint_size,
-                               artifacts.total_lines, artifacts.total_uc_size,
-                               artifacts.truncated);
-    records::put_manifest(w, file_id, index::store::IndexExtension::Members, 0);
 }
 
 GzipIndexer::GzipIndexer(const std::string& gz_path_,

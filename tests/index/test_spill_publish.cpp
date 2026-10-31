@@ -1,7 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
+#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/budget.h>
@@ -53,9 +57,10 @@ std::string write_trace(const std::string& dir, const std::string& name,
     return gz;
 }
 
-build::IndexBuildBatchResult run_build(const std::string& file,
-                                       const std::string& index_dir,
-                                       std::uint64_t memory_budget) {
+build::IndexBuildBatchResult run_build(
+    const std::string& file, const std::string& index_dir,
+    std::uint64_t memory_budget,
+    build::IndexBuildBatchConfig::AggFoldFactory agg_fold_factory = {}) {
     build::IndexBuildBatchResult out;
     Runtime rt(4);
     auto task = run_coro_scope(
@@ -65,6 +70,7 @@ build::IndexBuildBatchResult run_build(const std::string& file,
             config->index_dir = index_dir;
             config->parallelism = 2;
             config->memory_budget = memory_budget;
+            config->agg_fold_factory = std::move(agg_fold_factory);
             out = co_await build::BatchBuilder::process(&scope,
                                                         std::move(config));
         });
@@ -122,6 +128,59 @@ TEST_SUITE("SpillPublish") {
         const auto stats = idx::chunk_stats(*snapshot, *found);
         REQUIRE(stats);
         CHECK_FALSE(stats->empty());
+        MESSAGE("polls that saw the file: " << visible.load());
+    }
+
+    TEST_CASE("a file written through is never visible without its rows") {
+        namespace agg = idx::schemas::dft::agg;
+        dftu_utils_test::TestEnvironment env(10);
+        const auto file = write_trace(env.get_dir(), "through", 12000);
+        const auto dir = env.get_dir() + "/idx";
+        const auto logical = idx::store::internal::get_logical_path(file);
+        const auto path = trace::internal::determine_index_path(file, dir);
+        auto index = idx::Index::open(index_root(file, dir));
+        REQUIRE(index);
+
+        agg::AggregationConfig config;
+        config.time_interval_us = 100'000;
+        auto run = build::start_aggregation(path, config);
+        const auto run_bytes = agg::g_agg_run_bytes.exchange(1);
+        const auto staged = agg::g_agg_runs_staged.load();
+
+        std::atomic<bool> stop{false};
+        std::atomic<int> visible{0};
+        std::atomic<int> without_rows{0};
+        std::thread poller([&] {
+            while (!stop.load()) {
+                auto snapshot = index->snapshot();
+                if (snapshot && snapshot->file(logical)) {
+                    visible.fetch_add(1);
+                    idx::store::IndexDatabase db(
+                        path, idx::store::IndexOpenMode::ReadOnly);
+                    const int id = db.get_file_info_id(logical);
+                    std::size_t rows = 0;
+                    if (id >= 0)
+                        agg::tier::for_each_partial(
+                            db, id,
+                            [&](std::uint64_t, std::uint32_t, std::uint32_t,
+                                std::uint32_t, std::uint32_t, agg::PartialKind,
+                                std::span<const std::uint8_t>) {
+                                ++rows;
+                                return false;
+                            });
+                    if (rows == 0) without_rows.fetch_add(1);
+                }
+                std::this_thread::yield();
+            }
+        });
+        const auto built = run_build(file, dir, 1 * MIB, run.factory);
+        stop.store(true);
+        poller.join();
+        agg::g_agg_run_bytes.store(run_bytes);
+
+        REQUIRE(built.indexed == 1);
+        CHECK(agg::g_agg_runs_staged.load() > staged);
+        CHECK(without_rows.load() == 0);
         MESSAGE("polls that saw the file: " << visible.load());
     }
 

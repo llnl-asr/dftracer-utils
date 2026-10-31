@@ -89,15 +89,6 @@ int file_id_of(dftracer::utils::index::store::IndexDatabase& db,
         dftracer::utils::index::store::internal::get_logical_path(gz));
 }
 
-// Binds a logical path to the file id a fold writes, since the store names a
-// file by its path.
-int bind_file(istore::IndexDatabase& db, std::string_view logical_path) {
-    auto write = db.begin_write();
-    const int fid = dftu_utils_test::register_test_file(*write, logical_path);
-    write->commit();
-    return fid;
-}
-
 bool file_bloom_contains(dftracer::utils::index::store::IndexDatabase& db,
                          int fid, std::string_view dim,
                          std::string_view value) {
@@ -133,6 +124,28 @@ std::string stored_path(const dftracer::utils::index::store::IndexDatabase& db,
     return {};
 }
 
+// The build of the fold's file, which must exist before the fold spills: its
+// commit publishes the record the tier hangs off.
+// Registers the fold's file, since the store names a file by its path, and
+// starts the build the fold writes into.
+int start_store(const std::string& root) {
+    istore::IndexDatabase db(root);
+    auto write = db.begin_write();
+    const int fid = dftu_utils_test::register_test_file(*write, "f.pfw.gz");
+    write->commit();
+    return fid;
+}
+
+dftracer::utils::index::FileBuild start_build(const std::string& root) {
+    REQUIRE(start_store(root) == 1);
+    auto index = dftracer::utils::index::Index::open(
+        dftracer::utils::index::store::internal::normalize_index_root(root));
+    REQUIRE(index);
+    auto build = index->build("f.pfw.gz", {});
+    REQUIRE(build);
+    return std::move(*build);
+}
+
 std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
                                  StringIntern& intern) {
     std::vector<FoldEvent> out;
@@ -151,9 +164,9 @@ std::vector<FoldEvent> events_of(const std::vector<std::string>& lines,
 
 TEST_SUITE("BloomFold") {
     // A build that fails after spilling drops its fold, and the runs it staged
-    // go with it: nothing of them is readable. Runs handed off by
-    // finish_staged belong to the caller, whose commit publishes the tier.
-    TEST_CASE("spill runs live until handed off or dropped") {
+    // go with it: nothing of them is readable. Runs of a build that commits
+    // come with the rest of the tier.
+    TEST_CASE("spill runs live until their build commits or is dropped") {
         TestEnvironment env(10);
         StringIntern intern;
         std::vector<std::string> lines;
@@ -176,54 +189,49 @@ TEST_SUITE("BloomFold") {
         };
         const std::string dropped = env.get_dir() + "/dropped";
         {
-            istore::IndexDatabase db(dropped);
-            REQUIRE(bind_file(db, "f.pfw.gz") == 1);
+            auto build = start_build(dropped);
             BloomFold fold(intern);
-            fold.enable_spill(1, db.begin_staged_write(), 1,
-                              /*fresh_id=*/true);
+            fold.enable_spill(1, build);
             drive(fold);
             // The spills fill one run, far under the run size floor.
             CHECK(fold.spill_runs() == 1);
+            fold.write_run().get();
+            CHECK(fold.spill_runs() == 1);
         }
         {
-            istore::IndexDatabase db(dropped, istore::IndexOpenMode::ReadOnly);
+            istore::IndexDatabase db(dropped + "/.dftindex",
+                                     istore::IndexOpenMode::ReadOnly);
             CHECK_FALSE(db.pruning_tier_current(1));
             CHECK(db.query_chunk_statistics(1).empty());
         }
 
         const std::string kept = env.get_dir() + "/kept";
         {
-            istore::IndexDatabase db(kept);
-            REQUIRE(bind_file(db, "f.pfw.gz") == 1);
+            auto build = start_build(kept);
             BloomFold fold(intern);
-            fold.enable_spill(1, db.begin_staged_write(), 1,
-                              /*fresh_id=*/true);
+            fold.enable_spill(1, build);
             drive(fold);
             CHECK(fold.spill_runs() == 1);
-            auto staged = fold.finish_staged(1);
-            REQUIRE(staged);
-            staged->commit();
+            // The run goes into the build and is staged; the commit publishes
+            // it with the chunks the fold still holds.
+            fold.write_run().get();
+            fold.write(build);
+            REQUIRE(build.commit().get());
         }
         // The staged tier holds every chunk the fold saw, as the tier a fold
         // that fit in memory writes does.
         const std::string memory = env.get_dir() + "/memory";
         {
-            istore::IndexDatabase db(memory);
-            REQUIRE(bind_file(db, "f.pfw.gz") == 1);
+            auto build = start_build(memory);
             BloomFold fold(intern);
             drive(fold);
             CHECK(fold.spill_runs() == 0);
-            auto index = dftracer::utils::index::Index::open(
-                dftracer::utils::index::store::internal::normalize_index_root(
-                    memory));
-            REQUIRE(index);
-            auto build = index->build("f.pfw.gz", {});
-            REQUIRE(build);
-            fold.write(*build);
-            REQUIRE(build->commit().get());
+            fold.write(build);
+            REQUIRE(build.commit().get());
         }
         auto chunks = [](const std::string& path) {
-            istore::IndexDatabase db(path, istore::IndexOpenMode::ReadOnly);
+            istore::IndexDatabase db(path + "/.dftindex",
+                                     istore::IndexOpenMode::ReadOnly);
             return db.query_chunk_statistics(1);
         };
         const auto spilled = chunks(kept);

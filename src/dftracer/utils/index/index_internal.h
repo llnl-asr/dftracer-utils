@@ -9,6 +9,7 @@
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/store/store.h>
 
 #include <cstddef>
@@ -48,7 +49,7 @@ struct FileBuild::Impl {
         kv::Namespace ns;
         kv::Batch batch;
         std::uint64_t params_hash = 0;
-        /// Puts since the last stage, and puts that stage() already committed.
+        /// Puts since the last stage, and puts the stages already committed.
         std::size_t puts = 0;
         std::size_t staged_puts = 0;
         bool finished = false;
@@ -58,6 +59,9 @@ struct FileBuild::Impl {
     std::string root;
     kv::Store store;
     kv::ScopeKey scope;
+    /// Held by the fold task that puts and stages a spilled run, so two tasks
+    /// never write the copies below at once.
+    coro::AsyncMutex write_mutex;
     dstd::Vector<SourceStat> sources;
     dstd::Vector<Copy> copies;
     /// Extensions whose copy of the file the commit drops.
@@ -106,6 +110,11 @@ struct IndexAccess {
     static void clear(FileBuild& build, const kv::NamespaceSpec& spec);
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> stage(
         FileBuild& build);
+    static coro::AsyncMutex& write_mutex(FileBuild& build);
+    /// Erases the keys in [begin, end) of a copy the build holds. A copy it
+    /// does not hold needs no erasing.
+    static void erase(FileBuild& build, const kv::NamespaceSpec& spec,
+                      dstd::ByteView begin, dstd::ByteView end);
 
     static const std::string& root(const Index& index);
     /// Opens the store, which creates its directory.

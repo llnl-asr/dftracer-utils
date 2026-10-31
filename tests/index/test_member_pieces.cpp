@@ -1,7 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -31,6 +33,21 @@ GzipMemberRecord record(std::uint64_t idx, std::uint64_t c_offset,
     return r;
 }
 
+// Writes `arts` as the members of "trace.pfw.gz" in one build and returns the
+// file's id in the index.
+int persist(const std::string& index_root, IndexDatabase& db,
+            const GzipBuildArtifacts& arts) {
+    auto index = dftracer::utils::index::Index::open(
+        dftracer::utils::index::store::internal::normalize_index_root(
+            index_root));
+    REQUIRE(index);
+    auto build = index->build("trace.pfw.gz", {});
+    REQUIRE(build);
+    dftracer::utils::index::gzip::persist_gzip_index_artifacts(*build, arts);
+    REQUIRE(build->commit().get());
+    return db.get_file_info_id("trace.pfw.gz");
+}
+
 }  // namespace
 
 TEST_SUITE("member pieces") {
@@ -52,14 +69,8 @@ TEST_SUITE("member pieces") {
             window[i] = static_cast<char>(i * 31);
         arts.restart_windows = {{2, window}, {3, std::string(32768, 'x')}};
 
-        int fid = -1;
-        {
-            auto w = db.begin_write();
-            fid = w->file_id_for("trace.pfw.gz");
-            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*w, fid,
-                                                                       arts);
-            w->commit();
-        }
+        const int fid = persist((root / ".dftindex").string(), db, arts);
+        REQUIRE(fid >= 0);
 
         const auto got = db.query_gzip_members(fid);
         REQUIRE(got.size() == 4);
@@ -94,13 +105,9 @@ TEST_SUITE("member pieces") {
         whole.members = {record(0, 0, 0, GzipRecordKind::Member, 0)};
 
         int fid = -1;
-        for (const auto* arts : {&split, &whole}) {
-            auto w = db.begin_write();
-            fid = w->file_id_for("trace.pfw.gz");
-            dftracer::utils::index::gzip::persist_gzip_index_artifacts(*w, fid,
-                                                                       *arts);
-            w->commit();
-        }
+        for (const auto* arts : {&split, &whole})
+            fid = persist((root / ".dftindex").string(), db, *arts);
+        REQUIRE(fid >= 0);
         const auto got = db.query_gzip_members(fid);
         REQUIRE(got.size() == 1);
         CHECK(got[0].kind == GzipRecordKind::Member);

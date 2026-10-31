@@ -279,6 +279,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         while (!in_flight_.empty()) co_await step_oldest();
         while (!bloom_steps_.empty()) co_await await_bloom_front();
         co_await await_tails();
+        if (bloom_ && bloom_->spills()) co_await bloom_->write_run();
     }
 
     /// Publish accumulated fold state once the file's members are all parsed.
@@ -555,10 +556,11 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         if (builders_) builders_->step(c.checkpoint_idx, c.lines);
     }
 
-    // The staged rows of the aggregation fold after an in-order step(), so no
-    // worker blocks on the store.
+    // The rows and runs the folds put into the build after an in-order step(),
+    // so no worker blocks on the store.
     coro::CoroTask<void> stage_agg() {
-        if (agg_ && agg_->stage_due()) co_await agg_->stage_async();
+        if (agg_ && agg_->drain_due()) co_await agg_->drain();
+        if (bloom_ && bloom_->spill_pending()) co_await bloom_->write_run();
     }
 
     struct PieceRelease {
@@ -595,12 +597,13 @@ class IndexFoldDriver : public index::build::IndexVisitor {
                 }));
         }
         if (bloom_) co_await step_bloom(std::move(piece));
+        if (bloom_ && bloom_->spill_pending()) co_await bloom_->write_run();
     }
 
     // Spawned frames are destroyed after their future completes, so a task
     // drops its piece itself: the last owner returns the permit to the driver.
-    // `agg` is the fold when it is the aggregation fold, whose staged rows are
-    // written here so no worker blocks on the store.
+    // `agg` is the fold when it is the aggregation fold, whose rows are
+    // staged here so no worker blocks on the store.
     static coro::CoroTask<void> fold_task(
         trace::views::detail::Fold* fold,
         index::schemas::dft::agg::AggregationFold* agg,
@@ -615,7 +618,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         }
         c.reset();
         if (error) std::rethrow_exception(error);
-        if (agg && agg->stage_due()) co_await agg->stage_async();
+        if (agg && agg->drain_due()) co_await agg->drain();
     }
 
     // The bloom fold's state is per checkpoint, so batches of different

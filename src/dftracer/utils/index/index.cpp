@@ -203,6 +203,18 @@ void IndexAccess::put(FileBuild& build, const kv::NamespaceSpec& spec,
     ++copy->puts;
 }
 
+void IndexAccess::erase(FileBuild& build, const kv::NamespaceSpec& spec,
+                        dstd::ByteView begin, dstd::ByteView end) {
+    FileBuild::Impl& impl = *build.impl_;
+    if (impl.error || impl.committed) return;
+    for (FileBuild::Impl::Copy& copy : impl.copies) {
+        if (copy.ns.spec.name != spec.name) continue;
+        auto erased = impl.store.erase(copy.ns, impl.scope, begin, end);
+        if (!erased) impl.error = erased.error();
+        return;
+    }
+}
+
 void IndexAccess::finish(FileBuild& build, const kv::NamespaceSpec& spec,
                          std::uint64_t params_hash) {
     FileBuild::Impl& impl = *build.impl_;
@@ -280,6 +292,10 @@ FileBuild::Impl::Copy* FileBuild::Impl::copy_of(const kv::NamespaceSpec& spec) {
     return &copies.back();
 }
 
+coro::AsyncMutex& IndexAccess::write_mutex(FileBuild& build) {
+    return build.impl_->write_mutex;
+}
+
 coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::stage(
     FileBuild& build) {
     FileBuild::Impl& impl = *build.impl_;
@@ -297,6 +313,16 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::stage(
         copy.puts = 0;
     }
     co_return dstd::Expected<void, dstd::Error>{};
+}
+
+coro::CoroTask<dstd::Expected<void, dstd::Error>> Claim::stage() {
+    return IndexAccess::stage(*build_);
+}
+
+coro::CoroTask<dstd::UniquePtr<Claim>> claim(FileBuild& build) {
+    coro::AsyncMutex& mutex = IndexAccess::write_mutex(build);
+    co_await mutex.lock();
+    co_return dstd::make_unique<Claim>(build, coro::AsyncMutexGuard(mutex));
 }
 
 coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(

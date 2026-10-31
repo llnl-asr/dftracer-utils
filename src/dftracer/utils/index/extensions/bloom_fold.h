@@ -8,7 +8,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>
@@ -73,14 +72,10 @@ class BloomFold : public trace::views::detail::Fold {
     Lane open(const trace::views::detail::FoldBatch& batch);
     void observe(const Lane& lane,
                  const trace::views::detail::FoldBatch& batch);
-    bool spills() const { return staged_ != nullptr; }
-    /// Whether finish_staged writes the tier rather than write(), because the
-    /// file spilled while it was parsed. Small files share one write.
-    bool writes_runs() const {
-        if (!spills() || files_.empty()) return false;
-        const auto& sp = files_.begin()->second.spill;
-        return sp.staged_runs > 0 || sp.staged_bytes > 0;
-    }
+    bool spills() const { return spill_share_ != 0; }
+    /// Whether a run waits for write_run, which puts it into the build and
+    /// stages it.
+    bool spill_pending() const { return spill_pending_; }
     void seal_unit(const trace::views::detail::ScanUnit& /*unit*/) override {}
     void drop_unit(const trace::views::detail::ScanUnit& unit) override;
     void merge(trace::views::detail::Fold& slice) override;
@@ -104,13 +99,14 @@ class BloomFold : public trace::views::detail::Fold {
         return total;
     }
 
-    /// Past `share` bytes the finished chunks of a file are written as a run, a
-    /// stage() of `staged` (begin_staged_write) whose commit publishes the tier
-    /// whole. finish_staged hands it back. A fresh `file_id` was reserved by
-    /// this build, so its runs clear nothing.
-    void enable_spill(std::uint64_t share,
-                      std::unique_ptr<index::store::IndexDatabaseWrite> staged,
-                      int file_id, bool fresh_id = false);
+    /// Past `share` bytes the finished chunks of a file are written as a run
+    /// into `build`: write_run puts the run there and stages it, so its memory
+    /// goes before the file ends and one commit publishes the whole tier. The
+    /// final write() must be given the same `build`.
+    void enable_spill(std::uint64_t share, index::FileBuild& build);
+    /// Writes the run spill() queued into the build and stages it, waiting for
+    /// the task that writes the build now.
+    coro::CoroTask<void> write_run();
     /// Caps the auto keys. Unset, the size is read from the path at write.
     void set_file_bytes(std::uint64_t bytes) { file_bytes_ = bytes; }
     /// Bytes the open run holds before it is committed. It never falls under
@@ -118,14 +114,8 @@ class BloomFold : public trace::views::detail::Fold {
     /// tiny budget writes few large runs.
     static std::uint64_t run_limit(std::uint64_t share,
                                    std::size_t runs) noexcept;
-    /// Runs written so far; 0 means the file is still wholly in memory.
+    /// Runs staged so far; 0 means the file is still wholly in memory.
     std::size_t spill_runs() const;
-    /// For a file with spill enabled, with or without runs so far: writes the
-    /// rest of the tier and its manifest entries into the staged write and
-    /// returns it. The caller adds the file's record first, so the tier carries
-    /// the file's sources, then commits it to publish the tier.
-    std::unique_ptr<index::store::IndexDatabaseWrite> finish_staged(
-        int file_id);
 
     /// Empty if the file is unseen.
     index::schemas::dft::BloomCore::Catalog file_catalog(
@@ -207,9 +197,17 @@ class BloomFold : public trace::views::detail::Fold {
         };
         /// Each spilled chunk's data events and own auto keys.
         std::vector<SpilledChunk> keys;
+        /// A chunk finished since the last run, with the dimensions it was
+        /// assembled for.
+        struct PendingChunk {
+            std::uint64_t checkpoint = 0;
+            std::vector<std::string> dims;
+            index::schemas::dft::BloomCore::ChunkState chunk;
+        };
+        std::vector<PendingChunk> pending;
         ankerl::unordered_dense::set<std::uint32_t> key_union;
-        std::size_t staged_runs = 0;
-        std::uint64_t staged_bytes = 0;
+        std::size_t runs = 0;
+        std::uint64_t run_bytes = 0;
     };
 
     using SchemaLeaf = std::pair<std::uint32_t, std::uint8_t>;
@@ -248,6 +246,8 @@ class BloomFold : public trace::views::detail::Fold {
     /// `fs`.
     void write_file(index::FileBuild& build, const std::string& file,
                     FileState& fs);
+    /// Writes the chunks spill() queued into `build` and frees them.
+    void write_pending(index::FileBuild& build, FileState& fs);
     // Nested extra dimensions come from a capture under "args."; records whose
     // every leaf is already a key need none.
     bool captures_nested() const { return !config_.auto_prefix.empty(); }
@@ -279,9 +279,8 @@ class BloomFold : public trace::views::detail::Fold {
     FileState* last_state_ = nullptr;
     std::uint64_t catalog_observations_ = 0;
     std::uint64_t spill_share_ = 0;
-    std::unique_ptr<index::store::IndexDatabaseWrite> staged_;
-    int spill_file_id_ = -1;
-    bool spill_fresh_ = false;
+    index::FileBuild* build_ = nullptr;
+    bool spill_pending_ = false;
 };
 
 }  // namespace dftracer::utils::index::extensions

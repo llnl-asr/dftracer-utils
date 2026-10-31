@@ -187,47 +187,26 @@ void AggregationFold::close_chunk() {
         slot.last_thread = 0;
         slot.used = false;
     }
-    if (through_db_ == nullptr) return;
+    if (through_ == nullptr) return;
     namespace fa = constants::file_admission;
     const std::size_t doublings = std::min(
         through_runs_ / fa::SPILL_RUNS_PER_DOUBLING, fa::MAX_SPILL_DOUBLINGS);
     if (closed_bytes_ >= g_agg_run_bytes.load(std::memory_order_relaxed)
                              << doublings)
-        queue_closed();
+        drain_due_ = true;
 }
 
-void AggregationFold::queue_closed() {
-    if (!staged_) {
-        staged_ = through_db_->begin_staged_write();
-        // Its runs come before the file's record.
-        staged_->bind_file(through_path_, file_id_);
-        staged_->set_fresh_file(through_fresh_ ? file_id_ : -1);
-        index::store::records::clear_file(
-            *staged_, index::store::layout::Ext::Agg, file_id_);
-    }
-    put_closed(*staged_);
-    stage_due_ = true;
-}
-
-coro::CoroTask<void> AggregationFold::stage_async() {
-    stage_due_ = false;
-    co_await staged_->stage_async();
+coro::CoroTask<void> AggregationFold::drain() {
+    drain_due_ = false;
+    auto held = co_await index::claim(*through_);
+    if (!held) co_return;
+    put_closed(held->build());
+    auto staged = co_await held->stage();
+    if (!staged) co_return;
     ++through_runs_;
 #if DFTRACER_UTILS_TEST_PROBES
     g_agg_runs_staged.fetch_add(1, std::memory_order_relaxed);
 #endif
-}
-
-void AggregationFold::put_closed(index::store::IndexWrite& w) {
-    for (const Closed& closed : closed_)
-        index::store::records::put_agg_partial_value(
-            w, file_id_, closed.chunk, closed.key.cat, closed.key.name,
-            closed.key.host, closed.key.extra,
-            static_cast<std::uint8_t>(closed.key.kind), bytes_of(closed.value));
-    for (const ClosedColumns& closed : closed_columns_)
-        index::store::records::put_agg_chunk_columns_value(
-            w, file_id_, closed.chunk, bytes_of(closed.value));
-    release_closed();
 }
 
 void AggregationFold::put_closed(index::FileBuild& build) {
@@ -280,36 +259,12 @@ void AggregationFold::write(index::FileBuild& build) {
         throw std::logic_error(
             "an aggregation fold writes the data of one file, and has none");
     }
-    if (staged_) {
-        throw std::logic_error(
-            "an aggregation fold that wrote through finishes its staged write");
-    }
     close_chunk();
     finish_rows(build);
 }
 
-void AggregationFold::write_through(index::store::IndexDatabase& db,
-                                    std::string logical_path, bool fresh_id) {
-    through_db_ = &db;
-    through_path_ = std::move(logical_path);
-    through_fresh_ = fresh_id;
-}
-
-std::unique_ptr<index::store::IndexDatabaseWrite>
-AggregationFold::finish_through() {
-    close_chunk();
-    if (!staged_) return nullptr;
-    finish_rows(*staged_);
-    return std::move(staged_);
-}
-
-void AggregationFold::finish_rows(index::store::IndexWrite& w) {
-    put_closed(w);
-    for (const std::uint32_t id : referenced_)
-        index::store::records::put_agg_dictionary_entry(
-            w, file_id_, id, agg_intern_->intern.resolve(id));
-    tier::put_file(w, file_id_, config_.params_hash());
-    referenced_.clear();
+void AggregationFold::write_through(index::FileBuild& build) {
+    through_ = &build;
 }
 
 void AggregationFold::finish_rows(index::FileBuild& build) {

@@ -23,7 +23,6 @@ class FileBuild;
 }
 
 namespace dftracer::utils::index::store {
-class IndexWrite;
 enum class ColumnType : std::uint8_t;
 }  // namespace dftracer::utils::index::store
 
@@ -244,13 +243,6 @@ class BloomCore {
     /// to `acc`. `extra_dims` names the chunk's extra blooms and statistics
     /// in order. An extra dimension with no value in the chunk gets a zone
     /// with `present = 0` and no bloom.
-    static void write_chunk(index::store::IndexWrite& w, int file_id,
-                            std::uint64_t checkpoint_idx,
-                            const ChunkState& chunk,
-                            const std::vector<std::string>& extra_dims,
-                            const ChunkIndexerConfig& config,
-                            FileAccumulator& acc);
-
     static void write_chunk(index::FileBuild& build,
                             std::uint64_t checkpoint_idx,
                             const ChunkState& chunk,
@@ -260,7 +252,7 @@ class BloomCore {
 
     /// The records a chunk of `observed` data events has for an extra
     /// dimension it never observed, as write_chunk writes them.
-    static void write_absent_extra(index::store::IndexWrite& w, int file_id,
+    static void write_absent_extra(index::FileBuild& build,
                                    std::uint64_t checkpoint_idx,
                                    std::string_view dim, std::uint64_t observed,
                                    const ChunkIndexerConfig& config);
@@ -268,11 +260,6 @@ class BloomCore {
     /// Writes the file-level records, the catalog and the manifest entries
     /// of tier_extensions. `extra_dims` are the dimensions the file keeps.
     /// Returns the file statistics.
-    static ChunkStatistics finish_file(
-        index::store::IndexWrite& w, int file_id, FileAccumulator& acc,
-        const ChunkIndexerConfig& config,
-        const std::vector<std::string>& extra_dims, const Catalog& catalog);
-    /// As above into `build`, which gets each extension finished.
     static ChunkStatistics finish_file(
         index::FileBuild& build, FileAccumulator& acc,
         const ChunkIndexerConfig& config,

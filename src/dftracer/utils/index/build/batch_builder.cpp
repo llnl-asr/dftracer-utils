@@ -109,8 +109,7 @@ struct Admission {
         : files(budget, workers, sink_bytes_each * sinks, file_count) {}
 
     FileAdmission files;
-    bool spill_staged = false;
-    index::store::IndexDatabase* staged_db = nullptr;
+    bool spill = false;
     /// RecordSchema id for every file; empty detects each file's.
     std::string schema;
     std::atomic<std::size_t> spilled{0};
@@ -200,6 +199,7 @@ static coro::CoroTask<void> parse_and_write_worker(
             auto t0 = std::chrono::steady_clock::now();
 
             ParsedBloomJob job;
+            dstd::Optional<index::FileBuild> build;
             bool parse_ok = false;
             try {
                 if (fd < 0)
@@ -208,125 +208,137 @@ static coro::CoroTask<void> parse_and_write_worker(
                 pf.file_hash = index::store::internal::calculate_file_hash(
                     fd, pf.file_size);
                 job.identity = pf;
-                namespace views = trace::views::detail;
-                index::gzip::CheckpointIndexer::VisitorList visitors;
-                const auto s0 = std::chrono::steady_clock::now();
-                const index::RecordSchema& schema =
-                    admission->schema.empty()
-                        ? index::detect_file_schema(
-                              pf.file_path, fd, pf.file_size, pf.file_mtime_ns)
-                        : index::get_schema(admission->schema);
-                writer->metrics->schema_ns.fetch_add(
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() - s0)
-                            .count()),
-                    std::memory_order_relaxed);
-                job.schema = &schema;
-                const auto file_config =
-                    index::build::for_schema(bloom_config, schema);
-
-                std::vector<views::Fold*> fold_ptrs;
-                std::optional<index::build::IndexFoldDriver> driver;
-                {
-                    job.intern =
-                        std::make_unique<dftracer::utils::dstd::StringIntern>();
-                    if (build_bloom) {
-                        job.bloom_fold =
-                            std::make_unique<index::extensions::BloomFold>(
-                                *job.intern, file_config);
-                        job.bloom_fold->set_file_bytes(pf.file_size);
-                        if (admission->spill_staged) {
-                            auto staged =
-                                admission->staged_db->begin_staged_write();
-                            // Its runs come before the file's record.
-                            staged->bind_file(pf.logical_path, pf.file_id);
-                            job.bloom_fold->enable_spill(
-                                ticket.elastic_bytes(), std::move(staged),
-                                pf.file_id, pf.fresh_id);
-                        }
-                        fold_ptrs.push_back(job.bloom_fold.get());
-                    }
-                    if (!tier_only) {
-                        job.rowset_fold =
-                            std::make_unique<index::extensions::RowSetFold>(
-                                *job.intern, index::indexed_rowsets(schema));
-                        fold_ptrs.push_back(job.rowset_fold.get());
-                    }
-                    if (agg_fold_factory_ptr && *agg_fold_factory_ptr) {
-                        job.agg_fold =
-                            (*agg_fold_factory_ptr)(*job.intern, pf.file_id);
-                        job.agg_fold->write_through(*admission->staged_db,
-                                                    pf.logical_path,
-                                                    pf.fresh_id);
-                        fold_ptrs.push_back(job.agg_fold.get());
-                    }
-                    driver.emplace(*job.intern, fold_ptrs, pf.file_path,
-                                   pf.index_path);
-                    driver->set_record_schema(schema);
-                    driver->share_buffers(admission->buffers);
-                    driver->set_parse_gate(admission->files.gate());
-                    if (build_bloom) {
-                        auto exts = index::extensions::plugin_extensions();
-                        if (!exts.empty()) {
-                            job.plugin_builders = std::make_unique<
-                                index::extensions::PluginBuilders>(
-                                std::move(exts));
-                            driver->set_plugin_builders(
-                                job.plugin_builders.get());
-                        }
-                    }
-                    visitors.emplace_back(*driver);
-                }
-
-                auto arts = co_await gzip_indexer::build_gzip_index_artifacts(
-                    fd, pf.file_path, checkpoint_size, visitors, scope, nullptr,
-                    admission->files.inflate_ways());
-                if (!arts) {
+                // The build exists before the folds, so one that spills
+                // writes its runs into the file it is parsing.
+                auto started = writer->index->build(
+                    pf.logical_path,
+                    index::SourceStat{pf.file_mtime, pf.file_size,
+                                      pf.file_hash});
+                if (!started) {
                     result.error_message =
-                        "Failed to build gzip index artifacts";
+                        std::string(started.error().message());
                 } else {
-                    job.artifacts = std::move(*arts);
-                    result.total_lines =
-                        static_cast<std::size_t>(job.artifacts.total_lines);
-                    result.chunks_processed = job.artifacts.members.size();
-                    // Publish the dictionary's pending entries now that every
-                    // member is parsed. Bloom needs none.
-                    if (driver) driver->seal();
-                    if (job.bloom_fold) {
-                        result.events_processed = static_cast<std::size_t>(
-                            job.bloom_fold->total_events());
-                        if (job.bloom_fold->spill_runs() > 0) {
-                            admission->spilled.fetch_add(
-                                1, std::memory_order_relaxed);
-                            const std::size_t runs =
-                                job.bloom_fold->spill_runs();
-                            std::size_t seen = admission->max_spill_runs.load(
-                                std::memory_order_relaxed);
-                            while (runs > seen &&
-                                   !admission->max_spill_runs
-                                        .compare_exchange_weak(
-                                            seen, runs,
-                                            std::memory_order_relaxed)) {
-                            }
-                            DFTRACER_UTILS_LOG_INFO(
-                                "IndexBatch: %s spilled %zu runs",
-                                basename_of(pf.file_path).c_str(),
-                                job.bloom_fold->spill_runs());
+                    build.emplace(std::move(*started));
+                    namespace views = trace::views::detail;
+                    index::gzip::CheckpointIndexer::VisitorList visitors;
+                    const auto s0 = std::chrono::steady_clock::now();
+                    const index::RecordSchema& schema =
+                        admission->schema.empty()
+                            ? index::detect_file_schema(pf.file_path, fd,
+                                                        pf.file_size,
+                                                        pf.file_mtime_ns)
+                            : index::get_schema(admission->schema);
+                    writer->metrics->schema_ns.fetch_add(
+                        static_cast<std::uint64_t>(
+                            std::chrono::duration_cast<
+                                std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - s0)
+                                .count()),
+                        std::memory_order_relaxed);
+                    job.schema = &schema;
+                    const auto file_config =
+                        index::build::for_schema(bloom_config, schema);
+
+                    std::vector<views::Fold*> fold_ptrs;
+                    std::optional<index::build::IndexFoldDriver> driver;
+                    {
+                        job.intern = std::make_unique<
+                            dftracer::utils::dstd::StringIntern>();
+                        if (build_bloom) {
+                            job.bloom_fold =
+                                std::make_unique<index::extensions::BloomFold>(
+                                    *job.intern, file_config);
+                            job.bloom_fold->set_file_bytes(pf.file_size);
+                            if (admission->spill)
+                                job.bloom_fold->enable_spill(
+                                    ticket.elastic_bytes(), *build);
+                            fold_ptrs.push_back(job.bloom_fold.get());
                         }
+                        if (!tier_only) {
+                            job.rowset_fold =
+                                std::make_unique<index::extensions::RowSetFold>(
+                                    *job.intern,
+                                    index::indexed_rowsets(schema));
+                            fold_ptrs.push_back(job.rowset_fold.get());
+                        }
+                        if (agg_fold_factory_ptr && *agg_fold_factory_ptr) {
+                            job.agg_fold = (*agg_fold_factory_ptr)(*job.intern,
+                                                                   pf.file_id);
+                            job.agg_fold->write_through(*build);
+                            fold_ptrs.push_back(job.agg_fold.get());
+                        }
+                        driver.emplace(*job.intern, fold_ptrs, pf.file_path,
+                                       pf.index_path);
+                        driver->set_record_schema(schema);
+                        driver->share_buffers(admission->buffers);
+                        driver->set_parse_gate(admission->files.gate());
+                        if (build_bloom) {
+                            auto exts = index::extensions::plugin_extensions();
+                            if (!exts.empty()) {
+                                job.plugin_builders = std::make_unique<
+                                    index::extensions::PluginBuilders>(
+                                    std::move(exts));
+                                driver->set_plugin_builders(
+                                    job.plugin_builders.get());
+                            }
+                        }
+                        visitors.emplace_back(*driver);
                     }
-                    if (job.agg_fold) {
-                        index::schemas::dft::agg::AggFoldOutput ao;
-                        ao.file_path = pf.file_path;
-                        ao.min_time_bucket = job.agg_fold->min_time_bucket();
-                        ao.max_time_bucket = job.agg_fold->max_time_bucket();
-                        ao.events_processed = job.agg_fold->events_processed();
-                        job.agg_output = std::move(ao);
+
+                    auto arts =
+                        co_await gzip_indexer::build_gzip_index_artifacts(
+                            fd, pf.file_path, checkpoint_size, visitors, scope,
+                            nullptr, admission->files.inflate_ways());
+                    if (!arts) {
+                        result.error_message =
+                            "Failed to build gzip index artifacts";
+                    } else {
+                        job.artifacts = std::move(*arts);
+                        result.total_lines =
+                            static_cast<std::size_t>(job.artifacts.total_lines);
+                        result.chunks_processed = job.artifacts.members.size();
+                        // Publish the dictionary's pending entries now that
+                        // every member is parsed. Bloom needs none.
+                        if (driver) driver->seal();
+                        if (job.bloom_fold) {
+                            result.events_processed = static_cast<std::size_t>(
+                                job.bloom_fold->total_events());
+                            if (job.bloom_fold->spill_runs() > 0) {
+                                admission->spilled.fetch_add(
+                                    1, std::memory_order_relaxed);
+                                const std::size_t runs =
+                                    job.bloom_fold->spill_runs();
+                                std::size_t seen =
+                                    admission->max_spill_runs.load(
+                                        std::memory_order_relaxed);
+                                while (runs > seen &&
+                                       !admission->max_spill_runs
+                                            .compare_exchange_weak(
+                                                seen, runs,
+                                                std::memory_order_relaxed)) {
+                                }
+                                DFTRACER_UTILS_LOG_INFO(
+                                    "IndexBatch: %s spilled %zu runs",
+                                    basename_of(pf.file_path).c_str(),
+                                    job.bloom_fold->spill_runs());
+                            }
+                        }
+                        if (job.agg_fold) {
+                            index::schemas::dft::agg::AggFoldOutput ao;
+                            ao.file_path = pf.file_path;
+                            ao.min_time_bucket =
+                                job.agg_fold->min_time_bucket();
+                            ao.max_time_bucket =
+                                job.agg_fold->max_time_bucket();
+                            ao.events_processed =
+                                job.agg_fold->events_processed();
+                            job.agg_output = std::move(ao);
+                        }
+                        result.index_created = true;
+                        result.success = true;
+                        job.result = result;
+                        parse_ok = true;
                     }
-                    result.index_created = true;
-                    result.success = true;
-                    job.result = result;
-                    parse_ok = true;
                 }
             } catch (const std::exception& e) {
                 result.error_message = e.what();
@@ -368,12 +380,8 @@ static coro::CoroTask<void> parse_and_write_worker(
             const auto w0 = std::chrono::steady_clock::now();
             {
                 index::build::ParsedIndexJob write_job;
-                write_job.file_id = pf.file_id;
-                write_job.fresh_id = pf.fresh_id;
                 write_job.file_path = pf.file_path;
-                write_job.logical_path = pf.logical_path;
-                write_job.record = {static_cast<std::uint32_t>(pf.file_id),
-                                    pf.file_mtime, pf.file_hash, pf.file_size};
+                write_job.fresh_id = pf.fresh_id;
                 write_job.artifacts = std::move(job.artifacts);
                 write_job.intern = std::move(job.intern);
                 write_job.bloom_fold = std::move(job.bloom_fold);
@@ -392,7 +400,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                 (*results_ptr)[idx] = std::move(result);
 
                 const bool written = co_await index::build::write_index_job(
-                    *writer->index, write_job, ticket);
+                    *build, write_job, ticket);
                 if (written) {
                     writer->metrics->files_written.fetch_add(
                         1, std::memory_order_relaxed);
@@ -452,8 +460,6 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
 
     // A lookup per file stalled a build on Lustre for minutes.
     index::load_index_schemas(state->index_path);
-    auto writer_db =
-        std::make_shared<index::store::IndexDatabase>(state->index_path);
     auto writer_index = index::Index::open(
         index::store::internal::normalize_index_root(state->index_path));
     if (!writer_index) {
@@ -476,8 +482,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     auto admission = std::make_shared<Admission>(
         budget, parse_workers, plan.sink_bytes,
         std::min(state->num_files, parse_workers), state->num_files);
-    admission->staged_db = writer_db.get();
-    if (budget != NO_BUDGET) admission->spill_staged = true;
+    admission->spill = budget != NO_BUDGET;
     admission->schema = state->schema;
     auto* admission_ptr = admission.get();
     auto next_block = std::make_shared<std::atomic<std::size_t>>(0);

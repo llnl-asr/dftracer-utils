@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 
@@ -79,11 +78,6 @@ coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
 /// Write the file's members, restart windows and metadata into `build` and
 /// finish its Members extension.
 void persist_gzip_index_artifacts(index::FileBuild &build,
-                                  const GzipBuildArtifacts &artifacts);
-
-/// Replace the file's `core.members` data (members and metadata) and write
-/// its manifest entry into `w`.
-void persist_gzip_index_artifacts(index::store::IndexWrite &w, int file_id,
                                   const GzipBuildArtifacts &artifacts);
 
 class GzipIndexer : public CheckpointIndexer {

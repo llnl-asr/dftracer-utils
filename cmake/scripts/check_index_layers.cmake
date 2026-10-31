@@ -59,6 +59,8 @@ set(ALLOWED
   "index/cache/cache_store.cpp|store/writer.h"
   # IndexDatabase reads an index root through either backend
   "index/store/index_database.cpp|store/snapshot.h"
+  "index/store/internal/index_decoding.h|index/gzip/gzip_member_record.h"
+  "index/store/internal/index_decoding.h|index/schemas/dft/chunk_statistics.h"
   "index/store/internal/index_encoding.h|index/gzip/gzip_member_record.h"
   "index/store/internal/index_encoding.h|index/schemas/dft/chunk_statistics.h"
   "index/store/queries.h|index/extensions/chunk_dimension_stats.h"

@@ -6,7 +6,6 @@ namespace dftracer::utils::index::store::store_layout {
 
 namespace {
 
-constexpr std::string_view NAMESPACE_PREFIX = "dftu.idx.";
 constexpr std::size_t KIND_PREFIX_BYTES = 3;
 constexpr std::size_t MANIFEST_EXT_OFFSET = 4;
 constexpr std::size_t MANIFEST_EXT_BYTES = 2;

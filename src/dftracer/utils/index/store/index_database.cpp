@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/agg_row_reader.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/internal/index_decoding.h>
 #include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/internal/payload_codec.h>
 #include <dftracer/utils/index/store/internal/statistics_codec.h>
@@ -76,114 +77,6 @@ std::uint32_t fid(int file_id) { return static_cast<std::uint32_t>(file_id); }
 
 std::uint32_t tail_u32(std::string_view key, std::size_t offset) {
     return layout::read_u32(key.substr(offset));
-}
-
-index::schemas::dft::ChunkStatistics decode_chunk_statistics_value(
-    std::string_view value) {
-    Cursor cursor(value);
-    index::schemas::dft::ChunkStatistics stats;
-    stats.total_events = cursor.u64();
-    stats.min_timestamp_us = cursor.u64();
-    stats.max_timestamp_us = cursor.u64();
-    stats.duration_sum_us = cursor.i64();
-    stats.duration_min_us = cursor.u64();
-    stats.duration_max_us = cursor.u64();
-    stats.duration_count = cursor.u64();
-    stats.duration_m2 = cursor.f64();
-
-    auto duration_sketch = cursor.blob_view();
-    if (!duration_sketch.empty()) {
-        stats.duration_sketch = dataframe::DDSketch::deserialize(
-            reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
-            duration_sketch.size());
-    }
-
-    auto duration_histogram = cursor.str();
-    if (!duration_histogram.empty()) {
-        stats.duration_histogram =
-            dataframe::Log2Histogram::from_json(duration_histogram);
-    }
-
-    auto name_sketches = cursor.blob_view();
-    if (!name_sketches.empty()) {
-        stats.name_duration_sketches = index::schemas::dft::ChunkStatistics::
-            deserialize_name_duration_sketches(
-                reinterpret_cast<const std::uint8_t*>(name_sketches.data()),
-                name_sketches.size());
-    }
-
-    stats.name_duration_histograms =
-        index::schemas::dft::ChunkStatistics::parse_histogram_map_json(
-            cursor.str());
-    stats.name_duration_sums =
-        index::schemas::dft::ChunkStatistics::parse_double_map_json(
-            cursor.str());
-    stats.name_duration_sum_sqs =
-        index::schemas::dft::ChunkStatistics::parse_double_map_json(
-            cursor.str());
-    stats.name_category =
-        index::schemas::dft::ChunkStatistics::parse_string_map_json(
-            cursor.str());
-
-    auto cat_sketches = cursor.blob_view();
-    if (!cat_sketches.empty()) {
-        stats.cat_duration_sketches = index::schemas::dft::ChunkStatistics::
-            deserialize_name_duration_sketches(
-                reinterpret_cast<const std::uint8_t*>(cat_sketches.data()),
-                cat_sketches.size());
-    }
-    stats.cat_duration_sums =
-        index::schemas::dft::ChunkStatistics::parse_double_map_json(
-            cursor.str());
-
-    auto pid_sketches = cursor.blob_view();
-    if (!pid_sketches.empty()) {
-        stats.pid_duration_sketches = index::schemas::dft::ChunkStatistics::
-            deserialize_name_duration_sketches(
-                reinterpret_cast<const std::uint8_t*>(pid_sketches.data()),
-                pid_sketches.size());
-    }
-    stats.pid_duration_sums =
-        index::schemas::dft::ChunkStatistics::parse_double_map_json(
-            cursor.str());
-
-    return stats;
-}
-
-index::gzip::GzipMemberRecord decode_gzip_member(std::string_view key,
-                                                 std::string_view body) {
-    index::gzip::GzipMemberRecord member;
-    member.member_idx = tail_u32(key, layout::KEY_PREFIX_BYTES);
-    Cursor cursor(body);
-    member.c_offset = cursor.u64();
-    member.c_size = cursor.u64();
-    member.uc_offset = cursor.u64();
-    member.uc_size = cursor.u64();
-    member.first_line_num = cursor.u64();
-    member.last_line_num = cursor.u64();
-    if (body.size() >= 6 * sizeof(std::uint64_t) + 2) {
-        const auto kind = cursor.u8();
-        if (kind >
-            static_cast<std::uint8_t>(index::gzip::GzipRecordKind::Restart))
-            throw DFTUtilsException::cat(ErrorCode::Indexer,
-                                         "unknown gzip record kind ", kind);
-        member.kind = static_cast<index::gzip::GzipRecordKind>(kind);
-        member.bits = cursor.u8();
-    }
-    return member;
-}
-
-dstd::StringViewMap<std::uint64_t> decode_count_map_value(
-    std::string_view value) {
-    Cursor cursor(value);
-    dstd::StringViewMap<std::uint64_t> counts;
-    auto num_entries = cursor.u32();
-    counts.reserve(num_entries);
-    for (std::uint32_t i = 0; i < num_entries; ++i) {
-        auto key = cursor.str();
-        counts.emplace(std::move(key), cursor.u64());
-    }
-    return counts;
 }
 
 }  // namespace
@@ -1306,12 +1199,13 @@ std::vector<std::pair<std::string, PathStat>> IndexDatabase::catalog(
 std::vector<index::schemas::dft::ChunkStatisticsResult>
 IndexDatabase::query_chunk_statistics(int file_id) const {
     std::vector<index::schemas::dft::ChunkStatisticsResult> results;
-    impl_->scan(Ext::Stats, sk::CHUNK_STATS,
-                layout::file_prefix(Ext::Stats, sk::CHUNK_STATS, fid(file_id)),
-                [&](std::string_view key, std::string_view body) {
-                    results.push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
-                                       decode_chunk_statistics_value(body)});
-                });
+    impl_->scan(
+        Ext::Stats, sk::CHUNK_STATS,
+        layout::file_prefix(Ext::Stats, sk::CHUNK_STATS, fid(file_id)),
+        [&](std::string_view key, std::string_view body) {
+            results.push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
+                               decoding::decode_chunk_statistics_value(body)});
+        });
     return results;
 }
 
@@ -1340,8 +1234,9 @@ IndexDatabase::query_chunk_statistics_batch(
     impl_->scan_files(
         Ext::Stats, sk::CHUNK_STATS, file_ids,
         [&](int file_id, std::string_view key, std::string_view body) {
-            results[file_id].push_back({tail_u32(key, layout::KEY_PREFIX_BYTES),
-                                        decode_chunk_statistics_value(body)});
+            results[file_id].push_back(
+                {tail_u32(key, layout::KEY_PREFIX_BYTES),
+                 decoding::decode_chunk_statistics_value(body)});
         });
     return results;
 }
@@ -1386,7 +1281,7 @@ IndexDatabase::query_file_pid_tid_counts_batch(
     impl_->scan_files(
         Ext::Stats, sk::FILE_PID_TID_COUNTS, file_ids,
         [&](int file_id, std::string_view, std::string_view body) {
-            results.emplace(file_id, decode_count_map_value(body));
+            results.emplace(file_id, decoding::decode_count_map_value(body));
         });
     return results;
 }
@@ -1399,7 +1294,8 @@ std::vector<index::gzip::GzipMemberRecord> IndexDatabase::query_gzip_members(
                 layout::file_prefix(Ext::Members, layout::members::MEMBER,
                                     fid(file_id)),
                 [&](std::string_view key, std::string_view body) {
-                    members.push_back(decode_gzip_member(key, body));
+                    members.push_back(decoding::decode_gzip_member(
+                        tail_u32(key, layout::KEY_PREFIX_BYTES), body));
                 });
     return members;
 }
@@ -1450,7 +1346,7 @@ ankerl::unordered_dense::set<std::uint64_t> IndexDatabase::query_file_pids(
         Ext::Stats, sk::FILE_PID_TID_COUNTS,
         layout::file_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS, fid(file_id)));
     if (!body) return {};
-    return pids_from_pid_tid_counts(decode_count_map_value(*body));
+    return pids_from_pid_tid_counts(decoding::decode_count_map_value(*body));
 }
 
 ankerl::unordered_dense::map<int, ankerl::unordered_dense::set<std::uint64_t>>
@@ -1462,7 +1358,8 @@ IndexDatabase::query_all_file_pids() const {
                 layout::kind_prefix(Ext::Stats, sk::FILE_PID_TID_COUNTS),
                 [&](std::string_view key, std::string_view body) {
                     result[static_cast<int>(tail_u32(key, 3))] =
-                        pids_from_pid_tid_counts(decode_count_map_value(body));
+                        pids_from_pid_tid_counts(
+                            decoding::decode_count_map_value(body));
                 });
     return result;
 }

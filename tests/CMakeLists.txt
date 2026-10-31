@@ -296,6 +296,7 @@ set(TEST_CPP_SOURCES
     server/test_viz_aggregated.cpp
     server/test_viz_schema.cpp
     trace/genesis/test_genesis.cpp
+    index/test_index_api.cpp
     index/test_index_database_store.cpp
     index/test_indexer.cpp
     index/test_store_key.cpp

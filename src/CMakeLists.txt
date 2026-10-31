@@ -169,6 +169,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_write.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/helpers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/index_decoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/index_encoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/statistics_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/layout.cpp
@@ -179,10 +180,12 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/gzip_indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_indexer_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/abi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/index.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/key.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/source.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_filter.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/bloom_fold.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/extensions/catalog_fold.cpp

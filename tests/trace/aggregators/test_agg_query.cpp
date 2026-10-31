@@ -1112,6 +1112,34 @@ TEST_SUITE("AggQuery") {
         }
     }
 
+    TEST_CASE(
+        "parallel reads merge in file order, so the sums match bit for bit") {
+        auto fx = build(FIVE_SECONDS_US, "five");
+        Ask ask;
+        ask.quantiles = true;
+        AggQuery q = make_query(*fx, ask, FIVE_SECONDS_US);
+        q.ordered = true;
+        q.workers = 1;
+        const AggQueryResult serial = run(q);
+        std::map<Key, const agg::AggPartial*> want;
+        for (const auto& [k, p] : serial.rows) want[row_key(serial, k)] = &p;
+        q.workers = 0;
+        for (int round = 0; round < 8; ++round) {
+            const AggQueryResult got = run(q);
+            REQUIRE(got.rows.size() == serial.rows.size());
+            for (const auto& [k, p] : got.rows) {
+                const auto it = want.find(row_key(got, k));
+                REQUIRE(it != want.end());
+                const FieldStat& a = it->second->duration;
+                CHECK(p.duration.sum == a.sum);
+                CHECK(p.duration.cmean == a.cmean);
+                CHECK(p.duration.cm2 == a.cm2);
+                CHECK(p.duration.cm3 == a.cm3);
+                CHECK(p.size.cm2 == it->second->size.cm2);
+            }
+        }
+    }
+
     TEST_CASE("parallel reads give the serial result") {
         auto fx = build(FIVE_SECONDS_US, "five");
         Ask ask;

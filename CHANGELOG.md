@@ -326,6 +326,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix `dftracer_comparator` printing a Cohen's d that changed in its last digits from run to run, because the duration variance merged the files in the order their reads finished.
 - Fix `dftracer_stats`, `dftracer_info`, `dftracer_event_count` and `dftracer_view` building a missing index on every hardware thread when `--executor-threads` asked for fewer.
   A cold `dftracer_stats` of the 2,376 amg traces at 96 threads on a 224-thread node takes 159 s where it took 199 s and peaks at 6.5 GB where it peaked at 10.8 GB.
 - Fix an idle worker pool that shrank by one worker per keep-alive, which took about a minute on a 224-thread node; it now retires half of the workers above its floor each keep-alive.

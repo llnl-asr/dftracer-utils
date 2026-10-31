@@ -497,8 +497,24 @@ CollapsedMap collapse_by_group(const AggQueryResult& windows,
         result.emplace(gk, std::move(cm));
     }
 
+    // Rows of one group merge in the order of their text, not of their ids,
+    // which follow the order the files finished in. The merged moments then
+    // match from run to run.
+    dstd::Vector<const AggQueryResult::Rows::value_type*> order;
+    order.reserve(merged.rows.size());
+    for (const auto& row : merged.rows) order.push_back(&row);
+    const auto text_key = [&](const AggKey& k) {
+        return std::tuple(merged.text(k.cat), merged.text(k.name),
+                          merged.text(k.host), merged.text(k.extra),
+                          merged.text(k.file_text), k.kind, k.pid, k.tid,
+                          k.file, k.window);
+    };
+    std::sort(order.begin(), order.end(), [&](const auto* a, const auto* b) {
+        return text_key(a->first) < text_key(b->first);
+    });
     GroupCache groups(merged, filter, &dst);
-    for (const auto& [key, p] : merged.rows) {
+    for (const auto* row : order) {
+        const auto& [key, p] = *row;
         const RowGroup& g = groups.of(key.cat, key.name);
         if (!g.kept) continue;
         auto it = result.find(g.key);
@@ -581,6 +597,8 @@ coro::CoroTask<Result<SideAggregate>> aggregate_side(
         coarse.keep.tids = false;
         coarse.keep.pid_spans = false;
         coarse.keep.offset = false;
+        // Cohen's d reads the merged variance of these rows.
+        coarse.ordered = true;
 
         auto coarse_result = co_await run_agg_query(coarse);
         if (!coarse_result)

@@ -101,6 +101,11 @@ struct AggQuery {
     /// the ids kept.
     AggKeep keep;
 
+    /// Merge the rows of the files in file order, so floating moments such as
+    /// the variance match from run to run. It holds every file's rows until
+    /// the last file is read, so set it only for a query with few rows.
+    bool ordered = false;
+
     /// The quantile stores of the rows. Without them none are merged.
     bool quantiles = false;
     /// The rows need only the count and the n and sum of duration and size.

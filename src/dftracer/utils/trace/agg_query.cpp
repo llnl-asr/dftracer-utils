@@ -1,9 +1,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
@@ -97,7 +99,8 @@ class Runner {
     }
     bool is_failed() const { return failed.load(std::memory_order_acquire); }
     bool cancelled() const { return rules.q.cancelled && rules.q.cancelled(); }
-    void merge(Task& task);
+    void take_stats(const AggQueryStats& t);
+    void submit(std::size_t seq, AggQueryResult::Rows&& rows);
 
     dstd::StringIntern read;
     AggEventRules rules;
@@ -111,19 +114,38 @@ class Runner {
    private:
     /// One lock for all rows made every worker wait on each merge.
     static constexpr std::size_t MERGE_STRIPES = 64;
+    using Row = AggQueryResult::Rows::value_type;
+    /// The floating moments of one file's row, kept by an ordered query.
+    struct Moments {
+        std::size_t seq = 0;
+        AggKey key;
+        dataframe::FieldStat duration;
+        dataframe::FieldStat size;
+        dataframe::FieldStat offset;
+    };
+    /// An ordered query also keeps the moments of each file's rows. After the
+    /// last file each stripe merges them again in file order and replaces the
+    /// moments its rows merged in the order the files finished.
     struct Stripe {
         std::mutex mu;
         AggQueryResult::Rows rows;
+        /// One list per file, so an append under the lock moves no moments.
+        dstd::Vector<dstd::Vector<Moments>> moments;
+        void add(const dstd::Vector<Row*>& part);
+        void drain(bool offset);
     };
     static std::size_t stripe_of(const AggKey& key) {
         return (AggKeyHash{}(key) >> 32U) % MERGE_STRIPES;
     }
     void collect();
+    coro::CoroTask<void> drain_task(std::size_t at);
 
-    coro::CoroTask<void> file_task(std::size_t source, std::size_t file);
+    coro::CoroTask<void> file_task(std::size_t source, std::size_t file,
+                                   std::size_t seq);
     coro::CoroTask<void> chunk_task(Source* source, const std::string* path,
                                     const index::gzip::ChunkSpan* span,
-                                    const ChunkJob* job);
+                                    const ChunkJob* job,
+                                    AggQueryResult::Rows* slot);
 
     std::mutex mu;
     std::array<Stripe, MERGE_STRIPES> stripes;
@@ -267,32 +289,85 @@ void trim_row(agg::AggPartial& p, const AggKeep& keep) {
     }
 }
 
-void Runner::merge(Task& task) {
-    for (auto& row : task.rows) trim_row(row.second, rules.q.keep);
-    dstd::Vector<std::pair<std::uint32_t, AggQueryResult::Rows::value_type*>>
-        order;
-    order.reserve(task.rows.size());
-    for (auto& row : task.rows)
-        order.emplace_back(static_cast<std::uint32_t>(stripe_of(row.first)),
-                           &row);
-    std::sort(order.begin(), order.end(),
-              [](const auto& a, const auto& b) { return a.first < b.first; });
-    for (std::size_t at = 0; at < order.size();) {
-        Stripe& stripe = stripes[order[at].first];
-        std::lock_guard<std::mutex> lock(stripe.mu);
-        const std::uint32_t id = order[at].first;
-        for (; at < order.size() && order[at].first == id; ++at) {
-            auto& [key, partial] = *order[at].second;
-            auto it = stripe.rows.find(key);
-            if (it == stripe.rows.end())
-                stripe.rows.emplace(key, std::move(partial));
-            else
-                it->second.merge(partial);
+void Runner::Stripe::add(const dstd::Vector<Row*>& part) {
+    for (Row* row : part) {
+        auto it = rows.find(row->first);
+        if (it == rows.end())
+            rows.emplace(row->first, std::move(row->second));
+        else
+            it->second.merge(row->second);
+    }
+}
+
+void Runner::Stripe::drain(bool offset) {
+    dstd::Vector<std::pair<std::size_t, const Moments*>> order;
+    for (const auto& file : moments) {
+        for (const Moments& m : file) {
+            const auto it = rows.find(m.key);
+            order.emplace_back(static_cast<std::size_t>(it - rows.begin()), &m);
         }
     }
+    std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) {
+        return a.first != b.first ? a.first < b.first
+                                  : a.second->seq < b.second->seq;
+    });
+    for (std::size_t at = 0; at < order.size();) {
+        Moments merged = *order[at].second;
+        const std::size_t row = order[at].first;
+        for (++at; at < order.size() && order[at].first == row; ++at) {
+            merged.duration.merge(order[at].second->duration);
+            merged.size.merge(order[at].second->size);
+            if (offset) merged.offset.merge(order[at].second->offset);
+        }
+        agg::AggPartial& p = (rows.begin() + row)->second;
+        p.duration = merged.duration;
+        p.size = merged.size;
+        if (offset) p.offset = merged.offset;
+    }
+    moments = dstd::Vector<dstd::Vector<Moments>>();
+}
+
+coro::CoroTask<void> Runner::drain_task(std::size_t at) {
+    stripes[at].drain(rules.q.keep.offset);
+    co_return;
+}
+
+void Runner::submit(std::size_t seq, AggQueryResult::Rows&& file_rows) {
+    std::array<dstd::Vector<Row*>, MERGE_STRIPES> parts;
+    std::array<dstd::Vector<Moments>, MERGE_STRIPES> moments;
+    for (auto& row : file_rows) {
+        auto& [key, partial] = row;
+        trim_row(partial, rules.q.keep);
+        const std::size_t at = stripe_of(key);
+        // The moments merge only once, in file order, at the end.
+        if (rules.q.ordered) {
+            Moments& m = moments[at].emplace_back();
+            m.seq = seq;
+            m.key = key;
+            m.duration = partial.duration;
+            m.size = partial.size;
+            partial.duration = {};
+            partial.size = {};
+            if (rules.q.keep.offset) {
+                m.offset = partial.offset;
+                partial.offset = {};
+            }
+        }
+        parts[at].push_back(&row);
+    }
+    for (std::size_t at = 0; at < MERGE_STRIPES; ++at) {
+        if (parts[at].empty()) continue;
+        Stripe& stripe = stripes[at];
+        std::lock_guard<std::mutex> lock(stripe.mu);
+        if (!moments[at].empty())
+            stripe.moments.push_back(std::move(moments[at]));
+        stripe.add(parts[at]);
+    }
+}
+
+void Runner::take_stats(const AggQueryStats& t) {
     std::lock_guard<std::mutex> lock(mu);
     auto& s = out.stats;
-    const auto& t = task.stats;
     s.files += t.files;
     s.files_without_partials += t.files_without_partials;
     s.partials_read += t.partials_read;
@@ -320,14 +395,23 @@ coro::CoroTask<void> Runner::run() {
         sources.push_back(std::make_unique<Source>(s, default_params_hash));
 
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+        std::size_t seq = 0;
         for (std::size_t si = 0; si < rules.q.sources.size(); ++si)
             for (std::size_t fi = 0; fi < rules.q.sources[si].files.size();
-                 ++fi)
-                scope.spawn(
-                    [this, si, fi](CoroScope&) { return file_task(si, fi); });
+                 ++fi, ++seq)
+                scope.spawn([this, si, fi, seq](CoroScope&) {
+                    return file_task(si, fi, seq);
+                });
         co_return;
     });
     if (error) std::rethrow_exception(error);
+    if (rules.q.ordered) {
+        co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+            for (std::size_t at = 0; at < MERGE_STRIPES; ++at)
+                scope.spawn([this, at](CoroScope&) { return drain_task(at); });
+            co_return;
+        });
+    }
     collect();
     out.stats.groups = out.rows.size();
 }
@@ -348,11 +432,13 @@ void Runner::collect() {
     }
 }
 
-coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file) {
+coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
+                                       std::size_t seq) {
     Source& src = *sources[source];
     const std::string path(rules.q.sources[source].files[file]);
     dstd::Vector<ChunkJob> jobs;
     dstd::Vector<index::gzip::ChunkSpan> spans;
+    AggQueryResult::Rows file_rows;
     {
         co_await permits->acquire(1);
         Permit permit(*permits);
@@ -363,25 +449,41 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file) {
                     co_await task.trace_jobs(path, jobs, spans);
                 else
                     co_await task.scan_file(path, jobs, spans);
-                merge(task);
+                take_stats(task.stats);
+                file_rows = std::move(task.rows);
             }
         } catch (...) {
             fail(std::current_exception());
         }
     }
-    if (jobs.empty() || is_failed() || cancelled()) co_return;
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        for (const ChunkJob& job : jobs)
-            scope.spawn([this, &src, &path, &spans, &job](CoroScope&) {
-                return chunk_task(&src, &path, spans.data(), &job);
-            });
-        co_return;
-    });
+    if (!jobs.empty() && !is_failed() && !cancelled()) {
+        dstd::Vector<AggQueryResult::Rows> slots(jobs.size());
+        co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+            for (std::size_t at = 0; at < jobs.size(); ++at)
+                scope.spawn(
+                    [this, &src, &path, &spans, &jobs, &slots, at](CoroScope&) {
+                        return chunk_task(&src, &path, spans.data(), &jobs[at],
+                                          &slots[at]);
+                    });
+            co_return;
+        });
+        for (auto& slot : slots) {
+            for (auto& [key, partial] : slot) {
+                auto it = file_rows.find(key);
+                if (it == file_rows.end())
+                    file_rows.emplace(key, std::move(partial));
+                else
+                    it->second.merge(partial);
+            }
+        }
+    }
+    submit(seq, std::move(file_rows));
 }
 
 coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
                                         const index::gzip::ChunkSpan* spans,
-                                        const ChunkJob* job) {
+                                        const ChunkJob* job,
+                                        AggQueryResult::Rows* slot) {
     co_await permits->acquire(1);
     Permit permit(*permits);
     try {
@@ -391,7 +493,8 @@ coro::CoroTask<void> Runner::chunk_task(Source* source, const std::string* path,
         const index::gzip::ChunkSpan& span =
             job->whole_file ? whole_file : spans[job->chunk];
         co_await task.read_chunk(*path, span, *job, spans);
-        merge(task);
+        take_stats(task.stats);
+        *slot = std::move(task.rows);
     } catch (...) {
         fail(std::current_exception());
     }

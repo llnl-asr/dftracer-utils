@@ -450,8 +450,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 
   # Eight forked writers, each with an I/O pool of one thread per hardware
-  # thread, pass the per-user thread limit of a 224-thread node when seven
-  # other tests run beside them.
+  # thread, can pass the per-user thread limit when other tests run beside them.
   if(bin_exec STREQUAL "store/test_processes")
     set_tests_properties(${bin_exec} PROPERTIES RUN_SERIAL TRUE)
   endif()

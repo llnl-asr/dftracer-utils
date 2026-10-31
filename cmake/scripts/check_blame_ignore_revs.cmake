@@ -1,11 +1,16 @@
 # Check .git-blame-ignore-revs: every entry is a commit, and every file it
 # changes is a pure rename or equals its parent version once all whitespace is
-# removed. Skips on a shallow clone, where parents are missing.
+# removed. Skips on a shallow clone or a tree without .git, where parents are missing.
 #
 # Usage: cmake -DSOURCE_DIR=<repo root> -P check_blame_ignore_revs.cmake
 
 if(NOT DEFINED SOURCE_DIR)
   message(FATAL_ERROR "check_blame_ignore_revs.cmake requires -DSOURCE_DIR=...")
+endif()
+
+if(NOT EXISTS ${SOURCE_DIR}/.git)
+  message("blame_ignore_revs: not a git checkout, skipping")
+  return()
 endif()
 
 find_program(GIT_EXECUTABLE git)

@@ -161,7 +161,10 @@ set_tests_properties(
 # The test runs Valgrind itself, so tests/valgrind/run.sh runs it as a plain
 # ctest test (label valgrind_direct) and does not wrap it a second time.
 find_program(VALGRIND_EXECUTABLE valgrind)
-if(VALGRIND_EXECUTABLE)
+# Valgrind cannot run a sanitizer binary.
+if(VALGRIND_EXECUTABLE AND NOT (DFTRACER_UTILS_ENABLE_ASAN
+                                OR DFTRACER_UTILS_ENABLE_TSAN
+                                OR DFTRACER_UTILS_ENABLE_UBSAN))
   add_test(
     NAME memory_valgrind_planted_leak
     COMMAND

@@ -85,7 +85,7 @@ add_test(NAME blame_ignore_revs
          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR} -P
                  ${CMAKE_SOURCE_DIR}/cmake/scripts/check_blame_ignore_revs.cmake)
 set_tests_properties(blame_ignore_revs PROPERTIES SKIP_REGULAR_EXPRESSION
-                     "blame_ignore_revs: shallow clone, skipping")
+                     "blame_ignore_revs: (shallow clone|not a git checkout), skipping")
 if(DFTRACER_UTILS_SINGLE_LIBRARY)
   message(
     STATUS
@@ -397,7 +397,7 @@ foreach(test_file ${TEST_CPP_SOURCES})
   # Default timeout for all tests (safety net against hangs in CI)
   set(default_test_timeout 120)
   if(DFTRACER_UTILS_ENABLE_TSAN)
-    set(default_test_timeout 300)
+    set(default_test_timeout 1800)
   endif()
 
   set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${default_test_timeout})
@@ -412,6 +412,9 @@ foreach(test_file ${TEST_CPP_SOURCES})
     if(DFTRACER_UTILS_ENABLE_TSAN OR DFTRACER_UTILS_COVERAGE
        OR DFTRACER_UTILS_ENABLE_ASAN)
       set(heavy_thread_timeout 600)
+    endif()
+    if(DFTRACER_UTILS_ENABLE_TSAN)
+      set(heavy_thread_timeout 1800)
     endif()
     set_tests_properties(${bin_exec} PROPERTIES
                                            TIMEOUT ${heavy_thread_timeout}
@@ -447,7 +450,12 @@ foreach(test_file ${TEST_CPP_SOURCES})
   if(bin_exec STREQUAL "index/test_big_member_reads"
      OR bin_exec STREQUAL "index/test_catalog"
      OR bin_exec STREQUAL "index/test_build_memory")
-    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE)
+    set(slow_serial_timeout 300)
+    if(DFTRACER_UTILS_ENABLE_TSAN)
+      set(slow_serial_timeout 1800)
+    endif()
+    set_tests_properties(${bin_exec} PROPERTIES TIMEOUT ${slow_serial_timeout}
+                                                RUN_SERIAL TRUE)
   endif()
 
   # The allocator counts its allocations only in debug mode, which is fixed
@@ -458,6 +466,11 @@ foreach(test_file ${TEST_CPP_SOURCES})
   endif()
 
   if(bin_exec STREQUAL "index/test_input_syscalls")
+    if(DFTRACER_UTILS_ENABLE_ASAN OR DFTRACER_UTILS_ENABLE_TSAN
+       OR DFTRACER_UTILS_ENABLE_UBSAN)
+      # strace and the interposer cannot run a sanitizer binary's children
+      set_tests_properties(${bin_exec} PROPERTIES DISABLED TRUE)
+    endif()
     add_dependencies(${target_name} input_syscalls_interpose
       dftracer_index dftracer_event_count dftracer_info dftracer_stats
       dftracer_view dftracer_split dftracer_validate dftracer_comparator
@@ -651,7 +664,7 @@ foreach(test_file ${TEST_BINARY_SOURCES})
   # group runs several times slower inside a fully parallel ctest than alone.
   set(integration_test_timeout 300)
   if(DFTRACER_UTILS_ENABLE_TSAN)
-    set(integration_test_timeout 180)
+    set(integration_test_timeout 1800)
   endif()
   # MPI tests spawn mpiexec several times per test case and each child runs
   # under ASan, which is ~10x slower than release. The default 120s is not

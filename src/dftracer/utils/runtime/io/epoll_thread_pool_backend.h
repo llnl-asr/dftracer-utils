@@ -2,7 +2,7 @@
 #define DFTRACER_UTILS_RUNTIME_IO_EPOLL_THREAD_POOL_BACKEND_H
 #ifdef __linux__
 
-#include <dftracer/utils/runtime/io/fd_handle.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/runtime/io/io_completion_thread.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 
@@ -37,8 +37,8 @@ class EpollThreadPoolBackend : public ThreadPoolFileOps {
     void epoll_loop();
 
     IoCompletionThread completion_thread_;
-    FdHandle epoll_fd_;
-    FdHandle event_fd_;
+    ScopedFd epoll_fd_;
+    ScopedFd event_fd_;
 };
 
 }  // namespace dftracer::utils::io

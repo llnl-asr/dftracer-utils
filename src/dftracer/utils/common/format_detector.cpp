@@ -1,6 +1,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/format_detector.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/scoped_fd.h>
 
 namespace dftracer::utils {
 
@@ -13,16 +14,14 @@ ArchiveFormat FormatDetector::detect(const std::string& file_path) {
         return ArchiveFormat::Gzip;
     }
 
-    FILE* file = std::fopen(file_path.c_str(), "rb");
+    ScopedFile file(std::fopen(file_path.c_str(), "rb"));
     if (!file) {
         DFTRACER_UTILS_LOG_ERROR("Failed to open file for format detection: %s",
                                  file_path.c_str());
         return ArchiveFormat::Unknown;
     }
 
-    ArchiveFormat format = detect_from_content(file);
-    std::fclose(file);
-    return format;
+    return detect_from_content(file.get());
 }
 
 ArchiveFormat FormatDetector::detect_from_content(FILE* file) {

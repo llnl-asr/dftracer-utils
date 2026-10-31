@@ -1,5 +1,6 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/common/sharded_mutex.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
@@ -62,7 +63,7 @@ struct Registry {
     ShardedMutex<ShardData, 64> shards;
     std::atomic<long long> next_id{0};
     Mode mode = Mode::Off;
-    std::FILE* csv = nullptr;
+    ScopedFile csv;
     long long min_us = 0;  // hide coroutines shorter than this in the report
 };
 
@@ -214,10 +215,7 @@ void at_exit_render() {
                 Done{l.id, l.parent, l.resume_fn, us, l.kind, l.spawn_tid, -1});
         }
     });
-    if (r.csv) {
-        std::fclose(r.csv);
-        r.csv = nullptr;
-    }
+    r.csv.reset();
     // Hide tiny coroutines. A parent's wall time always covers its children's,
     // so the kept set is upward-closed and the tree stays connected.
     if (r.min_us > 0) {
@@ -247,10 +245,10 @@ bool monitoring_enabled() {
         const auto file =
             Env::get<std::string_view>("DFTRACER_UTILS_MONITOR_FILE");
         if (file.has_value()) {
-            r.csv = std::fopen(std::string(*file).c_str(), "w");
+            r.csv.reset(std::fopen(std::string(*file).c_str(), "w"));
             if (r.csv) {
                 std::fprintf(
-                    r.csv,
+                    r.csv.get(),
                     "id,parent,kind,coroutine,spawn_tid,finish_tid,micros\n");
             }
         }
@@ -306,9 +304,10 @@ long long record_and_erase(Registry& r, ShardData& s, It it, int finish_tid) {
                      static_cast<double>(us) / 1000.0);
     }
     if (r.csv) {
-        std::fprintf(r.csv, "%lld,%lld,%s,%s,%d,%d,%lld\n", l.id, l.parent,
-                     kind_str(l.kind), symbolize_function(l.resume_fn).c_str(),
-                     l.spawn_tid, finish_tid, us);
+        std::fprintf(r.csv.get(), "%lld,%lld,%s,%s,%d,%d,%lld\n", l.id,
+                     l.parent, kind_str(l.kind),
+                     symbolize_function(l.resume_fn).c_str(), l.spawn_tid,
+                     finish_tid, us);
     }
     s.done.push_back(
         Done{l.id, l.parent, l.resume_fn, us, l.kind, l.spawn_tid, finish_tid});

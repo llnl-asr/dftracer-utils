@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/duql/pipeline.h>
 #include <dftracer/utils/duql/query.h>
@@ -45,35 +46,6 @@ using namespace dftracer::utils::trace;
 using namespace dftracer::utils::index::store;
 using namespace dftracer::utils::trace::views;
 using namespace dftracer::utils::utilities::filesystem;
-
-namespace {
-// Owns a FILE* opened for output and closes it on scope exit, so a throw from
-// the export ladder cannot leak it. A null handle closes nothing; stdout is
-// written through the raw pointer and never owned here.
-class FileHandle {
-   public:
-    FileHandle() = default;
-    explicit FileHandle(std::FILE* f) noexcept : f_(f) {}
-    ~FileHandle() {
-        if (f_) std::fclose(f_);
-    }
-    FileHandle(FileHandle&& o) noexcept : f_(o.f_) { o.f_ = nullptr; }
-    FileHandle& operator=(FileHandle&& o) noexcept {
-        if (this != &o) {
-            if (f_) std::fclose(f_);
-            f_ = o.f_;
-            o.f_ = nullptr;
-        }
-        return *this;
-    }
-    FileHandle(const FileHandle&) = delete;
-    FileHandle& operator=(const FileHandle&) = delete;
-    std::FILE* get() const noexcept { return f_; }
-
-   private:
-    std::FILE* f_ = nullptr;
-};
-}  // namespace
 
 #ifdef DFTRACER_UTILS_ENABLE_MPI
 // The files owned by `rank` of `size`: a deterministic round-robin split, so
@@ -919,7 +891,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
     }
-    FileHandle out_owner(out_file);  // closes out_file on any exit; not stdout
+    ScopedFile out_owner(out_file);  // closes out_file on any exit; not stdout
     FILE* out_target = out_file ? out_file : stdout;
     FileSink sink(out_target);
     bool verify_failed = false;

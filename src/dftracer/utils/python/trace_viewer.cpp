@@ -1,6 +1,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/scoped_fd.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
 #include <dftracer/utils/duql/macros.h>
@@ -29,7 +31,6 @@
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_source.h>
 
-#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -135,16 +136,13 @@ views::ProgressFn progress_from(PyObject* obj) {
 class FileSink : public views::ExportSink {
    public:
     explicit FileSink(FILE* f) : f_(f) {}
-    ~FileSink() override {
-        if (f_) std::fclose(f_);
-    }
     void write(std::string_view data) override {
-        std::fwrite(data.data(), 1, data.size(), f_);
+        std::fwrite(data.data(), 1, data.size(), f_.get());
     }
-    void flush() override { std::fflush(f_); }
+    void flush() override { std::fflush(f_.get()); }
 
    private:
-    FILE* f_;
+    dftracer::utils::ScopedFile f_;
 };
 
 // "fn(key)" or "fn(key, 'a', 'b')" -> transform + inner key text; false when
@@ -728,7 +726,7 @@ PyObject* tv_schema_tree(PyObject* self, PyObject*) {
 PyObject* tv_time_metric(PyObject* self, PyObject*) {
     std::string s(dftracer::utils::trace::time_metric_to_string(
         tv_of(self).time_metric()));
-    for (char& c : s) c = static_cast<char>(std::tolower(c));
+    ::dftracer::utils::detail::lower_ascii(s);
     return PyUnicode_FromString(s.c_str());
 }
 

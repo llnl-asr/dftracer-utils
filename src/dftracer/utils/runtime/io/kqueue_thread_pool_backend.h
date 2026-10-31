@@ -4,7 +4,7 @@
     defined(__NetBSD__) || defined(__DragonFly__)
 #define DFTRACER_UTILS_HAVE_KQUEUE 1
 
-#include <dftracer/utils/runtime/io/fd_handle.h>
+#include <dftracer/utils/common/scoped_fd.h>
 #include <dftracer/utils/runtime/io/io_completion_thread.h>
 #include <dftracer/utils/runtime/io/thread_pool_file_ops.h>
 
@@ -39,7 +39,7 @@ class KqueueThreadPoolBackend : public ThreadPoolFileOps {
     void kqueue_loop();
 
     IoCompletionThread completion_thread_;
-    FdHandle kqueue_fd_;
+    ScopedFd kqueue_fd_;
 
     /// User event identifier for shutdown signaling.
     static constexpr uintptr_t SHUTDOWN_IDENT = 0xDEAD;

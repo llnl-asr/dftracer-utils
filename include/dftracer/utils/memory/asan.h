@@ -13,6 +13,7 @@
 
 #ifdef DFTRACER_UTILS_MEMORY_ASAN
 #include <sanitizer/asan_interface.h>
+#include <sanitizer/lsan_interface.h>
 #endif
 
 namespace dftracer::utils::memory {
@@ -31,10 +32,17 @@ inline void asan_unpoison(const void* p, std::size_t n) noexcept {
     ASAN_UNPOISON_MEMORY_REGION(p, n);
 }
 
+/// Make the leak check scan @p n bytes it does not scan by itself, such as an
+/// mmap region that holds the only pointers to live blocks.
+inline void asan_register_root(const void* p, std::size_t n) noexcept {
+    __lsan_register_root_region(p, n);
+}
+
 #else
 
 inline void asan_poison(const void*, std::size_t) noexcept {}
 inline void asan_unpoison(const void*, std::size_t) noexcept {}
+inline void asan_register_root(const void*, std::size_t) noexcept {}
 
 #endif
 

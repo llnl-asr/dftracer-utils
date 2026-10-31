@@ -276,6 +276,8 @@ std::atomic<std::uintptr_t>* held_list() noexcept {
         os_munmap(raw, bytes);
         return expected;
     }
+    // Held frames are owned until a drain, and this list is their only owner.
+    asan_register_root(mine, bytes);
     return mine;
 }
 

@@ -475,9 +475,9 @@ function(need_zstd)
   target_compile_definitions(
     libzstd_static PRIVATE "ZSTDLIB_VISIBLE=" "ZSTDERRORLIB_VISIBLE="
                            "ZDICTLIB_VISIBLE=")
-  # zstd's own sources trip GCC -Wmaybe-uninitialized, and with NDEBUG the
-  # assert(0) that ends POOL_thread trips -Wreturn-type. Third-party source, so
-  # silence both on zstd's target only.
+  # zstd's own sources trip GCC -Wmaybe-uninitialized, and POOL_thread ends in
+  # an assert(0) that GCC does not always treat as noreturn (-Wreturn-type).
+  # Third-party source, so silence both on zstd's target only.
   if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(libzstd_static PRIVATE -Wno-maybe-uninitialized
                                                   -Wno-return-type)

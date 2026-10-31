@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/runtime/compose.h>
 #include <dftracer/utils/runtime/coro/task.h>
+#include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/task_graph/task_graph.h>
@@ -8,6 +9,7 @@
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -69,6 +71,27 @@ TEST_SUITE("compose") {
             "all", [&](auto&) -> CoroTask<void> { out = co_await fan(21); });
         CHECK(std::get<0>(out) == 42);
         CHECK(std::get<1>(out) == "21");
+    }
+
+    TEST_CASE("all (&&) runs both ops at the same time") {
+        Runtime rt(2);
+        std::atomic<bool> second_started{false};
+        auto first = [&second_started](int) -> CoroTask<bool> {
+            for (int i = 0; i < 100000 && !second_started.load(); ++i) {
+                co_await dftracer::utils::coro::yield();
+            }
+            co_return second_started.load();
+        };
+        auto second = [&second_started](int x) -> CoroTask<int> {
+            second_started.store(true);
+            co_return x;
+        };
+        auto both = u::op(first) && u::op(second);
+        std::tuple<bool, int> out;
+        rt.run_blocking(
+            "all", [&](auto&) -> CoroTask<void> { out = co_await both(7); });
+        CHECK(std::get<0>(out));
+        CHECK(std::get<1>(out) == 7);
     }
 
     TEST_CASE("any (||) races, yields the first to finish") {

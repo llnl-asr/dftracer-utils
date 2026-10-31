@@ -67,9 +67,7 @@ coro::CoroTask<async_result_t<B, async_result_t<A, I>>> pipe_run(A a, B b,
 template <typename A, typename B, typename I>
 coro::CoroTask<std::tuple<async_result_t<A, I>, async_result_t<B, I>>> all_run(
     A a, B b, I in) {
-    auto ra = co_await a(in);
-    auto rb = co_await b(in);
-    co_return std::make_tuple(std::move(ra), std::move(rb));
+    co_return co_await coro::when_all(a(in), b(in));
 }
 
 template <typename A, typename B, typename I>
@@ -128,7 +126,8 @@ auto operator|(Op<A> a, Op<B> b) {
     });
 }
 
-/// All (`&&`): (a && b)(x) runs both ops on x and yields a tuple of results.
+/// All (`&&`): (a && b)(x) runs both ops on x at the same time and yields a
+/// tuple of their results.
 template <typename A, typename B>
 auto operator&&(Op<A> a, Op<B> b) {
     return op([fa = std::move(a.fn), fb = std::move(b.fn)](auto&& in) {

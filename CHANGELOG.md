@@ -327,6 +327,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix the `&&` operator of `runtime/compose.h`, which ran its two ops one after the other, so that both ops now run at the same time.
 - Fix errors that were hidden: a view query now fails when an index cannot be read, when a stored zone map holds a bound that is not a number or when a `ts` bound is a string that is not an integer, where it used to read the file whole or skip the pruning.
   `dftracer_replay` now exits with 1 and names the token when a `--filter-pid`, `--exclude-pid`, `--filter-tid` or `--exclude-tid` list holds a token that is not an unsigned integer.
   A planner that has several chunks and no chunk table now fails, where it cut the file in equal parts that decoded the wrong bytes.

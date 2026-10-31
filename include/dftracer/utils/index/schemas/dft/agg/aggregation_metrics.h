@@ -3,8 +3,8 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dataframe/field_stat.h>
+#include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 
 #include <bit>
 #include <cstdint>
@@ -14,7 +14,7 @@
 
 namespace dftracer::utils::index::schemas::dft::agg {
 
-using utilities::common::statistics::DDSketch;
+using dataframe::DDSketch;
 
 /// One metric's aggregate: the shared FieldStat atom plus an optional DDSketch.
 /// The sketch stays beside the POD atom (never inside it) so FieldStat merges

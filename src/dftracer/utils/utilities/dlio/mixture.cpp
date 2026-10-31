@@ -1,5 +1,5 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/utilities/common/statistics/mixture.h>
+#include <dftracer/utils/utilities/dlio/mixture.h>
 
 #include <algorithm>
 #include <boost/math/distributions/normal.hpp>
@@ -9,7 +9,7 @@
 #include <random>
 #include <stdexcept>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::utilities::dlio {
 
 namespace bm = boost::math;
 
@@ -259,4 +259,4 @@ Sampler make_sampler(const BestModel& m, std::optional<double> min_bound,
         m);
 }
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::utilities::dlio

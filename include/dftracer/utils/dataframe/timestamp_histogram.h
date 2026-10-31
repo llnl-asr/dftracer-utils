@@ -1,11 +1,11 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_TIMESTAMP_HISTOGRAM_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_TIMESTAMP_HISTOGRAM_H
+#ifndef DFTRACER_UTILS_DATAFRAME_TIMESTAMP_HISTOGRAM_H
+#define DFTRACER_UTILS_DATAFRAME_TIMESTAMP_HISTOGRAM_H
 
 #include <cstdint>
 #include <utility>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::dataframe {
 
 class TimestampHistogram {
    public:
@@ -54,6 +54,6 @@ class TimestampHistogram {
     std::uint64_t total_count_ = 0;
 };
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::dataframe
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_TIMESTAMP_HISTOGRAM_H
+#endif  // DFTRACER_UTILS_DATAFRAME_TIMESTAMP_HISTOGRAM_H

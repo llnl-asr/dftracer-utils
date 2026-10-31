@@ -1,12 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/sketch.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <vector>
 
-using namespace dftracer::utils::utilities::common::statistics;
+using namespace dftracer::utils::dataframe;
 
 TEST_SUITE("DDSketch") {
     TEST_CASE("DDSketch - Empty sketch") {

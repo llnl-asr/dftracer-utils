@@ -1,9 +1,9 @@
 #ifndef DFTRACER_UTILS_TRACE_STATISTICS_DETAILED_STATISTICS_H
 #define DFTRACER_UTILS_TRACE_STATISTICS_DETAILED_STATISTICS_H
 
+#include <dftracer/utils/dataframe/log2_histogram.h>
+#include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
-#include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
 
 #include <cstdint>
 #include <string>
@@ -11,12 +11,12 @@
 
 namespace dftracer::utils::trace::statistics {
 
-using utilities::common::statistics::Log2Histogram;
+using dataframe::Log2Histogram;
 
 /** @brief A value distribution: log2 histogram, DDSketch, and running sums. */
 struct DistributionStats {
     Log2Histogram histogram;
-    utilities::common::statistics::DDSketch sketch{0.01};
+    dataframe::DDSketch sketch{0.01};
     double sum = 0.0;
     double sum_sq = 0.0;
 

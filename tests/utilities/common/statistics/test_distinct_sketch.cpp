@@ -1,11 +1,11 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
+#include <dftracer/utils/dataframe/distinct_sketch.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
 #include <string>
 
-using namespace dftracer::utils::utilities::common::statistics;
+using namespace dftracer::utils::dataframe;
 
 namespace {
 double rel_error(std::uint64_t got, std::uint64_t expected) {

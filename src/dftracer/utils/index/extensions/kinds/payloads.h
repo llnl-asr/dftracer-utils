@@ -1,8 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_EXTENSIONS_KINDS_PAYLOADS_H
 #define DFTRACER_UTILS_INDEX_EXTENSIONS_KINDS_PAYLOADS_H
 
+#include <dftracer/utils/dataframe/timestamp_histogram.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
-#include <dftracer/utils/utilities/common/statistics/timestamp_histogram.h>
 
 #include <cstdint>
 #include <optional>
@@ -26,7 +26,7 @@ struct Zone {
     /// Observed records carrying the path, when known.
     std::optional<std::uint64_t> present;
     /// Where the path's values fall, for timestamp paths.
-    std::optional<utilities::common::statistics::TimestampHistogram> histogram;
+    std::optional<dataframe::TimestampHistogram> histogram;
 };
 
 std::string encode_zone(const Zone& zone);

@@ -27,7 +27,6 @@
 #include <dftracer/utils/trace/views/view_executor.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -60,7 +59,7 @@ using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::AggSpec;
 using dftracer::utils::trace::views::GroupKey;
 using dftracer::utils::trace::views::ViewDefinition;
-namespace stats = dftracer::utils::utilities::common::statistics;
+namespace stats = dftracer::utils::dataframe;
 
 struct ArgMaxState {
     double by = 0;

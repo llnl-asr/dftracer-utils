@@ -2,6 +2,7 @@
 #define DFTRACER_UTILS_INDEX_SCHEMAS_DFT_AGG_AGG_PARTIAL_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dataframe/distinct_sketch.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/expected.h>
 #include <dftracer/utils/dstd/hash/constants.h>
@@ -10,7 +11,6 @@
 #include <dftracer/utils/dstd/span.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/agg/quantile_store.h>
-#include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -33,7 +33,7 @@ inline constexpr std::size_t DISTINCT_EXACT_CAPACITY = 256;
 /// DistinctSketch and the count is an estimate (is_exact() says which).
 class DistinctIds {
    public:
-    using Sketch = utilities::common::statistics::DistinctSketch;
+    using Sketch = dataframe::DistinctSketch;
 
     DistinctIds();
     DistinctIds(DistinctIds&& other) noexcept;

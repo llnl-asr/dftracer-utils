@@ -143,18 +143,19 @@ See :doc:`../data/series` for the full reducer list.
 Sketches and distribution fitting (C++)
 ---------------------------------------
 
-The native statistics primitives live in
-``dftracer/utils/utilities/common/statistics/`` (namespace
-``dftracer::utils::utilities::common::statistics``). Use them to accumulate a
-distribution incrementally or off a set of values.
+The sketches live in ``dftracer/utils/dataframe/`` (namespace
+``dftracer::utils::dataframe``). The distribution fitters live in
+``dftracer/utils/utilities/dlio/`` (namespace
+``dftracer::utils::utilities::dlio``). Use them to accumulate a distribution
+incrementally or off a set of values.
 
 ``DDSketch`` - relative-accuracy quantile sketch, mergeable across threads:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/common/statistics/ddsketch.h>
+   #include <dftracer/utils/dataframe/sketch.h>
 
-   using namespace dftracer::utils::utilities::common::statistics;
+   using namespace dftracer::utils::dataframe;
 
    DDSketch sketch(0.01);          // 1% relative accuracy
    for (double v : durations) sketch.add(v);
@@ -167,9 +168,9 @@ grouping key without keeping every value:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
+   #include <dftracer/utils/dataframe/distinct_sketch.h>
 
-   using namespace dftracer::utils::utilities::common::statistics;
+   using namespace dftracer::utils::dataframe;
 
    DistinctSketch sketch;              // 8192 registers, ~1.15% std error dense
    for (auto h : file_hashes) sketch.add_hash(h);   // pre-hashed (fhash/hhash)
@@ -185,7 +186,9 @@ promotes to a dense register array; two sketches only merge at the same
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
+   #include <dftracer/utils/dataframe/log2_histogram.h>
+
+   using namespace dftracer::utils::dataframe;
 
    Log2Histogram hist;
    hist.add(size_bytes);
@@ -197,7 +200,9 @@ Exponential, Weibull) and picks the best by KS statistic:
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/utilities/common/statistics/distributions.h>
+   #include <dftracer/utils/utilities/dlio/distributions.h>
+
+   using namespace dftracer::utils::utilities::dlio;
 
    std::vector<FittedDistribution> fits = fit_all_single_distributions(data);
    std::optional<FittedDistribution> best = best_fit_by_ks(fits);

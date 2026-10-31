@@ -6,6 +6,7 @@
 #include <dftracer/utils/dataframe/agg_expr.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/dataframe_handle.h>
+#include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -25,7 +26,6 @@
 #include <dftracer/utils/trace/views/fold_event.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/trace/views/view.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/parallel/merge.h>
 #include <simdjson.h>
@@ -446,7 +446,7 @@ void host_compose_free_op(void* /*h*/, ::dftu_op* /*op*/) {}
 
 // DDSketch lacks a mean, so the box tracks the running weighted sum.
 struct SketchBox {
-    utilities::common::statistics::DDSketch sketch;
+    dataframe::DDSketch sketch;
     double sum = 0.0;
 };
 

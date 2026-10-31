@@ -50,17 +50,15 @@ index::schemas::dft::MergedStatisticsResult decode_file_scalar_stats_value(
 
     auto duration_sketch = cursor.blob_view();
     if (!duration_sketch.empty()) {
-        stats.duration_sketch =
-            utilities::common::statistics::DDSketch::deserialize(
-                reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
-                duration_sketch.size());
+        stats.duration_sketch = dataframe::DDSketch::deserialize(
+            reinterpret_cast<const std::uint8_t*>(duration_sketch.data()),
+            duration_sketch.size());
     }
 
     auto duration_histogram = cursor.str();
     if (!duration_histogram.empty()) {
         stats.duration_histogram =
-            utilities::common::statistics::Log2Histogram::from_json(
-                duration_histogram);
+            dataframe::Log2Histogram::from_json(duration_histogram);
     }
 
     result.num_chunks = cursor.u64();

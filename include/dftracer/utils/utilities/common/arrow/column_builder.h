@@ -4,9 +4,9 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW
 
+#include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/utilities/common/arrow/arrow_export.h>
-#include <dftracer/utils/utilities/common/statistics/ddsketch.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -87,7 +87,7 @@ struct ColumnData {
 
     /// HIST support: flattened buckets across rows, plus each row's end offset
     /// into hist_bins (parallel to string_offsets).
-    std::vector<statistics::HistogramBin> hist_bins;
+    std::vector<dataframe::HistogramBin> hist_bins;
     std::vector<std::int32_t> hist_offsets;
 
     /// STRING_LIST support: elements flattened into string_data/string_offsets
@@ -152,7 +152,7 @@ class RecordBatchBuilder {
     void append_bool(std::size_t col_idx, bool value);
     /// Append one row's histogram (a list of buckets) to a HIST column.
     void append_hist(std::size_t col_idx,
-                     const std::vector<statistics::HistogramBin>& bins);
+                     const std::vector<dataframe::HistogramBin>& bins);
     /// Append one row's list of strings to a STRING_LIST column.
     void append_string_list(std::size_t col_idx,
                             const std::vector<std::string_view>& values);

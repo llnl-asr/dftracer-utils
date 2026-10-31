@@ -1,11 +1,11 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_LOG2_HISTOGRAM_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_LOG2_HISTOGRAM_H
+#ifndef DFTRACER_UTILS_DATAFRAME_LOG2_HISTOGRAM_H
+#define DFTRACER_UTILS_DATAFRAME_LOG2_HISTOGRAM_H
 
 #include <array>
 #include <cstdint>
 #include <string>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::dataframe {
 
 /**
  * @brief Log2-scale histogram with 65 fixed bins.
@@ -45,6 +45,6 @@ class Log2Histogram {
     std::uint64_t total_count_ = 0;
 };
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::dataframe
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_LOG2_HISTOGRAM_H
+#endif  // DFTRACER_UTILS_DATAFRAME_LOG2_HISTOGRAM_H

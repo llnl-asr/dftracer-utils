@@ -155,12 +155,9 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/internal/index_root.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/internal/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/trace/trace_config.cpp
-    # Common utilities (shared across modules)
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/log2_histogram.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/timestamp_histogram.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/distributions.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/common/statistics/mixture.cpp
     # DLIO config generation
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/distributions.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/mixture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/barrier_simulator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/trace_loader.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/utilities/dlio/optimizer.cpp
@@ -796,6 +793,8 @@ set(DFTRACER_UTILS_VEC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/grace_join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/join.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/sketch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/log2_histogram.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/timestamp_histogram.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/sketch_keys.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/arithmetic.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/dataframe/kernels/arithmetic_extra.cpp

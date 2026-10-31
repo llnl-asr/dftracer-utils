@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/common/statistics/distributions.h>
-#include <dftracer/utils/utilities/common/statistics/mixture.h>
+#include <dftracer/utils/utilities/dlio/distributions.h>
+#include <dftracer/utils/utilities/dlio/mixture.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-using namespace dftracer::utils::utilities::common::statistics;
+using namespace dftracer::utils::utilities::dlio;
 
 namespace {
 

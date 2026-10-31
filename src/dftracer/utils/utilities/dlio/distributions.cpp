@@ -1,5 +1,5 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/utilities/common/statistics/distributions.h>
+#include <dftracer/utils/utilities/dlio/distributions.h>
 
 #include <algorithm>
 #include <cmath>
@@ -14,7 +14,7 @@
 #include <boost/math/distributions/normal.hpp>
 #include <boost/math/distributions/weibull.hpp>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::utilities::dlio {
 
 namespace bm = boost::math;
 
@@ -414,4 +414,4 @@ Sampler make_sampler(const FittedDistribution& fit,
     };
 }
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::utilities::dlio

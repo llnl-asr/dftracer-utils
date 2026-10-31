@@ -311,7 +311,7 @@ void RecordBatchBuilder::append_bool(std::size_t col_idx, bool value) {
 }
 
 void RecordBatchBuilder::append_hist(
-    std::size_t col_idx, const std::vector<statistics::HistogramBin>& bins) {
+    std::size_t col_idx, const std::vector<dataframe::HistogramBin>& bins) {
     auto& col = columns_[col_idx];
     col.hist_bins.insert(col.hist_bins.end(), bins.begin(), bins.end());
     col.hist_offsets.push_back(static_cast<std::int32_t>(col.hist_bins.size()));

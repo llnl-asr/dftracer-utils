@@ -1,10 +1,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/common/statistics/timestamp_histogram.h>
+#include <dftracer/utils/dataframe/timestamp_histogram.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 
-using namespace dftracer::utils::utilities::common::statistics;
+using namespace dftracer::utils::dataframe;
 
 TEST_SUITE("TimestampHistogram") {
     TEST_CASE("empty histogram") {

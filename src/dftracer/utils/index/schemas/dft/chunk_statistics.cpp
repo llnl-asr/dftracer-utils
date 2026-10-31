@@ -18,8 +18,8 @@ namespace dftracer::utils::index::schemas::dft {
 
 namespace {
 
-using utilities::common::statistics::DDSketch;
-using utilities::common::statistics::Log2Histogram;
+using dataframe::DDSketch;
+using dataframe::Log2Histogram;
 
 template <class V>
 std::uint32_t slot_of(StringViewMap<V>& map, std::string_view key) {
@@ -309,7 +309,7 @@ std::vector<std::uint8_t> ChunkStatistics::serialize_name_duration_sketches()
 // Binary format: uint32_t num_entries, then per entry:
 //   uint32_t key_len, char[key_len], uint32_t blob_len, uint8_t[blob_len]
 std::vector<std::uint8_t> ChunkStatistics::serialize_sketch_map(
-    const StringViewMap<utilities::common::statistics::DDSketch>& sketches) {
+    const StringViewMap<dataframe::DDSketch>& sketches) {
     std::vector<std::uint8_t> buf;
     auto num = static_cast<std::uint32_t>(sketches.size());
 
@@ -366,9 +366,9 @@ StringViewMap<double> ChunkStatistics::parse_double_map_json(
     return result;
 }
 
-StringViewMap<utilities::common::statistics::Log2Histogram>
+StringViewMap<dataframe::Log2Histogram>
 ChunkStatistics::parse_histogram_map_json(const std::string& json) {
-    StringViewMap<utilities::common::statistics::Log2Histogram> result;
+    StringViewMap<dataframe::Log2Histogram> result;
 
     dftracer::utils::json::RecordParser parser;
     auto parse_result = parser.parse(json.data(), json.size());
@@ -381,7 +381,7 @@ ChunkStatistics::parse_histogram_map_json(const std::string& json) {
     for (auto field : obj) {
         if (!field.value.is_array()) continue;
 
-        utilities::common::statistics::Log2Histogram hist;
+        dataframe::Log2Histogram hist;
         auto arr = field.value.get_array().value_unsafe();
         for (auto pair : arr) {
             if (!pair.is_array()) continue;
@@ -395,12 +395,8 @@ ChunkStatistics::parse_histogram_map_json(const std::string& json) {
             auto bin_idx =
                 static_cast<std::size_t>(bin_idx_result.value_unsafe());
             auto count = count_result.value_unsafe();
-            if (bin_idx <
-                utilities::common::statistics::Log2Histogram::NUM_BINS) {
-                hist.add(
-                    utilities::common::statistics::Log2Histogram::bin_lower(
-                        bin_idx),
-                    count);
+            if (bin_idx < dataframe::Log2Histogram::NUM_BINS) {
+                hist.add(dataframe::Log2Histogram::bin_lower(bin_idx), count);
             }
         }
         result[std::string(field.key)] = std::move(hist);
@@ -408,10 +404,10 @@ ChunkStatistics::parse_histogram_map_json(const std::string& json) {
     return result;
 }
 
-StringViewMap<utilities::common::statistics::DDSketch>
+StringViewMap<dataframe::DDSketch>
 ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
                                                     std::size_t len) {
-    StringViewMap<utilities::common::statistics::DDSketch> result;
+    StringViewMap<dataframe::DDSketch> result;
     if (!data || len < sizeof(std::uint32_t)) return result;
 
     LeReader r(data, len);
@@ -429,8 +425,7 @@ ChunkStatistics::deserialize_name_duration_sketches(const std::uint8_t* data,
         if (!r.u32(blob_len)) break;
         const std::uint8_t* blob = r.take(blob_len);
         if (!blob) break;
-        result[key] = utilities::common::statistics::DDSketch::deserialize(
-            blob, blob_len);
+        result[key] = dataframe::DDSketch::deserialize(blob, blob_len);
     }
 
     return result;

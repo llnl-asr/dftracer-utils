@@ -42,10 +42,9 @@ std::optional<Zone> decode_zone(std::string_view bytes) {
         if (flags & HAS_PRESENT) zone.present = cursor.u64();
         if (flags & HAS_HISTOGRAM) {
             const auto blob = cursor.blob_view();
-            zone.histogram =
-                utilities::common::statistics::TimestampHistogram::deserialize(
-                    reinterpret_cast<const std::uint8_t*>(blob.data()),
-                    blob.size());
+            zone.histogram = dataframe::TimestampHistogram::deserialize(
+                reinterpret_cast<const std::uint8_t*>(blob.data()),
+                blob.size());
         }
         return zone;
     } catch (const std::exception&) {

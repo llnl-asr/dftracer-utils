@@ -7,8 +7,6 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-namespace stats = ::dftracer::utils::utilities::common::statistics;
-
 double percentile(const std::vector<double>& sorted_data, double pct) {
     if (sorted_data.empty()) return 0.0;
     const double p = std::clamp(pct, 0.0, 100.0) / 100.0;
@@ -41,7 +39,7 @@ OptimizerResult optimize_max_bound_percentile(
 
     for (int iter = 0; iter < options.max_iterations; ++iter) {
         const double max_bound = percentile(sample_times, current_percentile);
-        auto sampler = stats::make_sampler(model, sample_min, max_bound);
+        auto sampler = make_sampler(model, sample_min, max_bound);
 
         auto result = sim.simulate(context, options.base_seed, sampler);
         out.iterations_used = iter + 1;

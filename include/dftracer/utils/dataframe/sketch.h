@@ -20,9 +20,7 @@
 //
 // This is the one mergeable quantile/histogram sketch for the whole codebase:
 // it lives at the dataframe layer so the columnar aggregation engine can feed
-// it a SIMD-computed batch of bucket keys, and the higher trace/View layer
-// reaches it through the compatibility alias in
-// utilities/common/statistics/ddsketch.h.
+// it a SIMD-computed batch of bucket keys.
 
 #include <dftracer/utils/dstd/vector.h>
 

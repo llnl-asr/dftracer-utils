@@ -9,34 +9,32 @@
 
 namespace dftracer::utils::utilities::dlio {
 
-namespace stats = ::dftracer::utils::utilities::common::statistics;
-
 namespace {
 
-YAML::Node emit_single(const stats::FittedDistribution& f) {
+YAML::Node emit_single(const FittedDistribution& f) {
     YAML::Node n;
     switch (f.kind) {
-        case stats::DistributionKind::Normal:
+        case DistributionKind::Normal:
             n["type"] = "normal";
             n["mean"] = f.params[0];
             n["stdev"] = f.params[1];
             break;
-        case stats::DistributionKind::Lognormal:
+        case DistributionKind::Lognormal:
             n["type"] = "lognormal";
             n["mean"] = f.params[0];
             n["sigma"] = f.params[1];
             break;
-        case stats::DistributionKind::Gamma:
+        case DistributionKind::Gamma:
             n["type"] = "gamma";
             n["shape"] = f.params[0];
             n["scale"] = f.params[1];
             break;
-        case stats::DistributionKind::Exponential:
+        case DistributionKind::Exponential:
             // params[0] is rate; DLIO config expects "scale" = 1/rate.
             n["type"] = "exponential";
             n["scale"] = f.params[0] > 0.0 ? 1.0 / f.params[0] : 0.0;
             break;
-        case stats::DistributionKind::Weibull:
+        case DistributionKind::Weibull:
             n["type"] = "weibull";
             n["shape"] = f.params[0];
             n["scale"] = f.params[1];
@@ -45,7 +43,7 @@ YAML::Node emit_single(const stats::FittedDistribution& f) {
     return n;
 }
 
-YAML::Node emit_mixture(const stats::FittedMixture& m) {
+YAML::Node emit_mixture(const FittedMixture& m) {
     YAML::Node n;
     n["type"] = "mixture";
     n["n_components"] = static_cast<int>(m.weights.size());
@@ -68,7 +66,7 @@ YAML::Node emit_block(const DlioTimingBlock& block) {
     YAML::Node n = std::visit(
         [](const auto& v) -> YAML::Node {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, stats::FittedDistribution>) {
+            if constexpr (std::is_same_v<T, FittedDistribution>) {
                 return emit_single(v);
             } else {
                 return emit_mixture(v);

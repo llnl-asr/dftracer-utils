@@ -43,7 +43,7 @@ End-to-end the module composes five pieces:
 
 2. The distribution fitter (:doc:`API reference
    </cpp_api/utilities>`, under
-   ``common/statistics/distributions.h`` and ``mixture.h``) fits the lowest-BIC
+   ``dlio/distributions.h`` and ``mixture.h``) fits the lowest-BIC
    model from {Normal, Lognormal, Gamma, Exponential, Weibull, GMM-2, GMM-3}.
 
 3. **BarrierSimulator** simulates one DLIO training run across the captured
@@ -122,7 +122,7 @@ Free helpers exposed alongside ``BarrierSimulator``:
 Distribution fitting
 --------------------
 
-Lives under ``common/statistics`` and works on any sample array, not just DLIO
+Lives under ``utilities/dlio`` and works on any sample array, not just DLIO
 traces - see the :doc:`API reference
 </cpp_api/utilities>` for ``FittedDistribution``, ``FittedMixture``,
 ``BestModel`` (the ``std::variant``), ``select_best_model``, ``make_sampler``,

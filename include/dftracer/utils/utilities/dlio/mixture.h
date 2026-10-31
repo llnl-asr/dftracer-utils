@@ -1,14 +1,14 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_MIXTURE_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_MIXTURE_H
+#ifndef DFTRACER_UTILS_UTILITIES_DLIO_MIXTURE_H
+#define DFTRACER_UTILS_UTILITIES_DLIO_MIXTURE_H
 
-#include <dftracer/utils/utilities/common/statistics/distributions.h>
+#include <dftracer/utils/utilities/dlio/distributions.h>
 
 #include <cstdint>
 #include <optional>
 #include <variant>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::utilities::dlio {
 
 struct GmmComponent {
     double mean = 0.0;
@@ -71,6 +71,6 @@ Sampler make_sampler(const BestModel& m,
                      std::optional<double> min_bound = std::nullopt,
                      std::optional<double> max_bound = std::nullopt);
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::utilities::dlio
 
 #endif

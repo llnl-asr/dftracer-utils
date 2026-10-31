@@ -1,12 +1,12 @@
+#include <dftracer/utils/dataframe/log2_histogram.h>
 #include <dftracer/utils/dstd/bits.h>
-#include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <cstdio>
 #include <sstream>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::dataframe {
 
 std::size_t Log2Histogram::bin_index(std::uint64_t value) {
     // floor(log2(value)) + 1, and 0 for value 0.
@@ -265,4 +265,4 @@ Log2Histogram Log2Histogram::from_json(const std::string& json) {
     return hist;
 }
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::dataframe

@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DISTINCT_SKETCH_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DISTINCT_SKETCH_H
+#ifndef DFTRACER_UTILS_DATAFRAME_DISTINCT_SKETCH_H
+#define DFTRACER_UTILS_DATAFRAME_DISTINCT_SKETCH_H
 
 // HyperLogLog++: a mergeable distinct-count sketch.
 //
@@ -15,7 +15,7 @@
 // per-file and per-worker sketches combine without keeping the values.
 
 #include <dftracer/utils/dstd/bits.h>
-#include <dftracer/utils/utilities/hash/fnv1a_hasher_utility.h>
+#include <dftracer/utils/dstd/hash/fnv1a.h>
 
 #include <algorithm>
 #include <cmath>
@@ -23,7 +23,7 @@
 #include <string_view>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::dataframe {
 
 /// `Precision` sets the register count (2^Precision) and so the accuracy:
 /// the standard error is about 1.04/sqrt(registers) once dense. Sketches only
@@ -134,7 +134,8 @@ class BasicDistinctSketch {
     }
 
     static std::uint64_t hash64(std::string_view s) {
-        return hash::fnv1a_mix(hash::fnv1a_hash(s));
+        return dftracer::utils::hash::fnv1a_mix(
+            dftracer::utils::hash::fnv1a_hash(s));
     }
 
     std::vector<std::uint64_t> sparse_;
@@ -143,6 +144,6 @@ class BasicDistinctSketch {
 
 using DistinctSketch = BasicDistinctSketch<>;
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::dataframe
 
-#endif  // DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DISTINCT_SKETCH_H
+#endif  // DFTRACER_UTILS_DATAFRAME_DISTINCT_SKETCH_H

@@ -1,12 +1,12 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/utilities/common/statistics/log2_histogram.h>
+#include <dftracer/utils/dataframe/log2_histogram.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>
 #include <limits>
 #include <string>
 
-using namespace dftracer::utils::utilities::common::statistics;
+using namespace dftracer::utils::dataframe;
 
 TEST_SUITE("Log2Histogram") {
     TEST_CASE("bin_index - edge cases") {

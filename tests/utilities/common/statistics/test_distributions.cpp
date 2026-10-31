@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/utilities/common/statistics/distributions.h>
+#include <dftracer/utils/utilities/dlio/distributions.h>
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <random>
 #include <vector>
 
-using namespace dftracer::utils::utilities::common::statistics;
+using namespace dftracer::utils::utilities::dlio;
 using Rng = std::mt19937_64;
 
 namespace {

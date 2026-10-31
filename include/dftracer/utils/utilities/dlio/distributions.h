@@ -1,5 +1,5 @@
-#ifndef DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DISTRIBUTIONS_H
-#define DFTRACER_UTILS_UTILITIES_COMMON_STATISTICS_DISTRIBUTIONS_H
+#ifndef DFTRACER_UTILS_UTILITIES_DLIO_DISTRIBUTIONS_H
+#define DFTRACER_UTILS_UTILITIES_DLIO_DISTRIBUTIONS_H
 
 #include <array>
 #include <cstdint>
@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::utilities::dlio {
 
 enum class DistributionKind : std::uint8_t {
     Normal,       ///< params = {mean, stddev, _}
@@ -65,6 +65,6 @@ Sampler make_sampler(const FittedDistribution& fit,
 /// Returns the parameter count used for BIC. Useful when extending to mixtures.
 int free_parameter_count(DistributionKind kind);
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::utilities::dlio
 
 #endif

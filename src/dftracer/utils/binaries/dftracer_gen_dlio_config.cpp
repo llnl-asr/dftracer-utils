@@ -7,9 +7,9 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
-#include <dftracer/utils/utilities/common/statistics/distributions.h>
-#include <dftracer/utils/utilities/common/statistics/mixture.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
+#include <dftracer/utils/utilities/dlio/distributions.h>
+#include <dftracer/utils/utilities/dlio/mixture.h>
 #include <dftracer/utils/utilities/dlio/optimizer.h>
 #include <dftracer/utils/utilities/dlio/trace_loader.h>
 #include <dftracer/utils/utilities/dlio/yaml_emit.h>
@@ -28,7 +28,6 @@ using namespace dftracer::utils;
 using namespace dftracer::utils::utilities;
 namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace dlio = dftracer::utils::utilities::dlio;
-namespace stats = dftracer::utils::utilities::common::statistics;
 
 namespace {
 
@@ -171,35 +170,34 @@ class GenDlioConfigArgParse : public cli::ArgParse {
     }
 };
 
-std::optional<stats::BestModel> fit_best_model(
-    const std::vector<double>& data) {
+std::optional<dlio::BestModel> fit_best_model(const std::vector<double>& data) {
     if (data.empty()) return std::nullopt;
-    const auto singles = stats::fit_all_single_distributions(data);
-    std::vector<stats::FittedMixture> mixtures;
+    const auto singles = dlio::fit_all_single_distributions(data);
+    std::vector<dlio::FittedMixture> mixtures;
     if (data.size() >= 20) {
-        mixtures.push_back(stats::fit_gaussian_mixture(data, 2));
-        mixtures.push_back(stats::fit_gaussian_mixture(data, 3));
+        mixtures.push_back(dlio::fit_gaussian_mixture(data, 2));
+        mixtures.push_back(dlio::fit_gaussian_mixture(data, 3));
     }
-    const auto best = stats::select_best_model(singles, mixtures);
+    const auto best = dlio::select_best_model(singles, mixtures);
     if (!best) return std::nullopt;
     return best->model;
 }
 
-const char* model_label(const stats::BestModel& m) {
+const char* model_label(const dlio::BestModel& m) {
     return std::visit(
         [](const auto& v) -> const char* {
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, stats::FittedDistribution>) {
+            if constexpr (std::is_same_v<T, dlio::FittedDistribution>) {
                 switch (v.kind) {
-                    case stats::DistributionKind::Normal:
+                    case dlio::DistributionKind::Normal:
                         return "Normal";
-                    case stats::DistributionKind::Lognormal:
+                    case dlio::DistributionKind::Lognormal:
                         return "Lognormal";
-                    case stats::DistributionKind::Gamma:
+                    case dlio::DistributionKind::Gamma:
                         return "Gamma";
-                    case stats::DistributionKind::Exponential:
+                    case dlio::DistributionKind::Exponential:
                         return "Exponential";
-                    case stats::DistributionKind::Weibull:
+                    case dlio::DistributionKind::Weibull:
                         return "Weibull";
                 }
                 return "Unknown";

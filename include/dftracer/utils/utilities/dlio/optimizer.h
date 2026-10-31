@@ -1,15 +1,13 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_OPTIMIZER_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_OPTIMIZER_H
 
-#include <dftracer/utils/utilities/common/statistics/mixture.h>
 #include <dftracer/utils/utilities/dlio/barrier_simulator.h>
+#include <dftracer/utils/utilities/dlio/mixture.h>
 
 #include <cstdint>
 #include <vector>
 
 namespace dftracer::utils::utilities::dlio {
-
-using BestModel = ::dftracer::utils::utilities::common::statistics::BestModel;
 
 struct OptimizerOptions {
     int max_iterations = 5;

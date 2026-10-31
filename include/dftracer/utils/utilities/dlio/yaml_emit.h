@@ -1,14 +1,12 @@
 #ifndef DFTRACER_UTILS_UTILITIES_DLIO_YAML_EMIT_H
 #define DFTRACER_UTILS_UTILITIES_DLIO_YAML_EMIT_H
 
-#include <dftracer/utils/utilities/common/statistics/mixture.h>
+#include <dftracer/utils/utilities/dlio/mixture.h>
 
 #include <iosfwd>
 #include <string>
 
 namespace dftracer::utils::utilities::dlio {
-
-using BestModel = ::dftracer::utils::utilities::common::statistics::BestModel;
 
 /// Parameters needed to emit one timing block in the DLIO config.
 struct DlioTimingBlock {

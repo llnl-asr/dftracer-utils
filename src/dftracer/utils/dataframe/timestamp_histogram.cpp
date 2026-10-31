@@ -1,10 +1,10 @@
+#include <dftracer/utils/dataframe/timestamp_histogram.h>
 #include <dftracer/utils/dstd/varint.h>
-#include <dftracer/utils/utilities/common/statistics/timestamp_histogram.h>
 
 #include <algorithm>
 #include <cstring>
 
-namespace dftracer::utils::utilities::common::statistics {
+namespace dftracer::utils::dataframe {
 
 void TimestampHistogram::add(std::uint64_t timestamp_us) {
     std::uint64_t idx = bin_index(timestamp_us);
@@ -160,4 +160,4 @@ TimestampHistogram TimestampHistogram::deserialize(const std::uint8_t* data,
     return hist;
 }
 
-}  // namespace dftracer::utils::utilities::common::statistics
+}  // namespace dftracer::utils::dataframe

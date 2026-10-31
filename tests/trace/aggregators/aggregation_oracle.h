@@ -5,10 +5,10 @@
 // the events of a group one by one by the metric rules the partials share. The
 // partials must merge to what it gives.
 
+#include <dftracer/utils/dataframe/distinct_sketch.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_metrics.h>
-#include <dftracer/utils/utilities/common/statistics/distinct_sketch.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -26,7 +26,7 @@ struct AggregationMetrics {
     MetricStats offset;
     std::uint64_t ts = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t te = 0;
-    utilities::common::statistics::DistinctSketch distinct_files;
+    dataframe::DistinctSketch distinct_files;
     double sketch_accuracy = 0.01;
 
     explicit AggregationMetrics(double relative_accuracy = 0.01)

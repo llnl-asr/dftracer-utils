@@ -407,9 +407,11 @@ static void describe_site(std::uintptr_t site, char* out,
 
 static void report_top_sites(bool by_peak) noexcept {
     char text[REPORT_BYTES];
-    int n = std::snprintf(text, sizeof(text),
-                          "dftracer-utils memory: top %zu sites by %s bytes\n",
-                          TOP_SITES, by_peak ? "peak" : "live");
+    int n = std::snprintf(
+        text, sizeof(text),
+        "dftracer-utils memory: top %zu sites by %s bytes, allocations=%llu\n",
+        TOP_SITES, by_peak ? "peak" : "live",
+        static_cast<unsigned long long>(debug_allocation_count()));
     report(text, static_cast<std::size_t>(n));
     debug_top_sites(
         TOP_SITES, by_peak,

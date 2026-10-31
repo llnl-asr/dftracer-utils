@@ -305,6 +305,8 @@ class Store {
     static dstd::Expected<void, dstd::Error> close_all();
 
    private:
+    friend struct StoreAccess;
+
     struct State;
 
     explicit Store(dstd::SharedPtr<State> state) : state_(std::move(state)) {}

@@ -11,10 +11,9 @@
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/snapshot.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/store/writer.h>
 
-#include <atomic>
-#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <map>
@@ -22,7 +21,6 @@
 #include <mutex>
 #include <optional>
 #include <set>
-#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -105,11 +103,6 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     friend class StoreIndexWrite;
     friend class cache::CacheStore;
 
-    struct NamespaceEntry {
-        kv::engine::NamespaceId id;
-        std::uint32_t version = 0;
-    };
-
     class WriterUse {
        public:
         explicit WriterUse(StoreRoot& root);
@@ -130,18 +123,13 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
 
     explicit StoreRoot(std::string index_root);
 
-    void ensure_dir_locked();
-    void ensure_writer_locked();
-    std::shared_ptr<const kv::engine::Snapshot> open_snapshot_locked();
-    std::shared_ptr<const kv::engine::Snapshot> snapshot_locked();
+    /// The store of this root, opened on first use. Creates the directory.
+    kv::Store store();
+    /// Null before the root opened its store.
+    std::optional<kv::Store> store_if_open() const;
+
     void seed_file_ids_locked();
     void close_locked();
-    void refresh_locked();
-    /// The data files of the store directory but this root's own writer's.
-    std::vector<std::pair<std::string, std::uint64_t>> foreign_files_locked()
-        const;
-    /// Looks at most once per INDEX_STORE_REFRESH_MS.
-    void refresh_if_changed_locked();
 
     dstd::Expected<void, dstd::Error> run(
         coro::CoroTask<dstd::Expected<void, dstd::Error>> task);
@@ -192,11 +180,15 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
     std::size_t uses_ = 0;
     bool closing_ = false;
     mutable std::mutex mutex_;
+    /// Held while the store of the root opens.
+    mutable std::mutex open_mutex_;
     std::string index_root_;
     std::string store_dir_;
+    std::optional<kv::Store> store_;
+    /// Pinned when the store opens, so a close at exit still finds it.
     std::shared_ptr<Runtime> runtime_;
-    std::unique_ptr<kv::engine::Writer> writer_;
-    std::map<std::string, NamespaceEntry> namespaces_;
+    /// The version this process registered for a namespace name.
+    std::map<std::string, std::uint32_t> namespace_versions_;
     std::map<std::string, int> ids_by_path_;
     std::map<int, std::string> paths_by_id_;
     /// Keyed by the index in committed_names_ (high half) and the file id, so a
@@ -216,24 +208,8 @@ class StoreRoot : public std::enable_shared_from_this<StoreRoot> {
         const std::string& name, const kv::ScopeKey& scope);
     void forget_scope_entry_locked(const std::string& name,
                                    const kv::ScopeKey& scope);
-    std::shared_ptr<const kv::engine::Snapshot> snapshot_;
-    std::vector<std::pair<std::string, std::uint64_t>> foreign_seen_;
-    std::chrono::steady_clock::time_point foreign_checked_{};
-    /// Changed under mutex_, read without it by snapshot()'s fast path.
-    std::atomic<std::uint64_t> version_{0};
-    std::uint64_t snapshot_version_ = 0;
-    /// snapshot() returns it under a shared lock, so readers never wait on each
-    /// other or on mutex_. Written under mutex_, then this lock.
-    mutable std::shared_mutex published_mutex_;
-    std::shared_ptr<const kv::engine::Snapshot> published_;
-    std::uint64_t published_version_ = 0;
-    /// steady_clock ticks before which no look is due. 0 makes every snapshot()
-    /// look.
-    std::atomic<std::int64_t> next_look_{0};
-    std::uint64_t refreshed_version_ = 0;
     int next_file_id_ = 1;
     bool seeded_ = false;
-    bool snapshot_taken_ = false;
 };
 
 /// One write to the store of a StoreRoot, buffered until commit(). A delete it

@@ -1,6 +1,3 @@
-#include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/deque.h>
 #include <dftracer/utils/dstd/error.h>
@@ -11,6 +8,7 @@
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/record.h>
 #include <dftracer/utils/store/snapshot.h>
+#include <dftracer/utils/store/store_internal.h>
 #include <dftracer/utils/store/writer.h>
 
 #include <algorithm>
@@ -190,28 +188,21 @@ StoreRoot::~StoreRoot() {
     }
 }
 
-void StoreRoot::ensure_dir_locked() {
-    std::error_code error;
-    std::filesystem::create_directories(store_dir_, error);
-    if (error) {
-        throw std::runtime_error(
-            "store index: cannot create the store "
-            "directory " +
-            store_dir_ + ": " + error.message());
+kv::Store StoreRoot::store() {
+    std::lock_guard<std::mutex> lock(open_mutex_);
+    if (!store_) {
+        auto opened = kv::Store::open(store_dir_);
+        if (!opened)
+            throw_store_error("store index: open the store", opened.error());
+        store_ = std::move(*opened);
+        runtime_ = default_runtime_shared();
     }
+    return *store_;
 }
 
-void StoreRoot::ensure_writer_locked() {
-    if (writer_) return;
-    ensure_dir_locked();
-    runtime_ = default_runtime_shared();
-    auto created =
-        kv::engine::Writer::create(store_dir_, *runtime_->executor());
-    if (!created)
-        throw_store_error("store index: open the writer", created.error());
-    writer_ = std::move(*created);
-    // A snapshot taken before this writer holds none of its copies.
-    snapshot_taken_ = false;
+std::optional<kv::Store> StoreRoot::store_if_open() const {
+    std::lock_guard<std::mutex> lock(open_mutex_);
+    return store_;
 }
 
 dstd::Expected<void, dstd::Error> StoreRoot::commit(kv::engine::Writer& writer,
@@ -221,101 +212,31 @@ dstd::Expected<void, dstd::Error> StoreRoot::commit(kv::engine::Writer& writer,
 
 dstd::Expected<void, dstd::Error> StoreRoot::run(
     coro::CoroTask<dstd::Expected<void, dstd::Error>> task) {
-    if (!runtime_)
-        throw std::runtime_error("store index: no runtime to wait on");
+    std::shared_ptr<Runtime> runtime;
+    {
+        std::lock_guard<std::mutex> lock(open_mutex_);
+        if (!runtime_) runtime_ = default_runtime_shared();
+        runtime = runtime_;
+    }
     // A commit can come from a worker of this runtime, so the wait hands off
     // that worker's slot.
-    const bool reentrant = Executor::current() == runtime_->executor();
-    BlockingRegion block(reentrant ? runtime_->executor() : nullptr);
-    return runtime_->submit(std::move(task)).get();
-}
-
-std::shared_ptr<const kv::engine::Snapshot> StoreRoot::open_snapshot_locked() {
-    // A root that was never written has no store directory and reads as empty.
-    if (writer_) {
-        ensure_dir_locked();
-    } else {
-        std::error_code missing;
-        if (!std::filesystem::exists(store_dir_, missing)) return nullptr;
-    }
-    auto opened = kv::engine::Snapshot::open(store_dir_);
-    if (!opened)
-        throw_store_error("store index: open the store", opened.error());
-    return std::make_shared<const kv::engine::Snapshot>(std::move(*opened));
-}
-
-std::shared_ptr<const kv::engine::Snapshot> StoreRoot::snapshot_locked() {
-    if (snapshot_taken_ && snapshot_version_ == version_) return snapshot_;
-    snapshot_ = open_snapshot_locked();
-    snapshot_version_ = version_;
-    snapshot_taken_ = true;
-    return snapshot_;
+    const bool reentrant = Executor::current() == runtime->executor();
+    BlockingRegion block(reentrant ? runtime->executor() : nullptr);
+    return runtime->submit(std::move(task)).get();
 }
 
 std::shared_ptr<const kv::engine::Snapshot> StoreRoot::snapshot() {
-    if (steady_now_ns() < next_look_.load(std::memory_order_acquire)) {
-        std::shared_lock<std::shared_mutex> shared(published_mutex_);
-        if (published_ != nullptr &&
-            published_version_ == version_.load(std::memory_order_acquire))
-            return published_;
-    }
     memory::Scope in_pool(*pool_);
-    std::lock_guard<std::mutex> lock(mutex_);
-    refresh_if_changed_locked();
-    auto held = snapshot_locked();
-    std::unique_lock<std::shared_mutex> publish(published_mutex_);
-    published_ = held;
-    published_version_ = snapshot_version_;
-    return held;
-}
-
-std::vector<std::pair<std::string, std::uint64_t>>
-StoreRoot::foreign_files_locked() const {
-    std::vector<std::pair<std::string, std::uint64_t>> files;
-    std::error_code error;
-    std::filesystem::directory_iterator it(store_dir_, error);
-    if (error) return files;
-    const std::string own =
-        writer_ ? std::filesystem::path(std::string(writer_->path().data(),
-                                                    writer_->path().size()))
-                      .filename()
-                      .string()
-                : std::string();
-    for (; it != std::filesystem::directory_iterator(); it.increment(error)) {
-        if (error) break;
-        const auto& path = it->path();
-        if (path.extension() != ".dfs") continue;
-        std::string name = path.filename().string();
-        if (name == own) continue;
-        std::error_code size_error;
-        const auto size = it->file_size(size_error);
-        files.emplace_back(std::move(name),
-                           size_error ? 0 : static_cast<std::uint64_t>(size));
+    auto opened = store_if_open();
+    // A root nobody wrote has no store directory and reads as empty.
+    if (!opened) {
+        std::error_code missing;
+        if (!std::filesystem::exists(store_dir_, missing)) return nullptr;
+        opened = store();
     }
-    std::sort(files.begin(), files.end());
-    return files;
-}
-
-void StoreRoot::refresh_if_changed_locked() {
-    static const std::uint64_t interval_ms =
-        Env::get<std::uint64_t>(constants::indexer::INDEX_STORE_REFRESH_MS_ENV)
-            .value_or(constants::indexer::INDEX_STORE_REFRESH_MS);
-    const auto now = std::chrono::steady_clock::now();
-    if (interval_ms > 0 && foreign_checked_.time_since_epoch().count() != 0 &&
-        now - foreign_checked_ < std::chrono::milliseconds(interval_ms)) {
-        return;
-    }
-    foreign_checked_ = now;
-    if (interval_ms > 0) {
-        next_look_.store((now + std::chrono::milliseconds(interval_ms))
-                             .time_since_epoch()
-                             .count(),
-                         std::memory_order_release);
-    }
-    auto files = foreign_files_locked();
-    if (files == foreign_seen_) return;
-    foreign_seen_ = std::move(files);
-    refresh_locked();
+    auto held = kv::StoreAccess::snapshot(*opened);
+    if (!held) throw_store_error("store index: open the store", held.error());
+    return std::move(*held);
 }
 
 void StoreRoot::seed_file_ids_locked() {
@@ -325,7 +246,7 @@ void StoreRoot::seed_file_ids_locked() {
         seeded_ = true;
         return;
     }
-    const auto held = snapshot_locked();
+    const auto held = snapshot();
     if (!held) {
         seeded_ = true;
         return;
@@ -355,19 +276,13 @@ void StoreRoot::seed_file_ids_locked() {
 
 void StoreRoot::refresh() {
     memory::Scope in_pool(*pool_);
+    auto opened = store_if_open();
+    if (!opened) return;
+    kv::StoreAccess::refresh(*opened);
     std::lock_guard<std::mutex> lock(mutex_);
-    foreign_seen_ = foreign_files_locked();
-    foreign_checked_ = std::chrono::steady_clock::now();
-    refresh_locked();
-}
-
-void StoreRoot::refresh_locked() {
-    ++version_;
-    refreshed_version_ = version_;
-    if (seeded_) {
-        seeded_ = false;
-        seed_file_ids_locked();
-    }
+    if (!seeded_) return;
+    seeded_ = false;
+    seed_file_ids_locked();
 }
 
 int StoreRoot::file_id_for(std::string_view logical_path) {
@@ -442,42 +357,42 @@ void StoreRoot::bind_file_id(std::string_view logical_path, int file_id) {
 
 kv::engine::Writer& StoreRoot::writer() {
     memory::Scope in_pool(*pool_);
-    std::lock_guard<std::mutex> lock(mutex_);
-    ensure_writer_locked();
-    return *writer_;
+    kv::Store target = store();
+    auto opened = kv::StoreAccess::writer(target);
+    if (!opened)
+        throw_store_error("store index: open the writer", opened.error());
+    return **opened;
 }
 
 kv::engine::NamespaceId StoreRoot::namespace_id(const std::string& name,
                                                 std::uint32_t version) {
     memory::Scope in_pool(*pool_);
-    std::lock_guard<std::mutex> lock(mutex_);
-    ensure_writer_locked();
-    auto at = namespaces_.find(name);
-    if (at != namespaces_.end()) {
-        if (at->second.version != version) {
+    kv::Store target = store();
+    auto added = target.ns(make_spec(name, version));
+    if (!added) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto at = namespace_versions_.find(name);
+        if (at != namespace_versions_.end() && at->second != version) {
             throw std::runtime_error("store index: namespace " + name +
                                      " is at version " +
-                                     std::to_string(at->second.version) +
-                                     ", not " + std::to_string(version));
+                                     std::to_string(at->second) + ", not " +
+                                     std::to_string(version));
         }
-        return at->second.id;
-    }
-    auto added = writer_->add_namespace(make_spec(name, version));
-    if (!added)
         throw_store_error("store index: add a namespace", added.error());
-    NamespaceEntry entry;
-    entry.id = *added;
-    entry.version = version;
-    namespaces_.emplace(name, entry);
-    return entry.id;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        namespace_versions_.insert_or_assign(name, version);
+    }
+    return kv::engine::NamespaceId{added->id};
 }
 
 std::uint32_t StoreRoot::resolved_namespace_version(const std::string& name) {
     memory::Scope in_pool(*pool_);
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        auto at = namespaces_.find(name);
-        if (at != namespaces_.end()) return at->second.version;
+        auto at = namespace_versions_.find(name);
+        if (at != namespace_versions_.end()) return at->second;
     }
     const auto held = snapshot();
     if (!held) return 0;
@@ -627,10 +542,7 @@ std::optional<StoreRoot::ForeignCopy> StoreRoot::foreign_copy(
             if (committed_.count(key) != 0 || dropped_.count(key) != 0)
                 return std::nullopt;
         }
-        refresh_if_changed_locked();
-        held = snapshot_taken_ && snapshot_version_ >= refreshed_version_
-                   ? snapshot_
-                   : snapshot_locked();
+        held = snapshot();
     }
     if (!held) return std::nullopt;
     kv::CopyInfo info = held->copy_info(make_spec(name, version), scope);
@@ -639,22 +551,26 @@ std::optional<StoreRoot::ForeignCopy> StoreRoot::foreign_copy(
 }
 
 void StoreRoot::bump_version() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ++version_;
+    auto opened = store_if_open();
+    if (!opened) return;
+    kv::StoreAccess::bump_version(*opened);
 }
 
 void StoreRoot::close_locked() {
-    if (!writer_) return;
-    const auto closed = run(writer_->close());
-    writer_.reset();
-    namespaces_.clear();
+    auto opened = store_if_open();
+    if (!opened) return;
+    // A root that never wrote has no writer to close and no runtime to wait
+    // on, which matters at exit.
+    if (kv::StoreAccess::writer_open(*opened)) {
+        const auto closed = run((*opened).close());
+        if (!closed)
+            throw_store_error("store index: close the store", closed.error());
+    }
+    namespace_versions_.clear();
     committed_names_.clear();
     file_copies_.clear();
     committed_.clear();
     dropped_.clear();
-    ++version_;
-    if (!closed)
-        throw_store_error("store index: close the store", closed.error());
 }
 
 StoreRoot::WriterUse::WriterUse(StoreRoot& root) : root_(root) {

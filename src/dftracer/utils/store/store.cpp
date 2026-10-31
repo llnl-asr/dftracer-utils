@@ -1,5 +1,6 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/no_destructor.h>
 #include <dftracer/utils/memory/manager.h>
@@ -8,15 +9,18 @@
 #include <dftracer/utils/store/fold.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/store.h>
+#include <dftracer/utils/store/store_internal.h>
 #include <dftracer/utils/store/writer.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -249,8 +253,8 @@ Cursor Snapshot::wrap(engine::ScanCursor&& scan) const {
 namespace {
 
 std::mutex& registry_mutex() {
-    static std::mutex value;
-    return value;
+    static dstd::NoDestructor<std::mutex> value;
+    return *value;
 }
 
 }  // namespace
@@ -270,10 +274,19 @@ struct Store::State {
     dstd::SharedPtr<const engine::Snapshot> held;
     dstd::Vector<std::pair<std::string, std::uint64_t>> foreign_seen;
     std::chrono::steady_clock::time_point foreign_checked{};
-    std::uint64_t version = 0;
+    /// Changed under the mutex, read without it by snapshot()'s shortcut.
+    std::atomic<std::uint64_t> version{0};
     std::uint64_t held_version = 0;
     std::uint64_t held_records = 0;
     bool held_taken = false;
+    /// snapshot() hands it out under a shared lock, so readers never wait on
+    /// the state mutex. Written under the mutex, then this lock.
+    mutable std::shared_mutex published_mutex;
+    dstd::SharedPtr<const engine::Snapshot> published;
+    std::uint64_t published_version = 0;
+    /// steady_clock ticks before which no look at other processes is due. 0
+    /// makes every snapshot() look.
+    std::atomic<std::int64_t> next_look{0};
 
     using Registry = dstd::Map<std::string, std::weak_ptr<State>>;
 
@@ -420,13 +433,14 @@ Store::State::open_snapshot_locked() {
 dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
 Store::State::snapshot_locked() {
     const std::uint64_t records = writer ? writer->committed_records() : 0;
-    if (held_taken && held_version == version && held_records == records) {
+    const std::uint64_t current = version.load(std::memory_order_relaxed);
+    if (held_taken && held_version == current && held_records == records) {
         return held;
     }
     auto opened = open_snapshot_locked();
     if (!opened) return opened;
     held = std::move(*opened);
-    held_version = version;
+    held_version = current;
     held_records = records;
     held_taken = true;
     return held;
@@ -469,6 +483,12 @@ void Store::State::refresh_if_changed_locked() {
         return;
     }
     foreign_checked = now;
+    if (interval_ms > 0) {
+        next_look.store((now + std::chrono::milliseconds(interval_ms))
+                            .time_since_epoch()
+                            .count(),
+                        std::memory_order_release);
+    }
     auto files = foreign_files_locked();
     if (files == foreign_seen) return;
     foreign_seen = std::move(files);
@@ -477,10 +497,22 @@ void Store::State::refresh_if_changed_locked() {
 
 dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
 Store::State::snapshot() {
+    if (steady_now_ns() < next_look.load(std::memory_order_acquire)) {
+        std::shared_lock<std::shared_mutex> shared(published_mutex);
+        if (published != nullptr &&
+            published_version == version.load(std::memory_order_acquire)) {
+            return published;
+        }
+    }
     memory::Scope in_pool(*pool);
     std::lock_guard<std::mutex> lock(mutex);
     refresh_if_changed_locked();
-    return snapshot_locked();
+    auto opened = snapshot_locked();
+    if (!opened) return opened;
+    std::unique_lock<std::shared_mutex> publish(published_mutex);
+    published = *opened;
+    published_version = held_version;
+    return opened;
 }
 
 Store::State::Taken Store::State::take_writer() {
@@ -700,5 +732,32 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
     }
     return first;
 }
+
+dstd::Expected<dstd::SharedPtr<engine::Writer>, dstd::Error>
+StoreAccess::writer(Store& store) {
+    return store.state_->writer_for_use();
+}
+
+bool StoreAccess::writer_open(const Store& store) {
+    Store::State& state = *store.state_;
+    std::lock_guard<std::mutex> lock(state.mutex);
+    return state.writer != nullptr;
+}
+
+dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
+StoreAccess::snapshot(Store& store) {
+    return store.state_->snapshot();
+}
+
+void StoreAccess::refresh(Store& store) {
+    Store::State& state = *store.state_;
+    memory::Scope in_pool(*state.pool);
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.foreign_seen = state.foreign_files_locked();
+    state.foreign_checked = std::chrono::steady_clock::now();
+    ++state.version;
+}
+
+void StoreAccess::bump_version(Store& store) { store.state_->bump_version(); }
 
 }  // namespace dftracer::utils::store

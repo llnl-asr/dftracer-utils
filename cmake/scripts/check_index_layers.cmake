@@ -48,9 +48,11 @@ set(ALLOWED
   # the store backend is the write seam of the key-value store
   "index/store/store_backend.cpp|store/record.h"
   "index/store/store_backend.cpp|store/snapshot.h"
+  "index/store/store_backend.cpp|store/store_internal.h"
   "index/store/store_backend.cpp|store/writer.h"
   "index/store/store_backend.h|store/record.h"
   "index/store/store_backend.h|store/snapshot.h"
+  "index/store/store_backend.h|store/store.h"
   "index/store/store_backend.h|store/writer.h"
   # the query caches keep their entries on the key-value store
   "index/cache/cache_store.cpp|store/snapshot.h"

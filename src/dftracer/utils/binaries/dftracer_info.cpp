@@ -14,8 +14,6 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -307,7 +305,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
         indexed_groups) {
     auto index_path = internal::determine_index_path(
         files_needing_index.front().file_path, index_dir);
-    dftracer::utils::index::store::release_index(index_path);
+    dftracer::utils::index::release_root(index_path);
 
     {
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();

@@ -3,7 +3,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/dstd/string_intern.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>

@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/views/fold.h>
 
 #include <cstdint>

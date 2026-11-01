@@ -54,7 +54,6 @@ REQUIRED_PATTERNS = (
     "dftracer/include/dftracer/utils/runtime/coro/abi.h",
     "dftracer/include/dftracer/utils/dataframe/abi.h",
     "dftracer/include/dftracer/utils/duql/abi.h",
-    "dftracer/include/dftracer/utils/index/store/index_database.h",
     "dftracer/include/dftracer/utils/index/indexer.h",
     "dftracer/include/dftracer/utils/index/abi.h",
 )
@@ -65,7 +64,6 @@ PRIVATE_HEADERS = (
     "index/build/batch_builder.h",
     "index/build/resolver.h",
     "index/store/shard_manifest.h",
-    "index/store/index_write.h",
     "index/store/layout.h",
     "index/schemas/dft/agg/aggregation_drain.h",
 )

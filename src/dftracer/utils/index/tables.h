@@ -19,7 +19,7 @@
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/schemas/dft/statistics.h>
 #include <dftracer/utils/index/store/file.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/types.h>
 #include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/store/store.h>
@@ -32,6 +32,32 @@
 // owned values. A later step can return views into the snapshot for the hot
 // readers. Only index/ uses this header.
 namespace dftracer::utils::index {
+
+namespace store {
+
+/// The type a column reports in a schema, derived from the path catalog.
+enum class ColumnType : std::uint8_t {
+    Unknown = 0,
+    Int64 = 1,
+    Float64 = 2,
+    String = 3,
+    /// Text in some records and numbers or bools in others.
+    Json = 4,
+};
+
+/// Folds two observations of one column's type. Unknown yields to the other,
+/// Int64 and Float64 widen to Float64 and any other mix is Json. Commutative
+/// and associative, so it merges across files.
+ColumnType merge_column_type(ColumnType a, ColumnType b);
+
+/// The type of a catalog path from the bitmask of PathType values seen for
+/// it. Unknown when only nulls, objects or arrays were seen.
+ColumnType seen_column_type(std::uint8_t seen);
+
+/// The lowercase name of a ColumnType, such as "int64". Empty for Unknown.
+const char* column_type_name(ColumnType t);
+
+}  // namespace store
 
 template <class T>
 using Result = dstd::Expected<T, dstd::Error>;

@@ -5,12 +5,12 @@
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/extensions/kinds/time_bounds.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -560,7 +560,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     root.c_str());
                 // Drop the cached handle first, as the builder does: a live
                 // handle on a removed directory would serve the old data.
-                index::store::release_index(root);
+                index::release_root(root);
                 std::error_code ec;
                 fs::remove_all(root, ec);
                 forget_input(root);

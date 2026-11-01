@@ -17,7 +17,7 @@ enum class GzipRecordKind : std::uint8_t { Member = 0, Head = 1, Restart = 2 };
 ///
 /// A RESTART piece starts at the first whole byte `c_offset` zlib reads; the
 /// top `bits` bits of the byte before it belong to the piece, and its 32 KiB
-/// window is stored apart (`IndexDatabase::query_restart_window`). A piece
+/// window is stored apart (`restart_window` in `index/tables.h`). A piece
 /// need not start at a line start.
 struct GzipMemberRecord {
     std::uint64_t member_idx = 0;

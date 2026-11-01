@@ -27,7 +27,6 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/canonical.h>

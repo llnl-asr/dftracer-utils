@@ -166,15 +166,12 @@ set(DFTRACER_UTILS_UTILITIES_SOURCES
 
 set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/error.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_database.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/index_write.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/index_decoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/index_encoding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/internal/statistics_codec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/shard_manifest.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/store_backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/store_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_size.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/gzip_indexer.cpp

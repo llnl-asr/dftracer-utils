@@ -13,8 +13,8 @@
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -141,7 +141,7 @@ int cli_main(int argc, char** argv, const char* name, const char* description,
     // on still runs, not via atexit, where static destruction order would
     // leave them waiting on stopped threads.
     auto index_exit_guard = dftracer::utils::dstd::defer(
-        [] { dftracer::utils::index::store::close_index_writers(); });
+        [] { dftracer::utils::index::release_all_roots(); });
     dftracer::utils::logger::init();
     if (auto configured = dftracer::utils::configure_memory_from_env();
         !configured) {

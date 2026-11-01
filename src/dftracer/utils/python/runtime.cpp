@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -440,7 +440,7 @@ static PyMethodDef runtime_module_methods[] = {
 // I/O threads while the process is still healthy.
 static void dftracer_utils_atexit_cleanup() {
     // A store writer waits on the runtime to close, so it closes first.
-    dftracer::utils::index::store::close_index_writers();
+    dftracer::utils::index::release_all_roots();
     dftracer::utils::Runtime::stop_at_exit();
 }
 

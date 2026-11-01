@@ -16,8 +16,6 @@
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/queries.h>
 #include <dftracer/utils/index/tables.h>
@@ -977,7 +975,7 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
                                              std::size_t executor_threads) {
     auto index_path = trace::internal::determine_index_path(
         partition.files_needing_index.front().file_path, index_dir);
-    dftracer::utils::index::store::release_index(index_path);
+    dftracer::utils::index::release_root(index_path);
 
     std::printf("Auto-building index for %zu file(s)...\n",
                 partition.files_needing_index.size());

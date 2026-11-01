@@ -7,7 +7,6 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/runtime/coro/task.h>
 
 #include <array>

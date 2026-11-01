@@ -22,13 +22,6 @@ namespace dftracer::utils::index {
 
 namespace kv = dftracer::utils::store;
 
-/// Lets the index at `root` close once its current users finish. Index::open
-/// keeps recently opened roots open until this or process exit.
-void release_root(dstd::StringView root);
-/// Closes every store of the process and the kept roots. For shutdown, while
-/// the runtime still runs.
-void release_all_roots();
-
 struct FileRef::Data {
     dstd::String path;
     kv::ScopeKey scope;
@@ -150,12 +143,6 @@ struct IndexAccess {
     static dstd::Expected<dstd::Optional<kv::Store>, dstd::Error> find_store(
         const Index& index);
 };
-
-/// Tells the StoreRoot of `root`, when this process holds one, about the
-/// changes just published, so an old-API write never skips on stale
-/// bookkeeping.
-void note_applied(const std::string& root,
-                  dstd::Span<const kv::Publish> applied);
 
 }  // namespace dftracer::utils::index
 

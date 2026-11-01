@@ -1,6 +1,8 @@
 #ifndef DFTRACER_UTILS_INDEX_CACHE_CACHE_STORE_H
 #define DFTRACER_UTILS_INDEX_CACHE_CACHE_STORE_H
 
+#include <dftracer/utils/store/store.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -10,10 +12,6 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-namespace dftracer::utils::index::store {
-class StoreRoot;
-}  // namespace dftracer::utils::index::store
 
 namespace dftracer::utils::index::cache {
 
@@ -65,12 +63,17 @@ class CacheStore {
     /// Marks `sig` used now. No-op when read-only or `sig` has no record.
     void touch(std::uint64_t sig);
 
-    CacheStore(std::shared_ptr<store::StoreRoot> root, bool writable);
+    CacheStore(dftracer::utils::store::Store store,
+               dftracer::utils::store::Namespace data,
+               dftracer::utils::store::Namespace usage, bool writable);
 
    private:
     void evict(std::uint64_t keep);
+    dftracer::utils::store::Snapshot snapshot() const;
 
-    std::shared_ptr<store::StoreRoot> root_;
+    mutable dftracer::utils::store::Store store_;
+    dftracer::utils::store::Namespace data_;
+    dftracer::utils::store::Namespace usage_;
     bool writable_ = false;
 };
 

@@ -18,7 +18,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_drain.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -267,7 +266,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         // re-resolve below reads the destination.
         if (staging) {
             agg_run.reset();
-            index::store::release_index(build_index_path);
+            index::release_root(build_index_path);
             publish_path(build_index_path, staged_final_path);
         }
 
@@ -380,7 +379,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         roots.size(), failure.c_str());
     for (const auto& root : roots)
         if (fs::exists(root)) {
-            index::store::release_index(root);
+            index::release_root(root);
             auto target = unwrap(index::Index::open(
                 index::store::internal::normalize_index_root(root)));
             agg::tier::clear(target);

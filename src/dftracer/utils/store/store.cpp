@@ -10,7 +10,6 @@
 #include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/store.h>
-#include <dftracer/utils/store/store_internal.h>
 #include <dftracer/utils/store/writer.h>
 
 #include <algorithm>
@@ -768,32 +767,5 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
     }
     return first;
 }
-
-dstd::Expected<dstd::SharedPtr<engine::Writer>, dstd::Error>
-StoreAccess::writer(Store& store) {
-    return store.state_->writer_for_use();
-}
-
-bool StoreAccess::writer_open(const Store& store) {
-    Store::State& state = *store.state_;
-    std::lock_guard<std::mutex> lock(state.mutex);
-    return state.writer != nullptr;
-}
-
-dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
-StoreAccess::snapshot(Store& store) {
-    return store.state_->snapshot();
-}
-
-void StoreAccess::refresh(Store& store) {
-    Store::State& state = *store.state_;
-    memory::Scope in_pool(*state.pool);
-    std::lock_guard<std::mutex> lock(state.mutex);
-    state.foreign_seen = state.foreign_files_locked();
-    state.foreign_checked = std::chrono::steady_clock::now();
-    ++state.version;
-}
-
-void StoreAccess::bump_version(Store& store) { store.state_->bump_version(); }
 
 }  // namespace dftracer::utils::store

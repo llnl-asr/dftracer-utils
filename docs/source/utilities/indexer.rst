@@ -65,27 +65,36 @@ The batch builder and resolver behind it are private
 command-line tools use them directly for member normalization and bounded
 sub-batches, which ``Indexer`` does not offer yet.
 
-IndexDatabase
--------------
+Index
+-----
 
-The index store (the ``.dftindex`` root). Each kind of index data
-belongs to an extension, and the manifest records, per file, which extensions
-are built; data without a current manifest entry is never read.
+The typed index API (``include/dftracer/utils/index/index.h``) reads and writes an index root.
+Each kind of index data belongs to an extension.
+A snapshot records, per file, which extensions are built.
+Data that is not current is never read.
+
+``Index::open`` returns a handle for one index root.
+``Index::snapshot`` returns a view of the root that does not change while you hold it.
+``Index::build`` starts the data of one trace file, and ``FileBuild::commit`` publishes it.
+Call ``release_root`` before you delete or rebuild a root, so a later open sees a fresh root.
 
 .. code-block:: cpp
 
-   #include <dftracer/utils/index/store/index_database.h>
+   #include <dftracer/utils/index/index.h>
 
-   using namespace dftracer::utils::index::store;
+   using namespace dftracer::utils::index;
 
-   IndexDatabase db("trace.pfw.gz.dftindex");
+   auto index = Index::open("trace.pfw.gz.dftindex");
+   if (!index) return;
+   auto snapshot = index->snapshot();
+   if (!snapshot) return;
 
-   // Writes go through a write of the index
-   auto writer = db.begin_write();
-
-   // Read-only queries
-   int fid = db.get_file_info_id("trace.pfw.gz");
-   bool has_bloom = db.extension_current(fid, IndexExtension::Bloom);
+   // The stat of the trace file as it is on disk now
+   SourceStat now{mtime, size, 0};
+   Freshness state = snapshot->freshness("trace.pfw.gz", now);
+   if (state == Freshness::Current) {
+       auto file = snapshot->file("trace.pfw.gz");
+   }
 
 TraceReader
 -----------

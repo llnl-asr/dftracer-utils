@@ -1,7 +1,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/layout.h>
-#include <dftracer/utils/index/store/store_backend.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/manager.h>
@@ -152,29 +151,6 @@ dstd::Expected<kv::Store, dstd::Error> IndexAccess::open_store(
 dstd::Expected<dstd::Optional<kv::Store>, dstd::Error> IndexAccess::find_store(
     const Index& index) {
     return index.impl_->find_store();
-}
-
-void note_applied(const std::string& root,
-                  dstd::Span<const kv::Publish> applied) {
-    const auto held = store::StoreRoot::find(root);
-    if (!held) return;
-    for (const kv::Publish& change : applied) {
-        const std::string name(change.ns->spec.name.data(),
-                               change.ns->spec.name.size());
-        switch (change.change) {
-            case kv::Publish::Change::Ready:
-                held->note_published(name, *change.scope, change.params_hash,
-                                     change.sources);
-                break;
-            case kv::Publish::Change::Failed:
-                held->note_published(name, *change.scope, change.params_hash,
-                                     nullptr);
-                break;
-            case kv::Publish::Change::Dropped:
-                held->note_dropped(name, *change.scope);
-                break;
-        }
-    }
 }
 
 const kv::Snapshot* IndexAccess::store_snapshot(const Snapshot& snapshot) {
@@ -422,8 +398,6 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> FileBuild::Impl::commit_task(
             dstd::Span<const kv::Publish>(targets.data(), targets.size()));
         if (!published)
             co_return dstd::Unexpected<dstd::Error>(published.error());
-        note_applied(build.root, dstd::Span<const kv::Publish>(targets.data(),
-                                                               targets.size()));
     }
     co_return dstd::Expected<void, dstd::Error>{};
 }
@@ -449,13 +423,7 @@ FileBuild::Impl::commit_group_task(dstd::Vector<dstd::SharedPtr<Impl>> group) {
         dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     for (std::size_t i = 0; i < n; ++i) {
         if (errors[i] || begin[i] == begin[i + 1]) continue;
-        if (!published) {
-            errors[i] = published.error();
-            continue;
-        }
-        note_applied(group[i]->root,
-                     dstd::Span<const kv::Publish>(targets.data() + begin[i],
-                                                   begin[i + 1] - begin[i]));
+        if (!published) errors[i] = published.error();
     }
     co_return errors;
 }
@@ -689,8 +657,6 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> IndexAccess::remove_task(
     auto applied = co_await store.publish(
         dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     if (!applied) co_return dstd::Unexpected<dstd::Error>(applied.error());
-    note_applied(impl->root,
-                 dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     co_return dstd::Expected<void, dstd::Error>{};
 }
 

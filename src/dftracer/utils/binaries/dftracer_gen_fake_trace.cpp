@@ -82,7 +82,7 @@ static coro::CoroTask<int> run_verify(
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
-        dftracer::utils::index::store::release_index(index_path);
+        dftracer::utils::index::release_root(index_path);
 
         auto batch_config = std::make_shared<IndexBuildBatchConfig>();
         batch_config->file_paths = std::move(abs_paths);

@@ -23,6 +23,51 @@ namespace agg = schemas::dft::agg;
 
 using layout::Ext;
 
+namespace store {
+
+ColumnType merge_column_type(ColumnType a, ColumnType b) {
+    if (a == b) return a;
+    if (a == ColumnType::Unknown) return b;
+    if (b == ColumnType::Unknown) return a;
+    if ((a == ColumnType::Int64 && b == ColumnType::Float64) ||
+        (a == ColumnType::Float64 && b == ColumnType::Int64))
+        return ColumnType::Float64;
+    return ColumnType::Json;
+}
+
+const char* column_type_name(ColumnType t) {
+    switch (t) {
+        case ColumnType::Int64:
+            return "int64";
+        case ColumnType::Float64:
+            return "float64";
+        case ColumnType::String:
+            return "string";
+        case ColumnType::Json:
+            return "json";
+        case ColumnType::Unknown:
+            return "";
+    }
+    return "";
+}
+
+ColumnType seen_column_type(std::uint8_t seen) {
+    auto has = [seen](PathType t) {
+        return (seen >> static_cast<unsigned>(t)) & 1U;
+    };
+    const bool other = has(PathType::Uint) || has(PathType::Double) ||
+                       has(PathType::Bool) || has(PathType::Int);
+    if (has(PathType::Mixed) || (has(PathType::String) && other))
+        return ColumnType::Json;
+    if (has(PathType::String)) return ColumnType::String;
+    if (has(PathType::Uint) || has(PathType::Double))
+        return ColumnType::Float64;
+    if (has(PathType::Bool) || has(PathType::Int)) return ColumnType::Int64;
+    return ColumnType::Unknown;
+}
+
+}  // namespace store
+
 namespace {
 
 namespace sk = layout::stats_kind;
@@ -1046,8 +1091,6 @@ coro::CoroTask<Result<void>> put_agg_meta(const Index& index,
     auto published =
         co_await store.publish(dstd::Span<const kv::Publish>(&target, 1));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
-    note_applied(IndexAccess::root(index),
-                 dstd::Span<const kv::Publish>(&target, 1));
     co_return Result<void>{};
 }
 
@@ -1071,8 +1114,6 @@ coro::CoroTask<Result<void>> delete_agg_meta(const Index& index,
     auto published =
         co_await store.publish(dstd::Span<const kv::Publish>(&target, 1));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
-    note_applied(IndexAccess::root(index),
-                 dstd::Span<const kv::Publish>(&target, 1));
     co_return Result<void>{};
 }
 
@@ -1109,8 +1150,6 @@ coro::CoroTask<Result<void>> remove_extension(
     auto published = co_await store.publish(
         dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
-    note_applied(IndexAccess::root(index),
-                 dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     co_return Result<void>{};
 }
 
@@ -1149,8 +1188,6 @@ coro::CoroTask<Result<void>> remove_plugin(
     auto published = co_await store.publish(
         dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
-    note_applied(IndexAccess::root(index),
-                 dstd::Span<const kv::Publish>(targets.data(), targets.size()));
     co_return Result<void>{};
 }
 

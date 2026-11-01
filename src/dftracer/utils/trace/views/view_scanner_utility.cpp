@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/duql/evaluator.h>
 #include <dftracer/utils/index/plan/prefilter.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/trace/schema.h>

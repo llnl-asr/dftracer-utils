@@ -1,12 +1,15 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/cache/mv_store.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -156,6 +159,28 @@ void check_keys(const detail::ViewPlan& p, std::vector<GroupKey>& keys) {
 
 namespace {
 
+using Snapshots = std::map<std::string, dftracer::utils::index::Snapshot>;
+
+struct FileIndex {
+    const dftracer::utils::index::Snapshot* snapshot = nullptr;
+    dstd::Optional<dftracer::utils::index::FileRef> file;
+};
+
+// One snapshot per index root. A root with no store opens empty and holds no
+// file, so the file is read whole. A damaged index throws and fails the call.
+FileIndex find_file_index(Snapshots& snapshots, const ViewFile& f) {
+    namespace ix = dftracer::utils::index;
+    auto at = snapshots.find(f.index_path);
+    if (at == snapshots.end())
+        at = snapshots
+                 .emplace(f.index_path,
+                          unwrap(ix::plan::open_snapshot(f.index_path)))
+                 .first;
+    return {
+        &at->second,
+        at->second.file(ix::store::internal::get_logical_path(f.file_path))};
+}
+
 struct ConfirmedFiles {
     std::mutex mu;
     std::unordered_set<std::string> keys;
@@ -175,6 +200,7 @@ ConfirmedFiles& confirmed_files() {
 // writes serialize.
 void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
     namespace ib = dftracer::utils::index::build;
+    namespace ix = dftracer::utils::index;
     namespace st = dftracer::utils::index::store;
     struct Pending {
         std::string key;
@@ -192,7 +218,8 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
     std::map<Group, std::vector<Pending>> groups;
     std::vector<std::string> confirmed;
     {
-        std::map<std::string, std::optional<st::IndexDatabase>> dbs;
+        Snapshots snapshots;
+        dstd::HashSet<dstd::String> missing_roots;
         std::lock_guard<std::mutex> lock(confirmed_files().mu);
         for (const auto& f : files) {
             if (f.index_path.empty()) continue;
@@ -211,30 +238,41 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             key += std::to_string(f.checkpoint_size);
             if (confirmed_files().keys.contains(key)) continue;
 
-            auto [it, opened] = dbs.try_emplace(f.index_path);
-            if (opened && input_exists(f.index_path)) {
-                try {
-                    it->second.emplace(f.index_path,
-                                       st::IndexOpenMode::ReadOnly);
-                } catch (const DFTUtilsException&) {
-                }
+            if (missing_roots.contains(std::string_view(f.index_path)))
+                continue;
+            if (!snapshots.contains(f.index_path) &&
+                !input_exists(f.index_path)) {
+                missing_roots.insert(dstd::String(f.index_path));
+                continue;
             }
-            if (!it->second) continue;
-            const st::IndexDatabase& db = *it->second;
-            const int id = db.get_file_info_id(logical);
+            FileIndex found;
+            try {
+                found = find_file_index(snapshots, f);
+            } catch (const DFTUtilsException&) {
+                continue;
+            }
             std::string schema;
-            if (id >= 0) {
-                const bool same_ckpt =
-                    f.checkpoint_size == 0 || db.get_checkpoint_size(id) == 0 ||
-                    db.get_checkpoint_size(id) == f.checkpoint_size;
-                if (same_ckpt && db.check_freshness(f.file_path) ==
-                                     st::IndexDatabase::Freshness::Fresh) {
+            if (found.file) {
+                const auto meta =
+                    unwrap(ix::file_metadata(*found.snapshot, *found.file));
+                const std::uint64_t recorded = meta ? meta->checkpoint_size : 0;
+                const bool same_ckpt = f.checkpoint_size == 0 ||
+                                       recorded == 0 ||
+                                       recorded == f.checkpoint_size;
+                if (same_ckpt &&
+                    found.snapshot->freshness(
+                        logical,
+                        ix::SourceStat{
+                            static_cast<std::uint64_t>(file_stat.mtime),
+                            file_stat.size}) == ix::Freshness::Current) {
                     confirmed.push_back(std::move(key));
                     continue;
                 }
-                if (const auto recorded = db.file_schema(id)) {
-                    dftracer::utils::index::get_schema(*recorded);
-                    schema = *recorded;
+                if (const auto recorded_schema =
+                        unwrap(ix::schema(*found.snapshot, *found.file))) {
+                    ix::get_schema(*recorded_schema);
+                    schema.assign(recorded_schema->data(),
+                                  recorded_schema->size());
                 }
             }
             groups[{f.index_path, f.checkpoint_size, std::move(schema)}]
@@ -356,37 +394,18 @@ void fold_col_map(ColTypeMap& into, const ColTypeMap& from) {
     }
 }
 
-using IndexDbs =
-    ankerl::unordered_dense::map<std::string,
-                                 dftracer::utils::index::store::IndexDatabase>;
-
-struct FileIndex {
-    const dftracer::utils::index::store::IndexDatabase* db;
-    int file_id;
-};
-
-// A root with no store opens empty and answers file_id -1, so the file is
-// read whole. A damaged index throws and fails the call.
-FileIndex find_file_index(IndexDbs& dbs, const ViewFile& f) {
-    namespace st = dftracer::utils::index::store;
-    auto it =
-        dbs.try_emplace(f.index_path, f.index_path, st::IndexOpenMode::ReadOnly)
-            .first;
-    return {&it->second, it->second.get_file_info_id(
-                             st::internal::get_logical_path(f.file_path))};
-}
-
 // Path-decoded files: the union of each file's catalog paths as written.
 ColTypeMap harvest_path_types(const std::vector<ViewFile>& files) {
     ColTypeMap merged;
-    IndexDbs dbs;
+    Snapshots snapshots;
     for (const auto& f : files) {
         if (f.index_path.empty()) continue;
-        const FileIndex found = find_file_index(dbs, f);
-        if (found.file_id < 0) continue;
+        const FileIndex found = find_file_index(snapshots, f);
+        if (!found.file) continue;
         ColTypeMap one;
-        for (auto& [path, t] : found.db->file_column_types(found.file_id))
-            one.emplace(std::move(path), t);
+        for (auto& [path, t] : unwrap(dftracer::utils::index::file_column_types(
+                 *found.snapshot, *found.file)))
+            one.emplace(std::string(path.data(), path.size()), t);
         fold_col_map(merged, one);
     }
     return merged;
@@ -427,16 +446,19 @@ ColTypeMap harvest_column_types(const std::vector<ViewFile>& files) {
             [&](std::int64_t begin, std::int64_t end) {
                 ColTypeMap local;
                 for (std::int64_t i = begin; i < end; ++i) {
-                    namespace st = dftracer::utils::index::store;
-                    st::IndexDatabase db(roots[static_cast<std::size_t>(i)],
-                                         st::IndexOpenMode::ReadOnly);
+                    namespace ix = dftracer::utils::index;
+                    namespace st = ix::store;
+                    const ix::Snapshot snapshot =
+                        unwrap(ix::plan::open_snapshot(
+                            roots[static_cast<std::size_t>(i)]));
                     for (const std::string& logical :
                          root_files[static_cast<std::size_t>(i)]) {
-                        const int fid = db.get_file_info_id(logical);
-                        if (fid < 0) continue;
+                        const auto file = snapshot.file(logical);
+                        if (!file) continue;
                         ColTypeMap one;
-                        for (auto& [path, t] : db.file_column_types(fid)) {
-                            std::string_view name = path;
+                        for (auto& [path, t] :
+                             unwrap(ix::file_column_types(snapshot, *file))) {
+                            std::string_view name(path.data(), path.size());
                             if (name.starts_with("args."))
                                 name.remove_prefix(5);
                             auto [at, fresh] =
@@ -536,13 +558,13 @@ const char* path_type_name(dftracer::utils::index::store::PathType t) {
 
 std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
-    IndexDbs dbs;
+    Snapshots snapshots;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) return f.file_path;
-        const FileIndex found = find_file_index(dbs, f);
-        if (found.file_id < 0 ||
-            !found.db->extension_state(found.file_id,
-                                       st::IndexExtension::Catalog))
+        const FileIndex found = find_file_index(snapshots, f);
+        if (!found.file ||
+            !dftracer::utils::index::extension_state(
+                *found.snapshot, *found.file, st::IndexExtension::Catalog))
             return f.file_path;
     }
     return std::nullopt;
@@ -550,17 +572,17 @@ std::optional<std::string> file_without_catalog(const ScanPlan& plan_) {
 
 void ensure_catalog(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
-    IndexDbs dbs;
+    Snapshots snapshots;
     auto only = std::make_shared<detail::ViewPlan>();
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
-        const FileIndex found = find_file_index(dbs, f);
-        if (found.file_id < 0 ||
-            !found.db->extension_current(found.file_id,
-                                         st::IndexExtension::Catalog))
+        const FileIndex found = find_file_index(snapshots, f);
+        if (!found.file ||
+            !dftracer::utils::index::extension_current(
+                *found.snapshot, *found.file, st::IndexExtension::Catalog))
             only->files.push_back(f);
     }
-    dbs.clear();
+    snapshots.clear();
     if (only->files.empty()) return;
     only->record_schema = plan_->record_schema;
     only->all_records = true;
@@ -583,13 +605,15 @@ std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {
 std::vector<SchemaLeaf> catalog_tree(const ScanPlan& plan_) {
     namespace st = dftracer::utils::index::store;
     std::map<std::string, st::PathStat> merged;
-    IndexDbs dbs;
+    Snapshots snapshots;
     for (const auto& f : plan_->files) {
         if (f.index_path.empty()) continue;
-        const FileIndex found = find_file_index(dbs, f);
-        if (found.file_id < 0) continue;
-        for (auto& [path, stat] : found.db->catalog(found.file_id)) {
-            auto [pos, inserted] = merged.try_emplace(path, stat);
+        const FileIndex found = find_file_index(snapshots, f);
+        if (!found.file) continue;
+        for (auto& [path, stat] : unwrap(dftracer::utils::index::catalog(
+                 *found.snapshot, *found.file))) {
+            auto [pos, inserted] =
+                merged.try_emplace(std::string(path.data(), path.size()), stat);
             if (inserted) continue;
             pos->second.type = st::join(pos->second.type, stat.type);
             pos->second.count += stat.count;

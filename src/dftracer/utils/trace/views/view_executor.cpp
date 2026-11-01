@@ -225,9 +225,6 @@ BootstrapSource open_bootstrap_source(std::string_view file,
 struct BootstrapRoot {
     std::string index_path;
     dstd::Vector<std::size_t> members;
-    // Opens and registers the root, which Index::build needs, and a reader that
-    // opens it meanwhile shares this handle.
-    std::optional<dftracer::utils::index::store::IndexDatabase> db;
     dstd::Optional<dftracer::utils::index::Index> index;
     std::string index_error;
 };
@@ -269,7 +266,6 @@ coro::CoroTask<void> open_bootstrap_stores(const ViewPlan& plan,
         auto store = dstd::make_unique<BootstrapRoot>();
         store->index_path = index_path;
         store->members.assign(members.begin(), members.end());
-        store->db.emplace(index_path);
         auto opened = dftracer::utils::index::Index::open(
             dftracer::utils::index::store::internal::normalize_index_root(
                 index_path));

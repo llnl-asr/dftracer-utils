@@ -5,7 +5,6 @@
 #include <dftracer/utils/dstd/string_arena.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/cache/mv_store.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/runtime/runtime.h>

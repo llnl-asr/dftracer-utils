@@ -7,6 +7,7 @@
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
+#include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/store/snapshot.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/store/store_internal.h>
@@ -256,6 +257,8 @@ Cursor Snapshot::wrap(engine::ScanCursor&& scan) const {
 
 namespace {
 
+std::atomic<std::uint64_t> open_count{0};
+
 std::mutex& registry_mutex() {
     static dstd::NoDestructor<std::mutex> value;
     return *value;
@@ -382,6 +385,7 @@ Store::State::get_or_open(dstd::StringView dir) {
             dstd::Condition::Internal, "store: the pool table is full"));
     }
     states.insert_or_assign(key, created);
+    open_count.fetch_add(1, std::memory_order_relaxed);
     return created;
 }
 
@@ -593,6 +597,10 @@ coro::CoroTask<dstd::Expected<void, dstd::Error>> Store::State::close_task(
     auto closed = co_await writer->close();
     self->bump_version();
     co_return closed;
+}
+
+std::uint64_t internal::opens() noexcept {
+    return open_count.load(std::memory_order_relaxed);
 }
 
 dstd::Expected<Store, dstd::Error> Store::open(dstd::StringView dir) {

@@ -13,6 +13,10 @@
 #include <utility>
 #include <vector>
 
+namespace dftracer::utils::index {
+class Snapshot;
+}  // namespace dftracer::utils::index
+
 namespace dftracer::utils::trace::views {
 
 struct ViewPlannerInput {
@@ -26,6 +30,9 @@ struct ViewPlannerInput {
     // time-based pruning. For when chunk timestamp stats can't be trusted (e.g.
     // multi-node clock skew); the reader still filters events by the query.
     bool scan_all_chunks = false;
+    /// Borrowed snapshot of `index_path`, held by the caller across many files.
+    /// When null the planner takes its own.
+    const index::Snapshot* snapshot = nullptr;
 
     ViewPlannerInput& with_view(const ViewDefinition& v);
     ViewPlannerInput& with_file_path(const std::string& path);
@@ -34,6 +41,7 @@ struct ViewPlannerInput {
     ViewPlannerInput& with_num_checkpoints(std::size_t n);
     ViewPlannerInput& with_time_range(double begin, double end);
     ViewPlannerInput& with_scan_all_chunks(bool v);
+    ViewPlannerInput& with_snapshot(const index::Snapshot* s);
 };
 
 struct ViewChunkCandidate {

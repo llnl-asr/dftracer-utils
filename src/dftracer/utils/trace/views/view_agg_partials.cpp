@@ -16,7 +16,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
@@ -46,7 +45,6 @@ namespace {
 namespace agg = dftracer::utils::index::schemas::dft::agg;
 namespace dataframe = dftracer::utils::dataframe;
 namespace store = dftracer::utils::index::store;
-using store::IndexDatabase;
 using store::internal::get_logical_path;
 
 constexpr char EXTRA_SEP = '\x1f';
@@ -85,19 +83,26 @@ bool roles_complete(const ViewPlan& plan) {
          {&r.name, &r.entity, &r.lane, &r.duration, &r.time})
         if (!tier_field(plan, *p).empty()) paths.push_back(*p);
     if (paths.empty()) return true;
+    std::map<std::string, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
-        IndexDatabase db(f.index_path, store::IndexOpenMode::ReadOnly);
-        const int fid = db.get_file_info_id(get_logical_path(f.file_path));
-        if (fid < 0 ||
-            !db.extension_current(fid, store::IndexExtension::Zonemap))
+        auto at = snapshots.find(f.index_path);
+        if (at == snapshots.end())
+            at = snapshots
+                     .emplace(f.index_path,
+                              unwrap(ix::plan::open_snapshot(f.index_path)))
+                     .first;
+        const ix::Snapshot& snapshot = at->second;
+        const auto file = snapshot.file(get_logical_path(f.file_path));
+        if (!file || !ix::extension_current(snapshot, *file,
+                                            store::IndexExtension::Zonemap))
             return false;
-        const auto spans = db.query_chunk_spans(fid);
+        const auto spans = unwrap(ix::spans(snapshot, *file));
         for (std::string_view p : paths) {
             std::map<std::uint64_t,
                      dftracer::utils::index::extensions::kinds::Zone>
                 zones;
-            for (const auto& [granule, bytes] : db.path_granules(
-                     fid, store::IndexExtension::Zonemap, std::string(p)))
+            for (const auto& [granule, bytes] : unwrap(ix::granules(
+                     snapshot, *file, store::IndexExtension::Zonemap, p)))
                 if (auto z =
                         dftracer::utils::index::extensions::kinds::decode_zone(
                             bytes))

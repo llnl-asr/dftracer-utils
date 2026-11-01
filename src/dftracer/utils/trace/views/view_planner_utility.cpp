@@ -1,8 +1,9 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
 
@@ -13,7 +14,6 @@
 namespace dftracer::utils::trace::views {
 
 namespace plan = dftracer::utils::index::plan;
-using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::internal::get_logical_path;
 
 ViewPlannerInput& ViewPlannerInput::with_view(const ViewDefinition& v) {
@@ -51,6 +51,11 @@ ViewPlannerInput& ViewPlannerInput::with_scan_all_chunks(bool v) {
     return *this;
 }
 
+ViewPlannerInput& ViewPlannerInput::with_snapshot(const index::Snapshot* s) {
+    snapshot = s;
+    return *this;
+}
+
 coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
     const ViewPlannerInput& input) {
     DFTRACER_UTILS_TRACE_SCOPE("build view");
@@ -63,15 +68,15 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
     // Real per-chunk offsets are required: gzip members are non-uniformly
     // sized, so a uniform ckpt_idx*bytes_per estimate decodes the wrong bytes.
     std::vector<std::uint64_t> candidate_checkpoints;
-    std::vector<dftracer::utils::index::gzip::ChunkSpan> chunk_spans;
+    dstd::Vector<dftracer::utils::index::gzip::ChunkSpan> chunk_spans;
     const bool indexed = !input.index_path.empty();
     if (indexed) {
         try {
-            // Read-only: TraceIndex already holds the shared index open
-            // read-only; a read-write open would fail to upgrade.
-            IndexDatabase idx_db(
-                input.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+            dstd::Optional<dftracer::utils::index::Snapshot> owned;
+            if (input.snapshot == nullptr)
+                owned.emplace(unwrap(plan::open_snapshot(input.index_path)));
+            const dftracer::utils::index::Snapshot& snapshot =
+                input.snapshot != nullptr ? *input.snapshot : *owned;
             if (!input.scan_all_chunks) {
                 // The query and window describe data events; metadata the
                 // scan returns lives in chunks of its own.
@@ -80,8 +85,6 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                     : input.view.metadata_records ? plan::MetadataUse::All
                     : input.view.include_metadata ? plan::MetadataUse::Every
                                                   : plan::MetadataUse::None;
-                const auto snapshot =
-                    unwrap(plan::open_snapshot(input.index_path));
                 // Named, not built inside co_await: GCC 12 destroys such a
                 // temporary twice.
                 plan::PruneRequest request{
@@ -112,11 +115,11 @@ coro::CoroTask<Result<ViewPlannerOutput>> ViewPlannerUtility::operator()(
                     candidate_checkpoints = std::move(pruned->candidates);
                 }
             }
-            int fid =
-                idx_db.get_file_info_id(get_logical_path(input.file_path));
-            if (fid >= 0 &&
+            const auto file = snapshot.file(get_logical_path(input.file_path));
+            if (file &&
                 (!candidate_checkpoints.empty() || input.scan_all_chunks))
-                chunk_spans = idx_db.query_chunk_spans(fid);
+                chunk_spans =
+                    unwrap(dftracer::utils::index::spans(snapshot, *file));
         } catch (const std::exception& e) {
             // Fail loudly: swallowing this leaves chunk_spans empty, which
             // reads downstream as a prune and silently drops the file.

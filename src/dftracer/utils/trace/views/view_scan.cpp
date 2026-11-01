@@ -2,16 +2,19 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
@@ -28,6 +31,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -344,6 +348,19 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     for (const auto& e : errors)
         if (e) std::rethrow_exception(e);
 
+    // One snapshot per index root, taken after the metadata pass may have
+    // built the index, and shared read-only by every planner.
+    namespace ix = dftracer::utils::index;
+    dstd::HashMap<dstd::String, ix::Snapshot> snapshots;
+    dstd::HashSet<dstd::String> seen_roots;
+    for (const auto& f : plan.files) {
+        if (f.index_path.empty()) continue;
+        if (!seen_roots.insert(dstd::String(f.index_path)).second) continue;
+        if (!input_exists(f.index_path)) continue;
+        if (auto taken = ix::plan::open_snapshot(f.index_path))
+            snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
+    }
+
     co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
             scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
@@ -361,6 +378,10 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                                                                   : "")
                         .with_uncompressed_size(uc_sizes[fi])
                         .with_num_checkpoints(ckpt_counts[fi]);
+                    const auto held =
+                        snapshots.find(std::string_view(index_path));
+                    if (held != snapshots.end())
+                        pin.with_snapshot(&held->second);
                     // Path-decoded files prune time through their time field.
                     if (plan.time_range && !vdef.by_path)
                         pin.with_time_range(plan.time_range->first,
@@ -411,19 +432,24 @@ ScanShape scan_shape(const ViewDefinition& vdef) {
 
 namespace {
 
-// True if any file's index still lacks the pruner bloom (or has no index yet).
-// Bloom presence means the index was fully built, so once every file has it the
-// ride-along stops attaching and a repeat scan pays no re-parse.
-bool any_file_missing_bloom(const ViewPlan& plan) {
+// True if any file's index lacks extension `ext` at the current format, or has
+// no index yet. One snapshot serves every file of a root.
+bool any_file_missing_extension(
+    const ViewPlan& plan, dftracer::utils::index::store::IndexExtension ext) {
+    namespace ix = dftracer::utils::index;
+    std::map<std::string, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
         try {
-            dftracer::utils::index::store::IndexDatabase db(
-                f.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            int fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(
-                    f.file_path));
-            if (fid < 0 || !db.pruning_tier_current(fid)) return true;
+            auto at = snapshots.find(f.index_path);
+            if (at == snapshots.end())
+                at = snapshots
+                         .emplace(f.index_path,
+                                  unwrap(ix::plan::open_snapshot(f.index_path)))
+                         .first;
+            const auto file = at->second.file(
+                ix::store::internal::get_logical_path(f.file_path));
+            if (!file || !ix::extension_current(at->second, *file, ext))
+                return true;
         } catch (const std::exception&) {
             return true;
         }
@@ -431,25 +457,16 @@ bool any_file_missing_bloom(const ViewPlan& plan) {
     return false;
 }
 
+// Bloom presence means the index was fully built, so once every file has it the
+// ride-along stops attaching and a repeat scan pays no re-parse.
+bool any_file_missing_bloom(const ViewPlan& plan) {
+    return any_file_missing_extension(
+        plan, dftracer::utils::index::store::IndexExtension::Stats);
+}
+
 bool any_file_missing_catalog(const ViewPlan& plan) {
-    for (const auto& f : plan.files) {
-        try {
-            dftracer::utils::index::store::IndexDatabase db(
-                f.index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            int fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(
-                    f.file_path));
-            if (fid < 0 ||
-                !db.extension_current(
-                    fid,
-                    dftracer::utils::index::store::IndexExtension::Catalog))
-                return true;
-        } catch (const std::exception&) {
-            return true;
-        }
-    }
-    return false;
+    return any_file_missing_extension(
+        plan, dftracer::utils::index::store::IndexExtension::Catalog);
 }
 
 }  // namespace

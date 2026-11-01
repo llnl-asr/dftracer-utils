@@ -4,6 +4,7 @@
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/open_count.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -96,14 +97,15 @@ TEST_SUITE("BootstrapParallelism") {
         REQUIRE(default_runtime().threads() == WORKERS);
 
         trace::views::detail::bootstrap_counters().reset();
-        const auto opens_before = store::IndexDatabase::read_write_opens();
+        const auto store_opens_before =
+            dftracer::utils::store::internal::opens();
         const auto cold = count_by_name(files, index_dir);
-        const auto opens =
-            store::IndexDatabase::read_write_opens() - opens_before;
+        const auto store_opens =
+            dftracer::utils::store::internal::opens() - store_opens_before;
 
         CHECK(trace::views::detail::bootstrap_counters().max_in_flight.load() ==
               RUNNING_WORKERS);
-        CHECK(opens == 1);
+        CHECK(store_opens == 1);
 
         const auto warm = count_by_name(files, index_dir);
         CHECK(counts(cold) == counts(warm));
@@ -121,11 +123,12 @@ TEST_SUITE("BootstrapParallelism") {
         const auto index_dir = env.get_dir() + "/idx";
 
         configure_default_runtime({.threads = WORKERS, .eager = true});
-        const auto opens_before = store::IndexDatabase::read_write_opens();
+        const auto store_opens_before =
+            dftracer::utils::store::internal::opens();
         const auto cold = export_lines(files, index_dir);
-        const auto opens =
-            store::IndexDatabase::read_write_opens() - opens_before;
-        CHECK(opens == 1);
+        const auto store_opens =
+            dftracer::utils::store::internal::opens() - store_opens_before;
+        CHECK(store_opens == 1);
         CHECK(cold.size() == static_cast<std::size_t>(FILES) * EVENTS);
 
         const auto warm = export_lines(files, index_dir);

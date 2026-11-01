@@ -437,8 +437,7 @@ TEST_SUITE("AggPartialsStore") {
             std::string old_key(1,
                                 static_cast<char>(layout::agg_kind::PARTIAL));
             old_key.append(12, '\0');
-            const std::string old_value = layout::with_header(
-                layout::Ext::Agg, layout::agg_kind::PARTIAL, "old");
+            const std::string old_value = "old";
             const auto snapshot = open_index(index_path);
             const auto file = file_of(snapshot, files[0]);
             const auto state = index::extension_state(

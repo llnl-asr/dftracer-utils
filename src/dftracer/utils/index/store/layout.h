@@ -1,33 +1,21 @@
 #ifndef DFTRACER_UTILS_INDEX_STORE_LAYOUT_H
 #define DFTRACER_UTILS_INDEX_STORE_LAYOUT_H
 
-#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/store/file.h>
 
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 
-// The on-disk layout of an index database. Index data keys are
-// [ext_id u16][kind u8][file_id u32][tail], big-endian; every non-empty value
-// starts with a VALUE_HEADER_BYTES header. Only index/store reads and writes
-// these bytes.
+// The on-disk layout of an index database. A key is [kind u8][tail], its tail
+// big-endian, inside the namespace of its extension and the scope of its file.
+// A value is the payload alone. Only index/store reads and writes these bytes.
 namespace dftracer::utils::index::store::layout {
 
 using Ext = IndexExtension;
 
 std::string_view ext_name(Ext ext);
-
-namespace host {
-inline constexpr std::uint8_t FORMAT = 0;
-inline constexpr std::uint8_t EXT = 1;
-inline constexpr std::uint8_t FILE_BY_PATH = 2;
-inline constexpr std::uint8_t FILE_BY_ID = 3;
-inline constexpr std::uint8_t NEXT_FILE_ID = 4;
-inline constexpr std::uint8_t MANIFEST = 5;
-}  // namespace host
 
 namespace members {
 inline constexpr std::uint8_t MEMBER = 0;
@@ -74,12 +62,12 @@ namespace rowset_kind {
 inline constexpr std::uint8_t FRAME = 0;
 }  // namespace rowset_kind
 
-/// Aggregation kinds, keyed as follows after the file id, so a file's records
-/// are one range in key order.
+/// Aggregation kinds. Every tail is written after the kind byte, so a file's
+/// records are one range in key order.
 ///   PARTIAL  [chunk u32][category id u32][name id u32][host id u32]
 ///            [extra id u32][kind u8]
 ///   DICT     [id u32]
-///   META     [name], index-wide (file_id INDEX_WIDE), a namespace per name
+///   META     [name], a namespace per name at the root scope
 ///   COLUMNS  [chunk u32], a column block (see schemas/dft/agg/chunk_columns.h)
 /// The ids are the index root's dictionary ids. The extra id is that of the
 /// extra group key values joined by 0x1F, the empty text when there are none.
@@ -93,16 +81,6 @@ inline constexpr std::uint8_t UNUSED_SYSTEM = 3;
 inline constexpr std::uint8_t COLUMNS = 4;
 }  // namespace agg_kind
 
-/// file_id of data that belongs to the whole index rather than one file.
-inline constexpr std::uint32_t INDEX_WIDE = 0xFFFFFFFFU;
-
-struct KindSpec {
-    Ext ext;
-    std::uint8_t kind;
-};
-
-std::span<const KindSpec> kinds();
-
 /// Code version of each extension's data; a manifest entry with another
 /// version is stale.
 std::uint32_t ext_version(Ext ext);
@@ -111,41 +89,8 @@ std::uint16_t read_u16(std::string_view bytes);
 std::uint32_t read_u32(std::string_view bytes);
 std::uint64_t read_u64(std::string_view bytes);
 
-/// [ext][kind]
-std::string kind_prefix(Ext ext, std::uint8_t kind);
-/// [ext][kind][file_id]
-std::string file_prefix(Ext ext, std::uint8_t kind, std::uint32_t file_id);
-/// [ext][kind][file_id][granule]
-std::string granule_key(Ext ext, std::uint8_t kind, std::uint32_t file_id,
-                        std::uint32_t granule);
-/// [ext][kind][file_id][path][0x00]: the start of one path's keys.
-std::string path_prefix(Ext ext, std::uint8_t kind, std::uint32_t file_id,
-                        std::string_view path);
 /// The first key after every key starting with `prefix`.
 std::string prefix_end(std::string_view prefix);
-
-inline constexpr std::size_t KEY_PREFIX_BYTES = 7;
-inline constexpr std::size_t VALUE_HEADER_BYTES = 9;
-
-/// Prepends the value header for (ext, kind) to `payload`.
-std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload);
-
-/// Appends what with_header(ext, kind, payload) returns to `out`, in place.
-void append_value(dstd::Vector<std::uint8_t>& out, Ext ext, std::uint8_t kind,
-                  std::string_view payload);
-
-/// The payload of a value written for (ext, kind); nullopt when the header is
-/// missing, truncated or names another type or version.
-std::optional<std::string_view> payload(std::string_view value, Ext ext,
-                                        std::uint8_t kind);
-
-enum class ExtStatus : std::uint8_t { Ready = 1, Failed = 2 };
-
-struct ManifestEntry {
-    std::uint32_t version = 0;
-    std::uint64_t params_hash = 0;
-    ExtStatus status = ExtStatus::Ready;
-};
 
 std::string encode_chunk_metadata(const ChunkMetadata& metadata);
 std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body);
@@ -153,29 +98,6 @@ std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body);
 /// A catalog record: {type u8, seen u8, count u64}.
 std::string encode_path_stat(const PathStat& stat);
 std::optional<PathStat> decode_path_stat(std::string_view body);
-
-std::string manifest_key(std::uint32_t file_id, Ext ext);
-/// The manifest entry of plugin extension `name`.
-std::string plugin_manifest_key(std::uint32_t file_id, std::string_view name);
-std::string manifest_prefix(std::uint32_t file_id);
-std::string encode_manifest(const ManifestEntry& entry);
-std::optional<ManifestEntry> decode_manifest(std::string_view value);
-
-std::string format_key();
-std::string next_file_id_key();
-std::string ext_registry_key(Ext ext);
-std::string file_by_path_key(std::string_view logical_path);
-std::string file_by_id_key(std::uint32_t file_id);
-
-struct FileRecord {
-    std::uint32_t file_id = 0;
-    std::uint64_t mtime = 0;
-    std::uint64_t hash = 0;
-    std::uint64_t size = 0;
-};
-
-std::string encode_file_record(const FileRecord& record);
-std::optional<FileRecord> decode_file_record(std::string_view value);
 
 }  // namespace dftracer::utils::index::store::layout
 

@@ -14,8 +14,8 @@
 
 namespace dftracer::utils::index::store::internal::encoding {
 
-// Payload encoders of the core.members and dft.index records; keys and value
-// headers come from store/layout.h.
+// Payload encoders of the core.members and dft.index records. A value is the
+// payload alone and its key comes from index/tables.
 
 std::string encode_gzip_member_value(
     const index::gzip::GzipMemberRecord& member);

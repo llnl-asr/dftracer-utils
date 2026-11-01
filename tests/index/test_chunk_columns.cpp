@@ -940,8 +940,7 @@ TEST_SUITE("ChunkColumns") {
         CHECK(at == RECORDS);
     }
 
-    TEST_CASE(
-        "a stored partial or block is its layout header and its payload") {
+    TEST_CASE("a stored partial or block is its payload") {
         dftu_utils_test::TestEnvironment env(60);
         REQUIRE(env.is_valid());
         std::string text;
@@ -953,38 +952,22 @@ TEST_SUITE("ChunkColumns") {
             trace::internal::determine_index_path(gz, index_dir);
         std::size_t blocks = 0;
         std::size_t partials = 0;
-        const auto stored = [](std::string_view value, std::uint8_t kind) {
-            const auto payload = layout::payload(value, layout::Ext::Agg, kind);
-            REQUIRE_MESSAGE(payload.has_value(), "the header of kind ",
-                            static_cast<int>(kind));
-            CHECK(value ==
-                  layout::with_header(layout::Ext::Agg, kind, *payload));
-            return *payload;
-        };
         for (const auto& record : dftu_utils_test::dump_index(index_path)) {
             constexpr std::string_view AGG = "dftu.idx.dftracer.agg";
             if (record.name != AGG) continue;
-            const std::string_view key = record.key;
+            REQUIRE_FALSE(record.key.empty());
             const std::string_view value = record.value;
-            const auto columns = layout::payload(value, layout::Ext::Agg,
-                                                 layout::agg_kind::COLUMNS);
-            const auto partial = layout::payload(value, layout::Ext::Agg,
-                                                 layout::agg_kind::PARTIAL);
-            if (columns) {
-                const auto body = stored(value, layout::agg_kind::COLUMNS);
-                auto decoded = agg::decode_chunk_columns(span_of(body));
-                REQUIRE(decoded.has_value());
+            const auto kind = static_cast<std::uint8_t>(record.key[0]);
+            if (kind == layout::agg_kind::COLUMNS) {
+                const auto decoded = agg::decode_chunk_columns(span_of(value));
+                REQUIRE_MESSAGE(decoded.has_value(), record.key);
                 ++blocks;
-            } else if (partial) {
-                const auto body = stored(value, layout::agg_kind::PARTIAL);
+            } else if (kind == layout::agg_kind::PARTIAL) {
                 REQUIRE(
-                    agg::AggPartial::deserialize(span_of(body)).has_value());
+                    agg::AggPartial::deserialize(span_of(value)).has_value());
                 ++partials;
             } else {
-                CHECK_MESSAGE(layout::payload(value, layout::Ext::Agg,
-                                              layout::agg_kind::DICT)
-                                  .has_value(),
-                              key);
+                CHECK_MESSAGE(kind == layout::agg_kind::DICT, record.key);
             }
         }
         CHECK(blocks > 0);

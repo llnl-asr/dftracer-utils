@@ -182,7 +182,7 @@ Result<void> agg_file_texts(const Snapshot& snapshot, const FileRef& file,
 /// Every dictionary entry the index holds, in key order.
 Result<void> agg_dictionary(const Snapshot& snapshot,
                             schemas::dft::agg::AggInternTable& table);
-/// The index-wide aggregation record `name`, without its value header.
+/// The index-wide aggregation record `name`.
 Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
                                               dstd::StringView name);
 
@@ -257,14 +257,13 @@ void put_agg_chunk_columns(FileBuild& build, std::uint64_t chunk,
 void put_agg_dictionary_entry(FileBuild& build, std::uint32_t id,
                               dstd::StringView text);
 
-/// As put_agg_partial, with `value` the whole stored value including the layout
-/// header (layout::append_value), so it is stored without a copy.
+/// As put_agg_partial, with `value` the stored value, so it is stored without a
+/// copy.
 void put_agg_partial_value(FileBuild& build, std::uint64_t chunk,
                            std::uint32_t cat_id, std::uint32_t name_id,
                            std::uint32_t host_id, std::uint32_t extra_id,
                            std::uint8_t kind, dstd::StringView value);
-/// As put_agg_chunk_columns, with `value` the whole stored value including the
-/// layout header.
+/// As put_agg_chunk_columns, with `value` the stored value.
 void put_agg_chunk_columns_value(FileBuild& build, std::uint64_t chunk,
                                  dstd::StringView value);
 
@@ -273,8 +272,7 @@ void put_plugin(FileBuild& build, dstd::StringView name, std::uint32_t version,
                 std::uint64_t params_hash, const GranuleList& granules,
                 const dstd::Optional<dstd::String>& file);
 
-/// As above, with views the build copies. Each payload is copied once, into the
-/// stored value that carries the layout header.
+/// As above, with views, which are stored as they are, without a copy.
 using GranuleViews = dstd::Vector<std::pair<std::uint64_t, dstd::StringView>>;
 void put_plugin_views(FileBuild& build, dstd::StringView name,
                       std::uint32_t version, std::uint64_t params_hash,

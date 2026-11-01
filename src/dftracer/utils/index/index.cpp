@@ -40,7 +40,7 @@ kv::Namespace read_ns(Ext ext) {
     return ns;
 }
 
-bool builtin(Ext ext) { return ext != Ext::Plugin && ext != Ext::Host; }
+bool builtin(Ext ext) { return ext != Ext::Plugin; }
 
 bool has_name(const dstd::Vector<kv::Namespace>& list,
               const kv::Namespace& ns) {

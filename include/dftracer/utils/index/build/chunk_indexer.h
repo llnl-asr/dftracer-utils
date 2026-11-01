@@ -90,7 +90,6 @@ struct ChunkIndexerConfig {
             case store::IndexExtension::Zonemap:
                 selection();
                 break;
-            case store::IndexExtension::Host:
             case store::IndexExtension::Members:
             case store::IndexExtension::Rowset:
             case store::IndexExtension::Postings:

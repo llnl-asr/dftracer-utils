@@ -18,14 +18,9 @@ struct FileMetadataResult {
     bool truncated = false;
 };
 
-struct FileRegistryEntry {
-    int file_id = -1;
-};
-
 /// Owners of index data. The manifest records, per file, which of them are
 /// built and with which configuration.
 enum class IndexExtension : std::uint16_t {
-    Host = 0,
     /// Gzip members and file metadata.
     Members = 1,
     /// Per chunk and path: value range, type, record counts.

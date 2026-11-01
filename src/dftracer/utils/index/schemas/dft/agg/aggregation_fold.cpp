@@ -1,7 +1,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial_update.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -148,14 +147,12 @@ void AggregationFold::add_to_columns(
 }
 
 void AggregationFold::close_columns() {
-    namespace layout = index::store::layout;
     if (columns_.empty()) return;
     scratch_.clear();
     columns_.encode_into(scratch_);
     ClosedColumns closed;
     closed.chunk = chunk_;
-    layout::append_value(closed.value, layout::Ext::Agg,
-                         layout::agg_kind::COLUMNS, bytes_of(scratch_));
+    closed.value.assign(scratch_.begin(), scratch_.end());
     closed_bytes_ += closed.value.size();
     closed_columns_.push_back(std::move(closed));
     referenced_.insert(referenced_.end(), columns_.ids().begin(),
@@ -164,7 +161,6 @@ void AggregationFold::close_columns() {
 }
 
 void AggregationFold::close_chunk() {
-    namespace layout = index::store::layout;
     close_columns();
     for (Slot& slot : slots_) {
         if (!slot.used) continue;
@@ -174,8 +170,7 @@ void AggregationFold::close_chunk() {
         Closed closed;
         closed.chunk = chunk_;
         closed.key = slot.key;
-        layout::append_value(closed.value, layout::Ext::Agg,
-                             layout::agg_kind::PARTIAL, bytes_of(scratch_));
+        closed.value.assign(scratch_.begin(), scratch_.end());
         closed_bytes_ += closed.value.size();
         closed_.push_back(std::move(closed));
         referenced_.push_back(slot.key.cat);

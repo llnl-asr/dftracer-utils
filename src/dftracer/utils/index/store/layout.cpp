@@ -4,57 +4,11 @@
 #include <dftracer/utils/index/store/layout.h>
 
 #include <algorithm>
-#include <array>
-#include <cstring>
 
 namespace dftracer::utils::index::store::layout {
 
-namespace {
-
-constexpr std::array<KindSpec, 27> KINDS = {{
-    {Ext::Members, members::MEMBER},
-    {Ext::Members, members::METADATA},
-    {Ext::Members, members::RESTART},
-    {Ext::Zonemap, path_kind::PATHS},
-    {Ext::Zonemap, path_kind::DATA},
-    {Ext::Bloom, path_kind::PATHS},
-    {Ext::Bloom, path_kind::DATA},
-    {Ext::Bloom, path_kind::FILE},
-    {Ext::Counts, path_kind::PATHS},
-    {Ext::Counts, path_kind::DATA},
-    {Ext::Postings, path_kind::PATHS},
-    {Ext::Postings, path_kind::IN_FILE},
-    {Ext::Postings, path_kind::IN_GRANULE},
-    {Ext::Stats, stats_kind::CHUNK_STATS},
-    {Ext::Stats, stats_kind::FILE_SCALAR_STATS},
-    {Ext::Stats, stats_kind::FILE_PID_TID_COUNTS},
-    {Ext::Catalog, catalog_kind::PATH},
-    {Ext::Profile, profile_kind::ID},
-    {Ext::Metadata, metadata_kind::CHUNK},
-    {Ext::Plugin, path_kind::PATHS},
-    {Ext::Plugin, path_kind::DATA},
-    {Ext::Plugin, path_kind::FILE},
-    {Ext::Rowset, rowset_kind::FRAME},
-    {Ext::Agg, agg_kind::PARTIAL},
-    {Ext::Agg, agg_kind::META},
-    {Ext::Agg, agg_kind::DICT},
-    {Ext::Agg, agg_kind::COLUMNS},
-}};
-
-constexpr std::uint8_t PAYLOAD_VERSION = 0;
-constexpr std::uint8_t CODEC_RAW = 0;
-
-std::uint16_t type_id(Ext ext, std::uint8_t kind) {
-    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(ext) << 8U) |
-                                      kind);
-}
-
-}  // namespace
-
 std::string_view ext_name(Ext ext) {
     switch (ext) {
-        case Ext::Host:
-            return "host";
         case Ext::Members:
             return "core.members";
         case Ext::Zonemap:
@@ -83,26 +37,6 @@ std::string_view ext_name(Ext ext) {
     return "";
 }
 
-}  // namespace dftracer::utils::index::store::layout
-
-namespace dftracer::utils::index::store {
-
-std::string_view extension_name(IndexExtension ext) {
-    return layout::ext_name(ext);
-}
-
-std::optional<IndexExtension> parse_extension(std::string_view name) {
-    for (auto ext : ALL_EXTENSIONS)
-        if (layout::ext_name(ext) == name) return ext;
-    return std::nullopt;
-}
-
-}  // namespace dftracer::utils::index::store
-
-namespace dftracer::utils::index::store::layout {
-
-std::span<const KindSpec> kinds() { return KINDS; }
-
 // The index format version of VERSION, so a bump leaves every stored copy in a
 // namespace this build does not read and each file is indexed again.
 std::uint32_t ext_version(Ext /*ext*/) {
@@ -130,35 +64,6 @@ std::uint64_t read_u64(std::string_view bytes) {
     return read_be_checked<std::uint64_t>(bytes);
 }
 
-std::string kind_prefix(Ext ext, std::uint8_t kind) {
-    std::string key;
-    key.reserve(KEY_PREFIX_BYTES + 16);
-    dstd::append_u16_be(key, static_cast<std::uint16_t>(ext));
-    key.push_back(static_cast<char>(kind));
-    return key;
-}
-
-std::string file_prefix(Ext ext, std::uint8_t kind, std::uint32_t file_id) {
-    auto key = kind_prefix(ext, kind);
-    dstd::append_u32_be(key, file_id);
-    return key;
-}
-
-std::string granule_key(Ext ext, std::uint8_t kind, std::uint32_t file_id,
-                        std::uint32_t granule) {
-    auto key = file_prefix(ext, kind, file_id);
-    dstd::append_u32_be(key, granule);
-    return key;
-}
-
-std::string path_prefix(Ext ext, std::uint8_t kind, std::uint32_t file_id,
-                        std::string_view path) {
-    auto key = file_prefix(ext, kind, file_id);
-    key.append(path);
-    key.push_back('\0');
-    return key;
-}
-
 std::string prefix_end(std::string_view prefix) {
     std::string end(prefix);
     while (!end.empty()) {
@@ -170,61 +75,6 @@ std::string prefix_end(std::string_view prefix) {
         end.pop_back();
     }
     return std::string(prefix) + std::string(8, '\xFF');
-}
-
-std::string with_header(Ext ext, std::uint8_t kind, std::string_view payload) {
-    std::string value;
-    value.reserve(VALUE_HEADER_BYTES + payload.size());
-    dstd::append_u16_be(value, type_id(ext, kind));
-    value.push_back(static_cast<char>(PAYLOAD_VERSION));
-    value.push_back(static_cast<char>(CODEC_RAW));
-    value.push_back(0);
-    dstd::append_u32_be(value, static_cast<std::uint32_t>(payload.size()));
-    value.append(payload);
-    return value;
-}
-
-void append_value(dstd::Vector<std::uint8_t>& out, Ext ext, std::uint8_t kind,
-                  std::string_view payload) {
-    out.reserve(out.size() + VALUE_HEADER_BYTES + payload.size());
-    dstd::append_u16_be(out, type_id(ext, kind));
-    out.push_back(PAYLOAD_VERSION);
-    out.push_back(CODEC_RAW);
-    out.push_back(0);
-    dstd::append_u32_be(out, static_cast<std::uint32_t>(payload.size()));
-    const std::size_t at = out.size();
-    out.resize(at + payload.size());
-    if (!payload.empty())
-        std::memcpy(out.data() + at, payload.data(), payload.size());
-}
-
-std::optional<std::string_view> payload(std::string_view value, Ext ext,
-                                        std::uint8_t kind) {
-    if (value.size() < VALUE_HEADER_BYTES) return std::nullopt;
-    if (read_u16(value) != type_id(ext, kind) ||
-        static_cast<std::uint8_t>(value[2]) != PAYLOAD_VERSION ||
-        static_cast<std::uint8_t>(value[3]) != CODEC_RAW)
-        return std::nullopt;
-    const auto len = read_u32(value.substr(5));
-    if (len != value.size() - VALUE_HEADER_BYTES) return std::nullopt;
-    return value.substr(VALUE_HEADER_BYTES);
-}
-
-std::string manifest_prefix(std::uint32_t file_id) {
-    return file_prefix(Ext::Host, host::MANIFEST, file_id);
-}
-
-std::string manifest_key(std::uint32_t file_id, Ext ext) {
-    auto key = manifest_prefix(file_id);
-    dstd::append_u16_be(key, static_cast<std::uint16_t>(ext));
-    return key;
-}
-
-std::string plugin_manifest_key(std::uint32_t file_id, std::string_view name) {
-    auto key = manifest_key(file_id, Ext::Plugin);
-    key.append(name);
-    key.push_back('\0');
-    return key;
 }
 
 std::string encode_path_stat(const PathStat& stat) {
@@ -242,69 +92,6 @@ std::optional<PathStat> decode_path_stat(std::string_view body) {
     return PathStat{static_cast<PathType>(type),
                     static_cast<std::uint8_t>(body[1]),
                     read_u64(body.substr(2))};
-}
-
-std::string encode_manifest(const ManifestEntry& entry) {
-    std::string body;
-    dstd::append_u32_be(body, entry.version);
-    dstd::append_u64_be(body, entry.params_hash);
-    body.push_back(static_cast<char>(entry.status));
-    return with_header(Ext::Host, host::MANIFEST, body);
-}
-
-std::optional<ManifestEntry> decode_manifest(std::string_view value) {
-    auto body = payload(value, Ext::Host, host::MANIFEST);
-    if (!body || body->size() != 13) return std::nullopt;
-    ManifestEntry entry;
-    entry.version = read_u32(*body);
-    entry.params_hash = read_u64(body->substr(4));
-    entry.status =
-        static_cast<ExtStatus>(static_cast<std::uint8_t>((*body)[12]));
-    if (entry.status != ExtStatus::Ready && entry.status != ExtStatus::Failed)
-        return std::nullopt;
-    return entry;
-}
-
-std::string format_key() { return kind_prefix(Ext::Host, host::FORMAT); }
-
-std::string next_file_id_key() {
-    return kind_prefix(Ext::Host, host::NEXT_FILE_ID);
-}
-
-std::string ext_registry_key(Ext ext) {
-    auto key = kind_prefix(Ext::Host, host::EXT);
-    key.append(ext_name(ext));
-    return key;
-}
-
-std::string file_by_path_key(std::string_view logical_path) {
-    auto key = kind_prefix(Ext::Host, host::FILE_BY_PATH);
-    key.append(logical_path);
-    return key;
-}
-
-std::string file_by_id_key(std::uint32_t file_id) {
-    return file_prefix(Ext::Host, host::FILE_BY_ID, file_id);
-}
-
-std::string encode_file_record(const FileRecord& record) {
-    std::string body;
-    dstd::append_u32_be(body, record.file_id);
-    dstd::append_u64_be(body, record.mtime);
-    dstd::append_u64_be(body, record.hash);
-    dstd::append_u64_be(body, record.size);
-    return with_header(Ext::Host, host::FILE_BY_PATH, body);
-}
-
-std::optional<FileRecord> decode_file_record(std::string_view value) {
-    auto body = payload(value, Ext::Host, host::FILE_BY_PATH);
-    if (!body || body->size() != 28) return std::nullopt;
-    FileRecord record;
-    record.file_id = read_u32(*body);
-    record.mtime = read_u64(body->substr(4));
-    record.hash = read_u64(body->substr(12));
-    record.size = read_u64(body->substr(20));
-    return record;
 }
 
 namespace {
@@ -370,6 +157,16 @@ std::optional<ChunkMetadata> decode_chunk_metadata(std::string_view body) {
 }  // namespace dftracer::utils::index::store::layout
 
 namespace dftracer::utils::index::store {
+
+std::string_view extension_name(IndexExtension ext) {
+    return layout::ext_name(ext);
+}
+
+std::optional<IndexExtension> parse_extension(std::string_view name) {
+    for (auto ext : ALL_EXTENSIONS)
+        if (layout::ext_name(ext) == name) return ext;
+    return std::nullopt;
+}
 
 void add_metadata_value(std::optional<std::vector<std::string>>& list,
                         std::string_view value) {

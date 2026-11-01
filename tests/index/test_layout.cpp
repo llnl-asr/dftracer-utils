@@ -1,115 +1,173 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/dstd/big_endian.h>
+#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/store/internal/index_encoding.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
+#include <testing_utilities.h>
 
+#include <cstdint>
+#include <initializer_list>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
+namespace dstd = dftracer::utils::dstd;
+namespace encoding = dftracer::utils::index::store::internal::encoding;
+namespace idx = dftracer::utils::index;
 namespace layout = dftracer::utils::index::store::layout;
-using dftracer::utils::dstd::append_u32_be;
+namespace store = dftracer::utils::index::store;
 using layout::Ext;
 
+namespace {
+
+std::string kind_key(std::uint8_t kind) {
+    return std::string(1, static_cast<char>(kind));
+}
+
+/// Pins that the key range of one kind holds no key of another kind of the
+/// same namespace, which is what lets a reader scan one kind's prefix.
+void check_separate_ranges(std::initializer_list<std::uint8_t> kinds) {
+    for (const std::uint8_t kind : kinds) {
+        const std::string begin = kind_key(kind);
+        const std::string end = layout::prefix_end(begin);
+        std::string deepest = begin;
+        deepest.append(16, '\xFF');
+        CHECK(deepest < end);
+        for (const std::uint8_t other : kinds) {
+            if (other == kind) continue;
+            const std::string other_key = kind_key(other);
+            const bool inside = other_key >= begin && other_key < end;
+            CHECK_FALSE(inside);
+        }
+    }
+}
+
+std::optional<dftu_utils_test::IndexRecord> find_record(
+    const std::vector<dftu_utils_test::IndexRecord>& records,
+    const std::string& name, const std::string& key) {
+    for (const auto& record : records)
+        if (record.name == name && record.key == key) return record;
+    return std::nullopt;
+}
+
+}  // namespace
+
 TEST_SUITE("index layout") {
-    TEST_CASE("stored key and header bytes are big-endian and fixed") {
+    TEST_CASE("integers read big-endian") {
         using namespace std::string_view_literals;
-        CHECK(layout::granule_key(Ext::Zonemap, layout::path_kind::DATA,
-                                  0x01020304U, 0x0A0B0C0DU) ==
-              "\x00\x04\x01\x01\x02\x03\x04\x0A\x0B\x0C\x0D"sv);
-        CHECK(layout::with_header(Ext::Zonemap, 5, "ab") ==
-              "\x04\x05\x00\x00\x00\x00\x00\x00\x02"
-              "ab"sv);
         CHECK(layout::read_u16("\x01\x02"sv) == 0x0102);
         CHECK(layout::read_u32("\x01\x02\x03\x04"sv) == 0x01020304U);
         CHECK(layout::read_u64("\x01\x02\x03\x04\x05\x06\x07\x08"sv) ==
               0x0102030405060708ULL);
-        const layout::ManifestEntry entry{3, 0xABCDEF0123456789ULL,
-                                          layout::ExtStatus::Failed};
-        const auto value = layout::encode_manifest(entry);
-        const auto body =
-            layout::payload(value, Ext::Host, layout::host::MANIFEST);
-        REQUIRE(body.has_value());
-        CHECK(body->substr(0, 12) ==
-              "\x00\x00\x00\x03\xAB\xCD\xEF\x01\x23\x45\x67\x89"sv);
+        CHECK_THROWS(layout::read_u32("\x01\x02\x03"sv));
     }
 
-    TEST_CASE("a manifest that does not decode is not a manifest") {
-        const auto value = layout::encode_manifest(
-            {layout::ext_version(Ext::Zonemap), 7, layout::ExtStatus::Ready});
-        REQUIRE(layout::decode_manifest(value).has_value());
-        CHECK_FALSE(layout::decode_manifest("").has_value());
-        CHECK_FALSE(layout::decode_manifest(value.substr(0, value.size() - 1))
-                        .has_value());
-        auto other_payload_version = value;
-        other_payload_version[2] = static_cast<char>(
-            static_cast<unsigned char>(other_payload_version[2]) + 1);
-        CHECK_FALSE(layout::decode_manifest(other_payload_version).has_value());
-        auto bad_status = value;
-        bad_status.back() = '\x7F';
-        CHECK_FALSE(layout::decode_manifest(bad_status).has_value());
+    TEST_CASE("a stored key is its kind byte then its big-endian tail") {
+        dftu_utils_test::TestEnvironment env(10);
+        REQUIRE(env.is_valid());
+        const std::string root = env.get_dir() + "/.dftindex";
+        const std::string trace = "/traces/layout.pfw.gz";
+        const idx::gzip::GzipMemberRecord member{1, 4096, 512, 100, 4096, 7, 8};
+        idx::SourceStat stat;
+        stat.hash = 1;
+        auto build = dftu_utils_test::index_take(
+            dftu_utils_test::open_test_index(root).build(
+                dstd::StringView(trace.data(), trace.size()), stat));
+        idx::put_file_metadata(build, 0, 0, 0, false);
+        idx::put_gzip_member(build, member);
+        idx::put_path_granule(build, store::IndexExtension::Zonemap, "cat", 2,
+                              "zone");
+        dftu_utils_test::mark_built(build);
+        dftu_utils_test::commit_test_build(build);
+
+        const auto records = dftu_utils_test::dump_index(root);
+        std::string member_key = kind_key(layout::members::MEMBER);
+        member_key.append("\x00\x00\x00\x01", 4);
+        const auto member_record =
+            find_record(records, "dftu.idx.core.members", member_key);
+        REQUIRE(member_record.has_value());
+        CHECK(member_record->value ==
+              encoding::encode_gzip_member_value(member));
+
+        std::string zone_key = kind_key(layout::path_kind::DATA);
+        zone_key.append("cat");
+        zone_key.push_back('\0');
+        zone_key.append("\x00\x00\x00\x02", 4);
+        const auto zone_record =
+            find_record(records, "dftu.idx.zonemap", zone_key);
+        REQUIRE(zone_record.has_value());
+        CHECK(zone_record->value == "zone");
     }
 
-    TEST_CASE("keys order by extension, kind, file, then granule") {
-        namespace pk = layout::path_kind;
-        CHECK(layout::granule_key(Ext::Zonemap, pk::DATA, 1, 9) <
-              layout::granule_key(Ext::Zonemap, pk::DATA, 2, 0));
-        CHECK(layout::granule_key(Ext::Zonemap, pk::DATA, 1, 2) <
-              layout::granule_key(Ext::Zonemap, pk::DATA, 1, 10));
-        CHECK(layout::file_prefix(Ext::Zonemap, pk::DATA, 0xFFFF) <
-              layout::file_prefix(Ext::Zonemap, pk::FILE, 0));
-        CHECK(layout::file_prefix(Ext::Members, 0, 7).size() ==
-              layout::KEY_PREFIX_BYTES);
+    TEST_CASE("one kind's key range holds no key of another kind") {
+        check_separate_ranges({layout::members::MEMBER,
+                               layout::members::METADATA,
+                               layout::members::RESTART});
+        check_separate_ranges({layout::path_kind::PATHS,
+                               layout::path_kind::DATA,
+                               layout::path_kind::FILE});
+        check_separate_ranges({layout::path_kind::PATHS,
+                               layout::path_kind::IN_FILE,
+                               layout::path_kind::IN_GRANULE});
+        check_separate_ranges({layout::stats_kind::CHUNK_STATS,
+                               layout::stats_kind::FILE_SCALAR_STATS,
+                               layout::stats_kind::FILE_PID_TID_COUNTS});
+        check_separate_ranges({layout::agg_kind::PARTIAL,
+                               layout::agg_kind::META, layout::agg_kind::DICT,
+                               layout::agg_kind::COLUMNS});
     }
 
-    TEST_CASE("a path's keys are contiguous within a file") {
-        namespace pk = layout::path_kind;
-        const auto a = layout::path_prefix(Ext::Zonemap, pk::DATA, 1, "a");
-        const auto ab = layout::path_prefix(Ext::Zonemap, pk::DATA, 1, "ab");
-        auto a_last = a;
-        append_u32_be(a_last, 0xFFFFFFFFU);
-        CHECK(a_last < ab);
-        CHECK(a_last < layout::prefix_end(a));
-        CHECK_FALSE(ab < layout::prefix_end(a));
+    TEST_CASE("a prefix range ends at the first larger key") {
+        using namespace std::string_view_literals;
+        CHECK(layout::prefix_end("\x01\xFF"sv) == "\x02"sv);
+        CHECK(layout::prefix_end("\x01"sv) == "\x02"sv);
+        const std::string all_ff(3, '\xFF');
+        CHECK(layout::prefix_end(all_ff) == all_ff + std::string(8, '\xFF'));
+        const std::string path_key =
+            kind_key(layout::path_kind::DATA) + "a" + '\0';
+        std::string last = path_key;
+        last.append(4, '\xFF');
+        CHECK(last < layout::prefix_end(path_key));
+        const std::string next_path = kind_key(layout::path_kind::DATA) + "ab";
+        CHECK_FALSE(next_path < layout::prefix_end(path_key));
     }
 
-    TEST_CASE("a file prefix range holds exactly that file's keys") {
-        const auto prefix = layout::file_prefix(Ext::Zonemap, 3, 5);
-        const auto end = layout::prefix_end(prefix);
-        CHECK(prefix < layout::granule_key(Ext::Zonemap, 3, 5, 0xFFFFFFFFU));
-        CHECK(layout::granule_key(Ext::Zonemap, 3, 5, 0xFFFFFFFFU) + "zz" <
-              end);
-        CHECK_FALSE(layout::file_prefix(Ext::Zonemap, 3, 6) < end);
-        CHECK(layout::prefix_end("\x01\xFF") == "\x02");
-    }
-
-    TEST_CASE("value headers round-trip and reject another type") {
-        const auto v = layout::with_header(Ext::Zonemap, 5, "payload");
-        CHECK(v.size() == layout::VALUE_HEADER_BYTES + 7);
-        CHECK(layout::payload(v, Ext::Zonemap, 5) == "payload");
-        CHECK_FALSE(layout::payload(v, Ext::Zonemap, 6).has_value());
-        CHECK_FALSE(layout::payload(v, Ext::Members, 5).has_value());
-        CHECK_FALSE(layout::payload(v.substr(0, v.size() - 1), Ext::Zonemap, 5)
-                        .has_value());
-        CHECK_FALSE(layout::payload("short", Ext::Zonemap, 5).has_value());
-    }
-
-    TEST_CASE("manifest and file records round-trip") {
-        const layout::ManifestEntry entry{3, 0xABCDEF0123456789ULL,
-                                          layout::ExtStatus::Failed};
-        auto decoded = layout::decode_manifest(layout::encode_manifest(entry));
+    TEST_CASE("chunk metadata round-trips and keeps an over-cap list unknown") {
+        store::ChunkMetadata metadata;
+        metadata.records = 0x0102030405060708ULL;
+        metadata.names = std::vector<std::string>{"hhash", "name"};
+        metadata.paths = std::nullopt;
+        const std::string body = layout::encode_chunk_metadata(metadata);
+        const auto decoded = layout::decode_chunk_metadata(body);
         REQUIRE(decoded.has_value());
-        CHECK(decoded->version == 3);
-        CHECK(decoded->params_hash == entry.params_hash);
-        CHECK(decoded->status == layout::ExtStatus::Failed);
+        CHECK(decoded->records == metadata.records);
+        REQUIRE(decoded->names.has_value());
+        CHECK(*decoded->names == *metadata.names);
+        CHECK_FALSE(decoded->paths.has_value());
+        CHECK_FALSE(layout::decode_chunk_metadata("").has_value());
+        CHECK_FALSE(
+            layout::decode_chunk_metadata(body.substr(0, body.size() - 1))
+                .has_value());
+        CHECK_FALSE(layout::decode_chunk_metadata(body + "x").has_value());
+    }
 
-        const layout::FileRecord record{42, 1, 2, 3};
-        auto file =
-            layout::decode_file_record(layout::encode_file_record(record));
-        REQUIRE(file.has_value());
-        CHECK(file->file_id == 42);
-        CHECK(file->mtime == 1);
-        CHECK(file->hash == 2);
-        CHECK(file->size == 3);
-        CHECK_FALSE(layout::decode_file_record("not a record").has_value());
+    TEST_CASE("a catalog path stat is ten bytes and rejects another type") {
+        const store::PathStat stat{store::PathType::String, 0x28, 7};
+        const std::string body = layout::encode_path_stat(stat);
+        CHECK(body ==
+              std::string("\x05\x28\x00\x00\x00\x00\x00\x00\x00\x07", 10));
+        const auto decoded = layout::decode_path_stat(body);
+        REQUIRE(decoded.has_value());
+        CHECK(decoded->type == store::PathType::String);
+        CHECK(decoded->seen == 0x28);
+        CHECK(decoded->count == 7);
+        CHECK_FALSE(layout::decode_path_stat(body.substr(0, 9)).has_value());
+        CHECK_FALSE(layout::decode_path_stat(body + "x").has_value());
+        const std::string unknown_type(
+            "\x09\x00\x00\x00\x00\x00\x00\x00\x00\x07", 10);
+        CHECK_FALSE(layout::decode_path_stat(unknown_type).has_value());
     }
 }

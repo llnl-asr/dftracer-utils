@@ -143,20 +143,20 @@ struct NamespaceDigest {
     std::uint64_t digest;
 };
 constexpr NamespaceDigest RECORDED[] = {
-    {"dftu.idx.bloom", 2494455118050835805ULL},
-    {"dftu.idx.core.catalog", 737967714351296983ULL},
-    {"dftu.idx.core.members", 12874393105055921695ULL},
-    {"dftu.idx.core.profile", 15443161570083292913ULL},
-    {"dftu.idx.core.rowset", 16635713612375925559ULL},
-    {"dftu.idx.counts", 12244228330521019165ULL},
-    {"dftu.idx.dft.metadata", 4049779824839700145ULL},
-    {"dftu.idx.dft.stats", 1571608055023293593ULL},
+    {"dftu.idx.bloom", 6614337770950865930ULL},
+    {"dftu.idx.core.catalog", 13277922137834801935ULL},
+    {"dftu.idx.core.members", 12223201460428748558ULL},
+    {"dftu.idx.core.profile", 12883975498841085017ULL},
+    {"dftu.idx.core.rowset", 6585397510590508660ULL},
+    {"dftu.idx.counts", 14528743384093093223ULL},
+    {"dftu.idx.dft.metadata", 8564637570051539016ULL},
+    {"dftu.idx.dft.stats", 13276905867863997891ULL},
     {"dftu.idx.postings", 7981223057138895188ULL},
-    {"dftu.idx.zonemap", 4068739441821824802ULL},
+    {"dftu.idx.zonemap", 14397360174130556973ULL},
 };
 
 // The test directory is cut out of each record, since its length varies. A
-// record is its namespace, scope paths, inner key and value.
+// record is its namespace, scope paths, key and value.
 std::map<std::string, std::uint64_t> namespace_digests(
     const std::string& index_path, const std::string& dir) {
     namespace kv = dftracer::utils::store;

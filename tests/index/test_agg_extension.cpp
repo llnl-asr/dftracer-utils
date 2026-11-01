@@ -200,7 +200,7 @@ TEST_SUITE("AggExtension") {
         Indexer::open({gz}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({gz}) == 50);
         {
-            // A value without the layout header reads as absent.
+            // A value that does not decode as a config reads as absent.
             namespace kv = dftracer::utils::store;
             auto store = kv::Store::open(
                 index::store::internal::normalize_index_root(index_of(gz)) +

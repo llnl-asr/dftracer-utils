@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/store_backend.h>
@@ -623,6 +624,14 @@ class RetainedRoots {
 
 void release_root(dstd::StringView root) {
     RetainedRoots::instance().forget(std::string(root));
+}
+
+void release_all_roots() {
+    RetainedRoots::instance().clear();
+    if (auto closed = kv::Store::close_all(); !closed) {
+        DFTRACER_UTILS_LOG_ERROR("index: close at exit: %s",
+                                 closed.error().format().c_str());
+    }
 }
 
 dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {

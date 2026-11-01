@@ -25,6 +25,9 @@ namespace kv = dftracer::utils::store;
 /// Lets the index at `root` close once its current users finish. Index::open
 /// keeps recently opened roots open until this or process exit.
 void release_root(dstd::StringView root);
+/// Closes every store of the process and the kept roots. For shutdown, while
+/// the runtime still runs.
+void release_all_roots();
 
 struct FileRef::Data {
     dstd::String path;

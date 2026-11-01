@@ -329,6 +329,9 @@ struct Store::State {
 
     Taken take_writer();
     void bump_version();
+    /// Frees the cached snapshot and its page cache, so a close does not hold
+    /// them while it writes its final record.
+    void drop_published();
     dstd::Expected<void, dstd::Error> close_blocking();
 
     static coro::CoroTask<dstd::Expected<void, dstd::Error>> commit_task(
@@ -352,6 +355,7 @@ Store::State::~State() {
     if (!pool) return;
     {
         memory::Scope in_pool(*pool);
+        drop_published();
         (void)close_blocking();
     }
     std::lock_guard<std::mutex> lock(registry_mutex());
@@ -525,6 +529,15 @@ Store::State::snapshot() {
 Store::State::Taken Store::State::take_writer() {
     std::lock_guard<std::mutex> lock(mutex);
     return Taken{std::move(writer), runtime};
+}
+
+void Store::State::drop_published() {
+    dstd::SharedPtr<const engine::Snapshot> dropped;
+    {
+        std::unique_lock<std::shared_mutex> lock(published_mutex);
+        dropped = std::move(published);
+        published_version = 0;
+    }
 }
 
 void Store::State::bump_version() {
@@ -749,6 +762,7 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
     dstd::Expected<void, dstd::Error> first;
     for (const auto& state : live) {
         memory::Scope in_pool(*state->pool);
+        state->drop_published();
         auto closed = state->close_blocking();
         if (!closed && first) first = std::move(closed);
     }

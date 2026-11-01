@@ -774,6 +774,7 @@ void close_index_writers() {
         DFTRACER_UTILS_LOG_ERROR("store index: close at exit: %s",
                                  error->c_str());
     }
+    index::release_all_roots();
 }
 
 void release_index(const std::string& index_path) {

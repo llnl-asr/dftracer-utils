@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 // Platform-specific includes for file stats
@@ -31,6 +32,7 @@ std::string get_logical_path(std::string_view path) {
 }
 
 std::string normalize_index_root(std::string_view path) {
+    if (auto nested = nested_root_of(path)) return *nested;
     fs::path input{std::string(path)};
     if (input.filename() == ".dftindex") {
         return input.string();

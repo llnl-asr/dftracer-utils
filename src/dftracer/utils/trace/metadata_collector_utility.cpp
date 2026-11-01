@@ -3,8 +3,10 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/line.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -171,7 +173,9 @@ MetadataCollectorUtility::process_compressed(
                     if (input.force_rebuild && meta.has_index) {
                         DFTRACER_UTILS_LOG_DEBUG("Removing existing index: %s",
                                                  input.index_path.c_str());
-                        fs::remove_all(input.index_path);
+                        dftracer::utils::index::release_root(input.index_path);
+                        fs::remove_all(dftracer::utils::index::store_dir(
+                            input.index_path));
                         forget_input(input.index_path);
                     }
                     DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",

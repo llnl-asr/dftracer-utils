@@ -19,6 +19,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
@@ -267,7 +268,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         if (staging) {
             agg_run.reset();
             index::release_root(build_index_path);
-            publish_path(build_index_path, staged_final_path);
+            index::release_root(staged_final_path);
+            publish_path(index::store_dir(build_index_path),
+                         index::store_dir(staged_final_path));
         }
 
         // Refresh_input queries the index for the files just indexed.

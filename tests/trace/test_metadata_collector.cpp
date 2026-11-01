@@ -221,6 +221,39 @@ TEST_SUITE("MetadataCollector") {
         fs::remove_all(test_dir);
     }
 
+    TEST_CASE(
+        "MetadataCollector - force rebuild keeps the other index entries") {
+        const std::string dir =
+            dftu_utils_test::make_unique_test_path("metadata_keep_entries")
+                .string();
+        fs::create_directories(dir);
+        const std::string gz_file = create_test_trace_file(dir, 25);
+        const std::string root = internal::determine_index_path(gz_file, "");
+
+        auto first = MetadataCollectorUtilityInput::from_file(gz_file)
+                         .with_index(root)
+                         .with_force_rebuild(true);
+        MetadataCollectorUtility collector;
+        REQUIRE(collector(first).get().success);
+
+        fs::create_directories(fs::path(root) / "rollups");
+        fs::create_directories(fs::path(root) / "views" / "x");
+        std::ofstream(fs::path(root) / "rollups" / "marker") << "r";
+        std::ofstream(fs::path(root) / "views" / "x" / "marker") << "v";
+        std::ofstream(fs::path(root) / "store" / "stale_marker") << "s";
+
+        auto second = MetadataCollectorUtilityInput::from_file(gz_file)
+                          .with_index(root)
+                          .with_force_rebuild(true);
+        const auto output = collector(second).get();
+        CHECK(output.success);
+        CHECK(output.num_lines == 25);
+        CHECK(fs::exists(fs::path(root) / "rollups" / "marker"));
+        CHECK(fs::exists(fs::path(root) / "views" / "x" / "marker"));
+        CHECK_FALSE(fs::exists(fs::path(root) / "store" / "stale_marker"));
+        fs::remove_all(dir);
+    }
+
     TEST_CASE("MetadataCollector - Invalid inputs") {
         SUBCASE("Non-existent file") {
             auto input = MetadataCollectorUtilityInput::from_file(

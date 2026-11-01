@@ -1,6 +1,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/manager.h>
@@ -606,7 +607,7 @@ dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     if (root.empty()) return invalid("index: the root is empty");
     auto impl = dstd::make_shared<Impl>();
     impl->root = std::string(root);
-    impl->store_dir = (std::filesystem::path(impl->root) / "store").string();
+    impl->store_dir = index::store_dir(impl->root);
     const std::string key = impl->root;
     return RetainedRoots::instance().find_or_add(key, Index(std::move(impl)));
 }

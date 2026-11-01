@@ -178,6 +178,7 @@ set(DFTRACER_UTILS_INDEX_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/gzip/checkpoint_indexer_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/abi.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/index.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/store/root_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/indexer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/key.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/index/record_schema.cpp

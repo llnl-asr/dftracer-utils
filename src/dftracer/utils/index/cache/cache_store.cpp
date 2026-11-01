@@ -7,6 +7,7 @@
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/index/cache/cache_store.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
@@ -142,8 +143,7 @@ std::uint64_t cache_max_bytes() {
 
 bool CacheStore::exists(const std::string& path) {
     std::error_code missing;
-    return std::filesystem::exists(std::filesystem::path(path) / "store",
-                                   missing);
+    return std::filesystem::exists(store_dir(path), missing);
 }
 
 std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
@@ -174,8 +174,7 @@ std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
                 held = all.roots.end();
             }
             if (held == all.roots.end()) {
-                const std::string dir =
-                    (std::filesystem::path(path) / "store").string();
+                const std::string dir = store_dir(path);
                 auto opened = kv::Store::open(dstd::StringView(dir));
                 if (!opened) return nullptr;
                 held = all.roots.emplace(path, std::move(*opened)).first;

@@ -6,6 +6,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
@@ -1690,4 +1691,39 @@ TEST_CASE("a legacy index path normalizes to the root-local .dftindex") {
     CHECK(internal::normalize_index_root("/data/run/.dftindex") ==
           "/data/run/.dftindex");
     CHECK(internal::normalize_index_root("/data/run") == "/data/run/.dftindex");
+}
+
+TEST_CASE("a view or shard root normalizes to itself") {
+    namespace internal = dftracer::utils::index::store::internal;
+    CHECK(internal::normalize_index_root("/d/.dftindex") == "/d/.dftindex");
+    CHECK(internal::normalize_index_root("/d/.dftindex/store") ==
+          "/d/.dftindex");
+    CHECK(internal::normalize_index_root("/d/.dftindex/views/q-1a2b") ==
+          "/d/.dftindex/views/q-1a2b");
+    CHECK(internal::normalize_index_root(
+              "/d/.dftindex/views/q.x-1a2b/parts/p.pfw.gz") ==
+          "/d/.dftindex/views/q.x-1a2b");
+    CHECK(internal::normalize_index_root("/d/.dftindex/views/q.x-1a2b/store") ==
+          "/d/.dftindex/views/q.x-1a2b");
+    CHECK(internal::normalize_index_root("/d/.dftindex/shards/3/store") ==
+          "/d/.dftindex/shards/3");
+    CHECK(internal::normalize_index_root("/d/views/q/t.pfw.gz") ==
+          "/d/views/q/.dftindex");
+}
+
+TEST_CASE("opening a view root keeps its store inside the view root") {
+    dftu_utils_test::TestEnvironment env;
+    REQUIRE(env.is_valid());
+    const std::string root = env.get_dir() + "/.dftindex";
+    const std::string view = index::view_root(root, "v1");
+    auto opened = Index::open(view);
+    REQUIRE(opened.has_value());
+    const std::string path = "/traces/one.pfw.gz";
+    auto build = take(opened->build(path, stat_of(1000, 4000, 9)));
+    put_members(build, 1);
+    REQUIRE(run(build.commit()).has_value());
+
+    CHECK(std::filesystem::exists(root + "/views/v1/store"));
+    CHECK_FALSE(std::filesystem::exists(root + "/store"));
+    index::release_root(view);
 }

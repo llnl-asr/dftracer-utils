@@ -4,7 +4,6 @@
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
 #include <testing_utilities.h>
@@ -15,7 +14,6 @@
 using namespace dftracer::utils;
 namespace kinds = dftracer::utils::index::extensions::kinds;
 using dftracer::utils::index::extensions::ChunkDimensionStats;
-using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::IndexExtension;
 
 namespace {
@@ -33,24 +31,22 @@ ChunkDimensionStats dim(std::string name, std::vector<std::string> values) {
 // dur spans [10, 20], [30, 40], [50, 60].
 std::string build_index(const std::string& dir, const std::string& trace) {
     const auto path = dir + "/.dftindex";
-    IndexDatabase db(path);
-    auto w = db.begin_write();
-    const int fid = dftu_utils_test::register_test_file(*w, trace, 1);
+    auto opened = dftu_utils_test::open_test_index(path);
+    auto w = dftu_utils_test::register_test_file(opened, trace, 1);
     const std::vector<std::vector<std::string>> cats = {{"a", "a"}, {"b", "b"}};
     for (std::uint64_t c = 0; c < 3; ++c) {
-        dftu_utils_test::index_records::put_gzip_member(
-            *w, fid, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
+        index::put_gzip_member(
+            w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
         auto dur = dim("dur", {});
         dur.value_type = "uint";
         dur.min_value = std::to_string(10 + c * 20);
         dur.max_value = std::to_string(20 + c * 20);
-        dftu_utils_test::put_dimension_stats(*w, fid, c, dur, 2);
+        dftu_utils_test::put_dimension_stats(w, c, dur, 2);
         if (c < 2)
-            dftu_utils_test::put_dimension_stats(*w, fid, c,
-                                                 dim("cat", cats[c]), 2);
+            dftu_utils_test::put_dimension_stats(w, c, dim("cat", cats[c]), 2);
     }
-    dftu_utils_test::mark_built(*w, fid);
-    w->commit();
+    dftu_utils_test::mark_built(w);
+    dftu_utils_test::commit_test_build(w);
     return path;
 }
 
@@ -128,24 +124,22 @@ TEST_SUITE("index kinds") {
         const std::string trace = "/fake/time.pfw.gz";
         const auto path = dir.string() + "/.dftindex";
         {
-            IndexDatabase db(path);
-            auto w = db.begin_write();
-            const int fid = dftu_utils_test::register_test_file(*w, trace, 1);
+            auto idx = dftu_utils_test::open_test_index(path);
+            auto w = dftu_utils_test::register_test_file(idx, trace, 1);
             // Both chunks start their events before 50; only chunk 1's last
             // event runs past it.
             const std::pair<int, int> spans[] = {{10, 20}, {10, 100}};
             for (std::uint64_t c = 0; c < 2; ++c) {
-                dftu_utils_test::index_records::put_gzip_member(
-                    *w, fid,
-                    {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
+                index::put_gzip_member(
+                    w, {c, c * 100, 100, c * 200, 200, c * 2 + 1, c * 2 + 2});
                 auto te = dim("te", {});
                 te.value_type = "uint";
                 te.min_value = std::to_string(spans[c].first);
                 te.max_value = std::to_string(spans[c].second);
-                dftu_utils_test::put_dimension_stats(*w, fid, c, te, 2);
+                dftu_utils_test::put_dimension_stats(w, c, te, 2);
             }
-            dftu_utils_test::mark_built(*w, fid);
-            w->commit();
+            dftu_utils_test::mark_built(w);
+            dftu_utils_test::commit_test_build(w);
         }
         auto result = index::plan::prune_file({path, trace, nullptr, nullptr,
                                                std::make_pair(50.0, 0.0), 2})
@@ -160,18 +154,16 @@ TEST_SUITE("index kinds") {
         const std::string trace = "/fake/bad_zone.pfw.gz";
         const auto path = dir.string() + "/.dftindex";
         {
-            IndexDatabase db(path);
-            auto w = db.begin_write();
-            const int fid = dftu_utils_test::register_test_file(*w, trace, 1);
-            dftu_utils_test::index_records::put_gzip_member(
-                *w, fid, {0, 0, 100, 0, 200, 1, 2});
+            auto idx = dftu_utils_test::open_test_index(path);
+            auto w = dftu_utils_test::register_test_file(idx, trace, 1);
+            index::put_gzip_member(w, {0, 0, 100, 0, 200, 1, 2});
             auto dur = dim("dur", {});
             dur.value_type = "uint";
             dur.min_value = "not-a-number";
             dur.max_value = "20";
-            dftu_utils_test::put_dimension_stats(*w, fid, 0, dur, 2);
-            dftu_utils_test::mark_built(*w, fid);
-            w->commit();
+            dftu_utils_test::put_dimension_stats(w, 0, dur, 2);
+            dftu_utils_test::mark_built(w);
+            dftu_utils_test::commit_test_build(w);
         }
         auto q = duql::Query::from_string("dur > 5");
         REQUIRE(q.has_value());

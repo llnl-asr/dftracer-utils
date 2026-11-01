@@ -6,7 +6,6 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_agg_partials.h>
@@ -204,11 +203,11 @@ std::map<std::string, double> counts_by_op(const View& v) {
 // The file's recorded schema and whether its pruning tier is built.
 std::pair<std::string, bool> index_state(const std::string& gz,
                                          const std::string& idx) {
-    ix::store::IndexDatabase db(idx, ix::store::IndexOpenMode::ReadOnly);
-    const int fid =
-        db.get_file_info_id(ix::store::internal::get_logical_path(gz));
-    REQUIRE(fid >= 0);
-    return {db.file_schema(fid).value_or(""), db.pruning_tier_current(fid)};
+    const auto snapshot = dftu_utils_test::index_snapshot(idx);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+    const auto schema = dftu_utils_test::index_take(ix::schema(snapshot, file));
+    return {schema ? std::string(schema->data(), schema->size()) : "",
+            dftu_utils_test::pruning_tier_current(snapshot, file)};
 }
 
 // Nested calls on two processes of two threads each: step holds read (which

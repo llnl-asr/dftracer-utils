@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -12,6 +11,7 @@
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <sys/stat.h>
 #include <testing_utilities.h>
 
@@ -31,7 +31,7 @@
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
-namespace store = dftracer::utils::index::store;
+namespace istore = dftracer::utils::index::store;
 namespace scan = dftracer::utils::utilities::filesystem;
 namespace views = dftracer::utils::trace::views;
 
@@ -216,27 +216,31 @@ TEST_SUITE("SerialStages") {
         }
 
         const auto root = view_index_root(files.front(), index_dir);
-        store::release_index(root);
-        store::IndexDatabase db(root, store::IndexOpenMode::ReadOnly);
+        const auto snapshot = dftu_utils_test::index_snapshot(root);
         std::size_t marked = 0;
         for (const auto& f : files) {
-            const int fid = db.get_file_info_id(
-                dftracer::utils::index::store::internal::get_logical_path(f));
-            if (fid < 0) continue;
+            const auto file = dftu_utils_test::find_indexed_file(snapshot, f);
+            if (!file) continue;
             ++marked;
             INFO("file " << f);
-            CHECK(db.extension_current(fid, store::IndexExtension::Members));
-            CHECK(db.get_num_lines(fid) > 0);
-            CHECK_FALSE(db.query_gzip_members(fid).empty());
-            CHECK(db.pruning_tier_current(fid));
-            CHECK(db.extension_state(fid, store::IndexExtension::Profile)
+            CHECK(dftracer::utils::index::extension_current(
+                snapshot, *file, istore::IndexExtension::Members));
+            const auto meta = dftu_utils_test::index_take(
+                dftracer::utils::index::file_metadata(snapshot, *file));
+            REQUIRE(meta.has_value());
+            CHECK(meta->num_lines > 0);
+            CHECK_FALSE(dftu_utils_test::index_take(
+                            dftracer::utils::index::members(snapshot, *file))
+                            .empty());
+            CHECK(dftu_utils_test::pruning_tier_current(snapshot, *file));
+            CHECK(dftracer::utils::index::extension_state(
+                      snapshot, *file, istore::IndexExtension::Profile)
                       .has_value());
         }
         MESSAGE("marked " << marked << " of " << files.size());
         REQUIRE(marked > 0);
         CHECK(marked < files.size());
-        CHECK(db.get_file_info_id(
-                  dftracer::utils::index::store::internal::get_logical_path(
-                      files.back())) < 0);
+        CHECK_FALSE(dftu_utils_test::find_indexed_file(snapshot, files.back())
+                        .has_value());
     }
 }

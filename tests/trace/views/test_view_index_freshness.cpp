@@ -163,11 +163,10 @@ TEST_SUITE("ViewIndexFreshness") {
             st::internal::get_file_modification_time(gz));
 
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
-        st::IndexDatabase db(determine_index_path(gz, ""),
-                             st::IndexOpenMode::ReadOnly);
-        const auto stat = db.get_file_stat(st::internal::get_logical_path(gz));
-        REQUIRE(stat);
-        CHECK(stat->mtime == want);
+        const auto snapshot =
+            dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+        const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+        CHECK(file.stat().mtime == want);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "B")") == 0);
     }
 
@@ -189,22 +188,15 @@ TEST_SUITE("ViewIndexFreshness") {
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
 
         const auto idx = determine_index_path(f1, root);
-        std::int64_t id2 = -1;
-        {
-            st::IndexDatabase db(idx, st::IndexOpenMode::ReadOnly);
-            id2 = db.get_file_info_id(st::internal::get_logical_path(f2));
-            REQUIRE(id2 >= 0);
-        }
 
         rewrite_events(f1, "B", NEW_EVENTS);
         CHECK(rows(dir_view(d1, root), R"(cat == "B")") == NEW_EVENTS);
 
-        st::IndexDatabase db(idx, st::IndexOpenMode::ReadOnly);
-        CHECK(db.get_file_info_id(st::internal::get_logical_path(f2)) == id2);
-        const auto stat = db.get_file_stat(st::internal::get_logical_path(f2));
-        REQUIRE(stat);
-        CHECK(stat->mtime == static_cast<std::uint64_t>(
-                                 st::internal::get_file_modification_time(f2)));
+        const auto snapshot = dftu_utils_test::index_snapshot(idx);
+        const auto other = dftu_utils_test::require_indexed_file(snapshot, f2);
+        CHECK(other.stat().mtime ==
+              static_cast<std::uint64_t>(
+                  st::internal::get_file_modification_time(f2)));
         CHECK(rows(dir_view(d2, root), R"(cat == "C")") == MEMBER_EVENTS);
         CHECK(count_by(by_cat(dir_view(d2, root)), "c") == MEMBER_EVENTS);
     }

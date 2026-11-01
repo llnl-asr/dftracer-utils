@@ -12,9 +12,9 @@
 #include <dftracer/utils/index/plan/chunk_pruner.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -22,6 +22,7 @@
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
@@ -37,7 +38,6 @@
 
 using namespace dftracer::utils;
 namespace plan = dftracer::utils::index::plan;
-namespace store = dftracer::utils::index::store;
 
 namespace {
 
@@ -227,12 +227,14 @@ std::vector<std::string> run_oracle(const Corpus& c) {
     for (const auto& trace : c.traces) {
         const auto base = fs::path(trace).filename().string();
         const auto index_path = c.index_of(trace);
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        const int fid =
-            db.get_file_info_id(store::internal::get_logical_path(trace));
-        REQUIRE(fid >= 0);
-        const auto members = db.query_gzip_members(fid).size();
-        const auto uc = db.query_file_metadata_batch({fid})[fid].max_bytes;
+        const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+        const auto file =
+            dftu_utils_test::require_indexed_file(snapshot, trace);
+        const auto members =
+            dftu_utils_test::index_take(index::members(snapshot, file)).size();
+        const auto uc =
+            dftu_utils_test::index_take(index::file_metadata(snapshot, file))
+                ->max_bytes;
 
         for (const auto& text : QUERIES) {
             const auto q = duql::parse_or_throw(text);
@@ -337,9 +339,9 @@ std::uint64_t count_view_unpruned(const std::string& trace,
     trace::views::detail::ViewPlan vp;
     vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
-    store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-    const auto spans = db.query_chunk_spans(
-        db.get_file_info_id(store::internal::get_logical_path(trace)));
+    const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+    const auto spans = dftu_utils_test::index_take(index::spans(
+        snapshot, dftu_utils_test::require_indexed_file(snapshot, trace)));
     REQUIRE_FALSE(spans.empty());
     std::shared_ptr<const duql::Query> q;
     const trace::views::detail::ScanUnit u{
@@ -393,13 +395,15 @@ namespace {
 std::vector<std::uint64_t> view_chunks(const std::string& trace,
                                        const std::string& index_path,
                                        const std::string& text) {
-    store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-    const int fid =
-        db.get_file_info_id(store::internal::get_logical_path(trace));
+    const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     trace::views::detail::ViewPlan vp;
-    vp.files.push_back({trace, index_path,
-                        db.query_file_metadata_batch({fid})[fid].max_bytes,
-                        db.query_gzip_members(fid).size(), 0});
+    vp.files.push_back(
+        {trace, index_path,
+         dftu_utils_test::index_take(index::file_metadata(snapshot, file))
+             ->max_bytes,
+         dftu_utils_test::index_take(index::members(snapshot, file)).size(),
+         0});
     vp.query = duql::parse_or_throw(text);
     const auto vdef = trace::views::detail::make_vdef(vp, false);
     std::uint64_t skipped = 0;
@@ -538,15 +542,10 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
     // build's file order, and a memory budget changes that order. Its bytes may
     // differ, its answers may not.
     auto contents = [](const std::string& index_path) {
-        store::release_index(index_path);
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        std::vector<std::pair<std::string, std::string>> out;
-        db.for_each_record(
-            [&out](std::string_view key, std::string_view value) {
-                constexpr std::string_view AGG = "dftu.idx.dftracer.agg|";
-                if (key.rfind(AGG, 0) == 0) return;
-                out.emplace_back(std::string(key), std::string(value));
-            });
+        std::vector<dftu_utils_test::IndexRecord> out;
+        for (auto& record : dftu_utils_test::dump_index(index_path))
+            if (record.name != "dftu.idx.dftracer.agg")
+                out.push_back(std::move(record));
         return out;
     };
     const auto& trace = corpus.traces.front();

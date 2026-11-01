@@ -298,10 +298,8 @@ set(TEST_CPP_SOURCES
     server/test_viz_schema.cpp
     trace/genesis/test_genesis.cpp
     index/test_index_api.cpp
-    index/test_index_database_store.cpp
     index/test_indexer.cpp
     index/test_store_key.cpp
-    index/test_store_index_write.cpp
     store/test_segment.cpp
     store/test_file.cpp
     store/test_snapshot.cpp

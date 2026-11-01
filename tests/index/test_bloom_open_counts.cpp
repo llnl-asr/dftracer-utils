@@ -2,7 +2,6 @@
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <doctest/doctest.h>
 
 #include <cstdint>

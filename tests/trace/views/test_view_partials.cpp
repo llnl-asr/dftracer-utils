@@ -4,7 +4,6 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_aggregate.h>

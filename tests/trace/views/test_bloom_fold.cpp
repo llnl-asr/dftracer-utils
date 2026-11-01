@@ -8,7 +8,6 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -33,8 +32,6 @@ using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::extensions;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::index::extensions::ScalableBloomFilter;
-
-namespace istore = dftracer::utils::index::store;
 
 namespace {
 
@@ -83,19 +80,15 @@ dftracer::utils::index::FileBuild rebuild_file(const std::string& index_path,
     return std::move(*build);
 }
 
-int file_id_of(dftracer::utils::index::store::IndexDatabase& db,
-               const std::string& gz) {
-    return db.get_file_info_id(
-        dftracer::utils::index::store::internal::get_logical_path(gz));
-}
-
-bool file_bloom_contains(dftracer::utils::index::store::IndexDatabase& db,
-                         int fid, std::string_view dim,
-                         std::string_view value) {
-    auto fb = db.path_file_value(
-        fid, dftracer::utils::index::store::IndexExtension::Bloom, dim);
+bool file_bloom_contains(const dftracer::utils::index::Snapshot& snapshot,
+                         const dftracer::utils::index::FileRef& file,
+                         std::string_view dim, std::string_view value) {
+    auto fb = dftu_utils_test::index_take(dftracer::utils::index::path_file(
+        snapshot, file, dftracer::utils::index::store::IndexExtension::Bloom,
+        dim));
     REQUIRE(fb.has_value());
-    auto bloom = dftracer::utils::index::extensions::kinds::decode_bloom(*fb);
+    auto bloom = dftracer::utils::index::extensions::kinds::decode_bloom(
+        std::string_view(fb->data(), fb->size()));
     REQUIRE(bloom.has_value());
     return bloom->possibly_contains(value);
 }
@@ -110,12 +103,15 @@ std::vector<dftracer::utils::index::IndexedRowSet> dftracer_rowsets() {
         dftracer::utils::index::get_schema("dftracer"));
 }
 
-// The path the stored `files` row set of `fid` gives for `fhash`, or "".
-std::string stored_path(const dftracer::utils::index::store::IndexDatabase& db,
-                        int fid, std::string_view fhash) {
-    const auto bytes = db.rowset(fid, "files");
+// The path the stored `files` row set of `file` gives for `fhash`, or "".
+std::string stored_path(const dftracer::utils::index::Snapshot& snapshot,
+                        const dftracer::utils::index::FileRef& file,
+                        std::string_view fhash) {
+    const auto bytes = dftu_utils_test::index_take(
+        dftracer::utils::index::rowset(snapshot, file, "files"));
     if (!bytes) return {};
-    const auto f = dftracer::utils::dataframe::frame_from_native(*bytes);
+    const auto f = dftracer::utils::dataframe::frame_from_native(
+        std::string_view(bytes->data(), bytes->size()));
     if (!f) return {};
     const auto keys = f->column("fhash").materialize();
     const auto paths = f->column("path").materialize();
@@ -124,23 +120,16 @@ std::string stored_path(const dftracer::utils::index::store::IndexDatabase& db,
     return {};
 }
 
-// The build of the fold's file, which must exist before the fold spills: its
-// commit publishes the record the tier hangs off.
-// Registers the fold's file, since the store names a file by its path, and
-// starts the build the fold writes into.
-int start_store(const std::string& root) {
-    istore::IndexDatabase db(root);
-    auto write = db.begin_write();
-    const int fid = dftu_utils_test::register_test_file(*write, "f.pfw.gz");
-    write->commit();
-    return fid;
-}
-
+// Registers the fold's file, since a reader sees a file only through its
+// Members copy, and starts the build the fold writes into. The build must
+// exist before the fold spills: its commit publishes the record the tier
+// hangs off.
 dftracer::utils::index::FileBuild start_build(const std::string& root) {
-    REQUIRE(start_store(root) == 1);
     auto index = dftracer::utils::index::Index::open(
         dftracer::utils::index::store::internal::normalize_index_root(root));
     REQUIRE(index);
+    auto registered = dftu_utils_test::register_test_file(*index, "f.pfw.gz");
+    dftu_utils_test::commit_test_build(registered);
     auto build = index->build("f.pfw.gz", {});
     REQUIRE(build);
     return std::move(*build);
@@ -199,10 +188,14 @@ TEST_SUITE("BloomFold") {
             CHECK(fold.spill_runs() == 1);
         }
         {
-            istore::IndexDatabase db(dropped + "/.dftindex",
-                                     istore::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(db.pruning_tier_current(1));
-            CHECK(db.query_chunk_statistics(1).empty());
+            const auto snapshot =
+                dftu_utils_test::index_snapshot(dropped + "/.dftindex");
+            const auto file = snapshot.file("f.pfw.gz");
+            REQUIRE(file.has_value());
+            CHECK_FALSE(dftu_utils_test::pruning_tier_current(snapshot, *file));
+            CHECK(dftu_utils_test::index_take(
+                      dftracer::utils::index::chunk_stats(snapshot, *file))
+                      .empty());
         }
 
         const std::string kept = env.get_dir() + "/kept";
@@ -230,9 +223,12 @@ TEST_SUITE("BloomFold") {
             REQUIRE(build.commit().get());
         }
         auto chunks = [](const std::string& path) {
-            istore::IndexDatabase db(path + "/.dftindex",
-                                     istore::IndexOpenMode::ReadOnly);
-            return db.query_chunk_statistics(1);
+            const auto snapshot =
+                dftu_utils_test::index_snapshot(path + "/.dftindex");
+            const auto file = snapshot.file("f.pfw.gz");
+            REQUIRE(file.has_value());
+            return dftu_utils_test::index_take(
+                dftracer::utils::index::chunk_stats(snapshot, *file));
         };
         const auto spilled = chunks(kept);
         const auto held = chunks(memory);
@@ -257,27 +253,29 @@ TEST_SUITE("BloomFold") {
             View::from_file(gz, index_path).sink_json(s).get();
         }
 
-        dftracer::utils::index::store::IndexDatabase db(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        int fid = file_id_of(db, gz);
-        REQUIRE(db.pruning_tier_current(fid));
+        const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+        const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+        REQUIRE(dftu_utils_test::pruning_tier_current(snapshot, file));
 
         for (auto v : {"read", "write"})
-            CHECK(file_bloom_contains(db, fid, "name", v));
+            CHECK(file_bloom_contains(snapshot, file, "name", v));
         for (auto v : {"POSIX", "STDIO"})
-            CHECK(file_bloom_contains(db, fid, "cat", v));
+            CHECK(file_bloom_contains(snapshot, file, "cat", v));
         for (auto v : {"1", "2", "3", "4"})
-            CHECK(file_bloom_contains(db, fid, "pid", v));
+            CHECK(file_bloom_contains(snapshot, file, "pid", v));
         for (auto v : {"fh0", "fh1", "fh2", "fh3", "fh4"})
-            CHECK(file_bloom_contains(db, fid, "fhash", v));
-        CHECK(file_bloom_contains(db, fid, "hhash", "hh1"));
+            CHECK(file_bloom_contains(snapshot, file, "fhash", v));
+        CHECK(file_bloom_contains(snapshot, file, "hhash", "hh1"));
 
-        auto name_chunks = db.path_granules(
-            fid, dftracer::utils::index::store::IndexExtension::Bloom, "name");
+        auto name_chunks =
+            dftu_utils_test::index_take(dftracer::utils::index::granules(
+                snapshot, file,
+                dftracer::utils::index::store::IndexExtension::Bloom, "name"));
         REQUIRE(name_chunks.size() > 1);
         for (const auto& [chunk, bytes] : name_chunks) {
             auto bloom =
-                dftracer::utils::index::extensions::kinds::decode_bloom(bytes);
+                dftracer::utils::index::extensions::kinds::decode_bloom(
+                    std::string_view(bytes.data(), bytes.size()));
             REQUIRE(bloom.has_value());
             CHECK(bloom->num_entries() <= 2);
         }
@@ -298,10 +296,9 @@ TEST_SUITE("BloomFold") {
                 .duql(R"(cat == "POSIX")")
                 .sink_json(s)
                 .get();
-            dftracer::utils::index::store::IndexDatabase db(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            REQUIRE_FALSE(db.pruning_tier_current(file_id_of(db, gz)));
+            const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+            REQUIRE_FALSE(dftu_utils_test::pruning_tier_current(
+                snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
         }
 
         ScanUnit unit;
@@ -330,20 +327,18 @@ TEST_SUITE("BloomFold") {
         member_only.add(gz, 0);
         CHECK_FALSE(drive(member_only));
         {
-            dftracer::utils::index::store::IndexDatabase db(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(db.pruning_tier_current(file_id_of(db, gz)));
+            const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+            CHECK_FALSE(dftu_utils_test::pruning_tier_current(
+                snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
         }
 
         CoverageSet whole_file;
         whole_file.add_file(gz);
         CHECK(drive(whole_file));
         {
-            dftracer::utils::index::store::IndexDatabase db(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            CHECK(db.pruning_tier_current(file_id_of(db, gz)));
+            const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+            CHECK(dftu_utils_test::pruning_tier_current(
+                snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
         }
 
         // Already present: a second ride-along writes nothing.
@@ -386,7 +381,6 @@ TEST_SUITE("BloomFold") {
         bloom.seal_unit(unit);
         dict.seal_unit(unit);
 
-        int fid = -1;
         {
             const auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(gz);
@@ -394,17 +388,14 @@ TEST_SUITE("BloomFold") {
             bloom.write(build);
             dict.write(build);
             REQUIRE(build.commit().get());
-            dftracer::utils::index::store::IndexDatabase db(index_path);
-            fid = db.get_file_info_id(logical);
-            REQUIRE(fid >= 0);
         }
 
-        dftracer::utils::index::store::IndexDatabase rd(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        CHECK(file_bloom_contains(rd, fid, "name", "read"));
-        CHECK(file_bloom_contains(rd, fid, "name", "write"));
-        CHECK(file_bloom_contains(rd, fid, "fhash", "fh1"));
-        CHECK(stored_path(rd, fid, "fh1") == "/data/a.bin");
+        const auto rd = dftu_utils_test::index_snapshot(index_path);
+        const auto rfile = dftu_utils_test::require_indexed_file(rd, gz);
+        CHECK(file_bloom_contains(rd, rfile, "name", "read"));
+        CHECK(file_bloom_contains(rd, rfile, "name", "write"));
+        CHECK(file_bloom_contains(rd, rfile, "fhash", "fh1"));
+        CHECK(stored_path(rd, rfile, "fh1") == "/data/a.bin");
     }
 
     // IndexFoldDriver parses member plaintext into the folds. Feeding it split
@@ -443,7 +434,6 @@ TEST_SUITE("BloomFold") {
         drv.on_chunk(text.data() + half, text.size() - half, /*cp=*/0).get();
         drv.seal();
 
-        int fid = -1;
         {
             const auto logical =
                 dftracer::utils::index::store::internal::get_logical_path(gz);
@@ -451,20 +441,17 @@ TEST_SUITE("BloomFold") {
             bloom.write(build);
             dict.write(build);
             REQUIRE(build.commit().get());
-            dftracer::utils::index::store::IndexDatabase db(index_path);
-            fid = db.get_file_info_id(logical);
-            REQUIRE(fid >= 0);
         }
 
-        dftracer::utils::index::store::IndexDatabase rd(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+        const auto rd = dftu_utils_test::index_snapshot(index_path);
+        const auto rfile = dftu_utils_test::require_indexed_file(rd, gz);
         // All three events survived the seam: both names, both cats, the fhash,
         // and the FH row of the files row set.
-        CHECK(file_bloom_contains(rd, fid, "name", "read"));
-        CHECK(file_bloom_contains(rd, fid, "name", "write"));
-        CHECK(file_bloom_contains(rd, fid, "cat", "STDIO"));
-        CHECK(file_bloom_contains(rd, fid, "fhash", "fh1"));
-        CHECK(stored_path(rd, fid, "fh1") == "/data/a.bin");
+        CHECK(file_bloom_contains(rd, rfile, "name", "read"));
+        CHECK(file_bloom_contains(rd, rfile, "name", "write"));
+        CHECK(file_bloom_contains(rd, rfile, "cat", "STDIO"));
+        CHECK(file_bloom_contains(rd, rfile, "fhash", "fh1"));
+        CHECK(stored_path(rd, rfile, "fh1") == "/data/a.bin");
     }
 
     // Schemaless column harvest: nested-object and array args surface as dotted
@@ -644,30 +631,34 @@ TEST_SUITE("BloomFold - auto fields") {
                     &scope, input);
             index_path = res.index_path;
         });
-        dftracer::utils::index::store::IndexDatabase db(
-            index_path, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        const int fid = file_id_of(db, gz);
+        const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+        const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
         using dftracer::utils::index::store::IndexExtension;
-        auto dims = db.extension_paths(fid, IndexExtension::Zonemap);
+        auto dims = dftu_utils_test::index_take(dftracer::utils::index::paths(
+            snapshot, file, IndexExtension::Zonemap));
         for (auto d : {"size", "mode", "fname"})
             CHECK(std::find(dims.begin(), dims.end(), d) != dims.end());
 
-        auto size = db.path_granules(fid, IndexExtension::Zonemap, "size");
+        auto size =
+            dftu_utils_test::index_take(dftracer::utils::index::granules(
+                snapshot, file, IndexExtension::Zonemap, "size"));
         REQUIRE(size.size() >= 2);
         for (const auto& [chunk, bytes] : size) {
-            auto zone =
-                dftracer::utils::index::extensions::kinds::decode_zone(bytes);
+            auto zone = dftracer::utils::index::extensions::kinds::decode_zone(
+                std::string_view(bytes.data(), bytes.size()));
             REQUIRE(zone.has_value());
             CHECK(zone->value_type == "int");
             CHECK_FALSE(zone->min.empty());
         }
-        CHECK(dftu_utils_test::bloom_chunks(db, fid, "size") == 0);
-        CHECK_FALSE(dftu_utils_test::has_file_bloom(db, fid, "size"));
+        CHECK(dftu_utils_test::bloom_chunks(snapshot, file, "size") == 0);
+        CHECK_FALSE(dftu_utils_test::has_file_bloom(snapshot, file, "size"));
 
-        CHECK(dftu_utils_test::bloom_chunks(db, fid, "mode") == size.size());
-        CHECK(dftu_utils_test::has_file_bloom(db, fid, "mode"));
-        CHECK(dftu_utils_test::bloom_chunks(db, fid, "fname") < size.size());
-        CHECK_FALSE(dftu_utils_test::has_file_bloom(db, fid, "fname"));
+        CHECK(dftu_utils_test::bloom_chunks(snapshot, file, "mode") ==
+              size.size());
+        CHECK(dftu_utils_test::has_file_bloom(snapshot, file, "mode"));
+        CHECK(dftu_utils_test::bloom_chunks(snapshot, file, "fname") <
+              size.size());
+        CHECK_FALSE(dftu_utils_test::has_file_bloom(snapshot, file, "fname"));
     }
 }
 

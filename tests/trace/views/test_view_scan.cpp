@@ -2,7 +2,6 @@
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -347,15 +346,9 @@ TEST_SUITE("View") {
         CHECK(scannedA == scannedB);
         CHECK(colsA == colsB);
 
-        st::IndexDatabase dbA(idxA, st::IndexOpenMode::ReadOnly);
-        st::IndexDatabase dbB(idxB, st::IndexOpenMode::ReadOnly);
         for (std::size_t i = 0; i < partsA.size(); ++i) {
-            auto ma =
-                dbA.query_gzip_members(static_cast<int>(dbA.get_file_info_id(
-                    st::internal::get_logical_path(partsA[i]))));
-            auto mb =
-                dbB.query_gzip_members(static_cast<int>(dbB.get_file_info_id(
-                    st::internal::get_logical_path(partsB[i]))));
+            auto ma = dftu_utils_test::indexed_members(idxA, partsA[i]);
+            auto mb = dftu_utils_test::indexed_members(idxB, partsB[i]);
             REQUIRE(!ma.empty());
             REQUIRE(ma.size() == mb.size());
             for (std::size_t k = 0; k < ma.size(); ++k) {

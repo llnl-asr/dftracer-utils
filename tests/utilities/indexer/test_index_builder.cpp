@@ -5,7 +5,6 @@
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/schemas/dft/bloom_core.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -195,10 +194,8 @@ TEST_SUITE("IndexBuilder") {
                 dftracer::utils::trace::internal::determine_index_path(files[i],
                                                                        "");
             CHECK(r.results[i].index_path == idx);
-            IndexDatabase db(idx, IndexOpenMode::ReadOnly);
-            CHECK(db.get_file_info_id(
-                      dftracer::utils::index::store::internal::get_logical_path(
-                          files[i])) >= 0);
+            const auto snapshot = index_snapshot(idx);
+            CHECK(find_indexed_file(snapshot, files[i]).has_value());
         }
     }
 
@@ -212,11 +209,9 @@ TEST_SUITE("IndexBuilder") {
         REQUIRE(result.success);
         REQUIRE(fs::exists(result.index_path));
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
-        CHECK(db.pruning_tier_current(fid));
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
+        CHECK(pruning_tier_current(snapshot, file));
     }
 
     TEST_CASE("Member table covers every gzip member") {
@@ -228,12 +223,10 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
         REQUIRE(result.success);
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = db.query_gzip_members(fid);
+        auto members = index_take(index::members(snapshot, file));
         REQUIRE(members.size() == texts.size());
 
         std::uint64_t expected_uc = 0;
@@ -307,13 +300,11 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
         REQUIRE(result.success);
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = db.query_gzip_members(fid);
-        auto spans = db.query_chunk_spans(fid);
+        auto members = index_take(index::members(snapshot, file));
+        auto spans = index_take(index::spans(snapshot, file));
         REQUIRE(spans.size() == members.size());
         for (std::size_t i = 0; i < spans.size(); ++i) {
             CHECK(spans[i].uc_offset == members[i].uc_offset);
@@ -324,15 +315,15 @@ TEST_SUITE("IndexBuilder") {
 
         // Events are attributed to the member that holds them, so a name
         // confined to one member yields exactly that chunk.
-        auto rare_chunks = db.posting_granules(
-            fid, "name",
-            dftracer::utils::index::extensions::kinds::value_hash("rare"));
+        auto rare_chunks = index_take(index::posting_granules(
+            snapshot, file, "name",
+            dftracer::utils::index::extensions::kinds::value_hash("rare")));
         REQUIRE(rare_chunks.size() == 1);
         CHECK(rare_chunks[0] == 1);
 
-        auto common_chunks = db.posting_granules(
-            fid, "name",
-            dftracer::utils::index::extensions::kinds::value_hash("op"));
+        auto common_chunks = index_take(index::posting_granules(
+            snapshot, file, "name",
+            dftracer::utils::index::extensions::kinds::value_hash("op")));
         std::sort(common_chunks.begin(), common_chunks.end());
         REQUIRE(common_chunks.size() == 2);
         CHECK(common_chunks[0] == 0);
@@ -345,12 +336,10 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
         REQUIRE(result.success);
 
-        IndexDatabase db(result.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
+        const auto snapshot = index_snapshot(result.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
 
-        auto members = db.query_gzip_members(fid);
+        auto members = index_take(index::members(snapshot, file));
         REQUIRE(members.size() == 1);
         CHECK(members[0].c_offset == 0);
         CHECK(members[0].uc_offset == 0);
@@ -370,11 +359,9 @@ TEST_SUITE("IndexBuilder") {
         auto second = build_one(gz_file);
         CHECK(second.success);
 
-        IndexDatabase db(second.index_path);
-        int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz_file));
-        REQUIRE(fid >= 0);
-        CHECK(db.pruning_tier_current(fid));
+        const auto snapshot = index_snapshot(second.index_path);
+        const auto file = require_indexed_file(snapshot, gz_file);
+        CHECK(pruning_tier_current(snapshot, file));
     }
 
     TEST_CASE("Force rebuild") {

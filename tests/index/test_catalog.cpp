@@ -3,12 +3,13 @@
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -21,11 +22,11 @@
 #include <vector>
 
 using namespace dftracer::utils;
-namespace store = dftracer::utils::index::store;
-using store::ColumnType;
-using store::IndexExtension;
-using store::PathStat;
-using store::PathType;
+namespace istore = dftracer::utils::index::store;
+using istore::ColumnType;
+using istore::IndexExtension;
+using istore::PathStat;
+using istore::PathType;
 
 namespace {
 
@@ -118,11 +119,13 @@ struct Indexed {
 };
 
 std::vector<std::string> zonemap_paths(const Indexed& t) {
-    store::IndexDatabase db(t.index_path, store::IndexOpenMode::ReadOnly);
-    const int fid =
-        db.get_file_info_id(store::internal::get_logical_path(t.trace));
-    REQUIRE(fid >= 0);
-    return db.extension_paths(fid, IndexExtension::Zonemap);
+    const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
+    std::vector<std::string> out;
+    for (const auto& path : dftu_utils_test::index_take(
+             index::paths(snapshot, file, IndexExtension::Zonemap)))
+        out.emplace_back(path.data(), path.size());
+    return out;
 }
 
 bool has(const std::vector<std::string>& v, const std::string& x) {
@@ -132,13 +135,13 @@ bool has(const std::vector<std::string>& v, const std::string& x) {
 // The zones of `path`, by chunk.
 std::map<std::uint64_t, index::extensions::kinds::Zone> zones_of(
     const Indexed& t, const std::string& path) {
-    store::IndexDatabase db(t.index_path, store::IndexOpenMode::ReadOnly);
-    const int fid =
-        db.get_file_info_id(store::internal::get_logical_path(t.trace));
+    const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, t.trace);
     std::map<std::uint64_t, index::extensions::kinds::Zone> out;
-    for (auto& [chunk, bytes] :
-         db.path_granules(fid, IndexExtension::Zonemap, path)) {
-        auto zone = index::extensions::kinds::decode_zone(bytes);
+    for (auto& [chunk, bytes] : dftu_utils_test::index_take(
+             index::granules(snapshot, file, IndexExtension::Zonemap, path))) {
+        auto zone = index::extensions::kinds::decode_zone(
+            std::string_view(bytes.data(), bytes.size()));
         REQUIRE(zone);
         out.emplace(chunk, std::move(*zone));
     }
@@ -167,12 +170,28 @@ void check_full_scan(const Indexed& t, const std::string& index_dir,
 
 std::map<std::string, PathStat> catalog_of(const std::string& trace,
                                            const std::string& index_path) {
-    store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-    const int fid =
-        db.get_file_info_id(store::internal::get_logical_path(trace));
-    REQUIRE(fid >= 0);
+    const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     std::map<std::string, PathStat> out;
-    for (auto& [path, stat] : db.catalog(fid)) out.emplace(path, stat);
+    for (auto& [path, stat] :
+         dftu_utils_test::index_take(index::catalog(snapshot, file)))
+        out.emplace(std::string(path.data(), path.size()), stat);
+    return out;
+}
+
+// The column types of the file's catalog, without the "args." prefix.
+std::map<std::string, ColumnType> column_types(const std::string& trace,
+                                               const std::string& index_path) {
+    constexpr std::string_view ARGS = "args.";
+    const auto snapshot = dftu_utils_test::index_snapshot(index_path);
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
+    std::map<std::string, ColumnType> out;
+    for (auto& [name, t] : dftu_utils_test::index_take(
+             index::file_column_types(snapshot, file))) {
+        std::string_view path(name.data(), name.size());
+        if (path.starts_with(ARGS)) path.remove_prefix(ARGS.size());
+        out[std::string(path)] = t;
+    }
     return out;
 }
 
@@ -181,33 +200,33 @@ std::map<std::string, PathStat> catalog_of(const std::string& trace,
 TEST_SUITE("PathCatalog") {
     TEST_CASE("join follows the lattice") {
         using P = PathType;
-        CHECK(store::join(P::Int, P::Double) == P::Double);
-        CHECK(store::join(P::Int, P::Uint) == P::Uint);
-        CHECK(store::join(P::Uint, P::Double) == P::Double);
-        CHECK(store::join(P::Int, P::String) == P::Mixed);
-        CHECK(store::join(P::Bool, P::Int) == P::Mixed);
-        CHECK(store::join(P::NullValue, P::String) == P::String);
-        CHECK(store::join(P::Mixed, P::NullValue) == P::Mixed);
+        CHECK(istore::join(P::Int, P::Double) == P::Double);
+        CHECK(istore::join(P::Int, P::Uint) == P::Uint);
+        CHECK(istore::join(P::Uint, P::Double) == P::Double);
+        CHECK(istore::join(P::Int, P::String) == P::Mixed);
+        CHECK(istore::join(P::Bool, P::Int) == P::Mixed);
+        CHECK(istore::join(P::NullValue, P::String) == P::String);
+        CHECK(istore::join(P::Mixed, P::NullValue) == P::Mixed);
         const P all[] = {P::NullValue, P::Bool,   P::Int,  P::Uint,
                          P::Double,    P::String, P::Mixed};
         for (P a : all)
             for (P b : all) {
-                CHECK(store::join(a, b) == store::join(b, a));
+                CHECK(istore::join(a, b) == istore::join(b, a));
                 for (P c : all)
-                    CHECK(store::join(store::join(a, b), c) ==
-                          store::join(a, store::join(b, c)));
+                    CHECK(istore::join(istore::join(a, b), c) ==
+                          istore::join(a, istore::join(b, c)));
             }
     }
 
     TEST_CASE("a catalog record round-trips") {
         const PathStat s{PathType::Uint, 0x0c, 123456789012ULL};
-        auto back =
-            store::layout::decode_path_stat(store::layout::encode_path_stat(s));
+        auto back = istore::layout::decode_path_stat(
+            istore::layout::encode_path_stat(s));
         REQUIRE(back);
         CHECK(back->type == s.type);
         CHECK(back->seen == s.seen);
         CHECK(back->count == s.count);
-        CHECK_FALSE(store::layout::decode_path_stat("x"));
+        CHECK_FALSE(istore::layout::decode_path_stat("x"));
     }
 
     TEST_CASE("the catalog lists every data path with its type and count") {
@@ -263,9 +282,7 @@ TEST_SUITE("PathCatalog") {
         CHECK(cat.at("args.opts").type == PathType::Object);
         CHECK(cat.at("args.tags").count == 1);
         CHECK(cat.at("args.opts").count == 1);
-        store::IndexDatabase db(st.index_path, store::IndexOpenMode::ReadOnly);
-        std::map<std::string, ColumnType> cols;
-        for (auto& [name, t] : db.query_all_column_types()) cols[name] = t;
+        const auto cols = column_types(trace, st.index_path);
         CHECK_FALSE(cols.count("tags"));
         CHECK_FALSE(cols.count("opts"));
         CHECK(cols.count("n"));
@@ -276,9 +293,7 @@ TEST_SUITE("PathCatalog") {
         const auto trace = write_fixture(env.get_dir());
         const auto idx = env.get_dir() + "/idx";
         const auto st = index::Indexer::open({trace}, options(idx)).build();
-        store::IndexDatabase db(st.index_path, store::IndexOpenMode::ReadOnly);
-        std::map<std::string, ColumnType> cols;
-        for (auto& [name, t] : db.query_all_column_types()) cols[name] = t;
+        const auto cols = column_types(trace, st.index_path);
         CHECK(cols.at("size") == ColumnType::Int64);
         CHECK(cols.at("flag") == ColumnType::Int64);
         CHECK(cols.at("ratio") == ColumnType::Float64);
@@ -297,14 +312,11 @@ TEST_SUITE("PathCatalog") {
         const auto idx = env.get_dir() + "/idx";
         const auto st = index::Indexer::open({trace}, options(idx, 1)).build();
         {
-            store::IndexDatabase db(st.index_path,
-                                    store::IndexOpenMode::ReadOnly);
-            const int fid =
-                db.get_file_info_id(store::internal::get_logical_path(trace));
-            const auto zones = db.extension_paths(fid, IndexExtension::Zonemap);
+            const Indexed built{trace, st.index_path};
+            const auto zones = zonemap_paths(built);
             CHECK(std::find(zones.begin(), zones.end(), "a") != zones.end());
             CHECK(std::find(zones.begin(), zones.end(), "b") == zones.end());
-            CHECK(db.catalog(fid).size() >= 3);
+            CHECK(catalog_of(trace, st.index_path).size() >= 3);
         }
         for (const char* q : {"b == 105", "b > 100", "a == 5"}) {
             CAPTURE(q);
@@ -546,17 +558,19 @@ TEST_SUITE("Absence") {
         const Indexed t{
             trace,
             index::Indexer::open({trace}, options(idx)).build().index_path};
-        store::IndexDatabase db(t.index_path, store::IndexOpenMode::ReadOnly);
-        const int fid =
-            db.get_file_info_id(store::internal::get_logical_path(trace));
-        const auto blooms = db.path_granules(fid, IndexExtension::Bloom, "m");
+        const auto snapshot = dftu_utils_test::index_snapshot(t.index_path);
+        const auto file =
+            dftu_utils_test::require_indexed_file(snapshot, trace);
+        const auto blooms = dftu_utils_test::index_take(
+            index::granules(snapshot, file, IndexExtension::Bloom, "m"));
         REQUIRE(blooms.size() > 1);
         const index::extensions::ScalableBloomFilter configured(1024, 0.01);
         const index::extensions::ScalableBloomFilter three(4, 0.01);
         bool full = false;
         for (const auto& [chunk, bytes] : blooms) {
             CAPTURE(chunk);
-            auto bloom = index::extensions::kinds::decode_bloom(bytes);
+            auto bloom = index::extensions::kinds::decode_bloom(
+                std::string_view(bytes.data(), bytes.size()));
             REQUIRE(bloom);
             CHECK(bloom->num_entries() <= 3);
             CHECK(bloom->num_levels() == 1);

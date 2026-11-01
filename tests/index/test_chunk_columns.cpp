@@ -8,13 +8,13 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
@@ -38,7 +38,6 @@ namespace views = dftracer::utils::trace::views;
 namespace layout = dftracer::utils::index::store::layout;
 using index::Indexer;
 using index::IndexerOptions;
-using index::store::IndexDatabase;
 
 namespace {
 
@@ -952,7 +951,6 @@ TEST_SUITE("ChunkColumns") {
 
         const auto index_path =
             trace::internal::determine_index_path(gz, index_dir);
-        IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
         std::size_t blocks = 0;
         std::size_t partials = 0;
         const auto stored = [](std::string_view value, std::uint8_t kind) {
@@ -963,9 +961,11 @@ TEST_SUITE("ChunkColumns") {
                   layout::with_header(layout::Ext::Agg, kind, *payload));
             return *payload;
         };
-        db.for_each_record([&](std::string_view key, std::string_view value) {
-            constexpr std::string_view AGG = "dftu.idx.dftracer.agg|";
-            if (key.rfind(AGG, 0) != 0) return;
+        for (const auto& record : dftu_utils_test::dump_index(index_path)) {
+            constexpr std::string_view AGG = "dftu.idx.dftracer.agg";
+            if (record.name != AGG) continue;
+            const std::string_view key = record.key;
+            const std::string_view value = record.value;
             const auto columns = layout::payload(value, layout::Ext::Agg,
                                                  layout::agg_kind::COLUMNS);
             const auto partial = layout::payload(value, layout::Ext::Agg,
@@ -986,7 +986,7 @@ TEST_SUITE("ChunkColumns") {
                                   .has_value(),
                               key);
             }
-        });
+        }
         CHECK(blocks > 0);
         CHECK(partials > 0);
     }

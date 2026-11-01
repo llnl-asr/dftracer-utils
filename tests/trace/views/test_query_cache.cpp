@@ -3,7 +3,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/cache/rollup_store.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <trace/views/test_view_common.h>
 
@@ -15,7 +15,6 @@
 
 namespace {
 
-namespace rdb = dftracer::utils::index::store;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
 std::string cache_of(const std::string& gz) {
@@ -81,13 +80,19 @@ TEST_SUITE("QueryCache") {
         CHECK(rollup_sigs(gz).size() == 1);
         CHECK_FALSE(
             fs::exists(fs::path(determine_index_path(gz, "")) / "cache"));
-        rdb::IndexDatabase idx(determine_index_path(gz, ""),
-                               rdb::IndexOpenMode::ReadOnly);
+        auto store = dftracer::utils::store::Store::open(
+            (fs::path(determine_index_path(gz, "")) / "store").string());
+        REQUIRE(store.has_value());
+        auto snapshot = store->snapshot();
+        REQUIRE(snapshot.has_value());
+        auto declared = snapshot->namespaces();
+        REQUIRE(declared.has_value());
         bool rollup_in_index = false;
-        idx.for_each_record([&](std::string_view key, std::string_view) {
-            if (key.find("rollup") != std::string_view::npos)
+        for (const auto& decl : *declared) {
+            if (std::string_view(decl.name.data(), decl.name.size())
+                    .find("rollup") != std::string_view::npos)
                 rollup_in_index = true;
-        });
+        }
         CHECK_FALSE(rollup_in_index);
     }
 

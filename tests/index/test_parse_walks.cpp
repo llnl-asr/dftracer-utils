@@ -2,9 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/parse_inflated.h>
@@ -27,7 +28,7 @@
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
-namespace store = dftracer::utils::index::store;
+namespace istore = dftracer::utils::index::store;
 namespace walks = dftracer::utils::trace::internal::parse_walks;
 
 namespace {
@@ -142,21 +143,23 @@ struct NamespaceDigest {
     std::uint64_t digest;
 };
 constexpr NamespaceDigest RECORDED[] = {
-    {"dftu.idx.bloom", 18403345228985193765ULL},
-    {"dftu.idx.core.catalog", 15388493844977032509ULL},
-    {"dftu.idx.core.members", 15972920933709271177ULL},
-    {"dftu.idx.core.profile", 7294177582628813408ULL},
-    {"dftu.idx.core.rowset", 2644236780002143878ULL},
-    {"dftu.idx.counts", 3743539684424360917ULL},
-    {"dftu.idx.dft.metadata", 18388560704676654305ULL},
-    {"dftu.idx.dft.stats", 3464317095957144947ULL},
-    {"dftu.idx.postings", 17935341531168067248ULL},
-    {"dftu.idx.zonemap", 10281655885967840629ULL},
+    {"dftu.idx.bloom", 2494455118050835805ULL},
+    {"dftu.idx.core.catalog", 737967714351296983ULL},
+    {"dftu.idx.core.members", 12874393105055921695ULL},
+    {"dftu.idx.core.profile", 15443161570083292913ULL},
+    {"dftu.idx.core.rowset", 16635713612375925559ULL},
+    {"dftu.idx.counts", 12244228330521019165ULL},
+    {"dftu.idx.dft.metadata", 4049779824839700145ULL},
+    {"dftu.idx.dft.stats", 1571608055023293593ULL},
+    {"dftu.idx.postings", 7981223057138895188ULL},
+    {"dftu.idx.zonemap", 4068739441821824802ULL},
 };
 
-// The test directory is cut out of each record, since its length varies.
+// The test directory is cut out of each record, since its length varies. A
+// record is its namespace, scope paths, inner key and value.
 std::map<std::string, std::uint64_t> namespace_digests(
-    const store::IndexDatabase& db, const std::string& dir) {
+    const std::string& index_path, const std::string& dir) {
+    namespace kv = dftracer::utils::store;
     std::map<std::string, std::uint64_t> out;
     const auto without_dir = [&dir](std::string_view bytes) {
         std::string text(bytes);
@@ -165,20 +168,41 @@ std::map<std::string, std::uint64_t> namespace_digests(
             text.erase(at, dir.size());
         return text;
     };
-    db.for_each_record([&](std::string_view key, std::string_view value) {
-        std::string_view name = key;
-        if (name.starts_with("#copy|")) name.remove_prefix(6);
-        name = name.substr(0, name.find('|'));
+    auto opened = kv::Store::open(index_path + "/store");
+    REQUIRE(opened.has_value());
+    auto snapshot = opened->snapshot();
+    REQUIRE(snapshot.has_value());
+    auto declared = snapshot->namespaces();
+    REQUIRE(declared.has_value());
+    for (const auto& decl : *declared) {
+        kv::Namespace ns;
+        ns.spec.name = decl.name;
+        ns.spec.format_version = decl.format_version;
         auto [it, fresh] =
-            out.emplace(std::string(name), 1469598103934665603ULL);
+            out.emplace(std::string(decl.name.data(), decl.name.size()),
+                        1469598103934665603ULL);
         std::uint64_t& h = it->second;
         const auto mix = [&h](std::string_view bytes) {
             for (unsigned char c : bytes) h = (h ^ c) * 1099511628211ULL;
             h = (h ^ 0xFF) * 1099511628211ULL;
         };
-        mix(without_dir(key));
-        mix(without_dir(value));
-    });
+        auto cursor = snapshot->scan_all(ns, {}, {});
+        for (; !cursor.at_end(); cursor.next()) {
+            std::string scope;
+            for (const auto& path : cursor.scope().paths) {
+                scope.append(path.data(), path.size());
+                scope.push_back('\0');
+            }
+            const auto key = cursor.key();
+            auto value = cursor.value();
+            REQUIRE(value.has_value());
+            mix(without_dir(scope));
+            mix(without_dir(std::string_view(key.as<char>(), key.size())));
+            mix(without_dir(
+                std::string_view(value->as<char>(), value->size())));
+        }
+        REQUIRE_FALSE(cursor.error().has_value());
+    }
     return out;
 }
 
@@ -256,8 +280,8 @@ TEST_SUITE("IndexParseWalks") {
         build_one(file, env.get_dir() + "/idx");
         const std::string path =
             trace::internal::determine_index_path(file, env.get_dir() + "/idx");
-        const store::IndexDatabase db(path, store::IndexOpenMode::ReadOnly);
-        const auto digests = namespace_digests(db, env.get_dir());
+        const auto digests = namespace_digests(
+            istore::internal::normalize_index_root(path), env.get_dir());
         for (const auto& [name, digest] : digests)
             MESSAGE("namespace " << name << " " << digest);
         CHECK(digests.size() == std::size(RECORDED));

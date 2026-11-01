@@ -10,12 +10,15 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/store_layout.h>
+#include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <testing_utilities.h>
 
 #include <chrono>
@@ -30,7 +33,6 @@ using namespace dftracer::utils;
 using dftracer::utils::index::Indexer;
 using dftracer::utils::index::IndexerOptions;
 using dftracer::utils::index::schemas::dft::agg::AggregationConfig;
-using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::IndexExtension;
 using dftracer::utils::trace::views::AggOp;
 using dftracer::utils::trace::views::GroupKey;
@@ -106,26 +108,40 @@ bool same_counters(const dataframe::DataFrame& a,
     return true;
 }
 
-int file_id(const std::string& trace) {
-    IndexDatabase db(index_of(trace), index::store::IndexOpenMode::ReadOnly);
-    return db.get_file_info_id(index::store::internal::get_logical_path(trace));
-}
-
 // A bloom granule no build writes: it survives only while the file's bloom
-// data is not rewritten.
+// data is not rewritten, so the rewrite keeps everything the file holds.
 void plant_sentinel(const std::string& trace) {
-    const int fid = file_id(trace);
-    IndexDatabase db(index_of(trace));
-    auto w = db.begin_write();
-    index::store::records::put_path_granule(*w, IndexExtension::Bloom, fid,
-                                            SENTINEL, 0, "x");
-    w->commit();
+    const auto opened = dftu_utils_test::open_test_index(index_of(trace));
+    const auto snapshot = dftu_utils_test::index_take(opened.snapshot());
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
+    const auto state =
+        index::extension_state(snapshot, file, IndexExtension::Bloom);
+    REQUIRE(state.has_value());
+    auto build = dftu_utils_test::rebuild_test_file(opened, trace);
+    for (const auto& path : dftu_utils_test::index_take(
+             index::paths(snapshot, file, IndexExtension::Bloom))) {
+        index::put_path(build, IndexExtension::Bloom, path);
+        for (const auto& [granule, payload] : dftu_utils_test::index_take(
+                 index::granules(snapshot, file, IndexExtension::Bloom, path)))
+            index::put_path_granule(build, IndexExtension::Bloom, path, granule,
+                                    payload);
+        const auto whole = dftu_utils_test::index_take(
+            index::path_file(snapshot, file, IndexExtension::Bloom, path));
+        if (whole)
+            index::put_path_file(build, IndexExtension::Bloom, path, *whole);
+    }
+    index::put_path_granule(build, IndexExtension::Bloom, SENTINEL, 0, "x");
+    build.finish(IndexExtension::Bloom, state->params_hash);
+    dftu_utils_test::commit_test_build(build);
 }
 
 bool has_sentinel(const std::string& trace) {
-    const int fid = file_id(trace);
-    IndexDatabase db(index_of(trace), index::store::IndexOpenMode::ReadOnly);
-    return !db.path_granules(fid, IndexExtension::Bloom, SENTINEL).empty();
+    const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
+    return !dftu_utils_test::index_take(index::granules(snapshot, file,
+                                                        IndexExtension::Bloom,
+                                                        SENTINEL))
+                .empty();
 }
 
 std::optional<index::ExtensionEntry> agg_entry(const Indexer& ix,
@@ -179,19 +195,40 @@ TEST_SUITE("AggExtension") {
     }
 
     TEST_CASE("an unreadable aggregation config is built again") {
-        namespace layout = dftracer::utils::index::store::layout;
         TestEnvironment env(10);
         const auto gz = write_trace(env.get_dir(), "fix", 50, 1000);
         Indexer::open({gz}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({gz}) == 50);
         {
-            IndexDatabase db(index_of(gz));
-            auto w = db.begin_write();
-            auto key = layout::file_prefix(
-                layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
-            key.append("config");
-            w->put(key, "garbage");
-            w->commit();
+            // A value without the layout header reads as absent.
+            namespace kv = dftracer::utils::store;
+            auto store = kv::Store::open(
+                index::store::internal::normalize_index_root(index_of(gz)) +
+                "/store");
+            REQUIRE(store.has_value());
+            kv::NamespaceSpec spec;
+            const auto name =
+                index::store::store_layout::agg_meta_namespace_name("config");
+            spec.name.assign(name.data(), name.size());
+            auto ns = store->ns(spec);
+            REQUIRE(ns.has_value());
+            const kv::ScopeKey scope = kv::ScopeKey::root();
+            const std::string key =
+                std::string(1, static_cast<char>(
+                                   index::store::layout::agg_kind::META)) +
+                "config";
+            kv::Batch batch = store->building_batch(*ns, scope);
+            batch.put(dstd::ByteView(key), dstd::ByteView("garbage", 7));
+            REQUIRE(default_runtime()
+                        .submit(store->commit(std::move(batch)))
+                        .get()
+                        .has_value());
+            const kv::Publish target{&*ns, &scope, 0, nullptr};
+            REQUIRE(default_runtime()
+                        .submit(store->publish(
+                            dstd::Span<const kv::Publish>(&target, 1)))
+                        .get()
+                        .has_value());
         }
         {
             const auto snapshot =
@@ -252,7 +289,6 @@ TEST_SUITE("AggExtension") {
         CHECK(count_reads({a, b}) == 50);
         plant_sentinel(a);
 
-        index::store::release_index(index_of(a));
         write_trace(env.get_dir(), "b", 45, 500'000, true);
         fs::last_write_time(b,
                             fs::last_write_time(b) + std::chrono::seconds(10));
@@ -293,12 +329,14 @@ TEST_SUITE("AggExtension") {
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
         ix.build();
         {
-            const int fid = file_id(b);
-            IndexDatabase db(index_of(b));
-            auto w = db.begin_write();
-            index::store::records::clear_file(
-                *w, index::store::layout::Ext::Agg, fid);
-            w->commit();
+            const auto opened = dftu_utils_test::open_test_index(index_of(b));
+            const std::string key = dftu_utils_test::index_key(b);
+            const dstd::StringView target(key.data(), key.size());
+            REQUIRE(default_runtime()
+                        .submit(index::remove_extension(
+                            opened, IndexExtension::Agg, {&target, 1}))
+                        .get()
+                        .has_value());
         }
         const auto entry = agg_entry(ix, b);
         CHECK_FALSE((entry && entry->current));

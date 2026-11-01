@@ -11,8 +11,6 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_core.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
@@ -1010,16 +1008,25 @@ TEST_SUITE("AggQuery") {
     TEST_CASE("a file indexed without partials is read whole") {
         auto fx = build(FIVE_SECONDS_US, "five");
         {
-            index::store::IndexDatabase db(fx->index_path);
-            const int fid = db.get_file_info_id(
+            auto opened = index::Index::open(
+                index::store::internal::normalize_index_root(fx->index_path));
+            REQUIRE(opened.has_value());
+            const auto snapshot = opened->snapshot();
+            REQUIRE(snapshot.has_value());
+            const auto file = snapshot->file(
                 index::store::internal::get_logical_path(fx->files[0]));
-            REQUIRE(fid >= 0);
-            auto w = db.begin_write();
-            const auto begin =
-                layout::file_prefix(layout::Ext::Agg, layout::agg_kind::PARTIAL,
-                                    static_cast<std::uint32_t>(fid));
-            w->delete_range(begin, layout::prefix_end(begin));
-            w->commit();
+            REQUIRE(file.has_value());
+            const auto state = index::extension_state(
+                *snapshot, *file, index::store::IndexExtension::Agg);
+            REQUIRE(state.has_value());
+            auto rebuilt = index::rebuild(
+                *opened,
+                index::store::internal::get_logical_path(fx->files[0]));
+            REQUIRE(rebuilt.has_value());
+            rebuilt->finish(index::store::IndexExtension::Agg,
+                            state->params_hash);
+            REQUIRE(
+                default_runtime().submit(rebuilt->commit()).get().has_value());
         }
         SUBCASE("no window") {
             Ask ask;

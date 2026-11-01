@@ -1,8 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/build/batch_builder.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
-#include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -15,7 +12,6 @@
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
-namespace store = dftracer::utils::index::store;
 
 namespace {
 
@@ -103,51 +99,5 @@ TEST_SUITE("IndexParseAllocations") {
         const double per_file = static_cast<double>(pool) / SMALL_FILES;
         MESSAGE("global allocations per file: " << per_file);
         CHECK(per_file < MAX_PER_FILE);
-    }
-
-    TEST_CASE(
-        "clears remove the data of a rebuilt file id and spare a fresh one") {
-        constexpr int REBUILT = 1;
-        constexpr int FRESH = 2;
-        const auto ext = store::IndexExtension::Bloom;
-        dftu_utils_test::TestEnvironment env(10);
-        store::IndexDatabase db(env.get_dir() + "/clears_idx");
-        {
-            auto w = db.begin_write();
-            for (int id : {REBUILT, FRESH}) {
-                store::layout::FileRecord record;
-                record.file_id = static_cast<std::uint32_t>(id);
-                store::records::put_file_record(
-                    *w, "file" + std::to_string(id) + ".pfw.gz", record);
-                store::records::put_manifest(*w, id, ext, 0);
-                store::records::put_path(*w, ext, id, "p");
-                store::records::put_path_file(*w, ext, id, "p", "payload");
-            }
-            w->commit();
-        }
-        REQUIRE(db.extension_current(REBUILT, ext));
-        REQUIRE(db.path_file_value(REBUILT, ext, "p").has_value());
-
-        {
-            auto w = db.begin_write();
-            w->set_fresh_file(FRESH);
-            store::records::clear_path(*w, ext, REBUILT, "p");
-            store::records::clear_path(*w, ext, FRESH, "p");
-            w->commit();
-        }
-        CHECK_FALSE(db.path_file_value(REBUILT, ext, "p").has_value());
-        CHECK(db.path_file_value(FRESH, ext, "p").has_value());
-
-        {
-            auto w = db.begin_write();
-            w->set_fresh_file(FRESH);
-            store::records::clear_file(*w, ext, REBUILT);
-            store::records::clear_file(*w, ext, FRESH);
-            w->commit();
-        }
-        CHECK_FALSE(db.extension_current(REBUILT, ext));
-        CHECK(db.extension_paths(REBUILT, ext).empty());
-        CHECK(db.extension_current(FRESH, ext));
-        CHECK(db.extension_paths(FRESH, ext).size() == 1);
     }
 }

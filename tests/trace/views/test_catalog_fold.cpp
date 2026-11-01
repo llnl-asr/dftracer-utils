@@ -1,9 +1,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -92,20 +91,22 @@ void register_log_schema() {
 }
 
 bool has_catalog(const std::string& gz) {
-    st::IndexDatabase db(determine_index_path(gz, ""),
-                         st::IndexOpenMode::ReadOnly);
-    const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
-    return fid >= 0 && db.extension_current(fid, st::IndexExtension::Catalog);
+    const auto snapshot =
+        dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+    const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
+    return file &&
+           ix::extension_current(snapshot, *file, st::IndexExtension::Catalog);
 }
 
 Catalog catalog_of(const std::string& gz) {
-    st::IndexDatabase db(determine_index_path(gz, ""),
-                         st::IndexOpenMode::ReadOnly);
-    const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
-    REQUIRE(fid >= 0);
+    const auto snapshot =
+        dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
     Catalog out;
-    for (const auto& [path, stat] : db.catalog(fid))
-        out[path] = {static_cast<int>(stat.type), stat.seen, stat.count};
+    for (const auto& [path, stat] :
+         dftu_utils_test::index_take(ix::catalog(snapshot, file)))
+        out[std::string(path.data(), path.size())] = {
+            static_cast<int>(stat.type), stat.seen, stat.count};
     return out;
 }
 
@@ -136,12 +137,22 @@ void expect_scan_catalog_equals_build(const std::vector<std::string>& lines,
     CHECK(catalog_of(scanned) == want);
 }
 
+// Rewrites the file's catalog with one more path, as the build wrote it.
 void plant_sentinel(const std::string& gz) {
-    st::IndexDatabase db(determine_index_path(gz, ""));
-    const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
-    auto w = db.begin_write();
-    st::records::put_catalog_path(*w, fid, "zz.sentinel", st::PathStat{});
-    w->commit();
+    const auto index =
+        dftu_utils_test::open_test_index(determine_index_path(gz, ""));
+    const auto snapshot = dftu_utils_test::index_take(index.snapshot());
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+    const auto state =
+        ix::extension_state(snapshot, file, st::IndexExtension::Catalog);
+    REQUIRE(state.has_value());
+    auto build = dftu_utils_test::rebuild_test_file(index, gz);
+    for (const auto& [path, stat] :
+         dftu_utils_test::index_take(ix::catalog(snapshot, file)))
+        ix::put_catalog_path(build, path, stat);
+    ix::put_catalog_path(build, "zz.sentinel", st::PathStat{});
+    build.finish(st::IndexExtension::Catalog, state->params_hash);
+    dftu_utils_test::commit_test_build(build);
 }
 
 bool has_sentinel(const std::string& gz) {
@@ -174,15 +185,7 @@ TEST_SUITE("CatalogFold") {
         const std::string gz = write_gz(env, "s", dftracer_lines());
         (void)view_of(gz).collect().get();
         REQUIRE(has_catalog(gz));
-        {
-            st::IndexDatabase db(determine_index_path(gz, ""));
-            const int fid =
-                db.get_file_info_id(st::internal::get_logical_path(gz));
-            auto w = db.begin_write();
-            st::records::put_catalog_path(*w, fid, "zz.sentinel",
-                                          st::PathStat{});
-            w->commit();
-        }
+        plant_sentinel(gz);
         (void)view_of(gz).collect().get();
         CHECK(catalog_of(gz).count("zz.sentinel") == 1);
     }

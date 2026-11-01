@@ -9,11 +9,10 @@
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <memory/fresh_process.h>
@@ -43,7 +42,6 @@ namespace layout = dftracer::utils::index::store::layout;
 using dataframe::FieldStat;
 using index::Indexer;
 using index::IndexerOptions;
-using index::store::IndexDatabase;
 
 namespace {
 
@@ -329,16 +327,12 @@ TEST_SUITE("AggPartialsStore") {
 
         const auto index_path =
             trace::internal::determine_index_path(files[0], index_dir);
-        std::vector<int> ids;
         std::vector<std::size_t> before;
         {
-            IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
             unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
-                ids.push_back(db.get_file_info_id(
-                    index::store::internal::get_logical_path(f)));
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
                         .count);
@@ -347,34 +341,22 @@ TEST_SUITE("AggPartialsStore") {
         }
 
         // An index of an earlier build: another params hash and no partials.
+        // The empty copy of each file replaces its whole tier.
         {
             auto target = unwrap(index::Index::open(index_path));
-            IndexDatabase db(index_path);
             const auto config =
                 unwrap(agg::tier::read_config(unwrap(target.snapshot())));
             REQUIRE(config);
             auto old = *config;
             old.params_hash ^= 1;
             agg::tier::write_config(target, old);
-            auto w = db.begin_write();
-            for (const int id : ids) {
-                const auto begin = layout::file_prefix(
-                    layout::Ext::Agg, layout::agg_kind::PARTIAL,
-                    static_cast<std::uint32_t>(id));
-                w->delete_range(begin, layout::prefix_end(begin));
-            }
-            w->commit();
 
+            const auto snapshot = open_index(index_path);
             std::vector<std::string> logical;
             std::vector<index::SourceStat> stats;
             for (const auto& f : files) {
                 logical.push_back(index::store::internal::get_logical_path(f));
-                const auto stat = db.get_file_stat(logical.back());
-                const auto hash = db.get_file_hash(logical.back());
-                REQUIRE(stat);
-                REQUIRE(hash);
-                stats.push_back(
-                    index::SourceStat{stat->mtime, stat->size, *hash});
+                stats.push_back(file_of(snapshot, f).stat());
             }
 
             bool marked = true;
@@ -425,16 +407,12 @@ TEST_SUITE("AggPartialsStore") {
 
         const auto index_path =
             trace::internal::determine_index_path(files[0], index_dir);
-        std::vector<int> ids;
         std::vector<std::size_t> before;
         {
-            IndexDatabase db(index_path, index::store::IndexOpenMode::ReadOnly);
             const auto snapshot = open_index(index_path);
             auto dictionary = agg::make_intern_table();
             unwrap(index::agg_dictionary(snapshot, *dictionary));
             for (const auto& f : files) {
-                ids.push_back(db.get_file_info_id(
-                    index::store::internal::get_logical_path(f)));
                 before.push_back(
                     read_partials(snapshot, file_of(snapshot, f), *dictionary)
                         .count);
@@ -444,20 +422,40 @@ TEST_SUITE("AggPartialsStore") {
         // An index of an earlier build: no config record where it is kept now
         // and a partial whose key tail is the older 12 bytes.
         {
-            IndexDatabase db(index_path);
-            auto w = db.begin_write();
-            auto config = layout::file_prefix(
-                layout::Ext::Agg, layout::agg_kind::META, layout::INDEX_WIDE);
-            config.append("config");
-            w->del(config);
-            auto old_key =
-                layout::file_prefix(layout::Ext::Agg, layout::agg_kind::PARTIAL,
-                                    static_cast<std::uint32_t>(ids[0]));
+            auto target = unwrap(index::Index::open(index_path));
+            REQUIRE(default_runtime()
+                        .submit(index::delete_agg_meta(target, "config"))
+                        .get()
+                        .has_value());
+
+            namespace kv = dftracer::utils::store;
+            auto store = kv::Store::open(index_path + "/store");
+            REQUIRE(store.has_value());
+            auto ns =
+                store->ns(index::ext_spec(index::store::IndexExtension::Agg));
+            REQUIRE(ns.has_value());
+            std::string old_key(1,
+                                static_cast<char>(layout::agg_kind::PARTIAL));
             old_key.append(12, '\0');
-            w->put(old_key,
-                   layout::with_header(layout::Ext::Agg,
-                                       layout::agg_kind::PARTIAL, "old"));
-            w->commit();
+            const std::string old_value = layout::with_header(
+                layout::Ext::Agg, layout::agg_kind::PARTIAL, "old");
+            const auto snapshot = open_index(index_path);
+            const auto file = file_of(snapshot, files[0]);
+            const auto state = index::extension_state(
+                snapshot, file, index::store::IndexExtension::Agg);
+            REQUIRE(state.has_value());
+            const dstd::Vector<index::SourceStat> sources{file.stat()};
+            kv::Batch batch = store->batch(
+                *ns,
+                kv::ScopeKey::file(
+                    index::store::internal::get_logical_path(files[0])),
+                state->params_hash, &sources);
+            batch.put(dstd::ByteView(old_key), dstd::ByteView(old_value));
+            REQUIRE(default_runtime()
+                        .submit(store->commit(std::move(batch)))
+                        .get()
+                        .has_value());
+            REQUIRE(default_runtime().submit(store->flush()).get().has_value());
         }
         {
             const auto snapshot = open_index(index_path);

@@ -29,7 +29,6 @@ set(UTILITIES_TEST_SOURCES
     common/statistics/test_field_stat.cpp
 
     # Indexer
-    indexer/test_index_database.cpp
     indexer/test_index_builder.cpp
     indexer/test_hash_table_aggregation.cpp
 

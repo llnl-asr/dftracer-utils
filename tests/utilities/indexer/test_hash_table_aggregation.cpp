@@ -3,7 +3,6 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -18,7 +17,6 @@
 using namespace dftracer::utils;
 using dftracer::utils::index::build::resolve_and_build_index;
 using dftracer::utils::index::build::ResolveAndBuildInput;
-using dftracer::utils::index::store::IndexDatabase;
 using dftu_utils_test::run_coro;
 
 namespace {

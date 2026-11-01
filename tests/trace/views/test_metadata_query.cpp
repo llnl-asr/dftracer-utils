@@ -2,7 +2,6 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -169,12 +168,11 @@ TEST_SUITE("View - metadata under pruning") {
     TEST_CASE("the index counts metadata records per chunk") {
         TestEnvironment env(200);
         const std::string gz = create_threaded_trace(env);
-        dftracer::utils::index::store::IndexDatabase db(
-            determine_index_path(gz, ""),
-            dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        const int fid = db.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz));
-        auto counts = db.chunk_metadata(fid);
+        const auto snapshot =
+            dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+        auto counts =
+            dftu_utils_test::index_take(dftracer::utils::index::chunk_meta(
+                snapshot, dftu_utils_test::require_indexed_file(snapshot, gz)));
         REQUIRE(counts.has_value());
         std::uint64_t records = 0, with_records = 0;
         for (const auto& [chunk, m] : *counts) {
@@ -249,13 +247,12 @@ TEST_SUITE("View - metadata under pruning") {
         dftracer::utils::index::Indexer::open({gz}).drop_extension(
             "dft.metadata");
         {
-            dftracer::utils::index::store::IndexDatabase db(
-                idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            CHECK_FALSE(
-                db.chunk_metadata(
-                      db.get_file_info_id(dftracer::utils::index::store::
-                                              internal::get_logical_path(gz)))
-                    .has_value());
+            const auto snapshot = dftu_utils_test::index_snapshot(idx);
+            CHECK_FALSE(dftu_utils_test::index_take(
+                            dftracer::utils::index::chunk_meta(
+                                snapshot, dftu_utils_test::require_indexed_file(
+                                              snapshot, gz)))
+                            .has_value());
         }
         ScanPlan all =
             scan::filter(scan::phase(scan::from_file(gz, idx), Phase::Metadata),

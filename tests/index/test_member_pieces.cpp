@@ -2,9 +2,10 @@
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/index.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <testing_utilities.h>
 
 #include <string>
@@ -13,7 +14,7 @@
 using dftracer::utils::index::gzip::GzipBuildArtifacts;
 using dftracer::utils::index::gzip::GzipMemberRecord;
 using dftracer::utils::index::gzip::GzipRecordKind;
-using dftracer::utils::index::store::IndexDatabase;
+namespace idx = dftracer::utils::index;
 
 namespace {
 
@@ -33,10 +34,8 @@ GzipMemberRecord record(std::uint64_t idx, std::uint64_t c_offset,
     return r;
 }
 
-// Writes `arts` as the members of "trace.pfw.gz" in one build and returns the
-// file's id in the index.
-int persist(const std::string& index_root, IndexDatabase& db,
-            const GzipBuildArtifacts& arts) {
+// Writes `arts` as the members of "trace.pfw.gz" in one build.
+void persist(const std::string& index_root, const GzipBuildArtifacts& arts) {
     auto index = dftracer::utils::index::Index::open(
         dftracer::utils::index::store::internal::normalize_index_root(
             index_root));
@@ -45,7 +44,6 @@ int persist(const std::string& index_root, IndexDatabase& db,
     REQUIRE(build);
     dftracer::utils::index::gzip::persist_gzip_index_artifacts(*build, arts);
     REQUIRE(build->commit().get());
-    return db.get_file_info_id("trace.pfw.gz");
 }
 
 }  // namespace
@@ -54,7 +52,6 @@ TEST_SUITE("member pieces") {
     TEST_CASE("member, head and restart records round trip with a window") {
         auto root = dftu_utils_test::make_unique_test_path("member_pieces");
         fs::create_directories(root);
-        IndexDatabase db((root / ".dftindex").string());
 
         GzipBuildArtifacts arts;
         arts.checkpoint_size = 1000;
@@ -69,10 +66,18 @@ TEST_SUITE("member pieces") {
             window[i] = static_cast<char>(i * 31);
         arts.restart_windows = {{2, window}, {3, std::string(32768, 'x')}};
 
-        const int fid = persist((root / ".dftindex").string(), db, arts);
-        REQUIRE(fid >= 0);
+        persist((root / ".dftindex").string(), arts);
+        const auto snapshot =
+            dftu_utils_test::index_snapshot((root / ".dftindex").string());
+        const auto file = snapshot.file("trace.pfw.gz");
+        REQUIRE(file.has_value());
+        const auto restart = [&](std::uint64_t member) {
+            return dftu_utils_test::index_take(
+                idx::restart_window(snapshot, *file, member));
+        };
 
-        const auto got = db.query_gzip_members(fid);
+        const auto got =
+            dftu_utils_test::index_take(idx::members(snapshot, *file));
         REQUIRE(got.size() == 4);
         for (std::size_t i = 0; i < got.size(); ++i) {
             CAPTURE(i);
@@ -83,11 +88,16 @@ TEST_SUITE("member pieces") {
             CHECK(got[i].kind == arts.members[i].kind);
             CHECK(got[i].bits == arts.members[i].bits);
         }
-        CHECK(db.query_restart_window(fid, 2) == window);
-        CHECK(db.query_restart_window(fid, 3) == std::string(32768, 'x'));
-        CHECK_FALSE(db.query_restart_window(fid, 1).has_value());
+        REQUIRE(restart(2).has_value());
+        CHECK(std::string_view(restart(2)->data(), restart(2)->size()) ==
+              window);
+        REQUIRE(restart(3).has_value());
+        CHECK(std::string_view(restart(3)->data(), restart(3)->size()) ==
+              std::string(32768, 'x'));
+        CHECK_FALSE(restart(1).has_value());
 
-        const auto spans = db.query_chunk_spans(fid);
+        const auto spans =
+            dftu_utils_test::index_take(idx::spans(snapshot, *file));
         REQUIRE(spans.size() == 4);
         CHECK(spans[2].uc_offset == 2000);
     }
@@ -95,7 +105,6 @@ TEST_SUITE("member pieces") {
     TEST_CASE("a rebuild drops the windows of the old pieces") {
         auto root = dftu_utils_test::make_unique_test_path("member_pieces_re");
         fs::create_directories(root);
-        IndexDatabase db((root / ".dftindex").string());
 
         GzipBuildArtifacts split;
         split.members = {record(0, 0, 0, GzipRecordKind::Head, 0),
@@ -104,13 +113,18 @@ TEST_SUITE("member pieces") {
         GzipBuildArtifacts whole;
         whole.members = {record(0, 0, 0, GzipRecordKind::Member, 0)};
 
-        int fid = -1;
         for (const auto* arts : {&split, &whole})
-            fid = persist((root / ".dftindex").string(), db, *arts);
-        REQUIRE(fid >= 0);
-        const auto got = db.query_gzip_members(fid);
+            persist((root / ".dftindex").string(), *arts);
+        const auto snapshot =
+            dftu_utils_test::index_snapshot((root / ".dftindex").string());
+        const auto file = snapshot.file("trace.pfw.gz");
+        REQUIRE(file.has_value());
+        const auto got =
+            dftu_utils_test::index_take(idx::members(snapshot, *file));
         REQUIRE(got.size() == 1);
         CHECK(got[0].kind == GzipRecordKind::Member);
-        CHECK_FALSE(db.query_restart_window(fid, 1).has_value());
+        CHECK_FALSE(
+            dftu_utils_test::index_take(idx::restart_window(snapshot, *file, 1))
+                .has_value());
     }
 }

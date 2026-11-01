@@ -2,10 +2,10 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/index.h>
+#include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
@@ -223,7 +223,7 @@ TEST_SUITE("DFTracerIndex") {
               std::string::npos);
         CHECK(out.find("Files processed: 1\n") != std::string::npos);
 
-        ix::store::release_index(index_path);
+        ix::release_root(index_path);
         const auto snapshot =
             dftracer::utils::unwrap(ix::plan::open_snapshot(index_path));
         const auto config = dftracer::utils::unwrap(

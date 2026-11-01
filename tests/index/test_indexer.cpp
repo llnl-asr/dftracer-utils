@@ -2,13 +2,13 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <instrumentation.h>
 #include <sys/resource.h>
 #include <testing_utilities.h>
@@ -340,17 +340,16 @@ struct Indexed {
 };
 
 Indexed indexed(const std::string& trace) {
-    dftracer::utils::index::store::IndexDatabase db(
-        index_of(trace),
-        dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-    const int fid = db.get_file_info_id(
-        dftracer::utils::index::store::internal::get_logical_path(trace));
-    REQUIRE(fid >= 0);
+    const auto snapshot = dftu_utils_test::index_snapshot(index_of(trace));
+    const auto file = dftu_utils_test::require_indexed_file(snapshot, trace);
     Indexed r;
-    auto meta = db.query_file_metadata_batch({fid});
-    r.lines = meta[fid].num_lines;
-    r.truncated = meta[fid].truncated;
-    auto members = db.query_gzip_members(fid);
+    const auto meta = dftu_utils_test::index_take(
+        dftracer::utils::index::file_metadata(snapshot, file));
+    REQUIRE(meta.has_value());
+    r.lines = meta->num_lines;
+    r.truncated = meta->truncated;
+    auto members = dftu_utils_test::index_take(
+        dftracer::utils::index::members(snapshot, file));
     r.members = members.size();
     if (!members.empty())
         r.members_end = members.back().c_offset + members.back().c_size;

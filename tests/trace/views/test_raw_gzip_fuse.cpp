@@ -7,9 +7,9 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -206,15 +206,14 @@ TEST_SUITE("RawGzipFuse") {
 
         // The index that same pass produced is complete: bloom, members, and
         // the row sets harvested from the very metadata the agg excluded.
-        dftracer::utils::index::store::IndexDatabase rd(
-            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        int rid = rd.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz));
-        REQUIRE(rid >= 0);
-        CHECK(rd.pruning_tier_current(rid));
+        const auto snapshot = dftu_utils_test::index_snapshot(idx);
+        const auto rfile = dftu_utils_test::require_indexed_file(snapshot, gz);
+        CHECK(dftu_utils_test::pruning_tier_current(snapshot, rfile));
         CHECK(!arts.members.empty());
-        CHECK(dftu_utils_test::bloom_chunks(rd, rid, "name") > 0);
-        CHECK(rd.rowset(rid, "files").has_value());
+        CHECK(dftu_utils_test::bloom_chunks(snapshot, rfile, "name") > 0);
+        CHECK(dftu_utils_test::index_take(
+                  dftracer::utils::index::rowset(snapshot, rfile, "files"))
+                  .has_value());
     }
 
     // End to end through the public View API: a collect on a file with no index
@@ -248,12 +247,10 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(boot.names == ref.names);            // same group + value columns
         CHECK(boot.num_rows() == ref.num_rows());  // same groups, no metadata
 
-        dftracer::utils::index::store::IndexDatabase rd(
-            boot_idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        int fid = rd.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz));
-        REQUIRE(fid >= 0);
-        CHECK(rd.pruning_tier_current(fid));  // built in that one collect pass
+        const auto snapshot = dftu_utils_test::index_snapshot(boot_idx);
+        const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+        CHECK(dftu_utils_test::pruning_tier_current(
+            snapshot, file));  // built in that one collect pass
     }
 
     // A full export of a first-touch file routes through run_export's
@@ -282,12 +279,10 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(count_containing(all.lines(), R"("name":"FH")") == 1);
         CHECK(count_containing(all.lines(), R"("name":"HH")") == 1);
 
-        dftracer::utils::index::store::IndexDatabase rd(
-            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        int fid = rd.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz));
-        REQUIRE(fid >= 0);
-        CHECK(rd.pruning_tier_current(fid));  // index built in the dump pass
+        const auto snapshot = dftu_utils_test::index_snapshot(idx);
+        const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+        CHECK(dftu_utils_test::pruning_tier_current(
+            snapshot, file));  // index built in the dump pass
     }
 
     // A filtered first-touch aggregation whose predicate names only
@@ -323,13 +318,10 @@ TEST_SUITE("RawGzipFuse") {
         CHECK(got.num_rows() == ref.num_rows());  // filter applied: 1 group
         CHECK(rows_equal(got, ref));              // same counts
 
-        dftracer::utils::index::store::IndexDatabase rd(
-            fresh, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        int fid = rd.get_file_info_id(
-            dftracer::utils::index::store::internal::get_logical_path(gz));
-        REQUIRE(fid >= 0);
-        CHECK(rd.pruning_tier_current(
-            fid));  // built in the filtered bootstrap pass
+        const auto snapshot = dftu_utils_test::index_snapshot(fresh);
+        const auto file = dftu_utils_test::require_indexed_file(snapshot, gz);
+        CHECK(dftu_utils_test::pruning_tier_current(
+            snapshot, file));  // built in the filtered bootstrap pass
     }
 
     // A filter naming a non-POD field (an arg) is not bootstrap-evaluable, so
@@ -474,17 +466,10 @@ class ThrowingFold final : public Fold {
     int batches = 0;
 };
 
-// Every live key and value of every family of an index, in order.
-static std::vector<std::pair<std::string, std::string>> index_contents(
+// Every live record of every family of an index, in order.
+static std::vector<dftu_utils_test::IndexRecord> index_contents(
     const std::string& index_path) {
-    namespace store = dftracer::utils::index::store;
-    store::release_index(index_path);
-    store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-    std::vector<std::pair<std::string, std::string>> out;
-    db.for_each_record([&out](std::string_view key, std::string_view value) {
-        out.emplace_back(std::string(key), std::string(value));
-    });
-    return out;
+    return dftu_utils_test::dump_index(index_path);
 }
 
 TEST_CASE("a first-touch query under a small budget spills the same index") {

@@ -4,7 +4,6 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/memory/budget.h>
@@ -14,6 +13,7 @@
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
+#include <index_test_helpers.h>
 #include <testing_utilities.h>
 
 #include <atomic>
@@ -27,7 +27,6 @@
 
 using namespace dftracer::utils;
 namespace build = dftracer::utils::index::build;
-namespace store = dftracer::utils::index::store;
 
 namespace {
 
@@ -95,16 +94,10 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
     return out;
 }
 
-// Every live key and value of every family, in order.
-std::vector<std::pair<std::string, std::string>> contents(
+// Every live record of every family, in order.
+std::vector<dftu_utils_test::IndexRecord> contents(
     const std::string& index_path) {
-    store::release_index(index_path);
-    store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-    std::vector<std::pair<std::string, std::string>> out;
-    db.for_each_record([&out](std::string_view key, std::string_view value) {
-        out.emplace_back(std::string(key), std::string(value));
-    });
-    return out;
+    return dftu_utils_test::dump_index(index_path);
 }
 
 std::string index_of(const std::string& trace, const std::string& dir) {

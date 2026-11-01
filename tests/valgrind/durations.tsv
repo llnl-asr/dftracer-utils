@@ -89,7 +89,6 @@ utilities/plugins/test_plugin_reads	24.2
 trace/views/test_view_scanner	24.1
 trace/views/test_field_filter	23.8
 trace/views/test_view_join	23.4
-utilities/indexer/test_index_database	23.0
 trace/views/test_rowset_fold	22.8
 trace/views/test_view_planner	22.7
 utilities/fileio/lines/sources/test_async_indexed_file_bytes_generator	22.5

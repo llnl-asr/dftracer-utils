@@ -1,7 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_definition.h>
 #include <dftracer/utils/trace/views/view_planner_utility.h>
@@ -14,8 +13,6 @@
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::views;
 using namespace dftracer::utils::index::extensions;
-using dftracer::utils::index::store::IndexDatabase;
-using dftracer::utils::index::store::internal::get_logical_path;
 
 // Helper: create a .idx with 4 checkpoints
 // Checkpoint layout:
@@ -25,11 +22,9 @@ using dftracer::utils::index::store::internal::get_logical_path;
 //   3: name={forward}, cat={compute,ai_framework}
 static void populate_test_idx(const std::string& index_path,
                               const std::string& file_path) {
-    IndexDatabase idx_db(index_path);
-    auto writer = idx_db.begin_write();
-
-    int fid = dftu_utils_test::register_test_file(
-        *writer, get_logical_path(file_path), 40000);
+    auto index = dftu_utils_test::open_test_index(index_path);
+    auto writer = dftu_utils_test::register_test_file(
+        index, dftu_utils_test::index_key(file_path), 40000);
 
     struct ChunkDims {
         std::vector<std::string> names;
@@ -54,7 +49,7 @@ static void populate_test_idx(const std::string& index_path,
         }
         auto name_blob = name_bloom.serialize();
         dftu_utils_test::put_chunk_bloom(
-            *writer, fid, static_cast<std::uint64_t>(ckpt), "name", name_blob,
+            writer, static_cast<std::uint64_t>(ckpt), "name", name_blob,
             name_bloom.num_entries());
 
         BloomFilter cat_bloom(100, 0.01);
@@ -64,37 +59,36 @@ static void populate_test_idx(const std::string& index_path,
         }
         auto cat_blob = cat_bloom.serialize();
         dftu_utils_test::put_chunk_bloom(
-            *writer, fid, static_cast<std::uint64_t>(ckpt), "cat", cat_blob,
+            writer, static_cast<std::uint64_t>(ckpt), "cat", cat_blob,
             cat_bloom.num_entries());
 
         const auto m = static_cast<std::uint64_t>(ckpt);
-        dftu_utils_test::index_records::put_gzip_member(
-            *writer, fid,
-            dftracer::utils::index::gzip::GzipMemberRecord{
-                .member_idx = m,
-                .c_offset = m * 5000,
-                .c_size = 5000,
-                .uc_offset = m * 10000,
-                .uc_size = 10000,
-                .first_line_num = m * 10 + 1,
-                .last_line_num = m * 10 + 10,
-            });
+        dftracer::utils::index::put_gzip_member(
+            writer, dftracer::utils::index::gzip::GzipMemberRecord{
+                        .member_idx = m,
+                        .c_offset = m * 5000,
+                        .c_size = 5000,
+                        .uc_offset = m * 10000,
+                        .uc_size = 10000,
+                        .first_line_num = m * 10 + 1,
+                        .last_line_num = m * 10 + 10,
+                    });
     }
 
     auto name_blob = file_name_bloom.serialize();
-    dftu_utils_test::put_file_bloom(*writer, fid, "name", name_blob,
+    dftu_utils_test::put_file_bloom(writer, "name", name_blob,
                                     file_name_bloom.num_entries());
 
     auto cat_blob = file_cat_bloom.serialize();
-    dftu_utils_test::put_file_bloom(*writer, fid, "cat", cat_blob,
+    dftu_utils_test::put_file_bloom(writer, "cat", cat_blob,
                                     file_cat_bloom.num_entries());
 
-    dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::Bloom, fid, "name");
-    dftu_utils_test::index_records::put_path(
-        *writer, dftu_utils_test::IndexExtension::Bloom, fid, "cat");
-    dftu_utils_test::mark_built(*writer, fid);
-    writer->commit();
+    dftracer::utils::index::put_path(
+        writer, dftu_utils_test::IndexExtension::Bloom, "name");
+    dftracer::utils::index::put_path(
+        writer, dftu_utils_test::IndexExtension::Bloom, "cat");
+    dftu_utils_test::mark_built(writer);
+    dftu_utils_test::commit_test_build(writer);
 }
 
 TEST_SUITE("ViewPlannerUtility") {
@@ -278,24 +272,23 @@ TEST_SUITE("ViewPlannerUtility") {
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
 
-        IndexDatabase idx_db(index_path);
         {
-            auto writer = idx_db.begin_write();
-            int fid = dftu_utils_test::register_test_file(
-                *writer, get_logical_path(file_path), 10000);
+            auto index = dftu_utils_test::open_test_index(index_path);
+            auto writer = dftu_utils_test::register_test_file(
+                index, dftu_utils_test::index_key(file_path), 10000);
 
             BloomFilter fhash_bloom(100, 0.01);
             fhash_bloom.add("hash123");
             auto blob = fhash_bloom.serialize();
 
-            dftu_utils_test::put_file_bloom(*writer, fid, "fhash", blob,
+            dftu_utils_test::put_file_bloom(writer, "fhash", blob,
                                             fhash_bloom.num_entries());
-            dftu_utils_test::put_chunk_bloom(*writer, fid, 0, "fhash", blob,
+            dftu_utils_test::put_chunk_bloom(writer, 0, "fhash", blob,
                                              fhash_bloom.num_entries());
-            dftu_utils_test::index_records::put_path(
-                *writer, dftu_utils_test::IndexExtension::Bloom, fid, "fhash");
-            dftu_utils_test::mark_built(*writer, fid);
-            writer->commit();
+            dftracer::utils::index::put_path(
+                writer, dftu_utils_test::IndexExtension::Bloom, "fhash");
+            dftu_utils_test::mark_built(writer);
+            dftu_utils_test::commit_test_build(writer);
         }
 
         // Use "file" alias which should resolve to "fhash"
@@ -328,12 +321,11 @@ TEST_SUITE("ViewPlannerUtility") {
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
 
-        IndexDatabase idx_db(index_path);
         {
-            auto writer = idx_db.begin_write();
-            dftu_utils_test::register_test_file(
-                *writer, get_logical_path(file_path), 10000);
-            writer->commit();
+            auto index = dftu_utils_test::open_test_index(index_path);
+            auto writer = dftu_utils_test::register_test_file(
+                index, dftu_utils_test::index_key(file_path), 10000);
+            dftu_utils_test::commit_test_build(writer);
         }
 
         ViewDefinition view;

@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/gzip/gzip_member_record.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_scan.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -104,12 +103,9 @@ Indexed make_indexed(TestEnvironment& env, const Trace& t,
     return r;
 }
 
-std::vector<dftracer::utils::index::gzip::GzipMemberRecord> members(
-    const Indexed& x) {
-    st::IndexDatabase db(x.idx, st::IndexOpenMode::ReadOnly);
-    const int id = db.get_file_info_id(st::internal::get_logical_path(x.gz));
-    REQUIRE(id >= 0);
-    return db.query_gzip_members(id);
+dftracer::utils::dstd::Vector<dftracer::utils::index::gzip::GzipMemberRecord>
+members(const Indexed& x) {
+    return dftu_utils_test::indexed_members(x.idx, x.gz);
 }
 
 std::vector<std::int64_t> sorted_col(

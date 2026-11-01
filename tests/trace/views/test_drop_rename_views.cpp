@@ -1,6 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/indexer.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -122,11 +121,11 @@ namespace st = dftracer::utils::index::store;
 
 bool has_catalog(const std::string& gz) {
     try {
-        st::IndexDatabase db(determine_index_path(gz, ""),
-                             st::IndexOpenMode::ReadOnly);
-        const int fid = db.get_file_info_id(st::internal::get_logical_path(gz));
-        return fid >= 0 &&
-               db.extension_current(fid, st::IndexExtension::Catalog);
+        const auto snapshot =
+            dftu_utils_test::index_snapshot(determine_index_path(gz, ""));
+        const auto file = dftu_utils_test::find_indexed_file(snapshot, gz);
+        return file && dftracer::utils::index::extension_current(
+                           snapshot, *file, st::IndexExtension::Catalog);
     } catch (...) {
         return false;
     }

@@ -332,6 +332,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Fixed
 
+- Fix index and store writes that could stall for minutes when many threads append to one store extent at once, because the appenders spun on a lock while the thread that held it waited to run.
 - Fix a rare crash when a thread that queued work for a runtime exits while that runtime ends.
   The bundled concurrentqueue is updated and patched for this.
 - Fix a crash when a runtime ends while a thread outside it, such as a store I/O thread, is still waking one of its tasks.

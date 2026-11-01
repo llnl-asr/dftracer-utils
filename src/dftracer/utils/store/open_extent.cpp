@@ -25,8 +25,16 @@ constexpr std::uint64_t OPEN_EXTENT_BUMP_MASK = 0xFFFFFFFFULL;
 constexpr std::uint64_t OPEN_EXTENT_WRITER_ONE = 1ULL << 32U;
 constexpr std::uint64_t OPEN_EXTENT_WRITER_MASK = 0xFFFFULL << 32U;
 constexpr std::uint64_t OPEN_EXTENT_MAX_WRITERS = 0xFFFFULL;
+/// Bits 48..62: segment slots claimed in the extent.
+constexpr std::uint64_t OPEN_EXTENT_SLOT_ONE = 1ULL << 48U;
+constexpr std::uint64_t OPEN_EXTENT_SLOT_MASK = 0x7FFFULL << 48U;
+constexpr std::uint64_t OPEN_EXTENT_MAX_SLOTS = 0x7FFFULL;
 /// Bit 63: no appender may reserve space in the extent any more.
 constexpr std::uint64_t OPEN_EXTENT_SEALED = 1ULL << 63U;
+/// Slots per lazily made block, so an extent holds only the blocks it uses.
+constexpr std::uint64_t OPEN_EXTENT_SLOT_BLOCK = 256;
+constexpr std::uint64_t OPEN_EXTENT_SLOT_BLOCKS =
+    (OPEN_EXTENT_MAX_SLOTS + OPEN_EXTENT_SLOT_BLOCK) / OPEN_EXTENT_SLOT_BLOCK;
 
 /// After the first dictionary, one page in this many goes to the sample of the
 /// second, so it learns from a wider stretch of the data at the same cost.
@@ -97,17 +105,25 @@ struct ExtentWriter::OpenSegment {
 };
 
 struct ExtentWriter::OpenExtent {
+    struct SlotBlock {
+        OpenSegment slots[OPEN_EXTENT_SLOT_BLOCK];
+    };
+
     OpenExtent(std::uint32_t open_namespace_id, PageCodec open_codec,
                std::uint32_t bytes)
         : namespace_id(open_namespace_id),
           codec(open_codec),
           buffer(bytes, 0) {}
+    ~OpenExtent() {
+        for (auto& block : blocks) delete block.load(std::memory_order_relaxed);
+    }
 
     std::uint32_t namespace_id = 0;
     PageCodec codec = PageCodec::Zstd;
     std::atomic<std::uint64_t> state{0};
-    std::atomic_flag segments_lock = ATOMIC_FLAG_INIT;
+    std::atomic<SlotBlock*> blocks[OPEN_EXTENT_SLOT_BLOCKS] = {};
     dstd::Vector<std::uint8_t> buffer;
+    /// Filled from the slots once the last appender has left.
     dstd::Vector<OpenSegment> segments;
 };
 
@@ -159,7 +175,25 @@ ExtentWriter::~ExtentWriter() {
     }
 }
 
+void ExtentWriter::gather_segments(OpenExtent* extent) {
+    const std::uint64_t claimed =
+        (extent->state.load(std::memory_order_acquire) &
+         OPEN_EXTENT_SLOT_MASK) >>
+        48U;
+    extent->segments.reserve(extent->segments.size() + claimed);
+    for (std::uint64_t i = 0; i < claimed; ++i) {
+        auto* block = extent->blocks[i / OPEN_EXTENT_SLOT_BLOCK].load(
+            std::memory_order_acquire);
+        extent->segments.push_back(
+            std::move(block->slots[i % OPEN_EXTENT_SLOT_BLOCK]));
+    }
+    for (auto& block : extent->blocks)
+        delete block.exchange(nullptr, std::memory_order_acq_rel);
+    extent->state.fetch_and(~OPEN_EXTENT_SLOT_MASK, std::memory_order_acq_rel);
+}
+
 void ExtentWriter::discard(OpenExtent* extent) {
+    gather_segments(extent);
     if (on_discarded_ == nullptr) return;
     for (OpenSegment& open : extent->segments) on_discarded_(open.context);
     extent->segments.clear();
@@ -302,12 +336,21 @@ ExtentWriter::OpenExtent* ExtentWriter::publish_extent(NamespaceSlot& slot,
     return expected;
 }
 
-void ExtentWriter::push_segment(OpenExtent* extent, OpenSegment segment) {
-    while (extent->segments_lock.test_and_set(std::memory_order_acquire)) {
-        std::this_thread::yield();
+void ExtentWriter::put_segment(OpenExtent* extent, std::uint64_t slot,
+                               OpenSegment segment) {
+    std::atomic<OpenExtent::SlotBlock*>& home =
+        extent->blocks[slot / OPEN_EXTENT_SLOT_BLOCK];
+    OpenExtent::SlotBlock* block = home.load(std::memory_order_acquire);
+    if (block == nullptr) {
+        auto* made = new OpenExtent::SlotBlock;
+        if (home.compare_exchange_strong(block, made, std::memory_order_acq_rel,
+                                         std::memory_order_acquire)) {
+            block = made;
+        } else {
+            delete made;
+        }
     }
-    extent->segments.push_back(std::move(segment));
-    extent->segments_lock.clear(std::memory_order_release);
+    block->slots[slot % OPEN_EXTENT_SLOT_BLOCK] = std::move(segment);
 }
 
 void ExtentWriter::leave_extent(OpenExtent* extent) {
@@ -502,6 +545,7 @@ void ExtentWriter::start_extent_write(OpenExtent* extent) {
         return;
     }
 
+    gather_segments(extent);
     std::sort(extent->segments.begin(), extent->segments.end(),
               [](const OpenSegment& a, const OpenSegment& b) {
                   return a.segment.offset_in_extent <
@@ -639,12 +683,17 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
             const std::uint64_t used = state & OPEN_EXTENT_BUMP_MASK;
             const std::uint64_t writers =
                 (state & OPEN_EXTENT_WRITER_MASK) >> 32U;
+            const std::uint64_t claimed =
+                (state & OPEN_EXTENT_SLOT_MASK) >> 48U;
             if (used + length > capacity ||
-                writers == OPEN_EXTENT_MAX_WRITERS) {
+                writers == OPEN_EXTENT_MAX_WRITERS ||
+                claimed == OPEN_EXTENT_MAX_SLOTS) {
                 break;
             }
             if (extent->state.compare_exchange_weak(
-                    state, state + length + OPEN_EXTENT_WRITER_ONE,
+                    state,
+                    state + length + OPEN_EXTENT_WRITER_ONE +
+                        OPEN_EXTENT_SLOT_ONE,
                     std::memory_order_acq_rel, std::memory_order_acquire)) {
                 write(write_context, extent->buffer.data() + used);
                 info.offset_in_extent = static_cast<std::uint32_t>(used);
@@ -652,7 +701,7 @@ dstd::Expected<void, dstd::Error> ExtentWriter::append_with(
                 OpenSegment open;
                 open.segment = std::move(info);
                 open.context = context;
-                push_segment(extent, std::move(open));
+                put_segment(extent, claimed, std::move(open));
                 leave_extent(extent);
                 return {};
             }

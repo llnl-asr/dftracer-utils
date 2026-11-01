@@ -139,7 +139,11 @@ class ExtentWriter {
     dstd::SharedPtr<const PageDict> page_dict(
         NamespaceSlot& slot, const std::uint8_t* raw, std::uint32_t used,
         dstd::Span<const std::uint32_t> starts);
-    static void push_segment(OpenExtent* extent, OpenSegment segment);
+    static void put_segment(OpenExtent* extent, std::uint64_t slot,
+                            OpenSegment segment);
+    /// Moves the claimed slots into `segments`. Only after the last appender
+    /// has left.
+    static void gather_segments(OpenExtent* extent);
     void leave_extent(OpenExtent* extent);
     bool seal_extent(OpenExtent* extent);
     void start_extent_write(OpenExtent* extent);

@@ -609,6 +609,9 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     constexpr std::uint32_t BACKGROUND = 4;
     constexpr int ROUNDS = SANITIZED ? 40 : 200;
     constexpr int KEYS = 2;
+    // Bounded so a slow build cannot pile up data that the final close then
+    // spends minutes encoding. The rounds still race live background commits.
+    constexpr std::uint64_t BACKGROUND_BATCHES = SANITIZED ? 400 : 20000;
 
     dftu_utils_test::ScopedTestDir dir("store_concurrent_flush_race");
     auto writer = make_writer(dir, manual_options(RACE_EXTENT));
@@ -627,7 +630,8 @@ TEST_CASE("flush holds every batch committed before it under other threads") {
     for (std::uint32_t t = 0; t < BACKGROUND; ++t) {
         writers.emplace_back([&, t] {
             std::uint64_t count = 0;
-            while (!stop.load(std::memory_order_acquire)) {
+            while (!stop.load(std::memory_order_acquire) &&
+                   count < BACKGROUND_BATCHES) {
                 Batch entries = writer->batch(space, background_scope, 0);
                 for (int k = 0; k < KEYS; ++k) {
                     const std::string key = "t" + std::to_string(t) + "-" +

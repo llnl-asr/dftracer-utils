@@ -306,9 +306,13 @@ class Store {
     /// another process added data files.
     dstd::Expected<Snapshot, dstd::Error> snapshot();
 
-    /// Closes the writer of every store this process holds. For a CLI exit,
-    /// while the runtime still runs. Returns the first error.
+    /// Closes the writer of every store this process holds. The shutdown hook
+    /// runs it while the runtime still runs. Returns the first error.
     static dstd::Expected<void, dstd::Error> close_all();
+
+    /// Registers the shutdown hook that calls close_all(), once. A holder
+    /// whose own CloseStores hook must run first calls this before adding it.
+    static void register_shutdown_close();
 
     /// Moves every data file of `from_dir` into `to_dir` on the same
     /// filesystem and returns the count. Every writer of `from_dir` must be

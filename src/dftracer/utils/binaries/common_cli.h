@@ -11,6 +11,7 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/scope_exit.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
@@ -137,11 +138,10 @@ bool setup_and_parse(Cli& cli, int argc, char** argv) {
 template <class CliT, class RunFn>
 int cli_main(int argc, char** argv, const char* name, const char* description,
              RunFn&& run) {
-    // Close the index writers at cli_main scope, while the runtime they wait
-    // on still runs, not via atexit, where static destruction order would
-    // leave them waiting on stopped threads.
-    auto index_exit_guard = dftracer::utils::dstd::defer(
-        [] { dftracer::utils::index::release_all_roots(); });
+    // Run the shutdown hooks at cli_main scope, while the runtime the store
+    // writers wait on still runs.
+    auto shutdown_guard =
+        dftracer::utils::dstd::defer([] { dftracer::utils::dstd::shutdown(); });
     dftracer::utils::logger::init();
     if (auto configured = dftracer::utils::configure_memory_from_env();
         !configured) {

@@ -129,8 +129,8 @@ class Index {
 /// Closes the kept handle of one index root so a later open sees a fresh
 /// root. Call it before the root is deleted or rebuilt.
 void release_root(dstd::StringView root);
-/// Closes every kept root and every store writer, for an exit while the
-/// runtime still runs.
+/// Closes every kept root, every cache folder and every store writer, for an
+/// exit while the runtime still runs. Each step is safe to repeat.
 void release_all_roots();
 
 }  // namespace dftracer::utils::index

@@ -1,6 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
-#include <dftracer/utils/index/index.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/python/py_dict_helpers.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -436,12 +436,10 @@ static PyMethodDef runtime_module_methods[] = {
      "(never makes one)."},
     {NULL}};
 
-// Runs during interpreter finalization. Stop the default runtime's worker and
-// I/O threads while the process is still healthy.
+// Runs during interpreter finalization. Run the shutdown hooks there, while
+// the process is still healthy, because the runtime is one of them.
 static void dftracer_utils_atexit_cleanup() {
-    // A store writer waits on the runtime to close, so it closes first.
-    dftracer::utils::index::release_all_roots();
-    dftracer::utils::Runtime::stop_at_exit();
+    dftracer::utils::dstd::shutdown();
 }
 
 int dftracer::utils::python::init_runtime(PyObject *m) {

@@ -205,12 +205,12 @@ class Runtime {
     void set_default_task_timeout(std::chrono::milliseconds timeout);
 
     /// Stops the executor. A no-op on the process runtime, which only the
-    /// exit hook stops.
+    /// shutdown hooks stop.
     void shutdown();
     /// Applies `settings` in place, while work runs. Thread safe.
     void configure(const RuntimeSettings& settings);
-    /// Stops the process runtime. For exit handlers only: nothing may submit
-    /// work after it.
+    /// Stops the process runtime. For a shutdown hook only: nothing may
+    /// submit work after it.
     static void stop_at_exit();
     std::size_t threads() const;
     std::size_t io_threads() const;

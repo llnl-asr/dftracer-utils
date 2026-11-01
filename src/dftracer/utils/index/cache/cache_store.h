@@ -81,6 +81,9 @@ class CacheStore {
 /// (bytes, or a size such as "512MB"), 2 GiB when unset or malformed.
 std::uint64_t cache_max_bytes();
 
+/// Closes every cache folder this process kept open.
+void clear_cache_roots();
+
 }  // namespace dftracer::utils::index::cache
 
 #endif  // DFTRACER_UTILS_INDEX_CACHE_CACHE_STORE_H

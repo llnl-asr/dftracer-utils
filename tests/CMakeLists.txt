@@ -234,6 +234,7 @@ set(TEST_CPP_SOURCES
     dstd/test_raw_buffer.cpp
     dstd/test_expected.cpp
     dstd/test_error.cpp
+    dstd/test_shutdown.cpp
     common/test_filesystem_info.cpp
     common/test_memory_budget.cpp
     common/test_memory_config.cpp
@@ -299,6 +300,7 @@ set(TEST_CPP_SOURCES
     trace/genesis/test_genesis.cpp
     index/test_index_api.cpp
     index/test_indexer.cpp
+    index/test_exit_shutdown.cpp
     index/test_store_key.cpp
     store/test_segment.cpp
     store/test_file.cpp

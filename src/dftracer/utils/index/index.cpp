@@ -1,4 +1,7 @@
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/layout.h>
 #include <dftracer/utils/index/store/root_layout.h>
@@ -7,7 +10,6 @@
 #include <dftracer/utils/memory/manager.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include <list>
 #include <map>
@@ -541,17 +543,6 @@ constexpr std::size_t INDEX_ROOTS_RETAINED = 64;
 
 class RetainedRoots {
    public:
-    static RetainedRoots& instance() {
-        static RetainedRoots* roots = [] {
-            auto* made = new RetainedRoots();
-            // Registered after the memory manager, so it runs before the exit
-            // check and the check sees no store held here.
-            std::atexit([] { RetainedRoots::instance().clear(); });
-            return made;
-        }();
-        return *roots;
-    }
-
     Index find_or_add(const std::string& root, Index made) {
         memory::Scope general(memory::Manager::get().general());
         std::lock_guard<std::mutex> lock(mutex_);
@@ -589,14 +580,27 @@ class RetainedRoots {
     Held roots_;
 };
 
+RetainedRoots& retained_roots() {
+    RetainedRoots& roots = dstd::Singleton<RetainedRoots>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        kv::Store::register_shutdown_close();
+        dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores, [] {
+            dstd::Singleton<RetainedRoots>::get().clear();
+        });
+        return true;
+    }();
+    return roots;
+}
+
 }  // namespace
 
 void release_root(dstd::StringView root) {
-    RetainedRoots::instance().forget(std::string(root));
+    retained_roots().forget(std::string(root));
 }
 
 void release_all_roots() {
-    RetainedRoots::instance().clear();
+    cache::clear_cache_roots();
+    retained_roots().clear();
     if (auto closed = kv::Store::close_all(); !closed) {
         DFTRACER_UTILS_LOG_ERROR("index: close at exit: %s",
                                  closed.error().format().c_str());
@@ -609,7 +613,7 @@ dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     impl->root = std::string(root);
     impl->store_dir = index::store_dir(impl->root);
     const std::string key = impl->root;
-    return RetainedRoots::instance().find_or_add(key, Index(std::move(impl)));
+    return retained_roots().find_or_add(key, Index(std::move(impl)));
 }
 
 dstd::Expected<Snapshot, dstd::Error> Index::snapshot() const {

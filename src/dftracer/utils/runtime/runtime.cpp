@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/watchdog.h>
@@ -293,7 +294,9 @@ ExecutorConfig config_of(const RuntimeSettings& settings) {
 void Runtime::become_process_runtime() {
     process_runtime_ = true;
     [[maybe_unused]] static const bool hooked =
-        (memory::add_exit_hook(&Runtime::stop_at_exit), true);
+        (dstd::add_shutdown_hook(dstd::ShutdownStage::StopRuntime,
+                                 &Runtime::stop_at_exit),
+         true);
 }
 
 void Runtime::stop_at_exit() {
@@ -302,9 +305,8 @@ void Runtime::stop_at_exit() {
         std::lock_guard<std::mutex> lock(g_default_mtx);
         rt = g_default_runtime;
     }
-    // The memory exit check runs from atexit, which can come before this
-    // global is destroyed. Stopping first lets the workers free their last
-    // frames before the check reads.
+    // Shutdown stops the runtime before the memory exit check reads the
+    // counters, which lets the workers free their last frames first.
     if (rt) rt->stop();
 }
 

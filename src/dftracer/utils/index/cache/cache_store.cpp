@@ -6,13 +6,14 @@
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/shutdown.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 
 #include <algorithm>
 #include <chrono>
-#include <cstdlib>
 #include <filesystem>
 #include <mutex>
 #include <system_error>
@@ -106,9 +107,9 @@ dstd::Expected<void, dstd::Error> wait(
     return runtime->submit(std::move(task)).get();
 }
 
-/// Kept open so each folder gets one data file per process. Store::close_all
-/// closes their writers before the process runtime stops, and the handles go
-/// at exit so the memory exit check sees no live store.
+/// Kept open so each folder gets one data file per process. The handles go
+/// when shutdown clears them, before the store closes the writers they hold
+/// and before the process runtime stops.
 struct CacheRoots {
     using Held = dstd::Map<std::string, kv::Store>;
 
@@ -123,15 +124,20 @@ struct CacheRoots {
 };
 
 CacheRoots& cache_roots() {
-    static CacheRoots* value = [] {
-        auto* made = new CacheRoots();
-        std::atexit([] { cache_roots().clear(); });
-        return made;
+    CacheRoots& roots = dstd::Singleton<CacheRoots>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        kv::Store::register_shutdown_close();
+        dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores, [] {
+            dstd::Singleton<CacheRoots>::get().clear();
+        });
+        return true;
     }();
-    return *value;
+    return roots;
 }
 
 }  // namespace
+
+void clear_cache_roots() { cache_roots().clear(); }
 
 std::uint64_t cache_max_bytes() {
     const auto text = dftracer::utils::Env::get<std::string_view>(

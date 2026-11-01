@@ -1,8 +1,10 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/no_destructor.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -263,7 +265,21 @@ std::mutex& registry_mutex() {
     return *value;
 }
 
+void close_all_at_shutdown() {
+    if (auto closed = Store::close_all(); !closed) {
+        DFTRACER_UTILS_LOG_ERROR("store: close at exit: %s",
+                                 closed.error().format().c_str());
+    }
+}
+
 }  // namespace
+
+void Store::register_shutdown_close() {
+    static std::atomic<bool> registered{false};
+    if (registered.exchange(true, std::memory_order_acq_rel)) return;
+    dstd::add_shutdown_hook(dstd::ShutdownStage::CloseStores,
+                            &close_all_at_shutdown);
+}
 
 struct Store::State {
     /// Holds what the store keeps across queries, never the pool of the query
@@ -365,6 +381,7 @@ Store::State::~State() {
 
 dstd::Expected<dstd::SharedPtr<Store::State>, dstd::Error>
 Store::State::get_or_open(dstd::StringView dir) {
+    Store::register_shutdown_close();
     const std::string key = directory_key(dir);
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto& states = registry();

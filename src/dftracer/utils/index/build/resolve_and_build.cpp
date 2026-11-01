@@ -125,7 +125,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         for (const auto& file : result.all_files) {
             auto root =
                 trace::internal::determine_index_path(file, input.index_dir);
-            if (fs::exists(root)) stale_tiers.insert(std::move(root));
+            if (fs::exists(index::store_dir(root)))
+                stale_tiers.insert(std::move(root));
         }
     for (const auto& root : stale_tiers) clear_aggregation(root);
 
@@ -190,7 +191,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         // should_stage is cheap for the common local destination and short
         // circuits before any mount probing; only a network destination reaches
         // the single-root and size checks below.
-        if (!fs::exists(result.index_path) && should_stage(result.index_path)) {
+        if (!fs::exists(index::store_dir(result.index_path)) &&
+            should_stage(result.index_path)) {
             std::set<std::string> roots;
             for (const auto& f : files_needing_work)
                 roots.insert(
@@ -381,7 +383,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         "and aggregating again",
         roots.size(), failure.c_str());
     for (const auto& root : roots)
-        if (fs::exists(root)) {
+        if (fs::exists(index::store_dir(root))) {
             index::release_root(root);
             auto target = unwrap(index::Index::open(
                 index::store::internal::normalize_index_root(root)));

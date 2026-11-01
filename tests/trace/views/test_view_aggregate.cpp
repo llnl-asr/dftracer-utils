@@ -903,14 +903,13 @@ TEST_SUITE("View") {
         auto expect = canon(run(scan::collect_frame(make())));
         REQUIRE(expect.size() >= 1);
 
-        // A materialize plan persists the result into the rollup store beside
-        // the index as a byproduct of answering it.
+        // A materialize plan persists the result into the rollup store of the
+        // index root as a byproduct of answering it.
         CHECK(canon(run(scan::collect_frame(
                   scan::materialize(make(), 0, 0)))) == expect);
         {
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                (fs::path(idx).parent_path() / ".dftindex-cache" / "rollups")
-                    .string(),
+                dftracer::utils::index::rollups_dir(idx),
                 dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(db);
             CHECK_FALSE(
@@ -966,8 +965,7 @@ TEST_SUITE("View") {
             .get();  // build-only terminal: materialize the rollup
         {
             auto db = dftracer::utils::index::cache::open_rollup_db(
-                (fs::path(idx).parent_path() / ".dftindex-cache" / "rollups")
-                    .string(),
+                dftracer::utils::index::rollups_dir(idx),
                 dftracer::utils::index::cache::CacheStore::Mode::ReadOnly);
             REQUIRE(db);
             CHECK_FALSE(db->usage().empty());

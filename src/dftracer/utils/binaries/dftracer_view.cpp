@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/memory/budget.h>  // NO_SPILL_BUDGET
 #include <dftracer/utils/runtime/coro/task.h>
@@ -846,7 +847,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     for (const auto& file_path : files) {
         std::string index_path =
             internal::determine_index_path(file_path, index_dir);
-        if (!fs::exists(index_path)) {
+        if (!fs::exists(dftracer::utils::index::store_dir(index_path))) {
             files_needing_index.push_back(file_path);
         }
     }

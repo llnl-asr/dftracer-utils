@@ -1,5 +1,6 @@
-// The query cache: rollups and materialized views in .dftindex-cache beside
-// the index, capped with LRU eviction, disposable, and keyed by record schema.
+// The query cache: rollups and materialized views inside the index root, in
+// its rollups/, lookups/ and views/, capped with LRU eviction, disposable, and
+// keyed by record schema.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/index/cache/rollup_store.h>
@@ -18,11 +19,15 @@ namespace {
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
 std::string cache_of(const std::string& gz) {
-    return (fs::path(gz).parent_path() / ".dftindex-cache").string();
+    return determine_index_path(gz, "");
 }
 
 std::string rollups_of(const std::string& gz) {
-    return (fs::path(cache_of(gz)) / "rollups").string();
+    return dftracer::utils::index::rollups_dir(cache_of(gz));
+}
+
+std::string views_of(const std::string& gz) {
+    return dftracer::utils::index::views_dir(cache_of(gz));
 }
 
 // Signatures in the rollup store, from its usage records.
@@ -71,15 +76,15 @@ std::string indexed_trace(TestEnvironment& env) {
 }  // namespace
 
 TEST_SUITE("QueryCache") {
-    TEST_CASE("rollups go beside the index, not into it") {
+    TEST_CASE("rollups go in the index root, not in its store") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         by_cat(gz, "dur >= 0").materialize().get();
         CHECK(
             dftracer::utils::index::cache::CacheStore::exists(rollups_of(gz)));
         CHECK(rollup_sigs(gz).size() == 1);
-        CHECK_FALSE(
-            fs::exists(fs::path(determine_index_path(gz, "")) / "cache"));
+        CHECK_FALSE(fs::exists(fs::path(cache_of(gz)).parent_path() /
+                               ".dftindex-cache"));
         auto store = dftracer::utils::store::Store::open(
             (fs::path(determine_index_path(gz, "")) / "store").string());
         REQUIRE(store.has_value());
@@ -109,10 +114,12 @@ TEST_SUITE("QueryCache") {
 
         by_cat(gz, "dur >= 0").materialize().get();
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
-        REQUIRE(fs::exists(fs::path(cache_of(gz)) / "views"));
+        REQUIRE(fs::exists(fs::path(views_of(gz))));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
 
-        fs::remove_all(cache_of(gz));
+        // Both caches are disposable. The index itself is not part of them.
+        fs::remove_all(rollups_of(gz));
+        fs::remove_all(views_of(gz));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
         StringSink again;
         const auto st = View::from_file(gz, idx)
@@ -121,6 +128,29 @@ TEST_SUITE("QueryCache") {
                             .get();
         CHECK(again.lines() == rows.lines());
         CHECK(st.events_scanned == 50);
+    }
+
+    TEST_CASE("a root holding only caches is not mistaken for an index") {
+        TestEnvironment env(200);
+        const auto gz = create_mixed_trace(env, 30, 20);
+        const std::string idx = determine_index_path(gz, "");
+        by_cat(gz, "dur >= 0").materialize().get();
+        const fs::path store = fs::path(idx) / "store";
+        REQUIRE(fs::exists(store));
+
+        // The caches outlive the index, so the root stays without its store.
+        fs::remove_all(store);
+        REQUIRE(fs::exists(fs::path(rollups_of(gz))));
+        REQUIRE_FALSE(fs::exists(store));
+
+        StringSink rows;
+        const auto st = View::from_file(gz, idx)
+                            .duql(R"(name == "read")")
+                            .sink_json(rows)
+                            .get();
+        CHECK(rows.lines().size() == 30);
+        CHECK(st.events_scanned == 50);
+        CHECK(fs::exists(store));
     }
 
     TEST_CASE("a rollup store that cannot be opened does not fail the query") {
@@ -193,8 +223,7 @@ TEST_SUITE("QueryCache") {
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         std::vector<std::string> views;
         std::error_code ec;
-        for (fs::directory_iterator it(fs::path(cache_of(gz)) / "views", ec),
-             end;
+        for (fs::directory_iterator it(fs::path(views_of(gz)), ec), end;
              !ec && it != end; it.increment(ec))
             views.push_back(it->path().string());
         CHECK(views.empty());

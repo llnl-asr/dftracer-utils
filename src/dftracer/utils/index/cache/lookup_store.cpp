@@ -1,5 +1,4 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
@@ -9,6 +8,7 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
@@ -31,7 +31,7 @@ constexpr std::uint64_t SIG_BYTES = 8;
 
 std::string lookup_cache_path(const trace::views::detail::ViewPlan& plan) {
     const std::string dir = cache_dir(plan);
-    return dir.empty() ? dir : (fs::path(dir) / "lookups").string();
+    return dir.empty() ? dir : index::lookups_dir(dir);
 }
 
 std::optional<std::uint64_t> lookup_signature(

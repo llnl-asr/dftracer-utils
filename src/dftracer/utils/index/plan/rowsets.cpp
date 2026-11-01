@@ -11,6 +11,7 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/executor/executor.h>
@@ -129,7 +130,7 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
         const auto& f = files[i];
         if (f.index.empty()) continue;
         auto [it, fresh] = snapshots.try_emplace(f.index);
-        if (fresh && fs::exists(f.index)) {
+        if (fresh && fs::exists(store_of(f.index))) {
             load_index_schemas(f.index);
             it->second.emplace(unwrap(open_snapshot(f.index)));
         }

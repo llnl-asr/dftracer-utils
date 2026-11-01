@@ -15,6 +15,7 @@
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/merged_statistics.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -381,7 +382,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 
             auto trusted_index_path =
                 internal::determine_index_path(directory, index_dir);
-            if (!force_rebuild && fs::exists(trusted_index_path)) {
+            if (!force_rebuild && fs::exists(dftracer::utils::index::store_dir(
+                                      trusted_index_path))) {
                 if (summary_mode) {
                     ScopedTimer _rt(stages, "root_summary_read");
                     auto root_result =

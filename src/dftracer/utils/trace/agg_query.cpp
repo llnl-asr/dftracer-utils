@@ -15,6 +15,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/chunk_columns.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
@@ -59,7 +60,9 @@ struct Source {
     Source(const AggQuerySource& s, std::uint64_t default_params_hash)
         : path(s.index_path),
           params_hash(s.params_hash ? *s.params_hash : default_params_hash) {
-        if (path.empty() || !dftracer::utils::input_exists(path)) return;
+        if (path.empty() ||
+            !dftracer::utils::input_exists(index::store_of(path)))
+            return;
         snapshot.emplace(unwrap(index::plan::open_snapshot(path)));
     }
 

@@ -11,6 +11,7 @@ namespace dftracer::utils::index {
 inline constexpr std::string_view INDEX_ROOT_NAME = ".dftindex";
 inline constexpr std::string_view STORE_DIR = "store";
 inline constexpr std::string_view ROLLUPS_DIR = "rollups";
+inline constexpr std::string_view LOOKUPS_DIR = "lookups";
 inline constexpr std::string_view VIEWS_DIR = "views";
 inline constexpr std::string_view VIEW_PARTS_DIR = "parts";
 inline constexpr std::string_view SHARDS_DIR = "shards";
@@ -18,7 +19,11 @@ inline constexpr std::string_view SHARD_MANIFEST = "shards.json";
 inline constexpr std::string_view SPILL_DIR = "spill";
 
 std::string store_dir(std::string_view root);
+// The store directory under the root `path` names, normalized first, so a plain
+// directory names its own `.dftindex`. Empty `path` names nothing.
+std::string store_of(std::string_view path);
 std::string rollups_dir(std::string_view root);
+std::string lookups_dir(std::string_view root);
 std::string views_dir(std::string_view root);
 std::string view_root(std::string_view root, std::string_view slug);
 std::string view_parts_dir(std::string_view view_root);

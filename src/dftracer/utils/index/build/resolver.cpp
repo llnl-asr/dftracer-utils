@@ -10,6 +10,7 @@
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/layout.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -244,7 +245,8 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     result.index_path = input.index_path;
     if (!input.index_path.empty()) load_index_schemas(input.index_path);
 
-    if (input.index_path.empty() || !fs::exists(input.index_path)) {
+    if (input.index_path.empty() ||
+        !fs::exists(index::store_of(input.index_path))) {
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
                 FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});

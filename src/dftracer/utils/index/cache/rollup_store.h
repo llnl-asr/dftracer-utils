@@ -65,9 +65,8 @@ std::uint64_t rest_signature(const trace::views::detail::ViewPlan& plan);
 std::optional<dftracer::utils::dataframe::DataFrame> find_subsuming_rollup(
     CacheStore& db, const trace::views::detail::ViewPlan& plan);
 
-/// `.dftindex-cache` beside the one index all of `plan`'s files share; empty
-/// when they share none, or for a plan a cached result cannot serve (a rank
-/// key).
+/// The index root `plan`'s files share; empty when they share none, or for a
+/// plan a cached result cannot serve (a rank key).
 std::string cache_dir(const trace::views::detail::ViewPlan& plan);
 
 /// Where `plan`'s rollups live: plan.rollup_root, else `cache_dir/rollups`.

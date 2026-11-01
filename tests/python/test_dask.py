@@ -351,6 +351,61 @@ class TestDaskTraceViewer:
                 client.close()
                 cluster.close()
 
+    def test_materialize_row_view_processes_share_one_view_root(self):
+        import pyarrow as pa
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils import TraceViewer
+        from dftracer.utils.dask import DaskTraceViewer
+
+        with Environment(lines=200) as env:
+            files = self._cluster_files(env)
+
+            def query():
+                return TraceViewer(files, index_path=env.temp_dir).filter('cat == "STDIO"')
+
+            def rows():
+                return sum(pa.record_batch(c).num_rows for c in query().stream(batch_size=128))
+
+            def parts(views):
+                return sorted(
+                    os.path.join(r, f)
+                    for r, _d, fs in os.walk(views)
+                    for f in fs
+                    if f.endswith(".pfw.gz")
+                )
+
+            cluster = LocalCluster(processes=True, n_workers=2, threads_per_worker=1)
+            client = Client(cluster)
+            try:
+                base = rows()
+                assert base > 0
+
+                DaskTraceViewer(files, env.temp_dir, client=client, files_per_task=1).filter(
+                    'cat == "STDIO"'
+                ).materialize()
+
+                views = os.path.join(env.temp_dir, ".dftindex", "views")
+                slugs = os.listdir(views)
+                assert len(slugs) == 1
+                root = os.path.join(views, slugs[0])
+                found = parts(views)
+                assert len(found) >= 2
+                for part in found:
+                    rel = os.path.relpath(part, root).split(os.sep)
+                    assert rel[0] == "parts" and rel[1].startswith("shard-")
+                assert os.path.isdir(os.path.join(root, "store"))
+                stray = [
+                    r for r, ds, _f in os.walk(os.path.join(root, "parts")) if ".dftindex" in ds
+                ]
+                assert stray == []
+
+                assert rows() == base
+                assert parts(views) == found
+            finally:
+                client.close()
+                cluster.close()
+
     def test_pages_cover_all_events_once(self, tmp_path):
         import gzip
 

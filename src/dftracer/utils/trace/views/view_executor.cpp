@@ -28,6 +28,7 @@
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -94,14 +95,15 @@
 // only the shared scan setup is factored out.
 namespace dftracer::utils::trace::views::detail {
 
-// Every file is a clean first touch: it has an index path that does not exist
-// yet, so a bootstrap can build it (and there is nothing to read instead).
+// Every file is a clean first touch: it has an index path with no store yet,
+// so a bootstrap can build it (and there is nothing to read instead).
 static bool all_files_fresh(const ViewPlan& plan) {
     const std::string* checked = nullptr;
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) return false;
         if (checked && *checked == f.index_path) continue;
-        if (input_exists(f.index_path)) return false;
+        if (input_exists(dftracer::utils::index::store_of(f.index_path)))
+            return false;
         checked = &f.index_path;
     }
     return true;
@@ -986,7 +988,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
     plan_record_schema(plan);
 
     // Row query (no aggregation): materialize a filtered trace + index into a
-    // slug directory under <index>/cache/views, then record its manifest so a
+    // view root under the index root's views, then record its manifest so a
     // later subsuming query reads it instead of rescanning the base.
     if (plan.group_by.empty() && plan.agg.empty() &&
         !plan.auto_numeric_metrics) {
@@ -995,7 +997,7 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
         const std::string dir =
             dftracer::utils::index::cache::materialize_view_dir(plan);
         if (dir.empty()) co_return ExportStats{};
-        // Single-flight: one builder per slug dir. A loser skips - the winner
+        // Single-flight: one builder per view root. A loser skips - the winner
         // produces the MV. Re-check freshness under the lock in case the winner
         // just finished.
         const int lock = dftracer::utils::index::cache::lock_view_dir(dir);
@@ -1005,7 +1007,11 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
-        opts.output_path = (fs::path(dir) / "part.pfw.gz").string();
+        opts.output_path =
+            (fs::path(dftracer::utils::index::view_parts_dir(dir)) /
+             "part.pfw.gz")
+                .string();
+        opts.index_path = dir;
         opts.build_index = true;
         opts.compress = true;
         // One gzip member per index checkpoint, so the user's checkpoint_size
@@ -1115,7 +1121,8 @@ ViewPlan resolve_bucket_origin(const ViewPlan& plan) {
     const ix::Roles& roles = plan_record_schema(plan).roles;
     std::map<std::string, ix::Snapshot> snapshots;
     for (const auto& f : plan.files) {
-        if (f.index_path.empty() || !input_exists(f.index_path)) continue;
+        if (f.index_path.empty() || !input_exists(ix::store_of(f.index_path)))
+            continue;
         try {
             auto at = snapshots.find(f.index_path);
             if (at == snapshots.end())

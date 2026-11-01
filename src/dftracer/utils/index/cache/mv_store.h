@@ -11,9 +11,9 @@ namespace dftracer::utils::index::cache {
 
 struct ViewPlan;
 
-/// Root directory holding materialized filtered-trace views: a sibling of the
-/// aggregation anchor, `<parent-of-anchor>/.dftindex-views`, overridable via
-/// plan.views_root. Empty when the plan has no single anchor.
+/// Root directory holding materialized filtered-trace views: `<index
+/// root>/views`, overridable via plan.views_root. Empty when the plan has no
+/// single index root.
 std::string views_root(const trace::views::detail::ViewPlan& plan);
 
 /// Human-readable, collision-safe directory name for this row query's MV:
@@ -21,17 +21,17 @@ std::string views_root(const trace::views::detail::ViewPlan& plan);
 /// suffix. The suffix, not the readable part, guarantees uniqueness.
 std::string view_slug(const trace::views::detail::ViewPlan& plan);
 
-/// True if this exact plan is already materialized (its slug directory holds a
-/// manifest and a trace). The slug encodes the base files' size/mtime, so a
+/// True if this exact plan is already materialized (its view root holds a
+/// manifest and a part). The slug encodes the base files' size/mtime, so a
 /// changed base yields a different slug and this returns false.
 bool view_is_fresh(const trace::views::detail::ViewPlan& plan);
 
-/// The directory `<views_root>/<slug>` a materialize() writes into, created on
-/// demand. Empty if there is no views_root.
+/// The view root `<views_root>/<slug>` a materialize() writes into, created on
+/// demand with its parts directory. Empty if there is no views_root.
 std::string materialize_view_dir(const trace::views::detail::ViewPlan& plan);
 
-/// Single-flight guard for one MV directory: an advisory, non-blocking
-/// exclusive lock on `<dir>/.lock`. Returns an fd to pass to unlock_view_dir on
+/// Single-flight guard for one view root: an advisory, non-blocking exclusive
+/// lock on `<view root>/.lock`. Returns an fd to pass to unlock_view_dir on
 /// success, or -1 if another builder holds it (the caller should skip and let
 /// the winner finish). The lock is released on unlock and, on a crash, by the
 /// OS.

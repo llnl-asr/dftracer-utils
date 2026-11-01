@@ -1713,12 +1713,12 @@ pushdown and without.
 Lookup cache
 ~~~~~~~~~~~~
 
-A side is stored in a store at ``.dftindex-cache/lookups`` beside the
-single index of the files it reads, keyed by its text with parameters
+A side is stored in the ``lookups/`` directory of the index root that holds
+the single index of the files it reads, keyed by its text with parameters
 bound, the duql version, the record schema and the index record of each
 file. A file re-indexed with new records gives a new key. The store keeps
 at most ``DFTRACER_UTILS_CACHE_MAX_BYTES``, evicting the least recently used
-sides. Deleting ``.dftindex-cache`` loses nothing but time. A side over
+sides. Deleting ``lookups/`` loses nothing but time. A side over
 files that share no index, or whose index is not fresh, is not cached.
 
 A plan that reads a lookup uses no rollup or view store.

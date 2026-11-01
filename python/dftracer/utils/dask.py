@@ -420,8 +420,8 @@ def _dv_materialize_shard_task(
     checkpoint_size: int,
     part_size: int,
 ) -> str:
-    """Worker: materialize this shard's filtered events into its own MV subdir
-    (a self-contained part + index), for a distributed row-MV build."""
+    """Worker: materialize this shard's filtered events into a rank subdir of
+    the view's parts dir, indexed in the view root that holds them all."""
     os.makedirs(subdir, exist_ok=True)
     _make_viewer(files, index_dir, plan).export_trace(
         os.path.join(subdir, "part.pfw.gz"),
@@ -865,7 +865,7 @@ class DaskTraceViewer:
                 s,
                 self._index_dir,
                 self._plan,
-                os.path.join(mv_dir, f"shard-{n}"),
+                os.path.join(mv_dir, "parts", f"shard-{n}"),
                 checkpoint_size,
                 part_size,
                 pure=False,

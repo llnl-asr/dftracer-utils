@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/channel.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -544,7 +545,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                                                    index_dir_)]
                 .push_back(entry.path.string());
         for (auto& [root, paths] : by_root) {
-            if (!fs::exists(root)) continue;
+            const std::string store = index::store_of(root);
+            if (!fs::exists(store)) continue;
             bool stale = false;
             try {
                 stale = index_is_stale(root, paths);
@@ -562,8 +564,8 @@ coro::CoroTask<void> TraceIndex::initialize() {
                 // handle on a removed directory would serve the old data.
                 index::release_root(root);
                 std::error_code ec;
-                fs::remove_all(root, ec);
-                forget_input(root);
+                fs::remove_all(store, ec);
+                forget_input(store);
             }
         }
     }
@@ -580,8 +582,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
         std::size_t idx = files_.size();
         path_to_index_[info.path] = idx;
 
-        info.has_bloom_data = fs::exists(info.index_path);
-        info.has_checkpoint_index = fs::exists(info.index_path);
+        info.has_bloom_data = fs::exists(index::store_of(info.index_path));
+        info.has_checkpoint_index =
+            fs::exists(index::store_of(info.index_path));
         if (!info.has_bloom_data) {
             needs_build.push_back(idx);
         } else {

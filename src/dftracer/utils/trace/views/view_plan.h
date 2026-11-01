@@ -137,14 +137,13 @@ struct ViewPlan {
     std::int64_t topk_k = -1;
     bool topk_largest = true;
 
-    /// Root for the materialized-view cache (persist/reconstruct). Empty =
-    /// derive from the files' index location. The cache dir is
-    /// `<root>/<plan-signature>`, so a changed grain (files, filter, group_by,
-    /// agg, bucket, range) lands in a different dir and recomputes.
+    /// Root holding the rollup cache store. Empty = the files' index root.
+    /// Rollups are keyed by the plan signature, so a changed grain (files,
+    /// filter, group_by, agg, bucket, range) recomputes instead of matching.
     std::string rollup_root;
 
-    /// Directory holding materialized filtered-trace views. Empty = derive as
-    /// `<parent-of-index>/.dftindex-views`. Set to relocate MVs (e.g. a scratch
+    /// Directory holding materialized filtered-trace views, one subdir per
+    /// view. Empty = the index root's `views`. Set to relocate MVs (a scratch
     /// dir) away from the dataset.
     std::string views_root;
 

@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -314,7 +315,7 @@ coro::CoroTask<IndexStatus> Indexer::rebuild(CoroScope& scope) {
 coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
     std::vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(index_path)) continue;
+        if (!fs::exists(store_of(index_path))) continue;
         const auto snapshot = unwrap(plan::open_snapshot(index_path));
         for (const auto* p : traces) {
             const auto logical = store::internal::get_logical_path(*p);
@@ -339,7 +340,7 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
     const auto config = impl_->bloom_config();
     std::vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(index_path)) continue;
+        if (!fs::exists(store_of(index_path))) continue;
         const auto snapshot = unwrap(plan::open_snapshot(index_path));
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
@@ -394,7 +395,7 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
             "Indexer::explain: ", parsed.error().format());
     std::vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(index_path)) {
+        if (!fs::exists(store_of(index_path))) {
             for (const auto* p : traces) {
                 FileExplain f;
                 f.path = *p;
@@ -442,7 +443,7 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
                                                     std::string extension) {
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!fs::exists(index_path)) continue;
+        if (!fs::exists(store_of(index_path))) continue;
         if (ext == store::IndexExtension::Plugin) {
             co_await drop_plugin_extension(index_path, extension, traces);
             continue;

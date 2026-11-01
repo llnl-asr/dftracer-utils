@@ -332,8 +332,10 @@ Materialized views
 filtered trace for a row query, a rollup for an aggregation) so a later
 matching query is served from it instead of rescanning; it returns a
 ``coro::CoroTask<ExportStats>`` (``co_await`` it, or ``.get()`` outside a
-coroutine). See :doc:`aggregation` and :doc:`../../api/trace_viewer` for the
-Python equivalent.
+coroutine). A row view is its own index root under ``<dir>/.dftindex/views/``,
+with its parts in ``parts/`` and the index of those parts in ``store/``. See
+:doc:`aggregation` and :doc:`../../api/trace_viewer` for the Python
+equivalent.
 
 Distributed row-materialize coordinator protocol
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -344,11 +346,13 @@ coordinator publishing the result:
 
 1. The coordinator (a ``View`` over the **full** file set, with the query's
    filters/plan applied) calls ``materialize_dir()`` to create and return the
-   shared materialized-view directory (empty if the view has no views
-   anchor - see ``.views_root()``).
-2. Each rank exports its own slice of files' filtered events into a subdir of
-   that directory, e.g. via ``sink_trace`` with ``build_index`` set, at
-   ``<dir>/shard-<rank>/part.pfw.gz``.
+   shared view root (empty if the view has no views anchor - see
+   ``.views_root()``).
+2. Each rank exports its own slice of files' filtered events into a rank
+   subdir of that view's parts dir, e.g. via ``sink_trace`` with
+   ``build_index`` set, at
+   ``<dir>/parts/shard-<rank>/part.pfw.gz``. Every rank indexes into the
+   one view root, so the view holds a single index of all its parts.
 3. Once every rank has finished, the coordinator calls
    ``register_materialized(dir)`` to write the manifest describing the full
    base file set. A later matching read gathers the parts across all subdirs.
@@ -363,7 +367,8 @@ coordinator publishing the result:
    View::from_files(files_for_rank)
        .filter(q)
        .sink_trace(TraceWriteOptions{
-           .output_path = mv_dir + "/shard-" + std::to_string(rank) + "/part.pfw.gz",
+           .output_path = mv_dir + "/parts/shard-" + std::to_string(rank) +
+                          "/part.pfw.gz",
            .build_index = true,
        })
        .get();

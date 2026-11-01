@@ -227,9 +227,9 @@ Index storage and indexing
    * - ``DFTRACER_UTILS_CACHE_MAX_BYTES``
      - ``2G``
      - Size cap for each query cache store (rollups and materialized views
-       in ``.dftindex-cache``). A size such as ``512M`` or ``4G``. When a
-       store grows past the cap, the least recently used entries are
-       removed.
+       in ``rollups/`` and ``views/`` inside ``.dftindex``). A size such as
+       ``512M`` or ``4G``. When a store grows past the cap, the least
+       recently used entries are removed.
 
 Logging
 --------

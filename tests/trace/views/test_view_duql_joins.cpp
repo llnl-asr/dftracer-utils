@@ -1051,9 +1051,8 @@ TEST_SUITE("View duql joins") {
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
               std::vector<std::string>{"0", "2", "3", "5", "6", "8"});
 
-        const fs::path cache =
-            fs::path(determine_index_path(gz, "")).parent_path() /
-            ".dftindex-cache";
+        const std::string cache =
+            dftracer::utils::index::lookups_dir(determine_index_path(gz, ""));
         REQUIRE(fs::exists(cache));
         fs::remove_all(cache);
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
@@ -1091,9 +1090,8 @@ TEST_SUITE("View duql joins") {
             CAPTURE(checkpoint);
             const std::string gz = write_records(
                 env, "d" + std::to_string(checkpoint), lines, 4096, checkpoint);
-            const fs::path cache =
-                fs::path(determine_index_path(gz, "")).parent_path() /
-                ".dftindex-cache";
+            const std::string cache = dftracer::utils::index::lookups_dir(
+                determine_index_path(gz, ""));
             for (int pass = 0; pass < 3; ++pass) {
                 CAPTURE(pass);
                 if (pass == 2) fs::remove_all(cache);

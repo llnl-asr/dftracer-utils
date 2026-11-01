@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 
 namespace dftracer::utils::index {
@@ -13,8 +14,17 @@ std::string join(std::string_view base, std::string_view leaf) {
 
 std::string store_dir(std::string_view root) { return join(root, STORE_DIR); }
 
+std::string store_of(std::string_view path) {
+    if (path.empty()) return {};
+    return store_dir(store::internal::normalize_index_root(path));
+}
+
 std::string rollups_dir(std::string_view root) {
     return join(root, ROLLUPS_DIR);
+}
+
+std::string lookups_dir(std::string_view root) {
+    return join(root, LOOKUPS_DIR);
 }
 
 std::string views_dir(std::string_view root) { return join(root, VIEWS_DIR); }

@@ -12,6 +12,7 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -1246,7 +1247,7 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
 bool GzipIndexer::is_valid() const { return cached_is_valid; }
 
 bool GzipIndexer::exists() const {
-    return fs::exists(index_path) && fs::is_directory(index_path);
+    return fs::is_directory(index::store_dir(index_path));
 }
 
 bool GzipIndexer::need_rebuild() const {

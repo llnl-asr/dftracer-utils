@@ -8,6 +8,7 @@
 #include <dftracer/utils/index/plan/prefilter.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/json/line.h>
@@ -432,7 +433,8 @@ void TraceReader::probe_index() {
     format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
     index_path_ = dftu_internal::determine_index_path(config_.file_path,
                                                       config_.index_dir);
-    has_index_ = format_ == ArchiveFormat::Gzip && fs::exists(index_path_);
+    has_index_ = format_ == ArchiveFormat::Gzip &&
+                 fs::exists(dftracer::utils::index::store_dir(index_path_));
     // Do not trust an index whose source changed since it was built; fall back
     // to a raw read rather than serving stale data. Uses the shared stat-based
     // freshness predicate, so a record with no stored stat is treated as stale

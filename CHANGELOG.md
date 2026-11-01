@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Keep the query caches and materialized views inside the index root, in `.dftindex/rollups/`, `.dftindex/lookups/` and `.dftindex/views/`.
+  A `.dftindex-cache` folder next to the traces is no longer used and can be deleted.
 - Make `Index.find_stale_files()` return changed, added, removed and stale files from one snapshot of the index root.
   It no longer returns the `format_outdated` key.
 - Start the I/O thread pool of the epoll, kqueue and thread-pool backends with one thread, and add a thread when a request waits and no I/O thread is free, up to the configured I/O thread count.
@@ -69,7 +71,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Make a store index commit in a view bootstrap or an index build wait for its writes without holding a worker, so the peak memory of a bootstrap stays flat as its files grow.
 - Run the whole process on one runtime: pipelines, directory scans, index builds, the store, the caches and Python all share it.
   `configure_default_runtime()`, Python `Runtime(threads=...)` and `dftu_runtime_new()` grow or shrink its threads in place while work runs, and only process exit stops it.
-- Keep the rollup and lookup caches in `.dftindex-cache` on the store, so several processes can write one cache folder.
+- Keep the rollup and lookup caches on the store, so several processes can write one cache folder.
 - Spill the bloom chunks of a large file on the store into copies that no reader sees until the file's index is complete.
 - Cut the peak memory of an index build on the store backend: the build keeps each key once until its commit and writes it into its extent without more copies, and page dictionaries train as tasks of the build's executor.
   A cold `dftracer_index` of the 8,404 minife traces at 96 threads peaks at about 2.8 GB where it peaked at 3.6 GB.

@@ -67,14 +67,13 @@ std::uint64_t entry_bytes(std::size_t value_size) {
 }  // namespace
 
 TEST_SUITE("LookupStore") {
-    TEST_CASE("a stored side reads back beside the index") {
+    TEST_CASE("a stored side reads back inside the index root") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env, 30);
         const auto plan = plan_of(gz);
         const std::string path = cache::lookup_cache_path(*plan);
-        CHECK(path ==
-              (fs::path(gz).parent_path() / ".dftindex-cache" / "lookups")
-                  .string());
+        CHECK(path == dftracer::utils::index::lookups_dir(
+                          determine_index_path(gz, "")));
         const auto sig =
             cache::lookup_signature(*plan, "where type == \"run\"");
         REQUIRE(sig);
@@ -167,7 +166,7 @@ TEST_SUITE("LookupStore") {
             REQUIRE(db);
             cache::persist_lookup(*db, *sig, "rows");
         }
-        fs::remove_all(fs::path(path).parent_path());
+        fs::remove_all(path);
 
         CHECK_FALSE(
             cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly));
@@ -188,9 +187,8 @@ TEST_SUITE("LookupStore") {
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }
-        const fs::path store =
-            fs::path(determine_index_path(gz, "")).parent_path() /
-            ".dftindex-cache" / "lookups" / "store";
+        const fs::path store = dftracer::utils::index::store_dir(
+            dftracer::utils::index::lookups_dir(determine_index_path(gz, "")));
         REQUIRE(fs::exists(store));
         std::size_t files = 0;
         for (const auto& entry : fs::directory_iterator(store))

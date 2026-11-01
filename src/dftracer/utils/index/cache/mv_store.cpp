@@ -5,7 +5,9 @@
 #include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/index/cache/mv_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view_plan.h>
@@ -29,7 +31,6 @@ namespace json = json;
 
 namespace {
 
-constexpr const char* VIEWS_DIRNAME = "views";
 constexpr const char* MANIFEST_NAME = "manifest";
 constexpr const char* LAST_USED_NAME = "last_used";
 constexpr int MANIFEST_VERSION = 0;
@@ -283,6 +284,7 @@ void evict_views(const std::string& root, const std::string& keep) {
         const int fd = e.dir == keep ? -1 : lock_view_dir(e.dir);
         if (fd < 0 && e.dir != keep) return;
         std::error_code rm;
+        release_root(e.dir);
         fs::remove_all(e.dir, rm);
         unlock_view_dir(fd);
         if (!rm) total -= e.bytes;
@@ -314,21 +316,21 @@ std::vector<std::string> view_trace_files(const std::string& dir) {
     return out;
 }
 
-// All part files of an MV as ViewFiles, each paired with the index that covers
-// it. Parts written directly in `dir` share `dir/.dftindex`; a distributed
-// materialize puts each rank's parts in a subdir with its own index.
-// `.dftindex` subdirs (index roots, not parts) are skipped.
+// All part files of an MV as ViewFiles, each paired with the index its writer
+// used. Parts directly under parts/ use the view root. A distributed
+// materialize puts each rank's parts in a subdir of parts/, which resolves to
+// the same view root inside the index root and to its own root elsewhere.
 std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
     namespace dfti = trace::internal;
     std::vector<trace::views::ViewFile> out;
-    const std::string top_idx = dfti::determine_index_path(dir, "");
-    for (const auto& t : view_trace_files(dir))
-        out.push_back(trace::views::ViewFile{t, top_idx});
+    const std::string view_idx = dfti::determine_index_path(dir, "");
+    const std::string parts = index::view_parts_dir(dir);
+    for (const auto& t : view_trace_files(parts))
+        out.push_back(trace::views::ViewFile{t, view_idx});
     std::error_code ec;
-    for (fs::directory_iterator it(dir, ec), end; !ec && it != end;
+    for (fs::directory_iterator it(parts, ec), end; !ec && it != end;
          it.increment(ec)) {
         if (!it->is_directory(ec)) continue;
-        if (it->path().filename().string().rfind(".dftindex", 0) == 0) continue;
         const std::string sub = it->path().string();
         const std::string sidx = dfti::determine_index_path(sub, "");
         for (const auto& t : view_trace_files(sub))
@@ -397,7 +399,7 @@ std::string views_root(const trace::views::detail::ViewPlan& plan) {
     if (!plan.views_root.empty()) return plan.views_root;
     const std::string dir = cache_dir(plan);
     if (dir.empty()) return {};
-    return (fs::path(dir) / VIEWS_DIRNAME).string();
+    return index::views_dir(dir);
 }
 
 std::string view_slug(const trace::views::detail::ViewPlan& plan) {
@@ -438,7 +440,7 @@ std::string materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
     if (root.empty()) return {};
     const std::string dir = (fs::path(root) / view_slug(plan)).string();
     std::error_code ec;
-    fs::create_directories(dir, ec);
+    fs::create_directories(index::view_parts_dir(dir), ec);
     if (ec) return {};
     return dir;
 }
@@ -514,6 +516,7 @@ std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
         // can never be served again, and nobody reads a non-matching MV.
         if (manifest_is_stale(*m)) {
             std::error_code rm;
+            release_root(dir);
             fs::remove_all(dir, rm);
             continue;
         }

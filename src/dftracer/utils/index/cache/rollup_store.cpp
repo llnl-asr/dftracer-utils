@@ -1,5 +1,4 @@
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/internal/expr_handle.h>  // expr_canonical
@@ -8,6 +7,8 @@
 #include <dftracer/utils/index/cache/cache_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/record_schema.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/utilities/common/serialization/binary_codec.h>
@@ -328,9 +329,8 @@ std::string cache_dir(const trace::views::detail::ViewPlan& plan) {
     if (p.empty()) return {};
     for (const auto& f : plan.files)
         if (f.index_path != p) return {};
-    // Beside the index, not in it: code treats an existing index folder as an
-    // existing index, and a first build removes a folder with no database.
-    return (fs::path(p).parent_path() / ".dftindex-cache").string();
+    // The index root holds every durable artifact, so the caches go inside it.
+    return store::internal::normalize_index_root(p);
 }
 
 std::string rollup_cache_path(const trace::views::detail::ViewPlan& plan) {
@@ -341,7 +341,7 @@ std::string rollup_cache_path(const trace::views::detail::ViewPlan& plan) {
     if (plan.build_step) return {};
     if (!plan.rollup_root.empty()) return plan.rollup_root;
     const std::string dir = cache_dir(plan);
-    return dir.empty() ? dir : (fs::path(dir) / "rollups").string();
+    return dir.empty() ? dir : index::rollups_dir(dir);
 }
 
 }  // namespace dftracer::utils::index::cache

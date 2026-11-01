@@ -4,6 +4,7 @@
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/indexed_file_reader_utility.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -29,16 +30,22 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
 
     // Step 1: Check if index needs to be built/rebuilt
     bool need_build =
-        !input_exists(normalized_index_path) || input.force_rebuild;
+        !dftracer::utils::input_exists(
+            dftracer::utils::index::store_of(normalized_index_path)) ||
+        input.force_rebuild;
 
     if (need_build) {
         // Remove old index if forcing rebuild
-        if (input.force_rebuild && input_exists(normalized_index_path)) {
+        if (input.force_rebuild &&
+            dftracer::utils::input_exists(
+                dftracer::utils::index::store_of(normalized_index_path))) {
             // Force rebuild drops the handle this process keeps before removing
-            // the root directory.
+            // the store. The other artifacts in the root stay.
+            const std::string store =
+                dftracer::utils::index::store_of(normalized_index_path);
             dftracer::utils::index::release_root(normalized_index_path);
-            fs::remove_all(normalized_index_path);
-            forget_input(normalized_index_path);
+            fs::remove_all(store);
+            forget_input(store);
         }
 
         // Build new index

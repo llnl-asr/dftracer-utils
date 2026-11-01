@@ -9,6 +9,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
@@ -241,7 +242,7 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
             if (missing_roots.contains(std::string_view(f.index_path)))
                 continue;
             if (!snapshots.contains(f.index_path) &&
-                !input_exists(f.index_path)) {
+                !input_exists(ix::store_of(f.index_path))) {
                 missing_roots.insert(dstd::String(f.index_path));
                 continue;
             }

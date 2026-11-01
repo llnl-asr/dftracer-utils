@@ -14,6 +14,7 @@
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -356,7 +357,7 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     for (const auto& f : plan.files) {
         if (f.index_path.empty()) continue;
         if (!seen_roots.insert(dstd::String(f.index_path)).second) continue;
-        if (!input_exists(f.index_path)) continue;
+        if (!input_exists(ix::store_of(f.index_path))) continue;
         if (auto taken = ix::plan::open_snapshot(f.index_path))
             snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
     }
@@ -374,8 +375,9 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
                     ViewPlannerInput pin;
                     pin.with_view(vdef)
                         .with_file_path(f.file_path)
-                        .with_index_path(input_exists(index_path) ? index_path
-                                                                  : "")
+                        .with_index_path(input_exists(ix::store_of(index_path))
+                                             ? index_path
+                                             : "")
                         .with_uncompressed_size(uc_sizes[fi])
                         .with_num_checkpoints(ckpt_counts[fi]);
                     const auto held =

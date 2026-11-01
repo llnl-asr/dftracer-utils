@@ -102,6 +102,28 @@ TEST_SUITE("Indexer") {
         rt.shutdown();
     }
 
+    TEST_CASE("a root holding only caches is no index") {
+        Runtime rt(2);
+        TestEnvironment env(10);
+        const auto trace = env.create_dft_test_gzip_file(30);
+        CHECK(Indexer::open({trace}, with_runtime(rt)).build().indexed == 1);
+
+        // A cache survives where the store does not, so the root stays.
+        const fs::path root = index_of(trace);
+        fs::create_directories(root / "rollups" / "store");
+        std::ofstream(root / "rollups" / "marker") << "r";
+        fs::remove_all(root / "store");
+        REQUIRE(fs::exists(root));
+        REQUIRE_FALSE(fs::exists(root / "store"));
+
+        auto ix = Indexer::open({trace}, with_runtime(rt));
+        CHECK(ix.status().needs_work == std::vector<std::string>{trace});
+        CHECK(ix.build().indexed == 1);
+        CHECK(fs::exists(root / "store"));
+        CHECK(fs::exists(root / "rollups" / "marker"));
+        rt.shutdown();
+    }
+
     TEST_CASE("build indexes only what is missing or stale") {
         Runtime rt(4);
         TestEnvironment env(10);

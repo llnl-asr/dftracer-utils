@@ -3,13 +3,30 @@
 #include <trace/views/test_view_common.h>
 
 #include <algorithm>
+#include <map>
 #include <string>
 #include <vector>
 
 namespace {
 
 std::string views_root_of(const std::string& gz) {
-    return fs::path(gz).parent_path() / ".dftindex-cache" / "views";
+    return dftracer::utils::index::views_dir(determine_index_path(gz, ""));
+}
+
+// Every part file of the single MV, including the rank subdirs below parts/.
+void collect_parts(const std::string& dir, std::vector<std::string>& parts) {
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it->is_directory(ec)) {
+            collect_parts(it->path().string(), parts);
+            continue;
+        }
+        const std::string name = it->path().filename().string();
+        if (name.size() >= 7 &&
+            name.compare(name.size() - 7, 7, ".pfw.gz") == 0)
+            parts.push_back(it->path().string());
+    }
 }
 
 // The part files inside the single MV directory under the views root.
@@ -20,16 +37,46 @@ std::vector<std::string> mv_parts(const std::string& gz) {
     for (fs::directory_iterator it(root, ec), end; !ec && it != end;
          it.increment(ec)) {
         if (!it->is_directory(ec)) continue;
-        for (fs::directory_iterator f(it->path(), ec), fend; !ec && f != fend;
-             f.increment(ec)) {
-            const std::string name = f->path().filename().string();
-            if (name.size() >= 7 &&
-                name.compare(name.size() - 7, 7, ".pfw.gz") == 0)
-                parts.push_back(f->path().string());
-        }
+        collect_parts(
+            dftracer::utils::index::view_parts_dir(it->path().string()), parts);
     }
     std::sort(parts.begin(), parts.end());
     return parts;
+}
+
+// The one MV directory (slug dir) under the views root.
+std::string mv_root(const std::string& gz) {
+    std::error_code ec;
+    for (fs::directory_iterator it(views_root_of(gz), ec), end;
+         !ec && it != end; it.increment(ec))
+        if (it->is_directory(ec)) return it->path().string();
+    return {};
+}
+
+// Size and time of every part file, to tell a rebuild from a reuse.
+std::map<std::string, std::string> part_stamps(
+    const std::vector<std::string>& parts) {
+    std::map<std::string, std::string> out;
+    for (const auto& p : parts) {
+        std::error_code ec;
+        const auto stamp = fs::last_write_time(p, ec);
+        out[p] = std::to_string(fs::file_size(p, ec)) + ":" +
+                 std::to_string(
+                     static_cast<long long>(stamp.time_since_epoch().count()));
+    }
+    return out;
+}
+
+// Data files in the store of one index root.
+std::size_t store_files(const std::string& root) {
+    std::size_t n = 0;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator
+             it(dftracer::utils::index::store_dir(root), ec),
+         end;
+         !ec && it != end; it.increment(ec))
+        if (it->path().extension() == ".dfs") ++n;
+    return n;
 }
 
 std::vector<std::string> sorted_lines(StringSink& s) {
@@ -207,10 +254,14 @@ TEST_SUITE("ViewMV") {
         REQUIRE(!dir.empty());
         int r = 0;
         for (const auto& f : both) {
-            const std::string sub = dir + "/shard-" + std::to_string(r++);
+            const std::string sub =
+                dftracer::utils::index::view_parts_dir(dir) + "/shard-" +
+                std::to_string(r++);
             fs::create_directories(sub);
             TraceWriteOptions opts;
             opts.output_path = sub + "/part.pfw.gz";
+            // The view sits outside .dftindex, so each rank indexes its own
+            // subdir.
             opts.build_index = true;
             View::from_file(f.file_path, f.index_path)
                 .duql(R"(name == "read")")
@@ -218,11 +269,58 @@ TEST_SUITE("ViewMV") {
                 .get();
         }
         full().register_materialized(dir);
+        // The parts of both ranks sit under the one view root.
+        std::vector<std::string> parts;
+        collect_parts(dftracer::utils::index::view_parts_dir(dir), parts);
+        CHECK(parts.size() == 2);
 
         // The full query now reads the two shard parts, not the base.
         StringSink again;
         ExportStats astats = full().sink_json(again).get();
         CHECK(again.lines().size() == 60);
         CHECK(astats.events_scanned == 60);  // only the shards' read events
+        for (int k = 0; k < r; ++k)
+            CHECK(fs::exists(
+                dftracer::utils::index::store_dir(determine_index_path(
+                    dftracer::utils::index::view_parts_dir(dir) + "/shard-" +
+                        std::to_string(k),
+                    ""))));
+    }
+
+    TEST_CASE("MV - a view is its own index root and a repeat query is no-op") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string gz = create_mixed_trace(env, 30, 20);
+        std::string idx = determine_index_path(gz, "");
+
+        auto reads = [&]() {
+            return View::from_file(gz, idx).duql(R"(name == "read")");
+        };
+        reads().materialize().get();
+
+        const std::string root = mv_root(gz);
+        REQUIRE(!root.empty());
+        // <dir>/.dftindex/views/<slug>/{parts,store}
+        CHECK(fs::path(views_root_of(gz)).parent_path() == fs::path(idx));
+        CHECK(fs::path(root).parent_path() == fs::path(views_root_of(gz)));
+        CHECK(fs::exists(fs::path(root) / "parts"));
+        // The index of the view's parts is the view root itself.
+        CHECK(fs::exists(fs::path(root) / "store"));
+        CHECK(determine_index_path(root, "") == root);
+        const auto parts = mv_parts(gz);
+        REQUIRE(parts.size() == 1);
+        CHECK(fs::path(parts.front()).parent_path() ==
+              fs::path(root) / "parts");
+
+        const auto parts_before = part_stamps(parts);
+        const std::size_t files_before = store_files(root);
+        for (int query = 0; query < 2; ++query) {
+            StringSink s;
+            const auto st = reads().sink_json(s).get();
+            CHECK(s.lines().size() == 30);
+            CHECK(st.events_scanned == 30);  // served by the view
+        }
+        CHECK(part_stamps(parts) == parts_before);
+        CHECK(store_files(root) == files_before);
     }
 }

@@ -2081,8 +2081,8 @@ if(DFTRACER_UTILS_BUILD_PYTHON)
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/py_errors.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/indexer.h
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index_database.h
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/index.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/distribution.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/distribution.h
       ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/python/series.cpp

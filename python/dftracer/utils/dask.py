@@ -1064,7 +1064,7 @@ def distributed_index(
 
     from .dftracer_utils_ext import TRACE_FILE_PATTERNS
     from .dftracer_utils_ext import (
-        IndexDatabase as _IndexDatabase,
+        Index as _Index,
     )
     from .dftracer_utils_ext import (
         plan_lpt_partition as _plan_lpt_partition,
@@ -1132,8 +1132,8 @@ def distributed_index(
             entries = [(p, s) for (p, s) in entries if p in _needs]
             all_paths = [p for (p, _) in entries]
 
-    _log.info("distributed_index: opening IndexDatabase at %s", index_path)
-    db = _IndexDatabase(index_path)
+    _log.info("distributed_index: opening Index at %s", index_path)
+    db = _Index(index_path)
 
     # A file is never split across workers, since each part of its index is
     # built from the whole file.
@@ -1221,11 +1221,6 @@ def distributed_index(
             "distributed_index: agg meta writes done in %.2fs",
             _time.monotonic() - _t_meta,
         )
-
-    # The coordinator's own writes end in a complete data file, and reads in
-    # this process see what the workers wrote from other processes.
-    db.close_writer()
-    db.refresh()
 
     per_worker_file_counts = [len(set(paths)) for paths in worker_file_lists]
     return {

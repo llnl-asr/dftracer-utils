@@ -11,7 +11,7 @@
 #include <dftracer/utils/python/columnar_eval.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/distribution.h>
-#include <dftracer/utils/python/index_database.h>
+#include <dftracer/utils/python/index.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/json.h>
 #include <dftracer/utils/python/lazyframe.h>
@@ -199,7 +199,7 @@ PyMODINIT_FUNC PyInit_dftracer_utils_ext(void) {
     if (dftracer::utils::python::init_plugin_host(m) < 0) return NULL;
     if (dftracer::utils::python::init_op_runner(m) < 0) return NULL;
     if (dftracer::utils::python::init_ops(m) < 0) return NULL;
-    if (dftracer::utils::python::init_index_database(m) < 0) return NULL;
+    if (dftracer::utils::python::init_index(m) < 0) return NULL;
     if (dftracer::utils::python::init_distribution(m) < 0) return NULL;
     if (dftracer::utils::python::init_series(m) < 0) return NULL;
     if (dftracer::utils::python::init_dataframe(m) < 0) return NULL;

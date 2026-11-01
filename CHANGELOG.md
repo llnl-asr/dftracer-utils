@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Make `Index.find_stale_files()` return changed, added, removed and stale files from one snapshot of the index root.
+  It no longer returns the `format_outdated` key.
 - Start the I/O thread pool of the epoll, kqueue and thread-pool backends with one thread, and add a thread when a request waits and no I/O thread is free, up to the configured I/O thread count.
   An idle I/O thread above the first one stops after the elastic keep-alive. `DFTRACER_UTILS_ELASTIC=0` or an eager runtime starts the full pool, as before.
 - Key the Python PID queries by trace path, because a file id is numbered per process and means nothing to a caller.
@@ -74,7 +76,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Build each file of `distributed_index` on one worker, with that worker's threads, where a file larger than its share of the work was cut across workers.
   The `partition` argument keeps its values, and both place whole files.
 - Let a process that holds an index on the store backend see the files other processes wrote to it within 1 s, without a reopen.
-  `DFTRACER_UTILS_INDEX_STORE_REFRESH_MS` sets that interval, and `IndexDatabase.refresh()` makes it see them at once.
+  `DFTRACER_UTILS_INDEX_STORE_REFRESH_MS` sets that interval.
 - Build zstd 1.5.7 from source for every build, as one static archive with its symbols hidden, where a build found the system zstd first.
   A system zstd can be much older (1.4.4 on Corona), and a program that also loads the system libzstd no longer has its zstd calls bound to ours.
 - Build the index store engine as its own library, `libdftracer_utils_store`, which links only the runtime libraries, libdeflate and zstd.
@@ -234,7 +236,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   Indexes built before this change rebuild their aggregation data once.
 - Build the index on the index store from `dftracer_index` and from `distributed_index`, with no staged files and no ingest.
   Each `distributed_index` worker writes the index directly, and on the 8,404 minife traces `dftracer_index` takes 12 s where it took 36 s on RocksDB.
-- Add `IndexDatabase.close_writer()` and `IndexDatabase.refresh()` to the Python bindings.
 - Add `DFTRACER_UTILS_IO_BACKEND` to force the I/O backend, such as the thread pool for a run traced with DFTracer's preload.
 - Add `DFTRACER_UTILS_MEMORY_REPORT` to print the allocator's live, measured and limit bytes, the page heap's peak mapped bytes and its peak bytes in use at exit.
   The mapped peak counts address space, which reached 705 GiB on a split run that used 100 GB, so read `used_peak` for memory use.
@@ -304,6 +305,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the `dftracer_utils_ext.IndexDatabase` class. Use `dftracer_utils_ext.Index` instead.
 - Remove the Python `IndexDatabase.assign_file_ids` and `IndexDatabase.reserve_file_id_range` bindings, because a caller cannot use a file id that the process numbers for itself.
 - Remove the file id from the indexer C++ API and C ABI, which drops `IndexedFile::file_id` and the `file_id` field of `dftu_indexer_file`.
   Find a file by its path instead.

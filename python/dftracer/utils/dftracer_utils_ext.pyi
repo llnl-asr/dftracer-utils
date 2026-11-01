@@ -380,20 +380,18 @@ class Runtime:
 def get_default_runtime() -> Runtime: ...
 def peek_default_runtime() -> Optional[Runtime]: ...
 
-class IndexDatabase:
-    """Handle to a .dftindex index store.
+class Index:
+    """Handle to a .dftindex index root.
 
     Used by the distributed indexer coordinator to check staleness and to
     record the aggregation of a distributed build.
     """
 
     def __init__(self, index_path: str) -> None: ...
-    def close_writer(self) -> None: ...
-    def refresh(self) -> None: ...
     def find_stale_files(self, paths: List[str]) -> dict:
         """Stat-only (mtime + size) staleness check of `paths` against the
         index. Returns a dict with keys `changed`, `added`, `removed`
-        (lists of paths), `format_outdated` (bool) and `stale` (bool)."""
+        (lists of paths) and `stale` (bool)."""
         ...
 
     def write_agg_config(self, aggregation_config: Any) -> None:

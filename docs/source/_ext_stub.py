@@ -431,8 +431,8 @@ def install_extension_stub() -> None:
         ) -> dict[str, object]:
             return {}
 
-    class IndexDatabase(_BaseNative):
-        """Handle to a .dftindex index store.
+    class Index(_BaseNative):
+        """Handle to a .dftindex index root.
 
         Used by the distributed indexer coordinator to check staleness and to
         record the aggregation of a distributed build.
@@ -441,15 +441,11 @@ def install_extension_stub() -> None:
         def __init__(self, index_path: str) -> None:
             self._index_path = index_path
 
-        def close_writer(self) -> None:
-            """Close this process's writer of the index, so its data file is
-            complete for other processes."""
-            return None
-
-        def refresh(self) -> None:
-            """Later reads in this process see the data files other processes
-            wrote since."""
-            return None
+        def find_stale_files(self, paths: list[str]) -> dict[str, object]:
+            """Stat-only (mtime + size) staleness check of `paths` against the
+            index. Returns a dict with keys `changed`, `added`, `removed`
+            (lists of paths) and `stale` (bool)."""
+            return {}
 
         def write_agg_config(self, aggregation_config: object) -> None:
             """Record the aggregation config a distributed build aggregated its
@@ -633,7 +629,7 @@ def install_extension_stub() -> None:
         "DFTUtilsDuqlError",
         "DFTUtilsReaderError",
         "DFTUtilsValueError",
-        "IndexDatabase",
+        "Index",
         "Indexer",
         "IndexerCheckpoint",
         "JsonDictValue",

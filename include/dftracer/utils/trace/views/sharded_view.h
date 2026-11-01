@@ -68,8 +68,8 @@ class ShardedView {
 };
 
 /// Write a `shards.json` manifest at `root` cataloging `shard_dirs` as one
-/// shard set. Each shard directory is opened read-only to record its file-id
-/// range and file count. A shard path is stored relative to `root` when it
+/// shard set. Each shard directory is opened read-only to record its file
+/// count. A shard path is stored relative to `root` when it
 /// lives under it, else absolute. Overwrites any existing manifest atomically.
 /// A later `ShardedView::from_manifest(root)` reads the set back.
 void write_shard_set(const std::string& root,

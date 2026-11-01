@@ -78,7 +78,6 @@ typedef struct dftu_indexer_report {
 typedef struct dftu_indexer_file {
     const char* path;       /**< borrowed from the file list */
     const char* index_path; /**< borrowed from the file list */
-    int64_t file_id;
     uint64_t size_bytes;    /**< as recorded when indexed */
     uint64_t mtime;         /**< as recorded when indexed */
     int32_t truncated;      /**< bool: last gzip member was cut short */

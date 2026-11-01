@@ -172,7 +172,7 @@ Interface for processing decompressed chunks during index building. Implementati
        virtual coro::CoroTask<void> on_checkpoint(std::size_t checkpoint_idx) = 0;
        virtual coro::CoroTask<void> on_chunk(const char* data, std::size_t len,
                                              std::size_t checkpoint_idx) = 0;
-       virtual void finalize(IndexDatabaseWriterContext& writer, int file_id) = 0;
+       virtual void finalize(IndexDatabaseWrite& writer, int file_id) = 0;
    };
 
 Index building itself no longer goes through public ``IndexVisitor``

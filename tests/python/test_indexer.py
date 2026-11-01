@@ -450,9 +450,9 @@ class TestIndexerDfanalyzerAPIs:
                 indexer.rowset("nope")
 
     def test_query_file_pids(self):
-        """Test query_file_pids returns set of PIDs for a file"""
+        """query_file_pids returns the PIDs the index recorded for a path"""
         with Environment() as env:
-            gz_file = env.create_dft_trace_file()
+            gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
 
             with dftu_utils.Indexer(
                 files=[gz_file],
@@ -460,17 +460,13 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                # File ID 1 is typically the first indexed file
-                pids = indexer.query_file_pids(1)
-                assert isinstance(pids, set)
-                # PIDs should be integers
-                for pid in pids:
-                    assert isinstance(pid, int)
+                assert indexer.query_file_pids(gz_file) == {7}
 
-    def test_query_file_pids_nonexistent(self):
-        """Test query_file_pids returns empty set for nonexistent file"""
+    def test_query_file_pids_unindexed_path(self):
+        """query_file_pids returns an empty set for a path not in the index"""
         with Environment() as env:
             gz_file = env.create_dft_trace_file()
+            absent = os.path.join(env.temp_dir, "absent.pfw.gz")
 
             with dftu_utils.Indexer(
                 files=[gz_file],
@@ -478,15 +474,15 @@ class TestIndexerDfanalyzerAPIs:
             ) as indexer:
                 indexer.ensure_indexed()
 
-                pids = indexer.query_file_pids(9999)
+                pids = indexer.query_file_pids(absent)
                 assert isinstance(pids, set)
                 assert len(pids) == 0
 
     def test_query_all_file_pids(self):
-        """Test query_all_file_pids returns dict mapping file_id to PID sets"""
+        """query_all_file_pids keys the PID sets by trace path"""
         with Environment() as env:
-            gz_file1 = env.create_dft_trace_file(filename="trace1.pfw.gz")
-            gz_file2 = env.create_dft_trace_file(filename="trace2.pfw.gz")
+            gz_file1 = env.create_dft_trace_file_with_pid("trace1.pfw.gz", 3)
+            gz_file2 = env.create_dft_trace_file_with_pid("trace2.pfw.gz", 5)
 
             with dftu_utils.Indexer(
                 files=[gz_file1, gz_file2],
@@ -496,12 +492,21 @@ class TestIndexerDfanalyzerAPIs:
 
                 all_pids = indexer.query_all_file_pids()
                 assert isinstance(all_pids, dict)
+                assert all_pids == {gz_file1: {3}, gz_file2: {5}}
 
-                for file_id, pid_set in all_pids.items():
-                    assert isinstance(file_id, int)
-                    assert isinstance(pid_set, set)
-                    for pid in pid_set:
-                        assert isinstance(pid, int)
+    def test_query_file_info(self):
+        """query_file_info returns the same path-keyed PID sets in one call"""
+        with Environment() as env:
+            gz_file = env.create_dft_trace_file_with_pid("t.pfw.gz", 7)
+
+            with dftu_utils.Indexer(
+                files=[gz_file],
+                require_bloom=True,
+            ) as indexer:
+                indexer.ensure_indexed()
+
+                assert indexer.query_file_info() == {gz_file: {7}}
+                assert indexer.query_file_info() == indexer.query_all_file_pids()
 
     def test_query_all_file_pids_empty_index(self):
         """Test query_all_file_pids returns empty dict for unindexed files"""

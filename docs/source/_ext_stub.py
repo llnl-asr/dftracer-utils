@@ -258,32 +258,33 @@ def install_extension_stub() -> None:
             """
             return None
 
-        def query_file_pids(self, file_id: int) -> set:
+        def query_file_pids(self, path: str) -> set:
             """Query PIDs observed in a specific file.
 
             Args:
-                file_id: File identifier (0-based index).
+                path: Path of the trace file, as given to the indexer.
 
             Returns:
-                Set of PIDs (int) observed in the file.
+                Set of PIDs (int) observed in the file, empty when the index
+                holds no entry for the file.
             """
             return set()
 
-        def query_all_file_pids(self) -> dict[int, set]:
+        def query_all_file_pids(self) -> dict[str, set]:
             """Query all file-to-PIDs mappings.
 
             Returns:
-                Dict mapping file_id to set of PIDs observed in that file.
+                Dict mapping trace path to set of PIDs observed in that file.
             """
             return {}
 
-        def query_file_info(self) -> tuple[dict[int, str], dict[int, set]]:
-            """Query file ID to path mapping and per-file PIDs in one call.
+        def query_file_info(self) -> dict[str, set]:
+            """Query every indexed file with its PIDs in one call.
 
             Returns:
-                Tuple of (file_id_to_path, file_pids).
+                Dict mapping trace path to set of PIDs observed in that file.
             """
-            return ({}, {})
+            return {}
 
     class CheckpointIndexer(_BaseNative):
         """Checkpoint indexer for single-file checkpoint-level operations."""
@@ -433,9 +434,8 @@ def install_extension_stub() -> None:
     class IndexDatabase(_BaseNative):
         """Handle to a .dftindex index store.
 
-        Used by the distributed indexer coordinator to assign file ids,
-        reserve file_id ranges and record the aggregation of a distributed
-        build.
+        Used by the distributed indexer coordinator to check staleness and to
+        record the aggregation of a distributed build.
         """
 
         def __init__(self, index_path: str) -> None:
@@ -450,16 +450,6 @@ def install_extension_stub() -> None:
             """Later reads in this process see the data files other processes
             wrote since."""
             return None
-
-        def assign_file_ids(self, paths: list[str]) -> list[int]:
-            """The file_id of each path (parallel to `paths`): its registered
-            id, or a newly reserved one. The file record is written with the
-            file's index data."""
-            return []
-
-        def reserve_file_id_range(self, count: int) -> int:
-            """Atomically reserve `count` contiguous file_ids; return first."""
-            return 0
 
         def write_agg_config(self, aggregation_config: object) -> None:
             """Record the aggregation config a distributed build aggregated its

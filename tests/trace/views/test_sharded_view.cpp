@@ -1,7 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -17,7 +17,6 @@
 #include <string>
 #include <vector>
 
-using dftracer::utils::index::store::IndexDatabase;
 using dftracer::utils::index::store::IndexShardManifest;
 using dftracer::utils::index::store::read_shard_manifest;
 using dftracer::utils::index::store::write_shard_manifest;
@@ -250,9 +249,10 @@ TEST_SUITE("ShardedView") {
         build_shard_index(b);
 
         IndexShardManifest manifest;
-        manifest.format_version = IndexDatabase::FORMAT_VERSION;
-        manifest.shards.push_back({ia, 0, 0, 1, 0});
-        manifest.shards.push_back({ib, 0, 0, 1, 0});
+        manifest.format_version =
+            static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
+        manifest.shards.push_back({ia, 1, 0});
+        manifest.shards.push_back({ib, 1, 0});
         std::string root = env.get_dir() + "/set";
         write_shard_manifest(root, manifest);
 
@@ -309,7 +309,8 @@ TEST_SUITE("ShardedView") {
 
         auto manifest = read_shard_manifest(root);
         REQUIRE(manifest.has_value());
-        CHECK(manifest->format_version == IndexDatabase::FORMAT_VERSION);
+        CHECK(manifest->format_version ==
+              static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION));
         REQUIRE(manifest->shards.size() == 2);
         for (const auto& s : manifest->shards) CHECK(s.num_files == 1);
 
@@ -355,9 +356,9 @@ TEST_SUITE("ShardedView") {
         CHECK(got.size() == 2);
     }
 
-    // The registry stores each trace's absolute path, so a shard index moved
-    // away from its traces still resolves them. SetUnion is not in the tier, so
-    // it forces the scan (not the tier fast path), which needs the traces.
+    // A shard stores each trace's absolute path, so a shard index moved away
+    // from its traces still resolves them. SetUnion is not in the tier, so it
+    // forces the scan (not the tier fast path), which needs the traces.
     TEST_CASE("a relocated shard finds its traces via the registry path") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
@@ -378,8 +379,9 @@ TEST_SUITE("ShardedView") {
         };
 
         IndexShardManifest m;
-        m.format_version = IndexDatabase::FORMAT_VERSION;
-        m.shards.push_back({moved, 0, 0, 1, 0});
+        m.format_version =
+            static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
+        m.shards.push_back({moved, 1, 0});
         std::string root = env.get_dir() + "/set";
         write_shard_manifest(root, m);
         auto got = ShardedView::from_manifest(root).aggregate(scan_cfg).get();
@@ -501,12 +503,14 @@ TEST_SUITE("ShardedView") {
         CHECK_THROWS(ShardedView::from_manifest(root));
 
         IndexShardManifest other;
-        other.format_version = IndexDatabase::FORMAT_VERSION + 1;
+        other.format_version =
+            static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION) + 1;
         write_shard_manifest(root, other);
         CHECK_THROWS(ShardedView::from_manifest(root));
 
         IndexShardManifest current;
-        current.format_version = IndexDatabase::FORMAT_VERSION;
+        current.format_version =
+            static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
         write_shard_manifest(root, current);
         CHECK_NOTHROW(ShardedView::from_manifest(root));
     }

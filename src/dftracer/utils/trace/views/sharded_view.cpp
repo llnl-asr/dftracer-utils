@@ -1,6 +1,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -70,9 +71,10 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
                     dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
                 ")");
     }
+    constexpr std::uint32_t INDEX_FORMAT_VERSION =
+        static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
     if (manifest->format_version !=
-        std::optional<std::uint32_t>(
-            dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION)) {
+        std::optional<std::uint32_t>(INDEX_FORMAT_VERSION)) {
         throw DFTUtilsException(
             ErrorCode::InvalidArgument,
             "shard manifest format version " +
@@ -80,8 +82,7 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
                      ? std::to_string(*manifest->format_version)
                      : std::string("(missing)")) +
                 " does not match this build's " +
-                std::to_string(dftracer::utils::index::store::IndexDatabase::
-                                   FORMAT_VERSION));
+                std::to_string(INDEX_FORMAT_VERSION));
     }
 
     std::vector<std::string> dirs;
@@ -95,14 +96,16 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
 
 std::vector<ViewFile> ShardedView::shard_view_files(
     const std::string& shard_dir) const {
-    // The registry stores each file's full canonical path, so it locates the
-    // trace directly - no reconstruction, and the index may live apart from it.
-    dftracer::utils::index::store::IndexDatabase db(
-        shard_dir, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
+    // A shard's Members scopes store each file's full canonical path, so it
+    // locates the trace directly and the index may live apart from it.
+    auto snapshot =
+        unwrap(dftracer::utils::index::plan::open_snapshot(shard_dir));
+    const auto indexed = unwrap(snapshot.files());
     std::vector<ViewFile> files;
-    for (const auto& [path, file_id] : db.query_all_file_info_ids()) {
+    files.reserve(indexed.size());
+    for (const auto& file : indexed) {
         ViewFile vf;
-        vf.file_path = path;
+        vf.file_path = std::string(file.path());
         vf.index_path = shard_dir;
         files.push_back(std::move(vf));
     }
@@ -144,23 +147,15 @@ void write_shard_set(const std::string& root,
                      const std::vector<std::string>& shard_dirs) {
     dftracer::utils::index::store::IndexShardManifest manifest;
     manifest.format_version =
-        dftracer::utils::index::store::IndexDatabase::FORMAT_VERSION;
+        static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
     manifest.shards.reserve(shard_dirs.size());
     for (const auto& dir : shard_dirs) {
-        dftracer::utils::index::store::IndexDatabase db(
-            dir, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        auto registry = db.query_all_file_registry();
+        auto snapshot =
+            unwrap(dftracer::utils::index::plan::open_snapshot(dir));
 
         dftracer::utils::index::store::IndexShardEntry entry;
-        entry.num_files = registry.size();
-        std::int64_t lo = -1;
-        std::int64_t hi = -1;
-        for (const auto& [name, file] : registry) {
-            if (lo < 0 || file.file_id < lo) lo = file.file_id;
-            if (file.file_id > hi) hi = file.file_id;
-        }
-        entry.file_id_min = entry.num_files == 0 ? 0 : lo;
-        entry.file_id_max = entry.num_files == 0 ? -1 : hi;
+        entry.num_files =
+            static_cast<std::uint64_t>(unwrap(snapshot.files()).size());
 
         const std::string rel = fs::path(dir).lexically_relative(root).string();
         entry.path = (rel.empty() || rel.rfind("..", 0) == 0) ? dir : rel;
@@ -186,10 +181,11 @@ coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
         const std::string idx = (fs::path(root) / shard.path).string();
-        dftracer::utils::index::store::IndexDatabase db(
-            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        for (const auto& [path, file_id] : db.query_all_file_info_ids())
-            files.push_back(path);
+        auto snapshot =
+            unwrap(dftracer::utils::index::plan::open_snapshot(idx));
+        const auto indexed = unwrap(snapshot.files());
+        for (const auto& file : indexed)
+            files.push_back(std::string(file.path()));
     }
     if (files.empty()) co_return 0;
 

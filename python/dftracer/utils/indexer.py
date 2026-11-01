@@ -3,7 +3,7 @@
 import json
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Tuple, Type, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Set, Type, Union
 
 from ._units import coerce_bytes, coerce_duration
 from .dftracer_utils_ext import CheckpointIndexer as _NativeCheckpointIndexer
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 DEFAULT_CHECKPOINT_SIZE = 32 * 1024 * 1024  # 32MB
 
-FileInfo = Tuple[Dict[int, str], Dict[int, Set[int]]]
+FileInfo = Dict[str, Set[int]]
 
 
 @dataclass
@@ -347,36 +347,35 @@ class Indexer:
 
         return DataFrame(self._native.rowset(name))
 
-    def query_file_pids(self, file_id: int) -> set:
+    def query_file_pids(self, path: str) -> set:
         """Query PIDs observed in a specific file.
 
         Args:
-            file_id: Integer file ID from index.
+            path: Path of the trace file, as given to the indexer.
 
         Returns:
-            set of PIDs (int) observed in the file.
+            set of PIDs (int) observed in the file, empty when the index
+            holds no entry for the file.
         """
-        return self._native.query_file_pids(file_id)
+        return self._native.query_file_pids(path)
 
-    def query_all_file_pids(self) -> dict:
+    def query_all_file_pids(self) -> Dict[str, Set[int]]:
         """Query PIDs for all indexed files.
 
-        Returns a dictionary mapping file_id to the set of PIDs observed
+        Returns a dictionary mapping trace path to the set of PIDs observed
         in that file. This is useful for distributed aggregation to assign
         files to workers by PID affinity.
 
         Returns:
-            dict mapping file_id (int) to set of PIDs (int).
+            dict mapping trace path (str) to set of PIDs (int).
         """
         return self._native.query_all_file_pids()
 
     def query_file_info(self) -> FileInfo:
-        """Query file distribution info in a single DB open.
+        """Query every indexed file with its PIDs in a single DB open.
 
         Returns:
-            Tuple of (file_id_to_path, file_pids) where:
-            - file_id_to_path: dict[int, str] mapping DB file ID to path
-            - file_pids: dict[int, set[int]] mapping file ID to PIDs
+            dict mapping trace path (str) to set of PIDs (int).
         """
         if self._file_info_cache is None:
             self._file_info_cache = self._native.query_file_info()

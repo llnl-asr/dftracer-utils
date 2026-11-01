@@ -120,7 +120,8 @@ static void test_file_list(void) {
         TEST_ASSERT_TRUE(DFTU_RESULT_OK(f));
         TEST_ASSERT_EQUAL_UINT64(file_size(DFTU_RESULT_VALUE(f).path),
                                  DFTU_RESULT_VALUE(f).size_bytes);
-        TEST_ASSERT_TRUE(DFTU_RESULT_VALUE(f).file_id >= 0);
+        TEST_ASSERT_TRUE(DFTU_RESULT_VALUE(f).size_bytes > 0);
+        TEST_ASSERT_TRUE(strlen(DFTU_RESULT_VALUE(f).index_path) > 0);
     }
     dftu_indexer_file_result out = dftu_indexer_file_list_get(list, 2);
     TEST_ASSERT_FALSE(DFTU_RESULT_OK(out));

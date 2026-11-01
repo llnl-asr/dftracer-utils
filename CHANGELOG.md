@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Start the I/O thread pool of the epoll, kqueue and thread-pool backends with one thread, and add a thread when a request waits and no I/O thread is free, up to the configured I/O thread count.
   An idle I/O thread above the first one stops after the elastic keep-alive. `DFTRACER_UTILS_ELASTIC=0` or an eager runtime starts the full pool, as before.
+- Key the Python PID queries by trace path, because a file id is numbered per process and means nothing to a caller.
+  `Indexer.query_file_pids` takes a trace path, and `query_all_file_pids` and `query_file_info` return a dict that maps each trace path to its PID set.
+- Make `dask.assign_files_by_pid` take and return trace paths, and send a file with no recorded PID to the worker that the `zlib.crc32` of its path picks, so two processes give the same assignment.
 - Size a runtime's I/O thread pool to its worker count when no I/O thread count is given, where it used to start one I/O thread per hardware thread.
   The CLI tools keep their `--io-threads` default of one per CPU core.
 - Make `dftracer_comparator` skip the parts of each stored aggregation partial that it never reads, and give each side half of the executor threads when it aggregates both at once.
@@ -301,6 +304,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Removed
 
+- Remove the Python `IndexDatabase.assign_file_ids` and `IndexDatabase.reserve_file_id_range` bindings, because a caller cannot use a file id that the process numbers for itself.
+- Remove the file id from the indexer C++ API and C ABI, which drops `IndexedFile::file_id` and the `file_id` field of `dftu_indexer_file`.
+  Find a file by its path instead.
+- Remove `file_id_min` and `file_id_max` from the `shards.json` shard manifest, because nothing read them and file ids are no longer public.
 - Remove RocksDB: the index store is the only index backend, and an index that RocksDB built is built again on first use.
   The environment variables `DFTRACER_UTILS_INDEX_BACKEND`, `DFTRACER_UTILS_ROCKSDB_CACHE` and `DFTRACER_UTILS_ROCKSDB_MAX_OPEN_FILES` and the CMake settings `DFTRACER_UTILS_ROCKSDB_VERSION` and `DFTRACER_UTILS_ROCKSDB_PREFIX` are gone.
 - Remove `build_sst_batch`, `SstArtifactRegistry`, `move_artifacts`, `index_backend`, `IndexDatabase.bulk_ingest()` and `IndexDatabase.init_schema()` from the Python bindings and `resolve_local_staging` from `dftracer.utils.dask`.

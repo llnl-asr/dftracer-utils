@@ -68,51 +68,6 @@ static PyObject *IndexDatabase_refresh(IndexDatabaseObject *self,
     Py_RETURN_NONE;
 }
 
-static PyObject *IndexDatabase_assign_file_ids(IndexDatabaseObject *self,
-                                               PyObject *args, PyObject *kwds) {
-    static const char *kwlist[] = {"paths", NULL};
-    PyObject *paths_obj;
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "O",
-                                     const_cast<char **>(kwlist), &paths_obj)) {
-        return NULL;
-    }
-    std::vector<std::string> paths;
-    if (!parse_str_list(paths_obj, "paths", paths)) return NULL;
-
-    std::vector<int> ids;
-    if (!run_blocking_r([&] { return self->db->assign_file_ids(paths); },
-                        ids)) {
-        return NULL;
-    }
-
-    PyObject *out = PyList_New(static_cast<Py_ssize_t>(ids.size()));
-    if (!out) return NULL;
-    for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(ids.size()); ++i) {
-        PyList_SET_ITEM(out, i, PyLong_FromLong(ids[i]));
-    }
-    return out;
-}
-
-static PyObject *IndexDatabase_reserve_file_id_range(IndexDatabaseObject *self,
-                                                     PyObject *args) {
-    Py_ssize_t count;
-    if (!PyArg_ParseTuple(args, "n", &count)) return NULL;
-    if (count < 0) {
-        PyErr_SetString(PyExc_ValueError, "count must be >= 0");
-        return NULL;
-    }
-    int first;
-    if (!run_blocking_r(
-            [&] {
-                return self->db->reserve_file_id_range(
-                    static_cast<std::size_t>(count));
-            },
-            first)) {
-        return NULL;
-    }
-    return PyLong_FromLong(first);
-}
-
 static PyObject *IndexDatabase_write_agg_config(IndexDatabaseObject *self,
                                                 PyObject *args) {
     PyObject *config_obj;
@@ -185,21 +140,12 @@ static PyMethodDef IndexDatabase_methods[] = {
      "refresh() -> None\n"
      "Later reads in this process see the data files other processes "
      "wrote since."},
-    {"assign_file_ids", DFTU_PYCFUNCTION(IndexDatabase_assign_file_ids),
-     METH_VARARGS | METH_KEYWORDS,
-     "assign_file_ids(paths) -> list[int]\n"
-     "The file_id of each path: its registered id, or a newly reserved one. "
-     "The file record is written with the file's index data."},
     {"find_stale_files", DFTU_PYCFUNCTION(IndexDatabase_find_stale_files),
      METH_VARARGS | METH_KEYWORDS,
      "find_stale_files(paths) -> dict\n"
      "Stat-only (mtime + size) staleness check of the given trace paths "
      "against the index. Returns {changed, added, removed, format_outdated, "
      "stale}."},
-    {"reserve_file_id_range",
-     DFTU_PYCFUNCTION(IndexDatabase_reserve_file_id_range), METH_VARARGS,
-     "reserve_file_id_range(count) -> int\n"
-     "Atomically reserve `count` contiguous file_ids, return the first."},
     {"write_agg_config", DFTU_PYCFUNCTION(IndexDatabase_write_agg_config),
      METH_VARARGS,
      "write_agg_config(aggregation_config) -> None\n"

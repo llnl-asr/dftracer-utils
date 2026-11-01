@@ -103,6 +103,12 @@ native runtime thread count), ``assign_files_by_pid(file_pids, n_workers)``
 ``DaskAggregatedTraceViewer`` classes for querying across the cluster once the
 index exists.
 
+``assign_files_by_pid`` takes a dict that maps each trace path to its set of
+PIDs, and returns a dict that maps each worker id to a list of trace paths.
+It sends the files of one majority PID to the same worker.
+A file with no recorded PID goes to the worker its path hashes to with
+``zlib.crc32``, so two runs of the same input give the same assignment.
+
 ``DaskTraceViewer.flamegraph(partition=("pid", "tid"), ts, dur, name, group)``
 builds a flamegraph across the cluster: each file shard folds a serialized arena
 partial (``TraceViewer.flamegraph_partial``), and the client tree-reduces them
@@ -157,13 +163,17 @@ set a ``group_by``/``agg``) - there is no raw-event read across a shard set.
 The shard-set format
 ~~~~~~~~~~~~~~~~~~~~~
 
-A shard set is a directory holding a ``shards.json`` manifest
-(written by ``IndexShardManifest``, which is internal to the index module):
-a ``format_version`` plus a list of ``IndexShardEntry`` records, each naming
-one shard's ``path`` (relative to the manifest's directory), its closed
-``file_id_min``/``file_id_max`` range, ``num_files``, and ``num_events``. Every
-shard's file-id range is disjoint from every other shard's, so a merge reader
-can open all of them without key collisions.
+A shard set is a directory holding a ``shards.json`` manifest.
+``IndexShardManifest`` writes that manifest and is internal to the index
+module.
+The manifest holds a ``format_version`` and a list of ``IndexShardEntry``
+records.
+Each record names one shard's ``path``, which is relative to the manifest's
+directory, and gives the shard's ``num_files`` and ``num_events`` counts.
+Each shard is a self-contained read-only index, so a reader opens each shard
+independently.
+The ``index`` line of ``VERSION`` sets ``format_version``, and a reader
+rejects a manifest that holds another version.
 
 Three free functions manage the set:
 

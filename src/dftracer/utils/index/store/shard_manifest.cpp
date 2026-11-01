@@ -57,10 +57,6 @@ std::string to_json(const IndexShardManifest& manifest) {
         out += (i == 0) ? "\n    {" : ",\n    {";
         out += "\n      \"path\": ";
         append_escaped(out, e.path);
-        out += ",\n      \"file_id_min\": ";
-        out += std::to_string(e.file_id_min);
-        out += ",\n      \"file_id_max\": ";
-        out += std::to_string(e.file_id_max);
         out += ",\n      \"num_files\": ";
         out += std::to_string(e.num_files);
         out += ",\n      \"num_events\": ";
@@ -98,10 +94,7 @@ IndexShardManifest parse_manifest(std::string_view json) {
         }
         e.path.assign(path);
 
-        std::int64_t i64 = 0;
         std::uint64_t u64 = 0;
-        if (s["file_id_min"].get(i64) == simdjson::SUCCESS) e.file_id_min = i64;
-        if (s["file_id_max"].get(i64) == simdjson::SUCCESS) e.file_id_max = i64;
         if (s["num_files"].get(u64) == simdjson::SUCCESS) e.num_files = u64;
         if (s["num_events"].get(u64) == simdjson::SUCCESS) e.num_events = u64;
         manifest.shards.push_back(std::move(e));

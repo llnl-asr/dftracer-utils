@@ -21,8 +21,8 @@ namespace {
 IndexShardManifest sample() {
     IndexShardManifest m;
     m.format_version = 8;
-    m.shards.push_back({"shard-0000.dftindex", 0, 127, 128, 10482375});
-    m.shards.push_back({"shard-0001.dftindex", 128, 200, 73, 512});
+    m.shards.push_back({"shard-0000.dftindex", 128, 10482375});
+    m.shards.push_back({"shard-0001.dftindex", 73, 512});
     return m;
 }
 
@@ -33,14 +33,14 @@ using dftu_utils_test::ScopedTestDir;
 TEST_SUITE("shard_manifest") {
     TEST_CASE("round-trips through JSON") {
         IndexShardManifest in = sample();
-        IndexShardManifest out = parse_manifest(to_json(in));
+        const std::string json = to_json(in);
+        CHECK(json.find("file_id") == std::string::npos);
+        IndexShardManifest out = parse_manifest(json);
 
         CHECK(out.format_version == in.format_version);
         REQUIRE(out.shards.size() == in.shards.size());
         for (std::size_t i = 0; i < in.shards.size(); ++i) {
             CHECK(out.shards[i].path == in.shards[i].path);
-            CHECK(out.shards[i].file_id_min == in.shards[i].file_id_min);
-            CHECK(out.shards[i].file_id_max == in.shards[i].file_id_max);
             CHECK(out.shards[i].num_files == in.shards[i].num_files);
             CHECK(out.shards[i].num_events == in.shards[i].num_events);
         }
@@ -60,8 +60,8 @@ TEST_SUITE("shard_manifest") {
         auto loaded = read_shard_manifest(dir.path().string());
         REQUIRE(loaded.has_value());
         REQUIRE(loaded->shards.size() == 2);
-        CHECK(loaded->shards[1].file_id_min == 128);
         CHECK(loaded->shards[1].num_files == 73);
+        CHECK(loaded->shards[1].num_events == 512);
     }
 
     TEST_CASE("reading a directory with no manifest returns nullopt") {
@@ -77,7 +77,7 @@ TEST_SUITE("shard_manifest") {
 
         IndexShardManifest second;
         second.format_version = 8;
-        second.shards.push_back({"only.dftindex", 0, 0, 1, 1});
+        second.shards.push_back({"only.dftindex", 1, 1});
         write_shard_manifest(dir.path().string(), second);
 
         auto loaded = read_shard_manifest(dir.path().string());
@@ -89,7 +89,7 @@ TEST_SUITE("shard_manifest") {
     TEST_CASE("a path with quotes and control chars survives escaping") {
         IndexShardManifest in;
         in.format_version = 8;
-        in.shards.push_back({"weird\"\\\n\tname.dftindex", 0, 0, 1, 1});
+        in.shards.push_back({"weird\"\\\n\tname.dftindex", 1, 1});
         IndexShardManifest out = parse_manifest(to_json(in));
         REQUIRE(out.shards.size() == 1);
         CHECK(out.shards[0].path == "weird\"\\\n\tname.dftindex");

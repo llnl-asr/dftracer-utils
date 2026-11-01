@@ -322,9 +322,9 @@ dftu_indexer_file_result dftu_indexer_file_list_get(
         return r;
     }
     const auto& f = list->files[i];
-    r.u.value = dftu_indexer_file{
-        f.path.c_str(), f.index_path.c_str(), f.file_id,       f.size_bytes,
-        f.mtime,        f.truncated ? 1 : 0,  f.schema.c_str()};
+    r.u.value = dftu_indexer_file{f.path.c_str(),      f.index_path.c_str(),
+                                  f.size_bytes,        f.mtime,
+                                  f.truncated ? 1 : 0, f.schema.c_str()};
     r.ok = 1;
     return r;
 }

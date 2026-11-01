@@ -216,30 +216,31 @@ class Indexer:
         """
         ...
 
-    def query_file_pids(self, file_id: int) -> set:
+    def query_file_pids(self, path: str) -> set:
         """Query PIDs observed in a specific file.
 
         Args:
-            file_id: File identifier (0-based index).
+            path: Path of the trace file, as given to the indexer.
 
         Returns:
-            Set of PIDs (int) observed in the file.
+            Set of PIDs (int) observed in the file, empty when the index
+            holds no entry for the file.
         """
         ...
 
-    def query_all_file_pids(self) -> Dict[int, set]:
+    def query_all_file_pids(self) -> Dict[str, set]:
         """Query all file-to-PIDs mappings.
 
         Returns:
-            Dict mapping file_id to set of PIDs observed in that file.
+            Dict mapping trace path to set of PIDs observed in that file.
         """
         ...
 
-    def query_file_info(self) -> Tuple[Dict[int, str], Dict[int, set]]:
-        """Query file ID to path mapping and per-file PIDs in one call.
+    def query_file_info(self) -> Dict[str, set]:
+        """Query every indexed file with its PIDs in one call.
 
         Returns:
-            Tuple of (file_id_to_path, file_pids).
+            Dict mapping trace path to set of PIDs observed in that file.
         """
         ...
 
@@ -382,27 +383,17 @@ def peek_default_runtime() -> Optional[Runtime]: ...
 class IndexDatabase:
     """Handle to a .dftindex index store.
 
-    Used by the distributed indexer coordinator to assign file ids, reserve
-    file_id ranges and record the aggregation of a distributed build.
+    Used by the distributed indexer coordinator to check staleness and to
+    record the aggregation of a distributed build.
     """
 
     def __init__(self, index_path: str) -> None: ...
     def close_writer(self) -> None: ...
     def refresh(self) -> None: ...
-    def assign_file_ids(self, paths: List[str]) -> List[int]:
-        """The file_id of each path (parallel to `paths`): its registered id,
-        or a newly reserved one. The file record is written with the file's
-        index data."""
-        ...
-
     def find_stale_files(self, paths: List[str]) -> dict:
         """Stat-only (mtime + size) staleness check of `paths` against the
         index. Returns a dict with keys `changed`, `added`, `removed`
         (lists of paths), `format_outdated` (bool) and `stale` (bool)."""
-        ...
-
-    def reserve_file_id_range(self, count: int) -> int:
-        """Atomically reserve `count` contiguous file_ids; return first."""
         ...
 
     def write_agg_config(self, aggregation_config: Any) -> None:

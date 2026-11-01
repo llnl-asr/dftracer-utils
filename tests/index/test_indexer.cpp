@@ -130,7 +130,7 @@ TEST_SUITE("Indexer") {
         REQUIRE(files.size() == 2);
         for (const auto& f : files) {
             CHECK(f.size_bytes == fs::file_size(f.path));
-            CHECK(f.file_id >= 0);
+            CHECK(f.size_bytes > 0);
             CHECK(f.index_path == index_of(f.path));
         }
         rt.shutdown();
@@ -229,7 +229,8 @@ TEST_SUITE("Indexer") {
         CHECK(by_async.ready.size() == by_block.ready.size());
         CHECK(by_async.needs_work == by_block.needs_work);
         REQUIRE(files_async.size() == files_block.size());
-        CHECK(files_async[0].file_id == files_block[0].file_id);
+        CHECK(fs::path(files_async[0].path).filename() ==
+              fs::path(files_block[0].path).filename());
         CHECK(files_async[0].size_bytes == files_block[0].size_bytes);
         CHECK(files_async[0].mtime == files_block[0].mtime);
         rt.shutdown();

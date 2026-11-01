@@ -1,6 +1,7 @@
 """Dask distributed integration for dftracer-utils."""
 
 import os
+import zlib
 from collections import defaultdict, namedtuple
 from dataclasses import dataclass, replace
 from typing import (
@@ -924,34 +925,37 @@ def distributed_write_trace(
 
 
 def assign_files_by_pid(
-    file_pids: Dict[int, Set[int]],
+    file_pids: Dict[str, Set[int]],
     n_workers: int,
-) -> Dict[int, List[int]]:
+) -> Dict[int, List[str]]:
     """Assign files to workers based on majority PID affinity.
 
     Files with overlapping PIDs are assigned to the same worker to minimize
-    cross-worker aggregation during the merge phase.
+    cross-worker aggregation during the merge phase. A file with no recorded
+    PID goes to the worker its path hashes to, so separate processes agree on
+    the assignment.
 
     Args:
-        file_pids: Dict mapping file_id to set of PIDs in that file.
+        file_pids: Dict mapping trace path to set of PIDs in that file.
         n_workers: Number of workers to distribute to.
 
     Returns:
-        Dict mapping worker_id to list of file_ids.
+        Dict mapping worker_id to list of trace paths.
     """
     if n_workers <= 0:
         n_workers = 1
 
-    worker_assignments: Dict[int, List[int]] = defaultdict(list)
+    worker_assignments: Dict[int, List[str]] = defaultdict(list)
 
-    for file_id, pids in file_pids.items():
+    for path, pids in file_pids.items():
         if not pids:
-            worker_id = file_id % n_workers
+            # crc32, not hash(): a str hash is salted per process.
+            worker_id = zlib.crc32(path.encode()) % n_workers
         else:
             # Files with same PIDs go to same worker.
             majority_pid = min(pids)  # min for determinism
             worker_id = hash(majority_pid) % n_workers
-        worker_assignments[worker_id].append(file_id)
+        worker_assignments[worker_id].append(path)
 
     return dict(worker_assignments)
 

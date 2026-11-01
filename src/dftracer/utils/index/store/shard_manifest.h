@@ -11,14 +11,11 @@ namespace dftracer::utils::index::store {
 
 /// One immutable index shard in a shard set. `path` is relative to the
 /// directory holding the manifest and names a self-contained, read-only
-/// `.dftindex` store. A shard owns a closed file-id range
-/// [file_id_min, file_id_max] that is disjoint from every other shard's range,
-/// so a merge reader opens all shards without key collisions. An empty shard
-/// (num_files == 0) carries file_id_min > file_id_max.
+/// `.dftindex` store. `num_files` counts the trace files the shard indexes and
+/// `num_events` its event count. An empty shard (num_files == 0) is skipped by
+/// a merge reader.
 struct IndexShardEntry {
     std::string path;
-    std::int64_t file_id_min = 0;
-    std::int64_t file_id_max = -1;
     std::uint64_t num_files = 0;
     std::uint64_t num_events = 0;
 

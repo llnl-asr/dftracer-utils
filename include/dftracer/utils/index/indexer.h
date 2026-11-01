@@ -85,7 +85,6 @@ struct IndexStatus {
 struct IndexedFile {
     std::string path;
     std::string index_path;
-    std::int64_t file_id = -1;
     /// Size and modification time recorded when the file was indexed.
     std::uint64_t size_bytes = 0;
     std::uint64_t mtime = 0;

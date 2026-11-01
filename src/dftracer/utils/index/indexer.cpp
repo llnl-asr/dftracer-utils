@@ -317,17 +317,13 @@ coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
         const auto snapshot = unwrap(plan::open_snapshot(index_path));
-        // The file id a caller sees is still the number the writer assigned.
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
         for (const auto* p : traces) {
             const auto logical = store::internal::get_logical_path(*p);
-            const int file_id = db.get_file_info_id(logical);
             const auto file = snapshot.file(logical);
-            if (file_id < 0 || !file) continue;
+            if (!file) continue;
             IndexedFile f;
             f.path = *p;
             f.index_path = index_path;
-            f.file_id = file_id;
             f.size_bytes = file->stat().size;
             f.mtime = file->stat().mtime;
             const auto meta = unwrap(file_metadata(snapshot, *file));

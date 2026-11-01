@@ -8,10 +8,12 @@
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/python/batch_indexer.h>
 #include <dftracer/utils/python/dataframe.h>
 #include <dftracer/utils/python/indexer.h>
@@ -31,10 +33,12 @@
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using dftracer::utils::CoroScope;
@@ -603,142 +607,129 @@ static PyObject* Indexer_rowset(IndexerObject* self, PyObject* args) {
     return dftracer::utils::python::wrap_dataframe(std::move(frame));
 }
 
-static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
-    int file_id;
-    if (!PyArg_ParseTuple(args, "i", &file_id)) {
-        return nullptr;
-    }
+namespace {
 
-    using dftracer::utils::index::store::IndexDatabase;
+// The PID of a "pid:tid" key of a pid:tid count map.
+std::uint64_t pid_of(std::string_view key) {
+    const std::size_t colon = key.find(':');
+    const std::string_view digits =
+        colon == std::string_view::npos ? key : key.substr(0, colon);
+    std::uint64_t pid = 0;
+    std::from_chars(digits.data(), digits.data() + digits.size(), pid);
+    return pid;
+}
+
+using PidSet = ankerl::unordered_dense::set<std::uint64_t>;
+using PidsByPath = ankerl::unordered_dense::map<std::string, PidSet>;
+
+// The distinct PIDs the index recorded for one file.
+PidSet file_pids(const dftracer::utils::index::Snapshot& snapshot,
+                 const dftracer::utils::index::FileRef& file) {
+    PidSet pids;
+    auto counts = dftracer::utils::unwrap(
+        dftracer::utils::index::pid_tid_counts(snapshot, file));
+    if (!counts) return pids;
+    for (const auto& [key, _] : *counts) pids.insert(pid_of(key));
+    return pids;
+}
+
+// Every indexed file with its PID set, keyed by the path the index names it by.
+PidsByPath all_file_pids(const std::string& index_path) {
+    const auto snapshot = dftracer::utils::unwrap(
+        dftracer::utils::index::plan::open_snapshot(index_path));
+    PidsByPath out;
+    for (const auto& file : dftracer::utils::unwrap(snapshot.files())) {
+        const auto path = file.path();
+        out.emplace(std::string(path.data(), path.size()),
+                    file_pids(snapshot, file));
+    }
+    return out;
+}
+
+PyObject* pids_set(const PidSet& pids) {
+    PyObject* set = PySet_New(nullptr);
+    if (!set) return nullptr;
+    for (std::uint64_t pid : pids) {
+        PyObject* value = PyLong_FromUnsignedLongLong(pid);
+        if (!value) {
+            Py_DECREF(set);
+            return nullptr;
+        }
+        PySet_Add(set, value);
+        Py_DECREF(value);
+    }
+    return set;
+}
+
+PyObject* pids_by_path_dict(const PidsByPath& pids_by_path) {
+    PyObject* dict = PyDict_New();
+    if (!dict) return nullptr;
+    for (const auto& [path, pids] : pids_by_path) {
+        PyObject* key = PyUnicode_FromStringAndSize(
+            path.data(), static_cast<Py_ssize_t>(path.size()));
+        PyObject* value = pids_set(pids);
+        if (!key || !value) {
+            Py_XDECREF(key);
+            Py_XDECREF(value);
+            Py_DECREF(dict);
+            return nullptr;
+        }
+        PyDict_SetItem(dict, key, value);
+        Py_DECREF(key);
+        Py_DECREF(value);
+    }
+    return dict;
+}
+
+}  // namespace
+
+static PyObject* Indexer_query_file_pids(IndexerObject* self, PyObject* args) {
+    const char* path = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &path)) return nullptr;
 
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    ankerl::unordered_dense::set<std::uint64_t> pids;
+    PidSet pids;
     if (!run_blocking_r(
             [&] {
-                IndexDatabase db(
-                    index_path,
-                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-                return db.query_file_pids(file_id);
+                const auto snapshot = dftracer::utils::unwrap(
+                    dftracer::utils::index::plan::open_snapshot(index_path));
+                const auto file = snapshot.file(
+                    dftracer::utils::index::store::internal::get_logical_path(
+                        path));
+                if (!file) return PidSet{};
+                return file_pids(snapshot, *file);
             },
             pids)) {
         return nullptr;
     }
-
-    PyObject* set = PySet_New(nullptr);
-    if (!set) return nullptr;
-
-    for (auto pid : pids) {
-        PyObject* val = PyLong_FromUnsignedLongLong(pid);
-        PySet_Add(set, val);
-        Py_DECREF(val);
-    }
-
-    return set;
+    return pids_set(pids);
 }
 
 static PyObject* Indexer_query_all_file_pids(IndexerObject* self,
                                              PyObject* Py_UNUSED(ignored)) {
-    using dftracer::utils::index::store::IndexDatabase;
-
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    ankerl::unordered_dense::map<int,
-                                 ankerl::unordered_dense::set<std::uint64_t>>
-        all_pids;
-    if (!run_blocking_r(
-            [&] {
-                IndexDatabase db(
-                    index_path,
-                    dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-                return db.query_all_file_pids();
-            },
-            all_pids)) {
+    PidsByPath all_pids;
+    if (!run_blocking_r([&] { return all_file_pids(index_path); }, all_pids))
         return nullptr;
-    }
-
-    PyObject* dict = PyDict_New();
-    if (!dict) return nullptr;
-
-    for (const auto& [file_id, pids] : all_pids) {
-        PyObject* key = PyLong_FromLong(file_id);
-        PyObject* set = PySet_New(nullptr);
-        for (auto pid : pids) {
-            PyObject* val = PyLong_FromUnsignedLongLong(pid);
-            PySet_Add(set, val);
-            Py_DECREF(val);
-        }
-        PyDict_SetItem(dict, key, set);
-        Py_DECREF(key);
-        Py_DECREF(set);
-    }
-
-    return dict;
+    return pids_by_path_dict(all_pids);
 }
 
 static PyObject* Indexer_query_file_info(IndexerObject* self,
                                          PyObject* Py_UNUSED(ignored)) {
-    using dftracer::utils::index::store::IndexDatabase;
-
     auto idx_opt = resolve_index_path(self);
     if (!idx_opt) return nullptr;
     std::string index_path = std::move(*idx_opt);
 
-    dftracer::utils::dstd::StringViewMap<int> file_ids;
-    ankerl::unordered_dense::map<int,
-                                 ankerl::unordered_dense::set<std::uint64_t>>
-        all_pids;
-
-    if (!run_blocking([&] {
-            IndexDatabase db(
-                index_path,
-                dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-            file_ids = db.query_all_file_info_ids();
-            all_pids = db.query_all_file_pids();
-        })) {
+    PidsByPath all_pids;
+    if (!run_blocking_r([&] { return all_file_pids(index_path); }, all_pids))
         return nullptr;
-    }
-
-    auto data_dir = fs::weakly_canonical(fs::path(index_path)).parent_path();
-
-    PyObject* id_to_path = PyDict_New();
-    if (!id_to_path) return nullptr;
-    for (const auto& [logical_name, fid] : file_ids) {
-        auto resolved = (data_dir / logical_name).string();
-        PyObject* key = PyLong_FromLong(fid);
-        PyObject* val = PyUnicode_FromStringAndSize(
-            resolved.data(), static_cast<Py_ssize_t>(resolved.size()));
-        PyDict_SetItem(id_to_path, key, val);
-        Py_DECREF(key);
-        Py_DECREF(val);
-    }
-
-    PyObject* pid_dict = PyDict_New();
-    if (!pid_dict) {
-        Py_DECREF(id_to_path);
-        return nullptr;
-    }
-    for (const auto& [file_id, pids] : all_pids) {
-        PyObject* key = PyLong_FromLong(file_id);
-        PyObject* set = PySet_New(nullptr);
-        for (auto pid : pids) {
-            PyObject* val = PyLong_FromUnsignedLongLong(pid);
-            PySet_Add(set, val);
-            Py_DECREF(val);
-        }
-        PyDict_SetItem(pid_dict, key, set);
-        Py_DECREF(key);
-        Py_DECREF(set);
-    }
-
-    PyObject* result = PyTuple_Pack(2, id_to_path, pid_dict);
-    Py_DECREF(id_to_path);
-    Py_DECREF(pid_dict);
-    return result;
+    return pids_by_path_dict(all_pids);
 }
 
 static PyMethodDef Indexer_methods[] = {
@@ -791,26 +782,26 @@ static PyMethodDef Indexer_methods[] = {
      "The rows the index build stored for row set `name` of the source\n"
      "(for example 'files'), as a DataFrame.\n"},
     {"query_file_pids", DFTU_PYCFUNCTION(Indexer_query_file_pids), METH_VARARGS,
-     "query_file_pids(file_id)\n"
+     "query_file_pids(path)\n"
      "--\n\n"
      "Query PIDs observed in a specific file.\n\n"
      "Args:\n"
-     "    file_id: Integer file ID from index.\n\n"
+     "    path: Path of the trace file, as given to the indexer.\n\n"
      "Returns:\n"
-     "    set of PIDs.\n"},
+     "    set of PIDs, empty when the index holds no entry for the file.\n"},
     {"query_all_file_pids", DFTU_PYCFUNCTION(Indexer_query_all_file_pids),
      METH_NOARGS,
      "query_all_file_pids()\n"
      "--\n\n"
      "Query PIDs for all indexed files.\n\n"
      "Returns:\n"
-     "    dict mapping file_id to set of PIDs.\n"},
+     "    dict mapping trace path to set of PIDs.\n"},
     {"query_file_info", DFTU_PYCFUNCTION(Indexer_query_file_info), METH_NOARGS,
      "query_file_info()\n"
      "--\n\n"
-     "Query file ID to path mapping and per-file PIDs in one call.\n\n"
+     "Query every indexed file with its PIDs in one call.\n\n"
      "Returns:\n"
-     "    tuple of (dict[int, str], dict[int, set[int]]).\n"},
+     "    dict mapping trace path to set of PIDs.\n"},
     {nullptr}};
 
 static PyGetSetDef Indexer_getsetters[] = {{nullptr}};

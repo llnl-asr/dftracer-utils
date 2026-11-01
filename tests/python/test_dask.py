@@ -4,7 +4,10 @@ End-to-end Dask integration tests for  utilities
 Tests combining indexer and reader functionality with Dask distributed computing
 """
 
+import json
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -20,6 +23,44 @@ import dftracer.utils as dftu_utils
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
 from .common import Environment
+
+ASSIGN_SNIPPET = """
+import json
+from dftracer.utils.dask import assign_files_by_pid
+
+paths = ["/data/trace%d.pfw.gz" % i for i in range(8)]
+out = assign_files_by_pid({p: set() for p in paths}, 4)
+print(json.dumps({str(w): sorted(f) for w, f in out.items()}, sort_keys=True))
+"""
+
+
+def _assign_in_new_process():
+    done = subprocess.run(
+        [sys.executable, "-c", ASSIGN_SNIPPET],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    return json.loads(done.stdout)
+
+
+def test_assign_files_by_pid_is_stable_across_processes():
+    """Files with no PID land on the same worker in two separate processes"""
+    first = _assign_in_new_process()
+    second = _assign_in_new_process()
+    assert first == second
+    assigned = sorted(f for files in first.values() for f in files)
+    assert assigned == ["/data/trace%d.pfw.gz" % i for i in range(8)]
+
+
+def test_assign_files_by_pid_groups_by_majority_pid():
+    """Files that share a majority PID land on the same worker"""
+    from dftracer.utils.dask import assign_files_by_pid
+
+    out = assign_files_by_pid({"/t/a.pfw.gz": {7}, "/t/b.pfw.gz": {7, 9}, "/t/c.pfw.gz": {9}}, 4)
+    worker = {f: w for w, files in out.items() for f in files}
+    assert sorted(worker) == ["/t/a.pfw.gz", "/t/b.pfw.gz", "/t/c.pfw.gz"]
+    assert worker["/t/a.pfw.gz"] == worker["/t/b.pfw.gz"]
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")

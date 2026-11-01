@@ -2,9 +2,11 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
@@ -18,7 +20,7 @@
 #include <vector>
 
 using namespace dftracer::utils;
-namespace store = dftracer::utils::index::store;
+namespace istore = dftracer::utils::index::store;
 
 namespace {
 
@@ -117,25 +119,31 @@ TEST_SUITE("Schemas") {
         CHECK(files[0].schema == "generic");
 
         {
-            store::IndexDatabase db(files[0].index_path,
-                                    store::IndexOpenMode::ReadOnly);
-            std::map<std::string, store::PathStat> cat;
-            for (auto& [p, st] : db.catalog(static_cast<int>(files[0].file_id)))
-                cat.emplace(p, st);
+            const auto snapshot =
+                unwrap(index::plan::open_snapshot(files[0].index_path));
+            const auto file =
+                snapshot.file(istore::internal::get_logical_path(trace));
+            REQUIRE(file.has_value());
+            std::map<std::string, istore::PathStat> cat;
+            for (auto& [p, st] : unwrap(index::catalog(snapshot, *file)))
+                cat.emplace(std::string(p.data(), p.size()), st);
             for (const char* p :
                  {"op", "host", "lat", "io.off", "hosts.0", "hosts.1", "ok"})
                 CHECK_MESSAGE(cat.count(p), p);
             CHECK(cat.at("op").count == 4000);
-            CHECK(cat.at("ok").type == store::PathType::Bool);
-            const auto blooms =
-                db.extension_paths(static_cast<int>(files[0].file_id),
-                                   store::IndexExtension::Bloom);
-            CHECK(std::find(blooms.begin(), blooms.end(), "op") !=
-                  blooms.end());
-            CHECK(std::find(blooms.begin(), blooms.end(), "cat") ==
-                  blooms.end());
+            CHECK(cat.at("ok").type == istore::PathType::Bool);
+            const auto blooms = unwrap(
+                index::paths(snapshot, *file, istore::IndexExtension::Bloom));
+            const auto has = [&](const char* name) {
+                return std::any_of(
+                    blooms.begin(), blooms.end(), [&](const auto& b) {
+                        return std::string_view(b.data(), b.size()) == name;
+                    });
+            };
+            CHECK(has("op"));
+            CHECK(!has("cat"));
             // Records without a metadata phase: every chunk counts none.
-            auto meta = db.chunk_metadata(static_cast<int>(files[0].file_id));
+            const auto meta = unwrap(index::chunk_meta(snapshot, *file));
             REQUIRE(meta.has_value());
             CHECK(!meta->empty());
             for (const auto& [chunk, m] : *meta) CHECK(m.records == 0);

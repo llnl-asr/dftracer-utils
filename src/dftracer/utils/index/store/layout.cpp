@@ -1,4 +1,5 @@
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/store/layout.h>
 
@@ -102,9 +103,11 @@ namespace dftracer::utils::index::store::layout {
 
 std::span<const KindSpec> kinds() { return KINDS; }
 
-// Version 0 until the first release. A development index is deleted, not
-// migrated.
-std::uint32_t ext_version(Ext /*ext*/) { return 0; }
+// The index format version of VERSION, so a bump leaves every stored copy in a
+// namespace this build does not read and each file is indexed again.
+std::uint32_t ext_version(Ext /*ext*/) {
+    return DFTRACER_UTILS_INDEX_FORMAT_VERSION;
+}
 
 namespace {
 template <typename T>

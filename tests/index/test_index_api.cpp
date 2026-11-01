@@ -397,6 +397,13 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
         const auto state = db.extension_state(file_id, ext);
         const bool current = db.extension_current(file_id, ext);
         CHECK(index::extension_current(snapshot, file, ext) == current);
+        const auto typed = index::extension_state(snapshot, file, ext);
+        REQUIRE(typed.has_value() == state.has_value());
+        if (state && typed) {
+            CHECK(typed->version == state->version);
+            CHECK(typed->params_hash == state->params_hash);
+            CHECK(typed->ready == state->ready);
+        }
         const Freshness got =
             snapshot.extension(file, ext, state ? state->params_hash : 0);
         if (current) {
@@ -405,6 +412,8 @@ void check_file(const IndexDatabase& db, const index::Snapshot& snapshot,
             CHECK(got != Freshness::Current);
         }
     }
+
+    CHECK_FALSE(index::extension_state(snapshot, file, IndexExtension::Plugin));
 
     if (!has_plugin) return;
     const auto old_plugins = db.plugin_extension_states(file_id);
@@ -634,6 +643,9 @@ TEST_CASE("a copy at another format version is not current") {
     CHECK(index::extension_current(snapshot, *file, IndexExtension::Members));
     CHECK(snapshot.extension(*file, IndexExtension::Profile, 0) !=
           Freshness::Current);
+    CHECK_FALSE(
+        index::extension_state(snapshot, *file, IndexExtension::Profile));
+    CHECK(index::extension_state(snapshot, *file, IndexExtension::Members));
     CHECK_FALSE(take(index::schema(snapshot, *file)).has_value());
 }
 

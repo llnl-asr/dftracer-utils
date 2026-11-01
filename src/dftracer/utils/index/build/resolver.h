@@ -85,11 +85,8 @@ struct ResolverResult {
     bool needs_augmentation = false;
     std::uint64_t stored_time_interval_us = 0;
 
-    /// A registered file's source changed since indexing (mtime/size mismatch)
-    /// or an index is in another format.
+    /// A registered file's source changed since indexing (mtime/size mismatch).
     bool stale_detected = false;
-    /// Index roots in another format, which are rebuilt whole.
-    std::vector<std::string> outdated_roots;
     /// Index roots whose aggregation tier must be cleared before a build:
     /// rows built with other params, or of a file rebuilt whole. Their
     /// dftracer files are all in needs_aggregation when aggregating.

@@ -747,6 +747,21 @@ dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
     return dstd::Optional<std::uint64_t>(info.sources[0].hash);
 }
 
+dstd::Optional<store::ExtensionState> extension_state(
+    const Snapshot& snapshot, const FileRef& file, store::IndexExtension ext) {
+    if (!builtin_ext(ext)) return dstd::Optional<store::ExtensionState>{};
+    const kv::Snapshot* snap = IndexAccess::store_snapshot(snapshot);
+    if (snap == nullptr) return dstd::Optional<store::ExtensionState>{};
+    const kv::CopyInfo info =
+        snap->copy_info(read_ns(ext), IndexAccess::scope(file));
+    if (info.state != kv::ScopeState::Ready &&
+        info.state != kv::ScopeState::Failed)
+        return dstd::Optional<store::ExtensionState>{};
+    return dstd::Optional<store::ExtensionState>(
+        store::ExtensionState{layout::ext_version(ext), info.params_hash,
+                              info.state == kv::ScopeState::Ready});
+}
+
 bool extension_current(const Snapshot& snapshot, const FileRef& file,
                        store::IndexExtension ext) {
     if (!builtin_ext(ext)) return false;

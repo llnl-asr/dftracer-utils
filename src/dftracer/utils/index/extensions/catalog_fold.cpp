@@ -1,6 +1,9 @@
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/extensions/catalog_fold.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 
@@ -45,6 +48,7 @@ coro::CoroTask<bool> CatalogFold::finalize(
     const trace::views::detail::CoverageSet& covered) {
     using index::store::IndexExtension;
     bool wrote = false;
+    dstd::HashMap<dstd::String, index::Snapshot> snapshots;
     for (auto& [file, fs] : files_) {
         if (fs.index_path.empty() || fs.paths.empty()) continue;
         if (!covered.covers_file(file)) continue;
@@ -52,11 +56,20 @@ coro::CoroTask<bool> CatalogFold::finalize(
         const std::string logical =
             index::store::internal::get_logical_path(file);
         try {
-            index::store::IndexDatabase ro(
-                fs.index_path, index::store::IndexOpenMode::ReadOnly);
-            const int file_id = ro.get_file_info_id(logical);
-            if (file_id < 0 ||
-                ro.extension_current(file_id, IndexExtension::Catalog))
+            auto at = snapshots.find(std::string_view(fs.index_path));
+            if (at == snapshots.end()) {
+                const auto opened = unwrap(index::Index::open(
+                    index::store::internal::normalize_index_root(
+                        fs.index_path)));
+                at = snapshots
+                         .emplace(dstd::String(fs.index_path),
+                                  unwrap(opened.snapshot()))
+                         .first;
+            }
+            const index::Snapshot& snapshot = at->second;
+            const auto ref = snapshot.file(logical);
+            if (!ref || index::extension_current(snapshot, *ref,
+                                                 IndexExtension::Catalog))
                 continue;
         } catch (const std::exception& e) {
             DFTRACER_UTILS_LOG_WARN("catalog check failed for %s: %s",

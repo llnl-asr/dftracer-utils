@@ -271,19 +271,17 @@ coro::CoroTask<IndexStatus> Indexer::status_of(
                                  std::vector<const build::ResolvedFile*>>
         by_index;
     for (const auto& f : result.cached)
-        if (f.file_id >= 0)
-            by_index[trace::internal::determine_index_path(
-                         f.file_path, impl_->options.index_dir)]
-                .push_back(&f);
+        by_index[trace::internal::determine_index_path(
+                     f.file_path, impl_->options.index_dir)]
+            .push_back(&f);
     for (const auto& [index_path, ready] : by_index) {
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        std::vector<int> ids;
-        ids.reserve(ready.size());
-        for (const auto* f : ready) ids.push_back(f->file_id);
-        auto meta = db.query_file_metadata_batch(ids);
+        const auto snapshot = unwrap(plan::open_snapshot(index_path));
         for (const auto* f : ready) {
-            auto it = meta.find(f->file_id);
-            if (it != meta.end() && it->second.truncated)
+            const auto file =
+                snapshot.file(store::internal::get_logical_path(f->file_path));
+            if (!file) continue;
+            const auto meta = unwrap(file_metadata(snapshot, *file));
+            if (meta && meta->truncated)
                 status.truncated.push_back(f->file_path);
         }
     }
@@ -318,30 +316,24 @@ coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
     std::vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
+        const auto snapshot = unwrap(plan::open_snapshot(index_path));
+        // The file id a caller sees is still the number the writer assigned.
         store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
-        auto registry = db.query_all_file_registry();
-        std::vector<int> ids;
         for (const auto* p : traces) {
-            auto it = registry.find(store::internal::get_logical_path(*p));
-            if (it != registry.end()) ids.push_back(it->second.file_id);
-        }
-        auto meta = db.query_file_metadata_batch(ids);
-        for (const auto* p : traces) {
-            auto logical = store::internal::get_logical_path(*p);
-            auto it = registry.find(logical);
-            if (it == registry.end()) continue;
-            auto stat = db.get_file_stat(logical);
+            const auto logical = store::internal::get_logical_path(*p);
+            const int file_id = db.get_file_info_id(logical);
+            const auto file = snapshot.file(logical);
+            if (file_id < 0 || !file) continue;
             IndexedFile f;
             f.path = *p;
             f.index_path = index_path;
-            f.file_id = it->second.file_id;
-            if (stat) {
-                f.size_bytes = stat->size;
-                f.mtime = stat->mtime;
-            }
-            auto m = meta.find(it->second.file_id);
-            f.truncated = m != meta.end() && m->second.truncated;
-            f.schema = db.file_schema(it->second.file_id).value_or("");
+            f.file_id = file_id;
+            f.size_bytes = file->stat().size;
+            f.mtime = file->stat().mtime;
+            const auto meta = unwrap(file_metadata(snapshot, *file));
+            f.truncated = meta && meta->truncated;
+            const auto recorded = unwrap(schema(snapshot, *file));
+            if (recorded) f.schema.assign(recorded->data(), recorded->size());
             out.push_back(std::move(f));
         }
     }
@@ -353,38 +345,44 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
     std::vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
-        store::IndexDatabase db(index_path, store::IndexOpenMode::ReadOnly);
+        const auto snapshot = unwrap(plan::open_snapshot(index_path));
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
         for (const auto* p : traces) {
-            const int fid =
-                db.get_file_info_id(store::internal::get_logical_path(*p));
-            if (fid < 0) continue;
+            const auto file =
+                snapshot.file(store::internal::get_logical_path(*p));
+            if (!file) continue;
             FileManifest m{*p, index_path, {}};
-            const auto id = db.file_schema(fid);
-            const RecordSchema* schema = id ? &get_schema(*id) : nullptr;
+            const auto recorded = unwrap(schema(snapshot, *file));
+            const std::string id =
+                recorded ? std::string(recorded->data(), recorded->size())
+                         : std::string{};
+            const RecordSchema* rec_schema =
+                recorded ? &get_schema(id) : nullptr;
             const auto file_config =
-                schema ? build::for_schema(config, *schema) : config;
+                rec_schema ? build::for_schema(config, *rec_schema) : config;
             for (auto ext : store::ALL_EXTENSIONS) {
-                auto state = db.extension_state(fid, ext);
+                const auto state = extension_state(snapshot, *file, ext);
                 if (!state) continue;
                 std::uint64_t want = file_config.params_hash(ext);
                 if (ext == store::IndexExtension::Profile)
-                    want = schema ? schema->params_hash() : 0;
+                    want = rec_schema ? rec_schema->params_hash() : 0;
                 else if (ext == store::IndexExtension::Agg)
                     want = agg_params;
-                m.extensions.push_back({std::string(store::extension_name(ext)),
-                                        state->version, state->params_hash,
-                                        state->ready,
-                                        db.extension_current(fid, ext) &&
-                                            state->params_hash == want});
+                m.extensions.push_back(
+                    {std::string(store::extension_name(ext)), state->version,
+                     state->params_hash, state->ready,
+                     extension_current(snapshot, *file, ext) &&
+                         state->params_hash == want});
             }
-            for (auto& [name, state] : db.plugin_extension_states(fid)) {
+            for (const auto& copy : unwrap(plugins(snapshot, *file))) {
+                const std::string name(copy.name.data(), copy.name.size());
                 const auto ext = extensions::find_plugin_extension(name);
-                const bool current = ext && ext->current(state);
-                m.extensions.push_back({std::move(name), state.version,
-                                        state.params_hash, state.ready,
-                                        current});
+                const bool current =
+                    ext && ext->current(store::ExtensionState{
+                               copy.version, copy.params_hash, copy.ready});
+                m.extensions.push_back({name, copy.version, copy.params_hash,
+                                        copy.ready, current});
             }
             out.push_back(std::move(m));
         }

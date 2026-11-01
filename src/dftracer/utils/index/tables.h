@@ -163,6 +163,11 @@ Result<dstd::Optional<dstd::String>> agg_meta(const Snapshot& snapshot,
 /// The hash the file was indexed with.
 dstd::Optional<std::uint64_t> file_hash(const Snapshot& snapshot,
                                         const FileRef& file);
+/// The file's copy of built-in extension `ext`: the version its build recorded,
+/// its params hash and whether it finished. Nullopt when the file holds no
+/// copy, and for a plugin extension.
+dstd::Optional<store::ExtensionState> extension_state(
+    const Snapshot& snapshot, const FileRef& file, store::IndexExtension ext);
 /// The extension is ready, and at the format version this code reads. False for
 /// a plugin extension, which is current only for its params hash.
 bool extension_current(const Snapshot& snapshot, const FileRef& file,

@@ -93,32 +93,6 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
     co_return failures;
 }
 
-// An index in another format is never read. Unless the build is forced, it is
-// removed and the files are resolved again.
-coro::CoroTask<ResolverResult> resolve_dropping_outdated(ResolverInput input,
-                                                         bool force_rebuild) {
-    Resolver resolver;
-    auto result = co_await resolver(input);
-    if (result.all_files.empty() || result.outdated_roots.empty() ||
-        force_rebuild)
-        co_return result;
-    for (const auto& root : result.outdated_roots) {
-        // Close any cached open handle to this index before removing the
-        // directory, or the removal fails with EBUSY.
-        index::store::release_index(root);
-        std::error_code ec;
-        fs::remove_all(root, ec);
-        forget_input(root);
-        if (ec) {
-            throw DFTUtilsException(ErrorCode::Io,
-                                    "failed to remove outdated index " + root +
-                                        ": " + ec.message());
-        }
-    }
-    if (input.entries.empty()) input.entries = scanned_entries(result);
-    co_return co_await resolver(input);
-}
-
 coro::CoroTask<ResolverResult> resolve_and_build_once(
     CoroScope* scope, ResolveAndBuildInput input) {
     std::size_t parallelism = input.parallelism;
@@ -139,8 +113,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         field = extra_dimension_name(field);
     if (input.build_bloom) resolve_input.bloom_config = input.bloom_config;
 
-    auto result = co_await resolve_dropping_outdated(std::move(resolve_input),
-                                                     input.force_rebuild);
+    auto result = co_await resolver(std::move(resolve_input));
     if (result.all_files.empty()) {
         co_return result;
     }
@@ -330,7 +303,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
 }  // namespace
 
 coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
-    auto result = co_await resolve_dropping_outdated(std::move(input), false);
+    Resolver resolver;
+    auto result = co_await resolver(std::move(input));
     std::vector<FileWorkItem> items;
     std::set<std::size_t> seen;
     for (const auto* group : {&result.needs_checkpoint, &result.needs_bloom,

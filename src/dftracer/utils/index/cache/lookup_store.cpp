@@ -1,13 +1,15 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/duql/syntax/tree.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
+#include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 
 #include <algorithm>
@@ -51,30 +53,35 @@ std::optional<std::uint64_t> lookup_signature(
     for (const auto& f : plan.files) files.push_back(&f);
     std::sort(files.begin(), files.end(),
               [](auto* a, auto* b) { return a->file_path < b->file_path; });
-    std::map<std::string, std::optional<rdb::IndexDatabase>, std::less<>> dbs;
+    std::map<std::string, std::optional<index::Snapshot>, std::less<>> snaps;
     for (const auto* f : files) {
         if (f->index_path.empty()) return std::nullopt;
-        auto [it, fresh] = dbs.try_emplace(f->index_path);
+        auto [it, fresh] = snaps.try_emplace(f->index_path);
         if (fresh) {
             try {
-                it->second.emplace(f->index_path, rdb::IndexOpenMode::ReadOnly);
+                it->second.emplace(
+                    unwrap(index::plan::open_snapshot(f->index_path)));
             } catch (const DFTUtilsException&) {
                 return std::nullopt;
             }
         }
-        const rdb::IndexDatabase& idx = *it->second;
-        if (idx.check_freshness(f->file_path) !=
-            rdb::IndexDatabase::Freshness::Fresh)
-            return std::nullopt;
+        const index::Snapshot& snapshot = *it->second;
         const std::string logical =
             rdb::internal::get_logical_path(f->file_path);
-        const auto hash = idx.get_file_hash(logical);
-        const auto stat = idx.get_file_stat(logical);
-        if (!hash || !stat) return std::nullopt;
+        InputFileStat now;
+        dftracer::utils::stat_input(f->file_path, now);
+        const SourceStat now_stat{static_cast<std::uint64_t>(now.mtime),
+                                  now.size};
+        if (snapshot.freshness(logical, now_stat) != index::Freshness::Current)
+            return std::nullopt;
+        const auto file = snapshot.file(logical);
+        if (!file) return std::nullopt;
+        const auto hash = index::file_hash(snapshot, *file);
+        if (!hash) return std::nullopt;
         add(logical);
         add(std::to_string(*hash));
-        add(std::to_string(stat->mtime));
-        add(std::to_string(stat->size));
+        add(std::to_string(file->stat().mtime));
+        add(std::to_string(file->stat().size));
     }
     return dftracer::utils::dstd::hash::fnv1a_hash(sig);
 }

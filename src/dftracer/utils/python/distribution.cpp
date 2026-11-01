@@ -3,7 +3,7 @@
 #include <dftracer/utils/index/build/file_partition.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
 #include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -292,25 +292,18 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::index::schemas::dft::agg::intern_for_index(
                 index_dir);
         batch_config->agg_fold_factory =
-            [agg_config_ptr, agg_intern](
-                dftracer::utils::dstd::StringIntern &build_intern, int file_id)
+            [agg_config_ptr,
+             agg_intern](dftracer::utils::dstd::StringIntern &build_intern)
             -> std::unique_ptr<
                 dftracer::utils::index::schemas::dft::agg::AggregationFold> {
             return std::make_unique<
                 dftracer::utils::index::schemas::dft::agg::AggregationFold>(
-                build_intern, agg_intern, *agg_config_ptr, file_id);
+                build_intern, agg_intern, *agg_config_ptr);
         };
     }
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
-            // Held across the build, so the builder shares this process's index
-            // writer, which then closes and leaves a complete data file. Each
-            // worker numbers its own files, since a file id is a label inside
-            // one process.
-            dftracer::utils::index::store::IndexDatabase store_db(index_dir);
-            // A worker process may hold this index from an earlier task.
-            store_db.refresh();
             rt->submit(dftracer::utils::run_coro_scope(
                            rt->executor(),
                            [](dftracer::utils::CoroScope &scope,
@@ -323,7 +316,6 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
                            batch_config, &result),
                        "build-index-batch")
                 .get();
-            store_db.close_writer();
         })) {
         return NULL;
     }

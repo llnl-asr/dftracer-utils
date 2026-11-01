@@ -920,7 +920,7 @@ static std::unique_ptr<IndexedRootSnapshot> load_index_root_snapshot_impl(
                 "found in the shared index");
         } else {
             snapshot->partition.indexed_entries.push_back(
-                ResolvedFile{file_index, std::move(logical_path), -1, {}});
+                ResolvedFile{file_index, std::move(logical_path), {}});
         }
         ++file_index;
     }

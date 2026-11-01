@@ -75,7 +75,6 @@ class Recorder : public index::build::IndexVisitor {
         bytes.append(data, len);
         co_return;
     }
-    void finalize(index::store::IndexDatabaseWrite&, int) override {}
 };
 
 GzipBuildArtifacts build(const std::string& path, Recorder* rec) {

@@ -271,7 +271,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             publish_path(build_index_path, staged_final_path);
         }
 
-        // Refresh_input queries the index for the file_ids just assigned.
+        // Refresh_input queries the index for the files just indexed.
         ResolverInput refresh_input;
         refresh_input.entries =
             scanned_entries(result, result.needs_checkpoint);

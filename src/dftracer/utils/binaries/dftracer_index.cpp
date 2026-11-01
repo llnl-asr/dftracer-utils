@@ -6,7 +6,6 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -355,20 +354,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     if (force_rebuild && fs::exists(agg_index)) stale_tiers.insert(agg_index);
     for (const auto& root : stale_tiers) clear_aggregation(root);
 
-    // One handle is held from the id assignment to the close.
-    IndexDatabase store_db(index_dir);
-    // Ids come from a counter that only grows, so one at or past it was never
-    // used in this index.
-    const int first_fresh_file_id = store_db.reserve_file_id_range(0);
-    std::vector<int> preassigned_file_ids =
-        store_db.assign_file_ids(input_files);
-    log_stage("assign_ids");
-
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(input_files);
     batch_config->file_costs.assign(scanned_sizes.begin(), scanned_sizes.end());
-    batch_config->preassigned_file_ids = std::move(preassigned_file_ids);
-    batch_config->first_fresh_file_id = first_fresh_file_id;
     batch_config->index_dir = index_dir;
     batch_config->checkpoint_size = checkpoint_size;
     batch_config->parallelism = executor_threads;
@@ -407,10 +395,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         batch_result.metrics.files_spilled,
         batch_result.metrics.max_spill_runs);
 
-    store_db.close_writer();
-    log_stage("close_writer");
     log_stage("close");
-
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
 

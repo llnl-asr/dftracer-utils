@@ -18,8 +18,6 @@
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/source.h>
-#include <dftracer/utils/index/store/error.h>
-#include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -51,11 +49,8 @@ struct PreparedFile {
     std::uint64_t file_mtime = 0;
     std::int64_t file_mtime_ns = 0;
     std::uint64_t file_size = 0;
-    int file_id = 0;
     /// The parse worker takes the caller's open descriptor, if it passed one.
     dstd::SharedPtr<ScopedFd> input_fd;
-    /// The id was reserved by this build, so its tiers need no clearing.
-    bool fresh_id = false;
 };
 
 struct ParsedBloomJob {
@@ -74,31 +69,13 @@ struct ParsedBloomJob {
 };
 
 PreparedFile prepare_file(std::size_t i, const std::string& file_path,
-                          const std::string& index_path, int file_id) {
+                          const std::string& index_path) {
     PreparedFile pf;
     pf.index = i;
     pf.file_path = file_path;
     pf.logical_path = index::store::internal::get_logical_path(file_path);
     pf.index_path = index_path;
-    pf.file_id = file_id;
     return pf;
-}
-
-// Ids only: a file's registry record is written with its data.
-std::vector<PreparedFile> prepare_file_identities(
-    const std::string& index_path, const std::vector<std::string>& file_paths) {
-    index::store::IndexDatabase db(index_path);
-    // Ids come from a counter that only grows, so one at or past it was never
-    // used in this index.
-    const int first_fresh = db.reserve_file_id_range(0);
-    const auto ids = db.assign_file_ids(file_paths);
-    std::vector<PreparedFile> prepared;
-    prepared.reserve(file_paths.size());
-    for (std::size_t i = 0; i < file_paths.size(); ++i) {
-        prepared.push_back(prepare_file(i, file_paths[i], index_path, ids[i]));
-        prepared.back().fresh_id = ids[i] >= first_fresh;
-    }
-    return prepared;
 }
 
 }  // namespace
@@ -145,6 +122,9 @@ static std::string basename_of(const std::string& path) {
 
 struct BlockWriter {
     const index::Index* index = nullptr;
+    /// The index as it was when the build started, so a file it does not hold
+    /// is new and its commit has no old tiers to clear.
+    const index::Snapshot* snapshot = nullptr;
     index::build::BatchWriterMetrics* metrics = nullptr;
 };
 
@@ -228,6 +208,8 @@ static coro::CoroTask<void> parse_and_write_worker(
             ParsedBloomJob job;
             dstd::Optional<index::FileBuild> build;
             bool parse_ok = false;
+            const bool fresh =
+                !writer->snapshot->file(pf.logical_path).has_value();
             try {
                 if (fd < 0)
                     throw DFTUtilsException::cat(ErrorCode::Io, "cannot open ",
@@ -289,8 +271,7 @@ static coro::CoroTask<void> parse_and_write_worker(
                             fold_ptrs.push_back(job.rowset_fold.get());
                         }
                         if (agg_fold_factory_ptr && *agg_fold_factory_ptr) {
-                            job.agg_fold = (*agg_fold_factory_ptr)(*job.intern,
-                                                                   pf.file_id);
+                            job.agg_fold = (*agg_fold_factory_ptr)(*job.intern);
                             job.agg_fold->write_through(*build);
                             fold_ptrs.push_back(job.agg_fold.get());
                         }
@@ -408,7 +389,7 @@ static coro::CoroTask<void> parse_and_write_worker(
             {
                 index::build::ParsedIndexJob write_job;
                 write_job.file_path = pf.file_path;
-                write_job.fresh_id = pf.fresh_id;
+                write_job.fresh = fresh;
                 write_job.artifacts = std::move(job.artifacts);
                 write_job.intern = std::move(job.intern);
                 write_job.bloom_fold = std::move(job.bloom_fold);
@@ -496,6 +477,15 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
         }
         co_return;
     }
+    auto taken = writer_index->snapshot();
+    if (!taken) {
+        for (auto& result : *state->results) {
+            result.success = false;
+            result.error_message = std::string(taken.error().message());
+        }
+        co_return;
+    }
+    const index::Snapshot writer_snapshot = std::move(*taken);
 
     constexpr std::uint64_t NO_BUDGET = memory::NO_SPILL_BUDGET;
     const std::uint64_t budget =
@@ -521,6 +511,7 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
     BlockWriter block_writer;
     block_writer.metrics = writer_metrics.get();
     block_writer.index = &*writer_index;
+    block_writer.snapshot = &writer_snapshot;
     auto* writer_ptr = &block_writer;
 
     const auto* block_starts_ptr = block_starts.get();
@@ -607,35 +598,16 @@ static std::unique_ptr<BatchWriteState> init_batch_write_state(
         std::make_shared<std::vector<IndexBuildResult>>(state->num_files);
     state->index_path =
         determine_index_path(config.file_paths.front(), config.index_dir);
-    if (!config.preassigned_file_ids.empty()) {
-        if (config.preassigned_file_ids.size() != config.file_paths.size()) {
-            throw index::store::IndexerError(
-                index::store::IndexerError::Type::InvalidArgument,
-                "preassigned_file_ids.size() must match file_paths.size()");
-        }
-        // Distributed path: the coordinator assigned the ids.
-        std::vector<PreparedFile> prepared;
-        prepared.reserve(config.file_paths.size());
-        for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
-            auto pf = prepare_file(i, config.file_paths[i], state->index_path,
-                                   config.preassigned_file_ids[i]);
-            pf.fresh_id =
-                config.preassigned_file_ids[i] >= config.first_fresh_file_id;
-            if (!config.input_fds.empty())
-                pf.input_fd = std::move(config.input_fds[i]);
-            prepared.push_back(std::move(pf));
-        }
-        state->prepared =
-            std::make_shared<std::vector<PreparedFile>>(std::move(prepared));
-    } else {
-        state->prepared = std::make_shared<std::vector<PreparedFile>>(
-            prepare_file_identities(state->index_path, config.file_paths));
-        if (!config.input_fds.empty()) {
-            auto& prepared = *state->prepared;
-            for (std::size_t i = 0; i < prepared.size(); ++i)
-                prepared[i].input_fd = std::move(config.input_fds[i]);
-        }
+    std::vector<PreparedFile> prepared;
+    prepared.reserve(config.file_paths.size());
+    for (std::size_t i = 0; i < config.file_paths.size(); ++i) {
+        auto pf = prepare_file(i, config.file_paths[i], state->index_path);
+        if (!config.input_fds.empty())
+            pf.input_fd = std::move(config.input_fds[i]);
+        prepared.push_back(std::move(pf));
     }
+    state->prepared =
+        std::make_shared<std::vector<PreparedFile>>(std::move(prepared));
     state->parsed_jobs =
         std::make_shared<std::vector<std::optional<ParsedBloomJob>>>(
             state->num_files);
@@ -714,7 +686,6 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
     for (std::size_t r = 0; r < roots.size(); ++r) {
         auto part = std::make_shared<IndexBuildBatchConfig>(config);
         part->file_paths.clear();
-        part->preassigned_file_ids.clear();
         part->input_fds.clear();
         part->file_costs.clear();
         std::vector<std::size_t> at;
@@ -722,9 +693,6 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
             if (root_of[i] != r) continue;
             at.push_back(i);
             part->file_paths.push_back(config.file_paths[i]);
-            if (!config.preassigned_file_ids.empty())
-                part->preassigned_file_ids.push_back(
-                    config.preassigned_file_ids[i]);
             if (!config.input_fds.empty())
                 part->input_fds.push_back(std::move(config_ptr->input_fds[i]));
             if (!config.file_costs.empty())

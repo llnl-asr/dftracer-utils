@@ -365,8 +365,6 @@ class SinkWriterVisitor : public dftracer::utils::index::build::IndexVisitor {
         buf_.erase(0, last_nl + 1);
         co_return;
     }
-    void finalize(dftracer::utils::index::store::IndexDatabaseWrite&,
-                  int) override {}
 
    private:
     trace::RecordPhase phase_of(std::string_view line) {

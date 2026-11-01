@@ -1114,4 +1114,44 @@ coro::CoroTask<Result<void>> remove_extension(
     co_return Result<void>{};
 }
 
+coro::CoroTask<Result<void>> remove_plugin(
+    const Index& index, dstd::StringView name,
+    dstd::Span<const dstd::StringView> paths) {
+    auto found = IndexAccess::find_store(index);
+    if (!found) co_return dstd::Unexpected<dstd::Error>(found.error());
+    if (!*found) co_return Result<void>{};
+    kv::Store store = **found;
+    auto taken = store.snapshot();
+    if (!taken) co_return dstd::Unexpected<dstd::Error>(taken.error());
+    auto versions = plugin_versions(*taken);
+    if (!versions) co_return dstd::Unexpected<dstd::Error>(versions.error());
+    const auto known = versions->find(std::string(name.data(), name.size()));
+    if (known == versions->end()) co_return Result<void>{};
+    auto registered = store.ns(plugin_spec(name, known->second));
+    if (!registered)
+        co_return dstd::Unexpected<dstd::Error>(registered.error());
+    const kv::Namespace ns = *registered;
+    dstd::Vector<kv::ScopeKey> scopes;
+    scopes.reserve(paths.size());
+    for (const dstd::StringView path : paths) {
+        kv::ScopeKey scope = kv::ScopeKey::file(path);
+        if (taken->copy_info(ns, scope).state == kv::ScopeState::Absent)
+            continue;
+        scopes.push_back(std::move(scope));
+    }
+    if (scopes.empty()) co_return Result<void>{};
+    dstd::Vector<kv::Publish> targets;
+    targets.reserve(scopes.size());
+    for (const kv::ScopeKey& scope : scopes) {
+        targets.push_back(
+            kv::Publish{&ns, &scope, 0, nullptr, kv::Publish::Change::Dropped});
+    }
+    auto published = co_await store.publish(
+        dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+    if (!published) co_return dstd::Unexpected<dstd::Error>(published.error());
+    note_applied(IndexAccess::root(index),
+                 dstd::Span<const kv::Publish>(targets.data(), targets.size()));
+    co_return Result<void>{};
+}
+
 }  // namespace dftracer::utils::index

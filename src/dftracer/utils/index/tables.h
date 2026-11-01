@@ -321,6 +321,12 @@ coro::CoroTask<Result<void>> remove_extension(
     const Index& index, store::IndexExtension ext,
     dstd::Span<const dstd::StringView> paths);
 
+/// Drops the copy of plugin extension `name` of every file in `paths`. A file
+/// without a copy, and a name the index holds no copy of, are skipped.
+coro::CoroTask<Result<void>> remove_plugin(
+    const Index& index, dstd::StringView name,
+    dstd::Span<const dstd::StringView> paths);
+
 }  // namespace dftracer::utils::index
 
 #endif  // DFTRACER_UTILS_INDEX_TABLES_H

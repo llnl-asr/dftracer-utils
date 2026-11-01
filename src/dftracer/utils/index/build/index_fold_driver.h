@@ -298,9 +298,6 @@ class IndexFoldDriver : public index::build::IndexVisitor {
 #endif
     }
 
-    void finalize(index::store::IndexDatabaseWrite& /*writer*/,
-                  int /*file_id*/) override {}
-
    private:
     // What a parse needs from the driver, shared with the parse tasks so a
     // task never reads the driver itself.

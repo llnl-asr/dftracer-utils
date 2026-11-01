@@ -27,11 +27,10 @@ AggRun start_aggregation(const std::string& index_path,
                             {config.time_interval_us, config.params_hash(),
                              config.group_by_file, config.extra_group_keys});
     auto cfg = std::make_shared<agg::AggregationConfig>(config);
-    auto factory = [cfg, intern](
-                       dftracer::utils::dstd::StringIntern& build_intern,
-                       int file_id) {
+    auto factory = [cfg,
+                    intern](dftracer::utils::dstd::StringIntern& build_intern) {
         return std::make_unique<agg::AggregationFold>(build_intern, intern,
-                                                      *cfg, file_id);
+                                                      *cfg);
     };
     return AggRun(index_path, std::move(factory));
 }

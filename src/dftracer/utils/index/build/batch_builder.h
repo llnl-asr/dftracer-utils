@@ -15,7 +15,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -37,10 +36,6 @@ class AggregationFold;
 namespace dftracer::utils::index::gzip {
 struct GzipMember;
 }  // namespace dftracer::utils::index::gzip
-
-namespace dftracer::utils::index::store {
-class IndexDatabase;
-}  // namespace dftracer::utils::index::store
 
 namespace dftracer::utils::index::build {
 
@@ -102,26 +97,19 @@ struct IndexBuildBatchConfig {
     std::string schema;
 
     /// Factory for the aggregation-tier fold, created once per file with the
-    /// fused-scan intern that produced its events and the file's id. When set,
-    /// the batch build steps an AggregationFold in the same single parse as
-    /// bloom/dict and its per-file out-of-band outputs land in
+    /// fused-scan intern that produced its events. When set, the batch build
+    /// steps an AggregationFold in the same single parse as bloom/dict and its
+    /// per-file out-of-band outputs land in
     /// IndexBuildBatchResult::agg_outputs.
     using AggFoldFactory = std::function<
         std::unique_ptr<index::schemas::dft::agg::AggregationFold>(
-            dftracer::utils::dstd::StringIntern& build_intern, int file_id)>;
+            dftracer::utils::dstd::StringIntern& build_intern)>;
     AggFoldFactory agg_fold_factory;
 
     /// Optional callback with (files_done, total_files) as files finish
     /// parsing. Called from worker threads (throttled); must be thread-safe.
     using ProgressFn = std::function<void(std::size_t done, std::size_t total)>;
     ProgressFn progress;
-
-    /// If non-empty, parallel to `file_paths`: use these file_ids instead
-    /// of allocating them in the build.
-    std::vector<int> preassigned_file_ids;
-    /// With preassigned ids, the ids from this one up were reserved by this
-    /// build and need no clearing. The default marks none.
-    int first_fresh_file_id = std::numeric_limits<int>::max();
 
     /// If non-empty, parallel to `file_paths`: an open read-only descriptor of
     /// each file, used instead of opening it. The build takes each one out of

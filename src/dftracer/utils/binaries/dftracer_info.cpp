@@ -117,7 +117,7 @@ static void load_cached_files(const std::string& index_path,
     for (const auto& file : listed) {
         files.emplace_back(file.path());
         if (index::extension_current(snapshot, file, IndexExtension::Stats))
-            group.push_back(ResolvedFile{fi, files.back(), -1, {}});
+            group.push_back(ResolvedFile{fi, files.back(), {}});
         ++fi;
     }
 }

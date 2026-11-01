@@ -247,7 +247,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     if (input.index_path.empty() || !fs::exists(input.index_path)) {
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
-                FileWorkItem{f.file_index, std::move(f.file_path), -1, {}, {}});
+                FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});
         }
         return result;
     }
@@ -308,23 +308,22 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
                 case FileDecision::Kind::NotIndexed:
                 case FileDecision::Kind::NeedsCheckpoint:
                     result.needs_checkpoint.push_back(FileWorkItem{
-                        f.file_index, std::move(f.file_path), -1, {}, {}});
+                        f.file_index, std::move(f.file_path), {}, {}});
                     continue;
                 default:
                     break;
             }
             if (d.agg_candidate)
                 agg_candidates.emplace_back(
-                    FileWorkItem{f.file_index, f.file_path, -1, {}, d.schema},
+                    FileWorkItem{f.file_index, f.file_path, {}, d.schema},
                     d.agg_current);
             if (d.kind == FileDecision::Kind::Bloom) {
                 result.needs_bloom.push_back(
-                    FileWorkItem{f.file_index, std::move(f.file_path), -1,
-                                 d.tier, std::move(d.schema)});
+                    FileWorkItem{f.file_index, std::move(f.file_path), d.tier,
+                                 std::move(d.schema)});
             } else if (d.kind == FileDecision::Kind::Cached) {
-                result.cached.push_back(ResolvedFile{f.file_index,
-                                                     std::move(f.file_path), -1,
-                                                     std::move(d.schema)});
+                result.cached.push_back(ResolvedFile{
+                    f.file_index, std::move(f.file_path), std::move(d.schema)});
             }
         }
         // A file already current must be aggregated again when the tier is
@@ -345,7 +344,7 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
         result.aggregation_stale = true;
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
-                FileWorkItem{f.file_index, std::move(f.file_path), -1, {}, {}});
+                FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});
         }
     }
 

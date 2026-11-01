@@ -18,7 +18,6 @@ namespace dftracer::utils::index::build {
 struct ResolvedFile {
     std::size_t file_index = 0;
     std::string file_path;
-    std::int32_t file_id = -1;
     /// The schema the file was indexed with.
     std::string schema;
 };
@@ -26,7 +25,6 @@ struct ResolvedFile {
 struct FileWorkItem {
     std::size_t file_index = 0;
     std::string file_path;
-    std::int32_t file_id = -1;
     /// For needs_bloom: the tier extensions that are missing or stale.
     index::store::ExtensionMask extensions;
     /// For needs_bloom: the schema the file was indexed with, which a tier

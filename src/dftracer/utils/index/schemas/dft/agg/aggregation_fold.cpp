@@ -255,7 +255,7 @@ void AggregationFold::merge(trace::views::detail::Fold& other) {
 }
 
 void AggregationFold::write(index::FileBuild& build) {
-    if (file_id_ < 0) {
+    if (!has_file_) {
         throw std::logic_error(
             "an aggregation fold writes the data of one file, and has none");
     }
@@ -265,6 +265,7 @@ void AggregationFold::write(index::FileBuild& build) {
 
 void AggregationFold::write_through(index::FileBuild& build) {
     through_ = &build;
+    has_file_ = true;
 }
 
 void AggregationFold::finish_rows(index::FileBuild& build) {

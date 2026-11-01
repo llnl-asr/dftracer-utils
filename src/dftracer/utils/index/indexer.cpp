@@ -2,7 +2,6 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/duql/query.h>
-#include <dftracer/utils/index/build/index_write_lock.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
@@ -12,8 +11,6 @@
 #include <dftracer/utils/index/plan/rowsets.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
-#include <dftracer/utils/index/store/index_database.h>
-#include <dftracer/utils/index/store/index_write.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/json_escape.h>
@@ -21,7 +18,6 @@
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cstdio>
-#include <mutex>
 #include <utility>
 
 namespace dftracer::utils::index {
@@ -144,21 +140,24 @@ void throw_on_error(const dstd::Error& error, std::string_view what) {
     throw DFTUtilsException::cat(ErrorCode::Io, what, ": ", error.message());
 }
 
-/// Clears plugin extension `name` of every file in `traces`. A plugin namespace
-/// has no remove in the index API yet, so this keeps the record writer.
-void drop_plugin_extension(const std::string& index_path,
-                           const std::string& name,
-                           const std::vector<const std::string*>& traces) {
-    std::lock_guard<std::mutex> lock(build::index_write_mutex(index_path));
-    store::IndexDatabase db(index_path);
-    auto writer = db.begin_write();
-    for (const auto* p : traces) {
-        const int fid =
-            db.get_file_info_id(store::internal::get_logical_path(*p));
-        if (fid < 0) continue;
-        store::records::clear_plugin(*writer, fid, name);
-    }
-    writer->commit();
+/// Clears plugin extension `name` of every file in `traces`.
+coro::CoroTask<void> drop_plugin_extension(
+    const std::string& index_path, const std::string& name,
+    const std::vector<const std::string*>& traces) {
+    auto opened =
+        Index::open(store::internal::normalize_index_root(index_path));
+    if (!opened) throw_on_error(opened.error(), "drop extension " + name);
+    std::vector<std::string> logical;
+    logical.reserve(traces.size());
+    for (const auto* p : traces)
+        logical.push_back(store::internal::get_logical_path(*p));
+    std::vector<dstd::StringView> views;
+    views.reserve(logical.size());
+    for (const auto& path : logical) views.emplace_back(path);
+    auto dropped = co_await remove_plugin(
+        *opened, dstd::StringView(name),
+        dstd::Span<const dstd::StringView>(views.data(), views.size()));
+    if (!dropped) throw_on_error(dropped.error(), "drop extension " + name);
 }
 
 store::IndexExtension tier_extension(const std::string& name) {
@@ -445,7 +444,7 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!fs::exists(index_path)) continue;
         if (ext == store::IndexExtension::Plugin) {
-            drop_plugin_extension(index_path, extension, traces);
+            co_await drop_plugin_extension(index_path, extension, traces);
             continue;
         }
         auto opened = Index::open(index_path);

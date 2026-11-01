@@ -9,10 +9,6 @@ namespace dftracer::utils {
 class CoroScope;
 }  // namespace dftracer::utils
 
-namespace dftracer::utils::index::store {
-class IndexDatabaseWrite;
-}  // namespace dftracer::utils::index::store
-
 namespace dftracer::utils::index::build {
 
 class IndexVisitor {
@@ -45,9 +41,6 @@ class IndexVisitor {
     /// the calling coroutine when downstream is full -- real backpressure
     /// without blocking an executor thread.
     virtual coro::CoroTask<void> drain_pending() { co_return; }
-
-    virtual void finalize(index::store::IndexDatabaseWrite& writer,
-                          int file_id) = 0;
 };
 
 }  // namespace dftracer::utils::index::build

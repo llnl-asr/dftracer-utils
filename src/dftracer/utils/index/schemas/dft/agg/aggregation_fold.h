@@ -138,13 +138,11 @@ class AggregationFold : public trace::views::detail::Fold {
    public:
     AggregationFold(dftracer::utils::dstd::StringIntern& build_intern,
                     index::schemas::dft::agg::AggInternPtr agg_intern,
-                    index::schemas::dft::agg::AggregationConfig config,
-                    int file_id = -1)
+                    index::schemas::dft::agg::AggregationConfig config)
         : build_intern_(&build_intern),
           metric_ids_(build_intern),
           agg_intern_(std::move(agg_intern)),
-          config_(std::move(config)),
-          file_id_(file_id) {}
+          config_(std::move(config)) {}
 
     bool accepts(const trace::views::detail::ScanShape&) const override {
         return true;
@@ -152,8 +150,10 @@ class AggregationFold : public trace::views::detail::Fold {
     bool needs_args() const override { return true; }
 
     std::unique_ptr<trace::views::detail::Fold> slice() const override {
-        return std::make_unique<AggregationFold>(*build_intern_, agg_intern_,
-                                                 config_, file_id_);
+        auto made = std::make_unique<AggregationFold>(*build_intern_,
+                                                      agg_intern_, config_);
+        made->has_file_ = has_file_;
+        return made;
     }
 
     void step(const trace::views::detail::FoldBatch& batch) override {
@@ -161,7 +161,7 @@ class AggregationFold : public trace::views::detail::Fold {
             PodAccessor acc(ev, *build_intern_, metric_ids_);
             if (!partial_holds(acc)) continue;
             index::schemas::dft::agg::aggregate_event(acc, state_, config_);
-            if (file_id_ >= 0) {
+            if (has_file_) {
                 if (batch.unit.checkpoint_idx != chunk_) {
                     close_chunk();
                     chunk_ = batch.unit.checkpoint_idx;
@@ -188,7 +188,8 @@ class AggregationFold : public trace::views::detail::Fold {
 
     /// Lets the fold put its closed rows into `build` once they pass a run's
     /// size, so a large file does not hold them all until write(), which must
-    /// be given the same `build`.
+    /// be given the same `build`. Marks the fold as one that writes a file's
+    /// data.
     void write_through(index::FileBuild& build);
     /// Whether rows wait in the build for drain().
     bool drain_due() const { return drain_due_; }
@@ -275,7 +276,9 @@ class AggregationFold : public trace::views::detail::Fold {
     index::schemas::dft::agg::MetricArgIds metric_ids_;
     index::schemas::dft::agg::AggInternPtr agg_intern_;
     index::schemas::dft::agg::AggregationConfig config_;
-    int file_id_;
+    /// The fold writes a file's data, so it emits rows. A fold that is only
+    /// merged into one does not.
+    bool has_file_ = false;
     index::schemas::dft::agg::AggState state_;
 
     std::uint64_t chunk_ = UINT64_MAX;

@@ -29,7 +29,8 @@ using index::extensions::RowSetFold;
 using index::schemas::dft::agg::AggregationFold;
 
 struct ParsedIndexJob {
-    bool fresh_id = false;
+    /// The file was not in the index before, so it has no old tier to clear.
+    bool fresh = false;
     std::string file_path;
     index::gzip::GzipBuildArtifacts artifacts;
     // The folds' intern, destroyed after them.
@@ -68,8 +69,8 @@ inline void fill_file_build(index::FileBuild& build, ParsedIndexJob& job) {
     if (job.rowset_fold) job.rowset_fold->write(build);
     if (job.agg_fold) job.agg_fold->write(build);
     // New members renumber the chunks, so a copy the build does not write
-    // would describe old ones. A fresh id has nothing to clear.
-    if (job.tier_only || job.fresh_id) return;
+    // would describe old ones. A fresh file has nothing to clear.
+    if (job.tier_only || job.fresh) return;
     index::clear_unwritten(build);
 }
 

@@ -1,7 +1,8 @@
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/index/store/index_database.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/python/indexer.h>
 #include <dftracer/utils/python/py_errors.h>
 #include <dftracer/utils/python/py_method.h>
@@ -157,7 +158,6 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
     if (self->build_bloom) {
         using namespace dftracer::utils;
         using namespace dftracer::utils::index::build;
-        using namespace dftracer::utils::index::store;
 
         const char *gz = as_utf8(self->gz_path);
         const char *idx = as_utf8(self->index_path);
@@ -290,15 +290,20 @@ static PyObject *CheckpointIndexer_has_bloom(CheckpointIndexerObject *self,
         Py_RETURN_FALSE;
     }
     try {
-        using namespace dftracer::utils::index::build;
-        using namespace dftracer::utils::index::store;
-        using namespace dftracer::utils::index::store::internal;
-        IndexDatabase db(
-            idx, dftracer::utils::index::store::IndexOpenMode::ReadOnly);
-        std::string logical = get_logical_path(gz);
-        int fid = db.get_file_info_id(logical);
-        if (fid >= 0 && db.pruning_tier_current(fid)) {
-            Py_RETURN_TRUE;
+        namespace index = dftracer::utils::index;
+        auto opened = index::Index::open(idx);
+        if (opened) {
+            auto snapshot = opened->snapshot();
+            if (snapshot) {
+                const std::string logical =
+                    index::store::internal::get_logical_path(gz);
+                const auto file = snapshot->file(logical);
+                if (file && index::extension_current(
+                                *snapshot, *file,
+                                index::store::IndexExtension::Stats)) {
+                    Py_RETURN_TRUE;
+                }
+            }
         }
     } catch (...) {
     }

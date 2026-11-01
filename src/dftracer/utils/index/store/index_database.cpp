@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
+#include <dftracer/utils/index/index_internal.h>
 #include <dftracer/utils/index/store/error.h>
 #include <dftracer/utils/index/store/index_database.h>
 #include <dftracer/utils/index/store/index_write.h>
@@ -776,8 +777,10 @@ void close_index_writers() {
 }
 
 void release_index(const std::string& index_path) {
-    RetainedStoreRoots::instance().forget(
-        index::store::internal::normalize_index_root(index_path));
+    const std::string root =
+        index::store::internal::normalize_index_root(index_path);
+    RetainedStoreRoots::instance().forget(root);
+    index::release_root(dstd::StringView(root.data(), root.size()));
 }
 
 std::uint64_t IndexDatabase::read_write_opens() noexcept {

@@ -22,6 +22,10 @@ namespace dftracer::utils::index {
 
 namespace kv = dftracer::utils::store;
 
+/// Lets the index at `root` close once its current users finish. Index::open
+/// keeps recently opened roots open until this or process exit.
+void release_root(dstd::StringView root);
+
 struct FileRef::Data {
     dstd::String path;
     kv::ScopeKey scope;

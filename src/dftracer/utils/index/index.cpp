@@ -3,10 +3,14 @@
 #include <dftracer/utils/index/store/store_backend.h>
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/memory/manager.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
+#include <list>
 #include <map>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -558,12 +562,76 @@ Freshness Snapshot::extension(const FileRef& file, store::IndexExtension ext,
                                            : Freshness::Stale;
 }
 
+namespace {
+
+/// Roots kept open after their last user, so the steps of one query and a
+/// reader that opens the index per file reuse one open store and its page
+/// cache instead of reading the data file footers again.
+constexpr std::size_t INDEX_ROOTS_RETAINED = 64;
+
+class RetainedRoots {
+   public:
+    static RetainedRoots& instance() {
+        static RetainedRoots* roots = [] {
+            auto* made = new RetainedRoots();
+            // Registered after the memory manager, so it runs before the exit
+            // check and the check sees no store held here.
+            std::atexit([] { RetainedRoots::instance().clear(); });
+            return made;
+        }();
+        return *roots;
+    }
+
+    Index find_or_add(const std::string& root, Index made) {
+        memory::Scope general(memory::Manager::get().general());
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto known =
+            std::find_if(roots_.begin(), roots_.end(),
+                         [&](const auto& held) { return held.first == root; });
+        if (known != roots_.end()) {
+            roots_.splice(roots_.begin(), roots_, known);
+            return roots_.front().second;
+        }
+        roots_.emplace_front(root, made);
+        if (roots_.size() > INDEX_ROOTS_RETAINED) roots_.pop_back();
+        return made;
+    }
+
+    void clear() {
+        Held dropped;
+        std::lock_guard<std::mutex> lock(mutex_);
+        dropped.swap(roots_);
+    }
+
+    void forget(const std::string& root) {
+        Held dropped;
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto known =
+            std::find_if(roots_.begin(), roots_.end(),
+                         [&](const auto& held) { return held.first == root; });
+        if (known != roots_.end())
+            dropped.splice(dropped.begin(), roots_, known);
+    }
+
+   private:
+    using Held = std::list<std::pair<std::string, Index>>;
+    std::mutex mutex_;
+    Held roots_;
+};
+
+}  // namespace
+
+void release_root(dstd::StringView root) {
+    RetainedRoots::instance().forget(std::string(root));
+}
+
 dstd::Expected<Index, dstd::Error> Index::open(dstd::StringView root) {
     if (root.empty()) return invalid("index: the root is empty");
     auto impl = dstd::make_shared<Impl>();
     impl->root = std::string(root);
     impl->store_dir = (std::filesystem::path(impl->root) / "store").string();
-    return Index(std::move(impl));
+    const std::string key = impl->root;
+    return RetainedRoots::instance().find_or_add(key, Index(std::move(impl)));
 }
 
 dstd::Expected<Snapshot, dstd::Error> Index::snapshot() const {

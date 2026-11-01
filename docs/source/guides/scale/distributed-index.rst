@@ -94,6 +94,23 @@ per worker) and ``index_path``. It raises ``ValueError``
 when ``index_path`` is empty or neither ``directory`` nor
 ``files`` is given, and ``ImportError`` when dask is not installed.
 
+The build runs in four steps.
+1. Each worker builds its files as a complete index root at
+   ``<index_path>/shards/<worker>``, staging the build on node-local disk with
+   the scratch helpers in ``dftracer/utils/common/scratch.h`` when
+   ``<index_path>`` is a network filesystem,
+   and falling back to building in place when there is no node-local scratch.
+2. The coordinator writes ``<index_path>/shards.json`` once every task
+   finished.
+3. The coordinator merges the shards into ``<index_path>/store`` by moving
+   their store data files there, then removes the manifest and the emptied
+   shard directories.
+4. The coordinator records the aggregation config and queries read
+   ``<index_path>/store`` like any other index root.
+
+A failed task fails the whole build and leaves the arrived shards in place, so
+a later call merges them without rebuilding.
+
 Related helpers
 ---------------
 
@@ -121,9 +138,10 @@ phase / time like ``collect``.
 Query a shard set
 -----------------
 
-``distributed_index`` (and any producer that writes disjoint per-worker
-indexes) can leave behind a set of immutable index shards instead of one
-consolidated store. ``ShardedView`` (C++,
+``distributed_index`` merges its shards into the index root, so a reader needs
+no shard support. A producer that keeps its per-worker indexes unmerged can
+leave them as a set of immutable index shards in ``<root>/shards/<n>`` next to
+the ``<root>/shards.json`` manifest. ``ShardedView`` (C++,
 ``dftracer/utils/trace/views/sharded_view.h``) queries that set as one logical
 index, without opening or rebuilding a merged store: it enumerates every
 shard's files, aggregates each shard independently with
@@ -180,29 +198,29 @@ Three free functions manage the set:
 - ``write_shard_set(root, shard_dirs)`` - catalog an existing set of shard
   directories into a manifest at ``root``. Atomic (write-temp-then-rename), so
   a concurrent reader never sees a torn manifest.
-- ``consolidate_shard_set(scope, root, out_root)`` - rebuild one unified index
-  (with its aggregation partials) from the shards' trace files at ``out_root``,
-  re-reading traces. Requires the trace files to be present with distinct
-  logical filenames across shards.
+- ``consolidate_shard_set(root)`` - merge every shard into ``root``'s own
+  store by moving each shard's store data files there, then remove the
+  manifest and the emptied shard directories. A move that fails leaves the
+  manifest and the remaining shards in place and throws, so a later call
+  retries the merge without a rebuild.
 - ``merge_shard_set(root, out_root)`` - merge the shards' aggregation partials
   into one consolidated index at ``out_root`` **without** re-reading traces
   (re-keys each shard's interned strings into a unified dictionary and copies
-  the partials and the column blocks). Answers partial-covered queries
-  from a single index, but does not serve scan-fallback queries the way
-  ``consolidate_shard_set`` does.
+  the partials and the column blocks). The shards stay where they are.
 
-The default nested location a producer uses is ``<trace-dir>/.dftindex-shards``
-(``SHARD_SET_DIRNAME``) so the shard set does not get picked up as trace input
-by the directory scanner.
+The shards of a root live in ``<root>/shards/<n>`` and the manifest is
+``<root>/shards.json`` (``shard_root`` and ``shard_manifest_path``), so the
+shard set is inside the index root that holds it and the directory scanner
+never picks it up as trace input.
 
 CLI: dftracer_view autodetects a shard set
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``dftracer_view`` resolves a shard-set root from ``-d``/``--directory`` or
-``--index-dir`` (the directory itself if it holds ``shards.json``, else its
-``.dftindex-shards`` subdirectory) and, when found, routes the query through
-``ShardedView`` instead of scanning trace files directly. A shard set only
-supports aggregate/counter queries:
+``--index-dir`` (adding ``.dftindex`` to the path when the path is not an
+index root yet, then reading ``shards.json``) and, when found, routes the
+query through ``ShardedView`` instead of scanning trace files directly. A
+shard set only supports aggregate/counter queries:
 
 .. code-block:: bash
 
@@ -210,8 +228,8 @@ supports aggregate/counter queries:
        > result.ndjson
 
 If ``-d``/``--index-dir`` does not resolve to a shard set (no ``shards.json``
-under it or its ``.dftindex-shards`` subdirectory), ``dftracer_view`` falls
-back to its normal single-index path.
+in the index root), ``dftracer_view`` falls back to its normal single-index
+path.
 
 See also
 --------

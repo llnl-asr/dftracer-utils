@@ -1,9 +1,14 @@
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_partition.h>
+#include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_fold.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/python/distribution.h>
 #include <dftracer/utils/python/py_agg_config.h>
 #include <dftracer/utils/python/py_errors.h>
@@ -15,12 +20,14 @@
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <new>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -252,9 +259,25 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
             dftracer::utils::index::schemas::dft::agg::
                 standard_aggregation_config());
 
+    // A fresh build of the whole root stages on node-local scratch when the
+    // destination is a slow filesystem, then publishes the store across.
+    const std::string final_root =
+        dftracer::utils::index::store::internal::normalize_index_root(
+            index_dir);
+    std::optional<dftracer::utils::ScratchSession> scratch;
+    std::string build_dir = index_dir;
+    if (!fs::exists(dftracer::utils::index::store_dir(final_root)) &&
+        dftracer::utils::should_stage(final_root)) {
+        auto staged = dftracer::utils::staged_build_scratch(files);
+        if (staged) {
+            build_dir = staged->dir();
+            scratch.emplace(std::move(*staged));
+        }
+    }
+
     auto batch_config = std::make_shared<IndexBuildBatchConfig>();
     batch_config->file_paths = std::move(files);
-    batch_config->index_dir = index_dir;
+    batch_config->index_dir = build_dir;
     batch_config->build_bloom = build_bloom != 0;
     batch_config->checkpoint_size = static_cast<std::size_t>(checkpoint_size);
     batch_config->force_rebuild = force_rebuild != 0;
@@ -330,7 +353,55 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
         }
     }
 
+    // Publish once every handle to the staged store is closed, so a later open
+    // reads the destination.
+    if (scratch) {
+        dftracer::utils::index::release_root(
+            dftracer::utils::index::store::internal::normalize_index_root(
+                build_dir));
+        dftracer::utils::index::release_root(final_root);
+        dftracer::utils::publish_path(
+            dftracer::utils::index::store_dir(
+                dftracer::utils::index::store::internal::normalize_index_root(
+                    build_dir)),
+            dftracer::utils::index::store_dir(final_root));
+    }
+
     Py_RETURN_NONE;
+}
+
+static PyObject *write_shard_set_fn(PyObject * /*self*/, PyObject *args) {
+    const char *root;
+    PyObject *shard_dirs_obj;
+    if (!PyArg_ParseTuple(args, "sO", &root, &shard_dirs_obj)) return NULL;
+    std::vector<std::string> shard_dirs;
+    if (!parse_string_seq(shard_dirs_obj, "shard_dirs must be a sequence",
+                          shard_dirs))
+        return NULL;
+    try {
+        dftracer::utils::trace::views::write_shard_set(
+            dftracer::utils::index::store::internal::normalize_index_root(root),
+            shard_dirs);
+    } catch (const std::exception &e) {
+        dftracer::utils::python::set_typed_py_error(e);
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
+static PyObject *consolidate_shard_set_fn(PyObject * /*self*/, PyObject *args) {
+    const char *root;
+    if (!PyArg_ParseTuple(args, "s", &root)) return NULL;
+    std::size_t files = 0;
+    try {
+        files = dftracer::utils::trace::views::consolidate_shard_set(
+            dftracer::utils::index::store::internal::normalize_index_root(
+                root));
+    } catch (const std::exception &e) {
+        dftracer::utils::python::set_typed_py_error(e);
+        return NULL;
+    }
+    return PyLong_FromSize_t(files);
 }
 
 static PyObject *enable_aggregation_deterministic_ids_fn(PyObject * /*self*/,
@@ -371,6 +442,17 @@ static PyMethodDef DistributionMethods[] = {
      "mode "
      "so the same string maps to the same 32-bit id in every worker "
      "process. Call once at worker startup BEFORE any aggregation work."},
+    {"write_shard_set", DFTU_PYCFUNCTION(write_shard_set_fn), METH_VARARGS,
+     "write_shard_set(index_root, shard_dirs) -> None\n"
+     "Catalog `shard_dirs` as the shards of the index root, in the root's "
+     "shards.json. A shard under the root is stored relative to it."},
+    {"consolidate_shard_set", DFTU_PYCFUNCTION(consolidate_shard_set_fn),
+     METH_VARARGS,
+     "consolidate_shard_set(index_root) -> int\n"
+     "Merge the shards the root's shards.json names into the root's own "
+     "store by moving their data files, then remove the manifest and the "
+     "shard directories. Returns the number of trace files the shards "
+     "indexed. A failed move keeps the manifest and the shards for a retry."},
     {NULL, NULL, 0, NULL}};
 
 int dftracer::utils::python::init_distribution(PyObject *m) {

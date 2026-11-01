@@ -1,5 +1,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/store/internal/helpers.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <simdjson.h>
 #include <unistd.h>
@@ -102,15 +104,15 @@ IndexShardManifest parse_manifest(std::string_view json) {
     return manifest;
 }
 
-void write_shard_manifest(const std::string& dir,
+void write_shard_manifest(const std::string& root,
                           const IndexShardManifest& manifest) {
     std::error_code ec;
-    fs::create_directories(dir, ec);
+    fs::create_directories(root, ec);
 
-    const fs::path final_path = fs::path(dir) / SHARD_MANIFEST_FILENAME;
+    const fs::path final_path = shard_manifest_path(root);
     const fs::path tmp_path =
-        fs::path(dir) / (std::string(SHARD_MANIFEST_FILENAME) + ".tmp." +
-                         std::to_string(::getpid()));
+        fs::path(root) /
+        (std::string(SHARD_MANIFEST) + ".tmp." + std::to_string(::getpid()));
 
     const std::string body = to_json(manifest);
     {
@@ -134,8 +136,8 @@ void write_shard_manifest(const std::string& dir,
     }
 }
 
-std::optional<IndexShardManifest> read_shard_manifest(const std::string& dir) {
-    const fs::path path = fs::path(dir) / SHARD_MANIFEST_FILENAME;
+std::optional<IndexShardManifest> read_shard_manifest(const std::string& root) {
+    const fs::path path = shard_manifest_path(root);
     std::error_code ec;
     if (!fs::exists(path, ec)) return std::nullopt;
 
@@ -149,15 +151,15 @@ std::optional<IndexShardManifest> read_shard_manifest(const std::string& dir) {
     return parse_manifest(std::string_view(contents.data(), contents.size()));
 }
 
-bool has_shard_manifest(const std::string& dir) {
+bool has_shard_manifest(const std::string& root) {
     std::error_code ec;
-    return fs::exists(fs::path(dir) / SHARD_MANIFEST_FILENAME, ec);
+    return fs::exists(shard_manifest_path(root), ec);
 }
 
 std::string resolve_shard_set_root(const std::string& target) {
-    if (has_shard_manifest(target)) return target;
-    const std::string nested = (fs::path(target) / SHARD_SET_DIRNAME).string();
-    if (has_shard_manifest(nested)) return nested;
+    if (target.empty()) return "";
+    const std::string root = internal::normalize_index_root(target);
+    if (has_shard_manifest(root)) return root;
     return "";
 }
 

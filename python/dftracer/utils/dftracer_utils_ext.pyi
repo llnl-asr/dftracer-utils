@@ -982,6 +982,18 @@ def enable_aggregation_deterministic_ids() -> None:
     so the same string maps to the same 32-bit id in every worker process."""
     ...
 
+def write_shard_set(index_root: str, shard_dirs: Sequence[str]) -> None:
+    """Catalog ``shard_dirs`` as the shards of the index root, in the root's
+    ``shards.json``. A shard under the root is stored relative to it."""
+    ...
+
+def consolidate_shard_set(index_root: str) -> int:
+    """Merge the shards the root's ``shards.json`` names into the root's own
+    store by moving their data files, then remove the manifest and the shard
+    directories. Returns the number of trace files the shards indexed. A failed
+    move keeps the manifest and the shards for a retry."""
+    ...
+
 def set_log_level(
     level: Literal["trace", "debug", "info", "warn", "warning", "error", "off", "none"],
 ) -> None:

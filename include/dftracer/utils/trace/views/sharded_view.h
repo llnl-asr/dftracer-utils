@@ -67,33 +67,31 @@ class ShardedView {
     std::vector<std::string> shard_dirs_;
 };
 
-/// Write a `shards.json` manifest at `root` cataloging `shard_dirs` as one
-/// shard set. Each shard directory is opened read-only to record its file
-/// count. A shard path is stored relative to `root` when it
-/// lives under it, else absolute. Overwrites any existing manifest atomically.
-/// A later `ShardedView::from_manifest(root)` reads the set back.
+/// Write the root's `shards.json` manifest cataloging `shard_dirs` as the
+/// shards of one index root. Each shard directory is opened read-only to record
+/// its file count. A shard path is stored relative to `root` when it lives
+/// under it, so a shard under `<root>/shards/` is stored as `shards/<n>`, else
+/// absolute. Overwrites any existing manifest atomically. A later
+/// `ShardedView::from_manifest(root)` reads the set back.
 void write_shard_set(const std::string& root,
                      const std::vector<std::string>& shard_dirs);
 
-/// Consolidate a shard set into one unified index (with its aggregation tier)
-/// at `out_root`, rebuilt from the shards' trace files, then write a
-/// single-shard manifest there. Returns the number of files consolidated. A
-/// later query over `out_root` opens one index instead of N.
+/// Merge the shards the root's `shards.json` names into the root's own store,
+/// by moving each shard's data files, and return the number of trace files the
+/// shards indexed. Removes the manifest and the emptied shard directories once
+/// every file moved, so a later query over `root` opens one index.
 ///
-/// Requires the trace files to be present and to have distinct logical
-/// filenames across shards (the registry keys on filename). Scan-fallback
-/// queries need the traces under one directory; a tier-answered query does not
-/// read them. co_await it.
-coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
-                                                  const std::string& root,
-                                                  const std::string& out_root);
+/// Throws DFTUtilsException when the root has no manifest, and when a file
+/// cannot move: the files that did not move stay in their shard, with the
+/// manifest and the shard directories, so a later call retries the merge
+/// without a rebuild. Releases the handles of the root and of every shard.
+std::size_t consolidate_shard_set(const std::string& root);
 
 /// Merge a shard set's aggregation tiers into one consolidated tier index at
 /// `out_root` WITHOUT re-reading traces. Each shard's tier is re-keyed into a
-/// unified intern dictionary and combined by the merge operator; the result
-/// answers tier-covered queries from a single index. Unlike
-/// consolidate_shard_set it does not rebuild per-file data, so scan-fallback
-/// queries are not served by it. Returns the number of files cataloged.
+/// unified intern dictionary and combined by the merge operator, so the result
+/// answers tier-covered queries from one index, while the shards stay in place.
+/// Returns the number of files cataloged.
 std::size_t merge_shard_set(const std::string& root,
                             const std::string& out_root);
 

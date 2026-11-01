@@ -22,7 +22,7 @@ except ImportError:
 import dftracer.utils as dftu_utils
 from dftracer.utils.dftracer_utils_ext import CheckpointIndexer as NativeIndexer
 
-from .common import Environment
+from .common import Environment, determine_index_path
 
 ASSIGN_SNIPPET = """
 import json
@@ -161,6 +161,75 @@ class TestDirectoryIndexerWithDask:
             status2 = indexer.ensure_indexed()
             assert len(status2.ready) == 1
             assert len(status2.needs_work) == 0
+
+
+@pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")
+class TestDistributedIndex:
+    """distributed_index builds one shard per worker and merges it into the root."""
+
+    def _query(self, files, index_dir):
+        table = (
+            dftu_utils.TraceViewer(files, index_path=index_dir)
+            .group_by("cat")
+            .agg("count", "sum:dur")
+            .collect()
+            .to_dict()
+        )
+        return {k: sorted(v) for k, v in table.items()}
+
+    def test_inline_build_merges_into_the_index_root(self):
+        from dftracer.utils.dask import distributed_index
+
+        with Environment(lines=100) as env:
+            files = [env.create_test_gzip_file(f"g{k}/t{k}.pfw.gz") for k in range(4)]
+            index_path = determine_index_path(files[0], env.temp_dir)
+            result = distributed_index(files=files, index_path=index_path)
+
+            assert result["total_files"] == 4
+            assert os.path.isdir(os.path.join(index_path, "store"))
+            assert not os.path.exists(os.path.join(index_path, "shards"))
+            assert not os.path.exists(os.path.join(index_path, "shards.json"))
+
+            local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
+            with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
+                ix.ensure_indexed()
+            assert self._query(files, index_path) == self._query(files, os.path.dirname(local))
+
+    def test_merges_worker_shards_into_the_index_root(self):
+        from dask.distributed import Client, LocalCluster
+
+        from dftracer.utils.dask import distributed_index
+        from dftracer.utils.dftracer_utils_ext import Index
+
+        with Environment(lines=100) as env:
+            files = [env.create_test_gzip_file(f"f{k}/t{k}.pfw.gz") for k in range(4)]
+            index_path = determine_index_path(files[0], env.temp_dir)
+
+            cluster = LocalCluster(processes=True, n_workers=2, threads_per_worker=1)
+            client = Client(cluster)
+            try:
+                result = distributed_index(files=files, index_path=index_path, client=client)
+            finally:
+                client.close()
+                cluster.close()
+
+            assert result["total_files"] == 4
+            assert sum(result["per_worker"]) == 4
+            # Every shard arrived, so the merge left one store and no bookkeeping.
+            assert os.path.isdir(os.path.join(index_path, "store"))
+            assert not os.path.exists(os.path.join(index_path, "shards"))
+            assert not os.path.exists(os.path.join(index_path, "shards.json"))
+
+            local = determine_index_path(files[0], os.path.join(env.temp_dir, "local"))
+            with dftu_utils.Indexer(files=files, index_dir=os.path.dirname(local)) as ix:
+                ix.ensure_indexed()
+
+            with dftu_utils.Indexer(files=files, index_dir=env.temp_dir) as ix:
+                status = ix.resolve()
+            assert sorted(status.ready) == sorted(files)
+            assert status.needs_work == []
+            assert Index(index_path).find_stale_files(files)["stale"] is False
+            assert self._query(files, index_path) == self._query(files, os.path.dirname(local))
 
 
 @pytest.mark.skipif(not DASK_AVAILABLE, reason="Dask not available")

@@ -57,12 +57,14 @@ job would do to its own slice, with no coordination between them:
 ``ShardedView`` (header ``dftracer/utils/trace/views/sharded_view.h``,
 namespace ``dftracer::utils::trace::views``) is C++-only: it queries a set of
 immutable index shards as one logical index, without opening or rebuilding a
-merged store. ``write_shard_set(root, shard_dirs)`` catalogs the shards into a
-``shards.json`` manifest at ``root``; ``ShardedView::from_manifest(root)``
-reads that catalog back. Under the hood, ``aggregate()`` runs each shard's
-``aggregate_partial()`` and reduces the partials with
-``merge_partials()``. See :doc:`../guides/scale/distributed-aggregation`
-for that pattern used directly (e.g. across MPI ranks):
+merged store.
+``write_shard_set(root, shard_dirs)`` catalogs the shards into the
+``shards.json`` manifest of the index root ``root``.
+``ShardedView::from_manifest(root)`` reads that catalog back.
+Under the hood, ``aggregate()`` runs each shard's ``aggregate_partial()`` and
+reduces the partials with ``merge_partials()``.
+See :doc:`../guides/scale/distributed-aggregation` for that pattern used directly,
+such as across MPI ranks.
 
 .. code-block:: cpp
 
@@ -75,10 +77,11 @@ for that pattern used directly (e.g. across MPI ranks):
    using namespace dftracer::utils::trace::views;
 
    int main() {
-       write_shard_set("shards", {std::filesystem::absolute("shard-a").string(),
-                                  std::filesystem::absolute("shard-b").string()});
+       write_shard_set("set/.dftindex",
+                       {std::filesystem::absolute("shard-a").string(),
+                        std::filesystem::absolute("shard-b").string()});
 
-       ShardedView sv = ShardedView::from_manifest("shards");
+       ShardedView sv = ShardedView::from_manifest("set/.dftindex");
 
        auto configure = [](View v) {
            return v.group_by({GroupKey::cat()})
@@ -106,7 +109,11 @@ partials into one row):
 
 No process ever opened both shards' trace files in the same scan, and neither
 shard's index was rebuilt or merged on disk, since ``ShardedView`` is fully
-read-only. ``sum_dur`` here comes back as a ``Uint64`` column: the partial
+read-only.
+To end with one ordinary index, put the shards under ``set/.dftindex/shards/<n>``
+and call ``consolidate_shard_set("set/.dftindex")``.
+It moves every shard's store data files into ``set/.dftindex/store`` and removes
+``shards.json`` and the shard directories, so a later query opens one index. ``sum_dur`` here comes back as a ``Uint64`` column: the partial
 merge preserves the field's integer domain, so a merged ``Sum`` over a
 non-negative integer field matches a plain ``View::collect()``. Call
 ``materialize()`` on the result column (it may be chunked), then read it with
@@ -118,10 +125,12 @@ What you learned
 - A shard is just a directory with its own trace(s) and its own
   ``.dftindex``; build each independently (``dftracer_index -d <dir>``), with
   no coordination required between shards.
-- ``write_shard_set(root, shard_dirs)`` catalogs a set of shards into a
-  manifest; ``ShardedView::from_manifest(root)`` reads it back and
-  ``.aggregate(configure)`` answers a ``group_by``/``agg`` query across every
-  shard without merging them.
+- ``write_shard_set(root, shard_dirs)`` catalogs a set of shards into the
+  manifest of an index root.
+  ``ShardedView::from_manifest(root)`` reads it back and ``.aggregate(configure)``
+  answers a ``group_by``/``agg`` query across every shard without merging them.
+- ``consolidate_shard_set(root)`` moves the data files of the shards under
+  ``<root>/shards/`` into the root's own store, so the root is one ordinary index.
 - A merged partial aggregation preserves each field's numeric domain: a
   ``Sum``/``Min``/``Max`` over an integer field returns the same integer
   (``Uint64``) column as a direct ``View::collect()``, so the two paths agree.

@@ -102,6 +102,18 @@ struct FileIndex {
 dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
                             std::uint64_t random, dstd::StringView label);
 
+/// The suffix every data file's name ends with, so a store directory's data
+/// files are recognized by name alone.
+inline constexpr std::string_view DATA_FILE_SUFFIX = ".dfs";
+
+/// Moves every data file of the store directory `from` into `to`, which is
+/// created when it is missing, and returns how many moved. Each move is a
+/// rename, so both directories must share a filesystem. On an Io error the
+/// files already moved stay moved and `from` keeps the rest, so a later call
+/// continues.
+dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
+                                                         dstd::StringView to);
+
 /// The file of a store directory that lists the footer of every closed data
 /// file, so a snapshot learns a file's directory without opening it. A writer
 /// appends an entry when its close succeeds. The summary is a cache: a file it

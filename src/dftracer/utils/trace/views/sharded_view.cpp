@@ -4,16 +4,18 @@
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
-#include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_partial.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_intern.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/index/tables.h>
+#include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 
@@ -66,10 +68,8 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
     if (!manifest) {
         throw DFTUtilsException(
             ErrorCode::Io,
-            "no shard manifest under " + root + " (" +
-                std::string(
-                    dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
-                ")");
+            "no shard manifest at " +
+                dftracer::utils::index::shard_manifest_path(root));
     }
     constexpr std::uint32_t INDEX_FORMAT_VERSION =
         static_cast<std::uint32_t>(DFTRACER_UTILS_INDEX_FORMAT_VERSION);
@@ -164,44 +164,41 @@ void write_shard_set(const std::string& root,
     dftracer::utils::index::store::write_shard_manifest(root, manifest);
 }
 
-coro::CoroTask<std::size_t> consolidate_shard_set(CoroScope* scope,
-                                                  const std::string& root,
-                                                  const std::string& out_root) {
+std::size_t consolidate_shard_set(const std::string& root) {
     auto manifest = dftracer::utils::index::store::read_shard_manifest(root);
     if (!manifest) {
         throw DFTUtilsException(
             ErrorCode::Io,
-            "no shard manifest under " + root + " (" +
-                std::string(
-                    dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
-                ")");
+            "no shard manifest at " +
+                dftracer::utils::index::shard_manifest_path(root));
     }
 
-    std::vector<std::string> files;
+    std::vector<std::string> shard_roots;
+    shard_roots.reserve(manifest->shards.size());
+    std::size_t files = 0;
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
-        const std::string idx = (fs::path(root) / shard.path).string();
-        auto snapshot =
-            unwrap(dftracer::utils::index::plan::open_snapshot(idx));
-        const auto indexed = unwrap(snapshot.files());
-        for (const auto& file : indexed)
-            files.push_back(std::string(file.path()));
+        shard_roots.push_back((fs::path(root) / shard.path).string());
+        files += shard.num_files;
     }
-    if (files.empty()) co_return 0;
 
-    dftracer::utils::index::build::ResolveAndBuildInput in;
-    in.files = files;
-    in.index_dir = out_root;
-    in.require_checkpoints = true;
-    in.aggregation_config = dftracer::utils::index::schemas::dft::agg::
-        standard_aggregation_config();
-    co_await dftracer::utils::index::build::resolve_and_build_index(
-        scope, std::move(in));
+    dftracer::utils::index::release_root(root);
+    for (const auto& shard_root : shard_roots)
+        dftracer::utils::index::release_root(shard_root);
 
-    const std::string unified =
-        internal::determine_index_path(files.front(), out_root);
-    write_shard_set(out_root, {unified});
-    co_return files.size();
+    const std::string target = dftracer::utils::index::store_dir(root);
+    for (const auto& shard_root : shard_roots) {
+        unwrap(dftracer::utils::store::Store::adopt(
+            dftracer::utils::index::store_dir(shard_root), target));
+    }
+    dftracer::utils::index::release_root(root);
+
+    std::error_code ec;
+    fs::remove(dftracer::utils::index::shard_manifest_path(root), ec);
+    for (const auto& shard : manifest->shards)
+        fs::remove_all(fs::path(root) / shard.path, ec);
+    fs::remove(dftracer::utils::index::shards_dir(root), ec);
+    return files;
 }
 
 namespace {
@@ -272,10 +269,8 @@ std::size_t merge_shard_set(const std::string& root,
     if (!manifest) {
         throw DFTUtilsException(
             ErrorCode::Io,
-            "no shard manifest under " + root + " (" +
-                std::string(
-                    dftracer::utils::index::store::SHARD_MANIFEST_FILENAME) +
-                ")");
+            "no shard manifest at " +
+                dftracer::utils::index::shard_manifest_path(root));
     }
 
     const std::string out_idx = internal::determine_index_path("x", out_root);
@@ -330,7 +325,6 @@ std::size_t merge_shard_set(const std::string& root,
             }
         });
 
-    write_shard_set(out_root, {out_idx});
     return files;
 }
 

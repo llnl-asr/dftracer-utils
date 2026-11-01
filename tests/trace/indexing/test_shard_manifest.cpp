@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -8,11 +9,11 @@
 #include <string>
 
 using dftracer::utils::DFTUtilsException;
+using dftracer::utils::index::shard_manifest_path;
 using dftracer::utils::index::store::IndexShardManifest;
 using dftracer::utils::index::store::parse_manifest;
 using dftracer::utils::index::store::read_shard_manifest;
 using dftracer::utils::index::store::resolve_shard_set_root;
-using dftracer::utils::index::store::SHARD_SET_DIRNAME;
 using dftracer::utils::index::store::to_json;
 using dftracer::utils::index::store::write_shard_manifest;
 
@@ -95,20 +96,18 @@ TEST_SUITE("shard_manifest") {
         CHECK(out.shards[0].path == "weird\"\\\n\tname.dftindex");
     }
 
-    TEST_CASE("resolve_shard_set_root finds a manifest directly or nested") {
+    TEST_CASE("resolve_shard_set_root names the root holding the manifest") {
         ScopedTestDir dir("dftu_shard_manifest_test");
         CHECK(resolve_shard_set_root(dir.path().string()).empty());
 
-        const std::string nested =
-            (dir.path() / std::string(SHARD_SET_DIRNAME)).string();
-        write_shard_manifest(nested, sample());
-        CHECK(resolve_shard_set_root(dir.path().string()) == nested);
-
-        // A manifest directly at the target takes precedence over the nested
-        // one.
-        write_shard_manifest(dir.path().string(), sample());
-        CHECK(resolve_shard_set_root(dir.path().string()) ==
-              dir.path().string());
+        const std::string root =
+            (dir.path() / std::string(dftracer::utils::index::INDEX_ROOT_NAME))
+                .string();
+        write_shard_manifest(root, sample());
+        CHECK(resolve_shard_set_root(dir.path().string()) == root);
+        CHECK(resolve_shard_set_root(root) == root);
+        CHECK(fs::exists(shard_manifest_path(root)));
+        CHECK_FALSE(fs::exists(dir.path() / std::string(".dftindex-shards")));
     }
 
     TEST_CASE("a manifest with no format version has none, not 0") {

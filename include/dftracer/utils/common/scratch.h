@@ -2,7 +2,9 @@
 #define DFTRACER_UTILS_COMMON_SCRATCH_H
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace dftracer::utils {
 
@@ -41,9 +43,11 @@ class ScratchSession {
     /// free RAM. `valid()` is false when no mount qualifies or the directory
     /// could not be created; callers then build in place.
     explicit ScratchSession(std::uint64_t estimated_bytes = 0);
-    ~ScratchSession();
     ScratchSession(const ScratchSession&) = delete;
     ScratchSession& operator=(const ScratchSession&) = delete;
+    ScratchSession(ScratchSession&& other) noexcept;
+    ScratchSession& operator=(ScratchSession&&) = delete;
+    ~ScratchSession();
 
     bool valid() const noexcept { return !dir_.empty(); }
     const std::string& dir() const noexcept { return dir_; }
@@ -55,6 +59,12 @@ class ScratchSession {
     std::string dir_;
     bool keep_ = false;
 };
+
+/// A scratch directory to build the index of `files` in, sized from their bytes
+/// times $DFTRACER_UTILS_INDEX_SIZE_FACTOR, or nullopt when no scratch mount
+/// has room. The caller publishes the store it builds there with publish_path.
+std::optional<ScratchSession> staged_build_scratch(
+    const std::vector<std::string>& files);
 
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any
 /// existing `dst`. Renames when both live on one filesystem, else recursively

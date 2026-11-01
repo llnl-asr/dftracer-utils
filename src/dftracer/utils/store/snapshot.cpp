@@ -72,7 +72,9 @@ std::string path_string(dstd::StringView dir, std::string_view name) {
 }
 
 bool has_data_file_suffix(std::string_view name) {
-    return name.size() > 4 && name.compare(name.size() - 4, 4, ".dfs") == 0;
+    return name.size() > DATA_FILE_SUFFIX.size() &&
+           name.compare(name.size() - DATA_FILE_SUFFIX.size(),
+                        DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) == 0;
 }
 
 double ms_since(std::chrono::steady_clock::time_point start) {

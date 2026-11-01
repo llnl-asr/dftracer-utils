@@ -12,6 +12,7 @@
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/coro/task.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 
@@ -308,6 +309,13 @@ class Store {
     /// Closes the writer of every store this process holds. For a CLI exit,
     /// while the runtime still runs. Returns the first error.
     static dstd::Expected<void, dstd::Error> close_all();
+
+    /// Moves every data file of `from_dir` into `to_dir` on the same
+    /// filesystem and returns the count. Every writer of `from_dir` must be
+    /// closed and no scope may live in both. Files moved before an Io error
+    /// stay moved, so a retry continues.
+    static dstd::Expected<std::size_t, dstd::Error> adopt(
+        dstd::StringView from_dir, dstd::StringView to_dir);
 
    private:
     struct State;

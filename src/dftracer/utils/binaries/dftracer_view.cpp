@@ -895,6 +895,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     FILE* out_target = out_file ? out_file : stdout;
     FileSink sink(out_target);
     bool verify_failed = false;
+    bool index_merge_failed = false;
 
     auto pipeline_config =
         cli::build_pipeline_config("DFTracer View", cli->pipeline);
@@ -962,19 +963,14 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 shard_set_root.empty()) {
                 auto shard =
                     shard_files(files, transport.rank(), transport.size());
-                // Default: nest the shard set under a hidden dir so it does not
-                // clutter (or get scanned from) the trace directory. An
-                // explicit
-                // --index-dir is used verbatim.
-                // Not a conditional expression: GCC 12 frees its temporaries
-                // twice in a coroutine.
-                std::string idx_base = index_dir;
-                if (idx_base.empty())
-                    idx_base = (fs::path(files.front()).parent_path() /
-                                SHARD_SET_DIRNAME)
-                                   .string();
-                std::string rank_idx =
-                    idx_base + "/rank_" + std::to_string(transport.rank());
+                // Each rank builds its own shard of the root, on node-local
+                // scratch when the destination warrants it, and publishes it as
+                // <root>/shards/<rank>. Rank 0 merges the shards once every
+                // rank published its own.
+                const std::string idx_root =
+                    internal::determine_index_path(files.front(), index_dir);
+                const std::string rank_idx = dftracer::utils::index::shard_root(
+                    idx_root, static_cast<std::size_t>(transport.rank()));
                 if (!no_auto_index) {
                     // Build each rank's index with its aggregation tier.
                     dftracer::utils::index::build::ResolveAndBuildInput bin;
@@ -989,7 +985,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 for (const auto& f : shard) {
                     ViewFile vf;
                     vf.file_path = f;
-                    vf.index_path = internal::determine_index_path(f, rank_idx);
+                    vf.index_path = rank_idx;
                     vf.checkpoint_size = checkpoint_size;
                     shard_files_vf.push_back(std::move(vf));
                 }
@@ -1001,6 +997,33 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 std::string partial = co_await partial_plan.collect();
                 auto partials = transport.all_gather(partial);
                 if (transport.rank() == 0) {
+                    // Every rank published its shard before the gather, so the
+                    // set is complete: catalog it and merge the shards into the
+                    // root's own store, leaving one index for a later query. A
+                    // failed merge keeps the manifest and the shards, so a
+                    // later call retries it without a rebuild.
+                    if (!no_auto_index) {
+                        std::vector<std::string> shard_dirs;
+                        for (int r = 0; r < transport.size(); ++r) {
+                            std::string d = dftracer::utils::index::shard_root(
+                                idx_root, static_cast<std::size_t>(r));
+                            if (fs::exists(
+                                    dftracer::utils::index::store_dir(d)))
+                                shard_dirs.push_back(std::move(d));
+                        }
+                        if (!shard_dirs.empty()) {
+                            try {
+                                write_shard_set(idx_root, shard_dirs);
+                                consolidate_shard_set(idx_root);
+                            } catch (const std::exception& e) {
+                                index_merge_failed = true;
+                                DFTRACER_UTILS_LOG_ERROR(
+                                    "shards not merged into %s: %s",
+                                    idx_root.c_str(), e.what());
+                            }
+                        }
+                    }
+
                     std::vector<std::string_view> pv(partials.begin(),
                                                      partials.end());
                     View merger = configure(View::from_files({}));
@@ -1017,26 +1040,6 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                             co_await windowed_table(std::move(merged));
                         print_table(out_target, table);
                         stats.events_matched = table.num_rows();
-                    }
-
-                    // Catalog the per-rank shards so a later query autodetects
-                    // and reads the set without rebuilding. Best-effort: a
-                    // write failure never fails the query.
-                    if (!no_auto_index) {
-                        std::vector<std::string> shard_dirs;
-                        for (int r = 0; r < transport.size(); ++r) {
-                            std::string d = internal::determine_index_path(
-                                "x", idx_base + "/rank_" + std::to_string(r));
-                            if (fs::exists(d))
-                                shard_dirs.push_back(std::move(d));
-                        }
-                        try {
-                            if (!shard_dirs.empty())
-                                write_shard_set(idx_base, shard_dirs);
-                        } catch (const std::exception& e) {
-                            DFTRACER_UTILS_LOG_WARN(
-                                "shard-set manifest not written: %s", e.what());
-                        }
                     }
                 }
                 co_return;
@@ -1208,7 +1211,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                      (unsigned long long)stats.lines_invalid,
                      (unsigned long long)stats.values_unconverted);
 
-    co_return verify_failed ? 1 : 0;
+    co_return (verify_failed || index_merge_failed) ? 1 : 0;
 }
 
 int main(int argc, char** argv) {

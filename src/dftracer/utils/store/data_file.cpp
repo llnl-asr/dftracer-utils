@@ -1,3 +1,4 @@
+#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/bits.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -24,6 +25,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace dftracer::utils::store::engine {
 
@@ -413,8 +415,46 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
             out.push_back(c);
         }
     }
-    out.append(".dfs");
+    out.append(DATA_FILE_SUFFIX);
     return out;
+}
+
+dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
+                                                         dstd::StringView to) {
+    const std::string from_dir = path_string(from);
+    const std::string to_dir = path_string(to);
+    auto io_error = [](const std::string& what, const std::error_code& ec) {
+        return dstd::Unexpected<dstd::Error>(
+            dstd::Error(dstd::Condition::Io, what + ": " + ec.message()));
+    };
+    std::error_code ec;
+    fs::create_directories(to_dir, ec);
+    if (ec) return io_error("store: cannot create the directory " + to_dir, ec);
+
+    std::vector<std::string> names;
+    fs::directory_iterator it(from_dir, ec);
+    if (ec) return io_error("store: cannot list the directory " + from_dir, ec);
+    for (; it != fs::directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        std::error_code file_ec;
+        if (!it->is_regular_file(file_ec) || file_ec) continue;
+        std::string name = it->path().filename().string();
+        if (name.size() <= DATA_FILE_SUFFIX.size()) continue;
+        if (name.compare(name.size() - DATA_FILE_SUFFIX.size(),
+                         DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) != 0) {
+            continue;
+        }
+        names.push_back(std::move(name));
+    }
+    if (ec) return io_error("store: cannot list the directory " + from_dir, ec);
+    std::sort(names.begin(), names.end());
+
+    for (const std::string& name : names) {
+        const fs::path src = fs::path(from_dir) / name;
+        fs::rename(src, fs::path(to_dir) / name, ec);
+        if (ec) return io_error("store: cannot move " + src.string(), ec);
+    }
+    return names.size();
 }
 
 namespace {

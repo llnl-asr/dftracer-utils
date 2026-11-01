@@ -963,21 +963,27 @@ def assign_files_by_pid(
 def _build_index_task(
     files: List[str],
     batch_id: str,
-    index_dir: str,
+    shard_root: str,
     checkpoint_size: int,
     bloom_dimensions: Optional[List[str]],
     force_rebuild: bool,
     parallelism: int,
     build_bloom: bool = True,
     aggregation_config: "Optional[AggregationConfig]" = None,
-    enable_det_ids: bool = False,
 ) -> None:
-    """Dask worker task: index `files` straight into the index at `index_dir`."""
+    """Dask worker task: index `files` as the shard at `shard_root`.
+
+    The shard is a complete index root of its own. The coordinator catalogs the
+    shards and merges them into the index root once every task finished.
+    """
     import logging as _logging
     import socket as _socket
     import time as _time
 
-    from .dftracer_utils_ext import build_index_batch
+    from .dftracer_utils_ext import (
+        build_index_batch,
+        enable_aggregation_deterministic_ids,
+    )
 
     _log = _logging.getLogger("dftracer.utils.dask._build_index_task")
     _host = _socket.gethostname()
@@ -985,14 +991,13 @@ def _build_index_task(
     _progress_cb = _worker_progress_forwarder("Indexing", batch_id)
 
     t0 = _time.monotonic()
-    if enable_det_ids:
-        from .dftracer_utils_ext import enable_aggregation_deterministic_ids
-
-        enable_aggregation_deterministic_ids()
+    # Every shard numbers its aggregation dictionary by content, so the shards
+    # of one root agree on the ids their data files carry.
+    enable_aggregation_deterministic_ids()
 
     build_index_batch(
         files,
-        index_dir,
+        shard_root,
         checkpoint_size,
         force_rebuild,
         build_bloom,
@@ -1032,11 +1037,16 @@ def distributed_index(
       2. LPT bin-pack whole files into one bucket per Dask worker. A file is
          never split across workers: every part of its index is built from the
          whole file, by one worker with its own threads.
-      3. Submit one Dask task per non-empty worker that runs the indexer
-         pipeline straight into the index. Each worker numbers its own files,
-         and nothing is staged or ingested.
-      4. The coordinator writes the aggregation config, then refreshes its
-         view of the index.
+      3. Submit one Dask task per non-empty worker. Each task builds its files
+         as the shard `<index_path>/shards/<worker>`, a complete index root of
+         its own, on node-local scratch when the destination warrants it.
+      4. The coordinator catalogs the arrived shards in `<index_path>/shards.json`
+         and merges them into `<index_path>/store` by moving their data files,
+         which leaves the manifest and the shard directories gone. A failed task
+         fails the build and leaves the arrived shards in place, so a later call
+         retries the merge without a rebuild.
+      5. The coordinator writes the aggregation config and refreshes its view of
+         the index.
 
     Args:
         directory: Directory containing trace files.
@@ -1132,9 +1142,6 @@ def distributed_index(
             entries = [(p, s) for (p, s) in entries if p in _needs]
             all_paths = [p for (p, _) in entries]
 
-    _log.info("distributed_index: opening Index at %s", index_path)
-    db = _Index(index_path)
-
     # A file is never split across workers, since each part of its index is
     # built from the whole file.
     _t3 = _time.monotonic()
@@ -1156,10 +1163,11 @@ def distributed_index(
         [len(u) for u in per_worker_files],
     )
 
-    index_dir = os.path.dirname(index_path.rstrip("/"))
+    index_root = index_path.rstrip("/")
     worker_file_lists: List[List[str]] = [
         [all_paths[i] for i in files_w] for files_w in per_worker_files
     ]
+    shard_dirs = [os.path.join(index_root, "shards", str(w)) for w in range(len(worker_file_lists))]
 
     _t_build = _time.monotonic()
     worker_ids: List[int] = []
@@ -1171,14 +1179,13 @@ def distributed_index(
             _build_index_task(
                 paths_w,
                 f"worker_{w}",
-                index_dir,
+                shard_dirs[w],
                 checkpoint_size,
                 bloom_dimensions,
                 force_rebuild,
                 parallelism_per_worker,
                 build_bloom,
                 agg_config,
-                False,
             )
     else:
         worker_addrs = list(client.nthreads().keys())
@@ -1194,14 +1201,13 @@ def distributed_index(
                         _build_index_task,
                         paths_w,
                         f"worker_{w}",
-                        index_dir,
+                        shard_dirs[w],
                         checkpoint_size,
                         bloom_dimensions,
                         force_rebuild,
                         parallelism_per_worker,
                         build_bloom,
                         agg_config,
-                        True,
                         workers=target,
                         pure=False,
                     )
@@ -1215,7 +1221,21 @@ def distributed_index(
 
     built = bool(worker_ids)
     if built:
+        _t_merge = _time.monotonic()
+        from .dftracer_utils_ext import consolidate_shard_set, write_shard_set
+
+        arrived = [shard_dirs[w] for w in worker_ids if os.path.isdir(shard_dirs[w])]
+        write_shard_set(index_root, arrived)
+        consolidate_shard_set(index_root)
+        _log.info(
+            "distributed_index: merged %d shards into %s in %.1fs",
+            len(arrived),
+            index_root,
+            _time.monotonic() - _t_merge,
+        )
+
         _t_meta = _time.monotonic()
+        db = _Index(index_path)
         db.write_agg_config(agg_config)
         _log.info(
             "distributed_index: agg meta writes done in %.2fs",

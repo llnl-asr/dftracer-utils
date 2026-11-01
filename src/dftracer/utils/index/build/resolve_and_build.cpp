@@ -1,7 +1,5 @@
-#include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
-#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/scratch.h>
@@ -198,26 +196,16 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                 roots.insert(
                     trace::internal::determine_index_path(f, input.index_dir));
             if (roots.size() == 1) {
-                std::uint64_t input_bytes = 0;
-                for (const auto& f : files_needing_work) {
-                    InputFileStat st;
-                    if (stat_input(f, st)) input_bytes += st.size;
-                }
-                const int factor = dftracer::utils::Env::get<int>(
-                                       "DFTRACER_UTILS_INDEX_SIZE_FACTOR")
-                                       .value_or(3);
-                scratch.emplace(input_bytes * static_cast<std::uint64_t>(
-                                                  factor > 0 ? factor : 1));
-                if (scratch->valid()) {
+                auto staged = staged_build_scratch(files_needing_work);
+                if (staged) {
                     staged_final_path = *roots.begin();
-                    build_index_dir = scratch->dir();
+                    build_index_dir = staged->dir();
                     build_index_path = trace::internal::determine_index_path(
                         files_needing_work.front(), build_index_dir);
                     DFTRACER_UTILS_LOG_INFO("Staging index build at %s -> %s",
                                             build_index_path.c_str(),
                                             staged_final_path.c_str());
-                } else {
-                    scratch.reset();
+                    scratch.emplace(std::move(*staged));
                 }
             }
         }

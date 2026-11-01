@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Changed
 
+- Build each `distributed_index` worker's files as a shard on node-local disk, then merge the shards into the index root by moving their data files.
+  Shard sets live in `.dftindex/shards/` with `.dftindex/shards.json`, where they lived in `.dftindex-shards`.
+- Make `consolidate_shard_set` merge the shards' data files instead of building the index again.
 - Keep the query caches and materialized views inside the index root, in `.dftindex/rollups/`, `.dftindex/lookups/` and `.dftindex/views/`.
   A `.dftindex-cache` folder next to the traces is no longer used and can be deleted.
 - Make `Index.find_stale_files()` return changed, added, removed and stale files from one snapshot of the index root.

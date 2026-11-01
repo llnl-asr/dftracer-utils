@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/index/indexer.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -203,7 +204,8 @@ std::string cell(const df::Series& c, std::int64_t i) {
 // Create a trace in its own subdir and build its index, with the aggregation
 // tier every build makes, over it; returns the shard's .dftindex path.
 std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
-                                   const std::string& tag, int num_events) {
+                                   const std::string& tag, int num_events,
+                                   const std::string& index_dir = "") {
     namespace internal = dftracer::utils::trace::internal;
     std::string dir = env.get_dir() + "/" + tag;
     fs::create_directories(dir);
@@ -212,8 +214,10 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
     fs::rename(src, gz);
 
     dftracer::utils::index::IndexerOptions options;
+    options.index_dir = index_dir;
     dftracer::utils::index::Indexer::open({gz}, options).build();
-    return internal::determine_index_path(gz, "");
+    if (index_dir.empty()) return internal::determine_index_path(gz, "");
+    return internal::determine_index_path("x", index_dir);
 }
 
 // Split into non-empty lines and sort, so two aggregations can be compared
@@ -449,9 +453,9 @@ TEST_SUITE("DFTracerView") {
         CHECK(numeric.size() > plain.size());
     }
 
-    // Pointing -d at a shard-set root (a dir with shards.json) autodetects it
-    // and answers the aggregate over the immutable shards, matching a direct
-    // query over the same traces.
+    // Pointing -d at a directory whose index root holds shards.json
+    // autodetects the set and answers the aggregate over the immutable shards,
+    // matching a direct query over the same traces.
     TEST_CASE("shard-set query matches a direct query") {
         auto binary = find_view_binary();
         if (binary.empty()) {
@@ -461,9 +465,13 @@ TEST_SUITE("DFTracerView") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
 
-        std::string sa = build_aggregated_shard(env, "sa", 50);
-        std::string sb = build_aggregated_shard(env, "sb", 40);
-        std::string root = env.get_dir() + "/set";
+        const std::string set = env.get_dir() + "/set";
+        const std::string root =
+            set + "/" + std::string(dftracer::utils::index::INDEX_ROOT_NAME);
+        std::string sa = build_aggregated_shard(
+            env, "sa", 50, dftracer::utils::index::shard_root(root, 0));
+        std::string sb = build_aggregated_shard(
+            env, "sb", 40, dftracer::utils::index::shard_root(root, 1));
         dftracer::utils::trace::views::write_shard_set(root, {sa, sb});
 
         // A flat directory with the same two traces for the baseline query.
@@ -475,7 +483,7 @@ TEST_SUITE("DFTracerView") {
         std::string cap = env.get_dir() + "/cap.txt";
         std::string shard_out, direct_out;
         CHECK(run_view_capture(
-                  binary, {"--group-by", "cat", "--agg", "count", "-d", root},
+                  binary, {"--group-by", "cat", "--agg", "count", "-d", set},
                   cap, shard_out) == 0);
         CHECK(run_view_capture(
                   binary, {"--group-by", "cat", "--agg", "count", "-d", both},
@@ -489,7 +497,7 @@ TEST_SUITE("DFTracerView") {
         CHECK(run_view_capture(
                   binary,
                   {"--group-by", "cat", "--agg", "count,sum:dur", "--select",
-                   "cat,count", "--limit", "1", "-d", root},
+                   "cat,count", "--limit", "1", "-d", set},
                   cap, shaped) == 0);
         CHECK(sorted_lines(shaped).size() == 1);
         CHECK(shaped.find("\"count\"") != std::string::npos);

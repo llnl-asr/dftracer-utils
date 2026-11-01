@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/memory/budget.h>
@@ -10,8 +11,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 namespace dftracer::utils {
 
@@ -191,10 +195,31 @@ ScratchSession::ScratchSession(std::uint64_t estimated_bytes) {
     if (!ec && fs::is_directory(dir, ec)) dir_ = dir;
 }
 
+ScratchSession::ScratchSession(ScratchSession&& other) noexcept
+    : dir_(std::move(other.dir_)), keep_(other.keep_) {
+    other.dir_.clear();
+}
+
 ScratchSession::~ScratchSession() {
     if (dir_.empty() || keep_) return;
     std::error_code ec;
     fs::remove_all(dir_, ec);
+}
+
+std::optional<ScratchSession> staged_build_scratch(
+    const std::vector<std::string>& files) {
+    std::uint64_t input_bytes = 0;
+    for (const std::string& file : files) {
+        InputFileStat st;
+        if (stat_input(file, st)) input_bytes += st.size;
+    }
+    const int factor =
+        Env::get<int>("DFTRACER_UTILS_INDEX_SIZE_FACTOR").value_or(3);
+    std::optional<ScratchSession> scratch(
+        std::in_place,
+        input_bytes * static_cast<std::uint64_t>(factor > 0 ? factor : 1));
+    if (!scratch->valid()) scratch.reset();
+    return scratch;
 }
 
 void publish_path(const std::string& src, const std::string& dst) {

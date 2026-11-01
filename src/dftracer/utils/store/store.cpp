@@ -471,7 +471,7 @@ Store::State::foreign_files_locked() const {
     for (; it != std::filesystem::directory_iterator(); it.increment(error)) {
         if (error) break;
         const auto& path = it->path();
-        if (path.extension() != ".dfs") continue;
+        if (path.extension() != engine::DATA_FILE_SUFFIX) continue;
         std::string name = path.filename().string();
         if (name == own) continue;
         std::error_code size_error;
@@ -766,6 +766,24 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
         if (!closed && first) first = std::move(closed);
     }
     return first;
+}
+
+dstd::Expected<std::size_t, dstd::Error> Store::adopt(dstd::StringView from_dir,
+                                                      dstd::StringView to_dir) {
+    auto moved = engine::move_data_files(from_dir, to_dir);
+    const std::string key = directory_key(to_dir);
+    dstd::SharedPtr<State> live;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex());
+        auto found = State::registry().find(key);
+        if (found != State::registry().end()) live = found->second.lock();
+    }
+    if (live) {
+        std::lock_guard<std::mutex> lock(live->mutex);
+        live->foreign_checked = {};
+        live->next_look.store(0, std::memory_order_release);
+    }
+    return moved;
 }
 
 }  // namespace dftracer::utils::store

@@ -542,6 +542,17 @@ def install_extension_stub() -> None:
         so the same string maps to the same 32-bit id in every worker process."""
         return None
 
+    def write_shard_set(index_root: str, shard_dirs: list[str]) -> None:
+        """Catalog ``shard_dirs`` as the shards of the index root, in the root's
+        ``shards.json``. A shard under the root is stored relative to it."""
+        return None
+
+    def consolidate_shard_set(index_root: str) -> int:
+        """Merge the shards the root's ``shards.json`` names into the root's own
+        store by moving their data files, then remove the manifest and the shard
+        directories. Returns the number of trace files the shards indexed."""
+        return 0
+
     class _Series(_BaseNative):
         """Native columnar Series handle (SIMD ops + Arrow C Data Interface).
 
@@ -643,6 +654,8 @@ def install_extension_stub() -> None:
         "build_index_batch",
         "peek_default_runtime",
         "enable_aggregation_deterministic_ids",
+        "write_shard_set",
+        "consolidate_shard_set",
         "get_default_runtime",
         "get_log_level",
         "jit_run_op",

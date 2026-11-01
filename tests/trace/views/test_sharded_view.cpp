@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/versions.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
+#include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -53,12 +54,27 @@ std::string make_x_trace(TestEnvironment& env, const std::string& tag,
 namespace aggregators = dftracer::utils::index::schemas::dft::agg;
 
 // Build a full sidecar index including the aggregation tier the way the
-// aggregator does, so the chunk partials can answer without a scan.
+// aggregator does, so the chunk partials can answer without a scan. `index_dir`
+// names the index root to build into, such as a shard root.
 void build_shard_index(const std::string& gz,
-                       const aggregators::AggregationConfig& config = {}) {
+                       const aggregators::AggregationConfig& config = {},
+                       const std::string& index_dir = "") {
     dftracer::utils::index::IndexerOptions options;
     options.aggregation = config;
+    options.index_dir = index_dir;
     dftracer::utils::index::Indexer::open({gz}, options).build();
+}
+
+// The trace files the root's store holds a current index for.
+std::vector<std::string> indexed_files(const std::string& root,
+                                       const std::vector<std::string>& files) {
+    dftracer::utils::index::IndexerOptions options;
+    options.index_dir = root;
+    options.aggregation = aggregators::AggregationConfig{};
+    auto status =
+        dftracer::utils::index::Indexer::open(files, options).status();
+    REQUIRE(status.needs_work.empty());
+    return status.ready;
 }
 
 // Render a DataFrame canonically (String columns are the group keys, numeric
@@ -389,47 +405,103 @@ TEST_SUITE("ShardedView") {
         CHECK(got.num_rows() == 2);  // POSIX + STDIO, resolved via stored paths
     }
 
-    // Consolidation rebuilds the set into one unified index+tier; a query over
-    // it opens a single shard and answers identically to the N-shard set.
-    TEST_CASE("consolidate_shard_set builds one unified tier index") {
+    // The merge moves each shard's data files into the root's own store, so the
+    // root opens as one index and the shards are gone.
+    TEST_CASE("consolidate_shard_set merges the shards into the root store") {
         TestEnvironment env(200);
         REQUIRE(env.is_valid());
-        std::string a = make_x_trace(env, "alpha", 30, 20);
-        std::string b = make_x_trace(env, "beta", 10, 40);
-        std::string ia = determine_index_path(a, "");
-        std::string ib = determine_index_path(b, "");
-        build_shard_index(a);
-        build_shard_index(b);
+        std::string a = make_x_trace(env, "ga", 30, 20);
+        std::string b = make_x_trace(env, "gb", 10, 40);
+        std::string c = make_x_trace(env, "gc", 5, 5);
+        const std::vector<std::string> files{a, b, c};
 
-        std::string root = env.get_dir() + "/set";
-        write_shard_set(root, {ia, ib});
+        const std::string root = env.get_dir() + "/root/.dftindex";
+        std::vector<std::string> shards;
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            shards.push_back(dftracer::utils::index::shard_root(root, i));
+            build_shard_index(files[i], {}, shards.back());
+        }
+        write_shard_set(root, shards);
+        auto manifest = read_shard_manifest(root);
+        REQUIRE(manifest.has_value());
+        REQUIRE(manifest->shards.size() == 3);
+        CHECK(manifest->shards[0].path == "shards/0");
 
         auto configure = [](View v) -> View {
-            return v.group_by({GroupKey::cat()}).agg({{AggOp::Count, "", "n"}});
+            return v.group_by({GroupKey::cat()})
+                .agg({{AggOp::Count, "", "n"}, {AggOp::Sum, "dur", "total"}});
         };
-        auto sharded =
-            canon(ShardedView::from_manifest(root).aggregate(configure).get());
-        REQUIRE(sharded.size() == 2);
+        const std::string single = env.get_dir() + "/single/.dftindex";
+        for (const auto& f : files) build_shard_index(f, {}, single);
+        auto expect = canon(
+            configure(View::from_files({{a, single}, {b, single}, {c, single}}))
+                .collect()
+                .get());
+        REQUIRE(expect.size() == 2);
 
-        std::string out = env.get_dir() + "/unified";
-        std::size_t n = 0;
-        run_coro(
-            [&](dftracer::utils::CoroScope& scope)
-                -> dftracer::utils::coro::CoroTask<void> {
-                n = co_await consolidate_shard_set(&scope, root, out);
-                co_return;
-            },
-            "sharded-view-test");
-        CHECK(n == 2);
+        CHECK(consolidate_shard_set(root) == 3);
+        CHECK_FALSE(read_shard_manifest(root).has_value());
+        CHECK_FALSE(fs::exists(dftracer::utils::index::shards_dir(root)));
+        CHECK(fs::exists(dftracer::utils::index::store_dir(root)));
+        CHECK(indexed_files(root, files).size() == 3);
 
-        auto m = read_shard_manifest(out);
-        REQUIRE(m.has_value());
-        CHECK(m->shards.size() == 1);
-        CHECK(m->shards[0].num_files == 2);
+        auto got =
+            canon(configure(View::from_files({{a, root}, {b, root}, {c, root}}))
+                      .collect()
+                      .get());
+        CHECK(got == expect);
+    }
 
-        auto consolidated =
-            canon(ShardedView::from_manifest(out).aggregate(configure).get());
-        CHECK(consolidated == sharded);
+    // A shard that cannot be listed keeps the manifest and the shards, and the
+    // next call completes the merge without a rebuild.
+    TEST_CASE("a failed merge keeps the shards for a retry") {
+        TestEnvironment env(200);
+        REQUIRE(env.is_valid());
+        std::string a = make_x_trace(env, "fa", 30, 20);
+        std::string b = make_x_trace(env, "fb", 10, 40);
+        const std::vector<std::string> files{a, b};
+
+        const std::string root = env.get_dir() + "/root/.dftindex";
+        std::vector<std::string> shards;
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            shards.push_back(dftracer::utils::index::shard_root(root, i));
+            build_shard_index(files[i], {}, shards.back());
+        }
+        write_shard_set(root, shards);
+
+        // A regular file where the second shard's store belongs, so listing it
+        // fails whatever user the merge runs as.
+        const std::string store_b =
+            dftracer::utils::index::store_dir(shards[1]);
+        const std::string held = store_b + ".held";
+        std::error_code ec;
+        fs::rename(store_b, held, ec);
+        REQUIRE_FALSE(ec);
+        {
+            std::ofstream ofs(store_b, std::ios::trunc);
+            ofs << "not a store";
+        }
+
+        CHECK_THROWS(consolidate_shard_set(root));
+        CHECK(read_shard_manifest(root).has_value());
+        CHECK(fs::exists(shards[0]));
+        CHECK(fs::exists(shards[1]));
+        std::size_t moved = 0;
+        for (const auto& entry :
+             fs::directory_iterator(dftracer::utils::index::store_dir(root))) {
+            if (entry.path().extension() == ".dfs") ++moved;
+        }
+        CHECK(moved == 1);
+
+        fs::remove(store_b, ec);
+        fs::rename(held, store_b, ec);
+        REQUIRE_FALSE(ec);
+
+        CHECK(consolidate_shard_set(root) == 2);
+        CHECK_FALSE(read_shard_manifest(root).has_value());
+        CHECK_FALSE(fs::exists(dftracer::utils::index::shards_dir(root)));
+        CHECK(indexed_files(root, files).size() == 2);
+        CHECK_THROWS(consolidate_shard_set(root));
     }
 
     // No-rescan tier merge: transcode each shard's tier into one consolidated
@@ -460,14 +532,17 @@ TEST_SUITE("ShardedView") {
         std::size_t n = merge_shard_set(root, out);
         CHECK(n == 2);
 
-        auto m = read_shard_manifest(out);
-        REQUIRE(m.has_value());
-        CHECK(m->shards.size() == 1);
+        // The tiers arrive in the new root; the shards stay where they are.
+        CHECK(read_shard_manifest(root).has_value());
+        CHECK_FALSE(read_shard_manifest(out).has_value());
 
         fs::remove(a);
         fs::remove(b);
+        const std::string out_idx = determine_index_path("x", out);
         auto merged =
-            canon(ShardedView::from_manifest(out).aggregate(configure).get());
+            canon(configure(View::from_files({{a, out_idx}, {b, out_idx}}))
+                      .collect()
+                      .get());
         CHECK(merged == sharded);
     }
 

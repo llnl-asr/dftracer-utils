@@ -2,11 +2,12 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/channel.h>
@@ -114,7 +115,8 @@ class GenDistArgParse : public binaries::ArgParse {
             return false;
         }
         for (const auto& r : roots) {
-            if (!common::fs::is_directory(r)) {
+            const auto is_dir = dstd::fs::is_directory(dstd::PathView(r));
+            if (!is_dir || !*is_dir) {
                 DFTRACER_UTILS_LOG_ERROR("Not a directory: %s", r.c_str());
                 return false;
             }
@@ -742,16 +744,12 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     if (closed && !head_closed) closed = std::move(head_closed);
     bool appended = false;
     if (!io_error && closed) {
-        std::error_code ec;
-        const std::uint64_t end = common::fs::file_size(output, ec);
-        const int fd = ec ? -1 : ::open(output.c_str(), O_WRONLY);
-        appended = fd >= 0 && copy_into(head_path, fd, end);
+        const auto end = dstd::fs::file_size(dstd::PathView(output));
+        const int fd = end ? ::open(output.c_str(), O_WRONLY) : -1;
+        appended = fd >= 0 && copy_into(head_path, fd, *end);
         if (fd >= 0 && ::close(fd) != 0) appended = false;
     }
-    {
-        std::error_code ec;
-        common::fs::remove(head_path, ec);
-    }
+    (void)dstd::fs::remove(dstd::PathView(head_path));
     if (io_error || !closed || !appended) {
         DFTRACER_UTILS_LOG_ERROR(
             "Cannot write %s%s%s", output.c_str(), closed ? "" : ": ",
@@ -798,10 +796,11 @@ bool all_ranks(bool ok) {
 // copies its part to its offset at the same time.
 int join_parts(const std::string& output, const std::string& part, int rank,
                int size, bool ok, const Report& report) {
-    std::error_code ec;
-    const std::uint64_t mine = ok ? common::fs::file_size(part, ec) : 0;
-    if (!all_ranks(ok && !ec)) {
-        common::fs::remove(part, ec);
+    const auto part_size = ok ? dstd::fs::file_size(dstd::PathView(part))
+                              : dstd::Expected<std::uint64_t, dstd::Error>(0);
+    const std::uint64_t mine = part_size ? *part_size : 0;
+    if (!all_ranks(ok && part_size)) {
+        (void)dstd::fs::remove(dstd::PathView(part));
         return 1;
     }
     std::vector<std::uint64_t> sizes(static_cast<std::size_t>(size));
@@ -826,7 +825,7 @@ int join_parts(const std::string& output, const std::string& part, int rank,
         copied = fd >= 0 && copy_into(part, fd, offset);
         if (fd >= 0 && ::close(fd) != 0) copied = false;
     }
-    common::fs::remove(part, ec);
+    (void)dstd::fs::remove(dstd::PathView(part));
     copied = all_ranks(copied);
     unsigned long long counts[2] = {report.runs, report.skips};
     unsigned long long sums[2] = {0, 0};
@@ -835,7 +834,7 @@ int join_parts(const std::string& output, const std::string& part, int rank,
     if (rank != 0) return copied ? 0 : 1;
     if (!copied) {
         DFTRACER_UTILS_LOG_ERROR("Cannot write %s", output.c_str());
-        common::fs::remove(output, ec);
+        (void)dstd::fs::remove(dstd::PathView(output));
         return 1;
     }
     print_summary(

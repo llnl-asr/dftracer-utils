@@ -67,7 +67,7 @@ TEST_CASE("TaskResult - empty result throws on get") {
     task_graph::TaskResult<int> empty;
     CHECK(empty.empty());
     CHECK(!empty.is_ready());
-    CHECK_THROWS_AS(empty.get(), std::runtime_error);
+    CHECK_THROWS_AS(empty.get(), dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("task_graph::TaskResult<void> - make") {
@@ -115,7 +115,7 @@ TEST_CASE("TaskGroup - from vector") {
 
     TaskGroup<int> group(tasks);
     CHECK(group.size() == 2);
-    CHECK_THROWS_AS(group.task(), std::runtime_error);
+    CHECK_THROWS_AS(group.task(), dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("TaskGroup - add and iterate") {

@@ -47,14 +47,14 @@ dftu_series* paths_column(const std::vector<filesystem::FileEntry>& entries,
     paths.reserve(entries.size());
     for (const filesystem::FileEntry& e : entries) {
         if (files_only && !e.is_regular_file) continue;
-        paths.push_back(e.path.string());
+        paths.emplace_back(e.path.str());
     }
     return Series::strings(paths).release();
 }
 
 dftu_series* scan_dir(const char* root, std::int32_t root_len) {
     filesystem::DirectoryScannerUtilityInput input{
-        common::fs::path(to_string(root, root_len))};
+        dstd::StringView(root, static_cast<std::size_t>(root_len))};
     std::vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir",
                   [&](CoroScope& scope) -> coro::CoroTask<void> {

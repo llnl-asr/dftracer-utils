@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -124,7 +125,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         for (const auto& file : result.all_files) {
             auto root =
                 trace::internal::determine_index_path(file, input.index_dir);
-            if (common::fs::exists(index::store_dir(root)))
+            if (common::unwrap(
+                    dstd::fs::exists(dstd::PathView(index::store_dir(root)))))
                 stale_tiers.insert(std::move(root));
         }
     for (const auto& root : stale_tiers) clear_aggregation(root);
@@ -190,7 +192,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         // should_stage is cheap for the common local destination and short
         // circuits before any mount probing; only a network destination reaches
         // the single-root and size checks below.
-        if (!common::fs::exists(index::store_dir(result.index_path)) &&
+        if (!common::unwrap(dstd::fs::exists(
+                dstd::PathView(index::store_dir(result.index_path)))) &&
             common::should_stage(result.index_path)) {
             std::set<std::string> roots;
             for (const auto& f : files_needing_work)
@@ -200,7 +203,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
                 auto staged = common::staged_build_scratch(files_needing_work);
                 if (staged) {
                     staged_final_path = *roots.begin();
-                    build_index_dir = staged->dir();
+                    build_index_dir = std::string(staged->dir().str());
                     build_index_path = trace::internal::determine_index_path(
                         files_needing_work.front(), build_index_dir);
                     DFTRACER_UTILS_LOG_INFO("Staging index build at %s -> %s",
@@ -260,8 +263,9 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             agg_run.reset();
             index::release_root(build_index_path);
             index::release_root(staged_final_path);
-            common::publish_path(index::store_dir(build_index_path),
-                                 index::store_dir(staged_final_path));
+            common::publish_path(
+                dstd::PathView(index::store_dir(build_index_path)),
+                dstd::PathView(index::store_dir(staged_final_path)));
         }
 
         // Refresh_input queries the index for the files just indexed.
@@ -358,8 +362,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         roots.insert(
             trace::internal::determine_index_path(file, input.index_dir));
     for (const auto& entry : input.entries)
-        roots.insert(trace::internal::determine_index_path(entry.path.string(),
-                                                           input.index_dir));
+        roots.insert(
+            trace::internal::determine_index_path(entry.path, input.index_dir));
     std::string failure;
     try {
         co_return co_await resolve_and_build_once(scope, input);
@@ -372,7 +376,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         "and aggregating again",
         roots.size(), failure.c_str());
     for (const auto& root : roots)
-        if (common::fs::exists(index::store_dir(root))) {
+        if (common::unwrap(
+                dstd::fs::exists(dstd::PathView(index::store_dir(root))))) {
             index::release_root(root);
             auto target = common::unwrap(index::Index::open(
                 index::store::internal::normalize_index_root(root)));

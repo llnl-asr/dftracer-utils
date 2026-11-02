@@ -79,7 +79,7 @@ static coro::CoroTask<int> run_verify(
         std::vector<std::string> abs_paths;
         abs_paths.reserve(file_paths.size());
         for (const auto& fp : file_paths) {
-            abs_paths.push_back(common::fs::absolute(fp).string());
+            abs_paths.push_back(binaries::absolute_path(fp));
         }
 
         auto index_path = internal::determine_index_path(abs_paths.front(), "");
@@ -94,7 +94,7 @@ static coro::CoroTask<int> run_verify(
     }
 
     for (const auto& file_path : file_paths) {
-        std::string abs_path = common::fs::absolute(file_path).string();
+        std::string abs_path = binaries::absolute_path(file_path);
         std::string index_path = internal::determine_index_path(abs_path, "");
 
         // Collect metadata
@@ -212,10 +212,11 @@ static coro::CoroTask<int> run_verify(
                 continue;
             }
 
-            std::string basename =
-                common::fs::path(abs_path).filename().string();
-            std::printf("  %s: indexed (%zu events, %zu chunks)\n",
-                        basename.c_str(), total_events, chunks.size());
+            const dstd::StringView basename =
+                dstd::PathView(abs_path).filename();
+            std::printf("  %.*s: indexed (%zu events, %zu chunks)\n",
+                        static_cast<int>(basename.size()), basename.data(),
+                        total_events, chunks.size());
         } catch (const std::exception& e) {
             std::fprintf(stderr,
                          "  WARN: bloom index generation failed for %s: %s\n",
@@ -238,7 +239,7 @@ static coro::CoroTask<int> run_verify(
         std::size_t chunks_matched = 0;
 
         for (const auto& file_path : file_paths) {
-            std::string abs_path = common::fs::absolute(file_path).string();
+            std::string abs_path = binaries::absolute_path(file_path);
             std::string idx_path_q =
                 internal::determine_index_path(abs_path, "");
 
@@ -431,7 +432,8 @@ int main(int argc, char** argv) {
                 static_cast<std::uint64_t>(step_dur_ms) * 1000ULL;
 
             // Create output directory
-            common::fs::create_directories(output_dir);
+            common::unwrap(
+                dstd::fs::create_directories(dstd::PathView(output_dir)));
 
             // -----------------------------------------------------------------------
             // Pre-compute hashes using project HasherUtility

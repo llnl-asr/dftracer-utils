@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
@@ -26,28 +27,36 @@ namespace dftracer::utils::index::store::internal {
 // write and read side so lookups stay consistent; relative inputs resolve
 // against the cwd, so the index is not portable across an absolute-layout move.
 std::string get_logical_path(std::string_view path) {
-    std::error_code ec;
-    common::fs::path abs =
-        common::fs::absolute(common::fs::path(std::string(path)), ec);
-    if (ec)
-        return common::fs::path(std::string(path)).lexically_normal().string();
-    return abs.lexically_normal().string();
+    const auto abs = dstd::fs::absolute(dstd::PathView(path));
+    if (!abs) return std::string(dstd::normalize(dstd::PathView(path)).str());
+    return std::string(dstd::normalize(abs->view()).str());
 }
 
 std::string normalize_index_root(std::string_view path) {
     if (auto nested = nested_root_of(path)) return *nested;
-    common::fs::path input{std::string(path)};
+    // A trailing separator leaves the last component empty, so it is neither
+    // the index directory nor a file with an extension.
+    if (!path.empty() && path.back() == '/') {
+        std::string_view stripped = path;
+        while (stripped.size() > 1 && stripped.back() == '/') {
+            stripped.remove_suffix(1);
+        }
+        if (dstd::PathView(stripped).filename() == ".dftindex") {
+            return std::string(stripped);
+        }
+        return std::string((dstd::PathView(stripped) / ".dftindex").str());
+    }
+    const dstd::PathView input(path);
     if (input.filename() == ".dftindex") {
-        return input.string();
+        return std::string(path);
     }
-    if (input.parent_path().filename() == ".dftindex") {
-        return input.parent_path().string();
+    if (input.parent().filename() == ".dftindex") {
+        return std::string(input.parent().str());
     }
-    if (input.extension() == ".idx" || input.extension() == ".pidx" ||
-        input.has_extension()) {
-        return (input.parent_path() / ".dftindex").string();
+    if (!input.extension().empty()) {
+        return std::string((input.parent() / ".dftindex").str());
     }
-    return (input / ".dftindex").string();
+    return std::string((input / ".dftindex").str());
 }
 
 time_t get_file_modification_time(const std::string &file_path) {

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -11,25 +10,33 @@ namespace dftracer::utils::trace::internal {
 
 namespace {
 
-bool is_directory_input(const std::string& path) {
+bool is_directory_input(dstd::CStringView path) {
     dftracer::utils::common::InputFileStat st;
     return dftracer::utils::common::stat_input(path, st) && st.is_directory;
 }
 
 }  // namespace
 
-std::string determine_index_path(const std::string& path,
-                                 const std::string& index_dir) {
-    common::fs::path data_path(path);
+std::string determine_index_path(dstd::CStringView cpath,
+                                 dstd::StringView index_dir) {
+    const dstd::StringView path = cpath.view();
     // A trace file name needs no stat to tell it from a directory.
-    common::fs::path root =
-        index_dir.empty() ? (!utilities::filesystem::is_trace_file(path) &&
-                                     is_directory_input(path)
-                                 ? data_path
-                                 : data_path.parent_path())
-                          : common::fs::path(index_dir);
-    return dftracer::utils::index::store::internal::normalize_index_root(
-        root.string());
+    dstd::StringView root = index_dir;
+    if (index_dir.empty()) {
+        if (!utilities::filesystem::is_trace_file(path) &&
+            is_directory_input(cpath)) {
+            root = path;
+        } else if (!path.empty() && path.back() == '/') {
+            // The parent of "a/b/" is "a/b", where PathView would give "a".
+            root = path;
+            while (root.size() > 1 && root.back() == '/') {
+                root.remove_suffix(1);
+            }
+        } else {
+            root = dstd::PathView(path).parent().str();
+        }
+    }
+    return dftracer::utils::index::store::internal::normalize_index_root(root);
 }
 
 std::string_view to_lower_ascii(std::string_view s, std::string& storage) {

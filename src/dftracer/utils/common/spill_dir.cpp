@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/memory/manager.h>
 #include <signal.h>
@@ -16,39 +19,36 @@
 #include <atomic>
 #include <cerrno>
 #include <charconv>
-#include <map>
 #include <mutex>
-#include <set>
-#include <string>
-#include <system_error>
-#include <unordered_map>
-#include <vector>
 
 namespace dftracer::utils::common {
 
 namespace detail {
 
-Result<std::string> choose_spill_dir(
-    const std::string& env, const std::string& local_root,
-    const std::vector<std::string>& fallbacks) {
-    std::error_code ec;
+Result<dstd::Path> choose_spill_dir(dstd::StringView env,
+                                    const dstd::Path& local_root,
+                                    const dstd::Vector<dstd::Path>& fallbacks) {
     if (!env.empty()) {
-        fs::create_directories(env, ec);
-        if (!ec && ::access(env.c_str(), W_OK | X_OK) != 0)
-            ec = std::make_error_code(std::errc::permission_denied);
-        if (ec)
+        dstd::StringView reason;
+        const dstd::Path env_path{env};
+        const auto made = dstd::fs::create_directories(env_path.view());
+        if (!made)
+            reason = made.error().message();
+        else if (::access(env_path.c_str(), W_OK | X_OK) != 0)
+            reason = "Permission denied";
+        if (!reason.empty())
             return make_error(
                 ErrorCode::Io,
                 str_cat("spill: cannot use spill directory '", env, "' (",
-                        ec.message(), "); set ", constants::SPILL_DIR_ENV,
+                        reason, "); set ", constants::SPILL_DIR_ENV,
                         " to a writable directory"));
-        return env;
+        return env_path;
     }
     // The root is found once, so check it again: a cleaner may have removed it
     // since.
     if (!local_root.empty()) {
-        fs::create_directories(local_root, ec);
-        if (!ec && ::access(local_root.c_str(), W_OK | X_OK) == 0)
+        const auto made = dstd::fs::create_directories(local_root.view());
+        if (made && ::access(local_root.c_str(), W_OK | X_OK) == 0)
             return local_root;
     }
     // Spilled bytes on a RAM-backed file system stay in memory, which is what
@@ -56,14 +56,15 @@ Result<std::string> choose_spill_dir(
     // network file system is slower but holds them outside memory.
     for (const auto& dir : fallbacks) {
         if (dir.empty()) continue;
-        const fs::path parent = fs::path(dir).parent_path();
-        const std::string probe =
-            fs::exists(dir, ec) ? dir
-                                : (parent.empty() ? dir : parent.string());
+        const dstd::PathView parent = dir.view().parent();
+        const auto present = dstd::fs::exists(dir.view());
+        const dstd::Path probe = (present && *present) || parent.empty()
+                                     ? dir
+                                     : dstd::Path(parent.str());
         if (is_memory_filesystem(filesystem_kind(probe))) continue;
-        ec.clear();
-        fs::create_directories(dir, ec);
-        if (ec || ::access(dir.c_str(), W_OK | X_OK) != 0) continue;
+        if (!dstd::fs::create_directories(dir.view()) ||
+            ::access(dir.c_str(), W_OK | X_OK) != 0)
+            continue;
         return dir;
     }
     return make_error(
@@ -77,17 +78,20 @@ Result<std::string> choose_spill_dir(
 
 }  // namespace detail
 
-Result<std::string> spill_dir() {
+Result<dstd::Path> spill_dir() {
     const auto env = Env::get(constants::SPILL_DIR_ENV);
-    std::vector<std::string> fallbacks;
-    std::error_code ec;
-    const fs::path tmp = fs::temp_directory_path(ec);
-    if (!ec) fallbacks.push_back(tmp.string());
-    if (const auto home = Env::get("HOME"); home && !home->empty())
-        fallbacks.push_back((fs::path(std::string(*home)) / ".cache" /
-                             "dftracer-utils" / "spill")
-                                .string());
-    auto dir = detail::choose_spill_dir(env ? std::string(*env) : std::string(),
+    dstd::Vector<dstd::Path> fallbacks;
+    const dstd::Path tmp = dstd::fs::temp_directory();
+    const auto tmp_is_dir = dstd::fs::is_directory(tmp.view());
+    if (tmp_is_dir && *tmp_is_dir) fallbacks.push_back(tmp);
+    if (const auto home = Env::get("HOME"); home && !home->empty()) {
+        dstd::Path spill{dstd::StringView(*home)};
+        spill /= ".cache";
+        spill /= "dftracer-utils";
+        spill /= "spill";
+        fallbacks.push_back(std::move(spill));
+    }
+    auto dir = detail::choose_spill_dir(env ? *env : dstd::StringView(),
                                         local_spill_root(), fallbacks);
     if (dir) {
         static const bool logged = [&] {
@@ -104,19 +108,27 @@ namespace {
 
 struct DirKinds {
     std::mutex mu;
-    std::map<std::string, bool> kinds;
+    dstd::Map<dstd::String, bool> kinds;
     bool warned = false;
 };
 
 }  // namespace
 
-bool spill_dir_in_memory(const std::string& dir) {
+bool spill_dir_in_memory(dstd::CStringView dir) {
     DirKinds& known = dstd::Singleton<DirKinds>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            DirKinds& held = dstd::Singleton<DirKinds>::get();
+            std::lock_guard<std::mutex> lock(held.mu);
+            held.kinds.clear();
+        });
+        return true;
+    }();
     std::lock_guard<std::mutex> lock(known.mu);
-    const auto found = known.kinds.find(dir);
+    const auto found = known.kinds.find(dir.view());
     if (found != known.kinds.end()) return found->second;
     const bool in_memory = is_memory_filesystem(filesystem_kind(dir));
-    known.kinds.emplace(dir, in_memory);
+    known.kinds.emplace(dstd::String(dir.view()), in_memory);
     if (in_memory && !known.warned) {
         known.warned = true;
         DFTRACER_UTILS_LOG_WARN(
@@ -142,7 +154,7 @@ memory::ExternalSlot& spill_slot() {
 // the charge of the directory holding it.
 struct SubdirRegistry {
     std::mutex mu;
-    std::unordered_map<std::string, std::weak_ptr<SpillCharge>> by_path;
+    dstd::Map<dstd::String, std::weak_ptr<SpillCharge>> by_path;
 };
 
 SubdirRegistry& subdirs() { return dstd::Singleton<SubdirRegistry>::get(); }
@@ -182,15 +194,15 @@ namespace {
 
 struct SweptPrefixes {
     std::mutex mu;
-    std::set<std::string> prefixes;
+    dstd::Set<dstd::String> prefixes;
 };
 
 // A spill root on a shared file system holds the directories of other hosts,
 // whose pids mean nothing here.
-std::string host_tag() {
+dstd::String host_tag() {
     char host[256] = {};
     ::gethostname(host, sizeof(host) - 1);
-    std::string tag(host);
+    dstd::String tag(host);
     for (char& c : tag)
         if (c == '/' || c == '_') c = '-';
     return tag;
@@ -198,16 +210,18 @@ std::string host_tag() {
 
 // Removes the `<prefix>_<host>_<pid>_<n>` directories of this host whose pid is
 // no longer a process.
-void sweep_stale(const fs::path& root, std::string_view prefix) {
-    std::error_code ec;
-    for (fs::directory_iterator it(root, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        const std::string name = it->path().filename().string();
+void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
+    const auto dir = dstd::fs::Dir::open(root);
+    if (!dir) return;
+    auto listing = dir->entries();
+    if (!listing) return;
+    const dstd::String tag = host_tag() + "_";
+    for (const dstd::fs::DirEntry& entry : *listing) {
+        const dstd::StringView name = entry.name;
         if (name.size() <= prefix.size() + 1 ||
             name.compare(0, prefix.size(), prefix) != 0 ||
             name[prefix.size()] != '_')
             continue;
-        const std::string tag = host_tag() + "_";
         if (name.compare(prefix.size() + 1, tag.size(), tag) != 0) continue;
         const char* first = name.data() + prefix.size() + 1 + tag.size();
         const char* last = name.data() + name.size();
@@ -216,61 +230,67 @@ void sweep_stale(const fs::path& root, std::string_view prefix) {
         if (perr != std::errc{} || stop == last || *stop != '_' || pid <= 0)
             continue;
         if (::kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH) continue;
-        std::error_code rm;
-        fs::remove_all(it->path(), rm);
+        (void)dstd::fs::remove_all((root / name).view());
     }
 }
 
 }  // namespace
 
-Result<ScopedSpillSubdir> ScopedSpillSubdir::create(std::string_view prefix) {
+Result<ScopedSpillSubdir> ScopedSpillSubdir::create(dstd::StringView prefix) {
     auto root = spill_dir();
     if (!root) return dstd::Unexpected(std::move(root).error());
     SweptPrefixes& swept = dstd::Singleton<SweptPrefixes>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            SweptPrefixes& held = dstd::Singleton<SweptPrefixes>::get();
+            std::lock_guard<std::mutex> lock(held.mu);
+            held.prefixes.clear();
+        });
+        return true;
+    }();
     {
         std::lock_guard<std::mutex> lock(swept.mu);
-        if (swept.prefixes.insert(std::string(prefix)).second)
-            sweep_stale(*root, prefix);
+        if (swept.prefixes.insert(dstd::String(prefix)).second)
+            sweep_stale(root->view(), prefix);
     }
     static std::atomic<std::uint64_t> counter{0};
-    const fs::path dir =
-        fs::path(*root) / str_cat(prefix, "_", host_tag(), "_", ::getpid(), "_",
-                                  counter.fetch_add(1));
-    std::error_code ec;
-    fs::create_directories(dir, ec);
-    if (ec)
+    const dstd::Path dir =
+        root->view() / str_cat(prefix, "_", host_tag(), "_", ::getpid(), "_",
+                               counter.fetch_add(1));
+    const auto made = dstd::fs::create_directories(dir.view());
+    if (!made)
         return make_error(
             ErrorCode::Io,
-            str_cat("spill: cannot create '", dir.string(), "' (", ec.message(),
-                    "); set ", constants::SPILL_DIR_ENV,
+            str_cat("spill: cannot create '", dir.str(), "' (",
+                    made.error().message(), "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));
     auto charge = std::make_shared<SpillCharge>(spill_dir_in_memory(*root));
     SubdirRegistry& reg = subdirs();
     {
         std::lock_guard<std::mutex> lock(reg.mu);
-        reg.by_path[dir.string()] = charge;
+        reg.by_path[dstd::String(dir.str())] = charge;
     }
-    return ScopedSpillSubdir(dir.string(), std::move(charge));
+    return ScopedSpillSubdir(dir, std::move(charge));
 }
 
 std::shared_ptr<SpillCharge> ScopedSpillSubdir::charge_for(
-    const std::string& file) {
-    const std::string parent = fs::path(file).parent_path().string();
+    dstd::PathView file) {
+    const dstd::PathView parent = file.parent();
     SubdirRegistry& reg = subdirs();
     std::lock_guard<std::mutex> lock(reg.mu);
-    const auto found = reg.by_path.find(parent);
+    const auto found = reg.by_path.find(parent.str());
     return found == reg.by_path.end() ? nullptr : found->second.lock();
 }
 
 ScopedSpillSubdir::ScopedSpillSubdir(ScopedSpillSubdir&& other) noexcept
-    : path_(std::exchange(other.path_, std::string())),
+    : path_(std::exchange(other.path_, dstd::Path())),
       charge_(std::move(other.charge_)) {}
 
 ScopedSpillSubdir& ScopedSpillSubdir::operator=(
     ScopedSpillSubdir&& other) noexcept {
     if (this != &other) {
         remove();
-        path_ = std::exchange(other.path_, std::string());
+        path_ = std::exchange(other.path_, dstd::Path());
         charge_ = std::move(other.charge_);
     }
     return *this;
@@ -282,14 +302,14 @@ ScopedSpillSubdir::~ScopedSpillSubdir() { remove(); }
 // leave the gauge once the files are gone and no writer adds more.
 void ScopedSpillSubdir::remove() noexcept {
     if (path_.empty()) return;
-    std::error_code ec;
-    fs::remove_all(path_, ec);
+    (void)dstd::fs::remove_all(path_.view());
     SubdirRegistry& reg = subdirs();
     {
         std::lock_guard<std::mutex> lock(reg.mu);
-        reg.by_path.erase(path_);
+        const auto found = reg.by_path.find(path_.str());
+        if (found != reg.by_path.end()) reg.by_path.erase(found);
     }
-    path_.clear();
+    path_ = dstd::Path();
     charge_.reset();
 }
 

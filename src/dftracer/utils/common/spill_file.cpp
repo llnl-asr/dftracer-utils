@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/path.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -17,13 +17,13 @@ namespace dftracer::utils::common {
 Result<std::unique_ptr<SpillFile>> SpillFile::create() {
     auto dir = spill_dir();
     if (!dir) return dstd::Unexpected(dir.error());
-    std::string path = (fs::path(*dir) / "dftu_spill_XXXXXX").string();
+    dstd::String path((dir->view() / "dftu_spill_XXXXXX").str());
     std::unique_ptr<SpillFile> f(new SpillFile(spill_dir_in_memory(*dir)));
     f->fd_ = dstd::ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
     if (f->fd_.get() < 0)
         return make_error(
             ErrorCode::Io,
-            str_cat("spill: cannot create a spill file in '", *dir, "' (",
+            str_cat("spill: cannot create a spill file in '", dir->str(), "' (",
                     std::strerror(errno), "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));
     ::unlink(path.c_str());

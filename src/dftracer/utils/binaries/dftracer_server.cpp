@@ -129,7 +129,7 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
         std::fprintf(stderr, "Using trace directory for indexes: %s\n",
                      index_dir.c_str());
     } else {
-        common::fs::create_directories(index_dir);
+        common::unwrap(dstd::fs::create_directories(dstd::PathView(index_dir)));
     }
 
     // Share decoded gzip members across concurrent queries (single-flight +

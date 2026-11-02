@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/dataframe/internal/governor.h>
 #include <dftracer/utils/dataframe/lazy/cursors.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 
 namespace dftracer::utils::dataframe {
 
@@ -269,12 +271,12 @@ class GroupByCursor : public Cursor {
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Io, "group_by spill: cannot open part file ",
                 path);
-        std::error_code size_ec;
-        const std::uint64_t file_size = common::fs::file_size(path, size_ec);
-        if (size_ec)
+        const auto sized = dstd::fs::file_size(dstd::PathView(path));
+        if (!sized)
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Io, "group_by spill: cannot stat part file ",
                 path);
+        const std::uint64_t file_size = *sized;
         std::uint64_t consumed = 0;
         std::vector<std::string> raw;
         std::uint64_t have = 0;

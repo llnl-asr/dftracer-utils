@@ -2,9 +2,12 @@
 #include <dftracer/utils/common/calendar.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
@@ -541,13 +544,18 @@ class Registry {
     const RecordSchema& add(const SchemaSpec& spec, const std::string& source);
 
     // Whether `path` was loaded before; marks it loaded.
-    bool first_load(const std::string& path) {
+    bool first_load(dstd::StringView path) {
         std::lock_guard lock(loaded_mu_);
-        return loaded_.insert(path).second;
+        return loaded_.emplace(path).second;
     }
-    void forget_load(const std::string& path) {
+    void forget_load(dstd::StringView path) {
         std::lock_guard lock(loaded_mu_);
-        loaded_.erase(path);
+        const auto found = loaded_.find(path);
+        if (found != loaded_.end()) loaded_.erase(found);
+    }
+    void drop_loads() {
+        std::lock_guard lock(loaded_mu_);
+        loaded_.clear();
     }
 
    private:
@@ -564,7 +572,7 @@ class Registry {
     mutable std::shared_mutex mu_;
     std::vector<Entry> entries_;
     std::mutex loaded_mu_;
-    std::set<std::string> loaded_;
+    dstd::Set<dstd::String> loaded_;
 };
 
 std::string_view role_name(Role role) {
@@ -829,8 +837,8 @@ SchemaSpec parse_spec(const YAML::Node& spec, const std::string& source) {
     return out;
 }
 
-bool spec_file(const common::fs::path& p) {
-    const auto ext = p.extension().string();
+bool spec_file(dstd::PathView p) {
+    const dstd::StringView ext = p.extension();
     return ext == ".yaml" || ext == ".yml" || ext == ".json";
 }
 
@@ -845,31 +853,37 @@ const RecordSchema& register_into(Registry& reg, std::string_view text,
     return reg.add(parse_spec(spec, source), source);
 }
 
-void load_into(Registry& reg, const std::string& path) {
-    std::error_code ec;
-    const common::fs::path p =
-        common::fs::weakly_canonical(common::fs::path(path), ec);
-    const std::string key = ec ? path : p.string();
+void load_into(Registry& reg, dstd::StringView path) {
+    const auto canonical = dstd::fs::weakly_canonical(dstd::PathView(path));
+    const dstd::Path p = canonical ? *canonical : dstd::Path(path);
+    const dstd::StringView key = p.str();
     if (!reg.first_load(key)) return;
     try {
-        std::vector<common::fs::path> files;
-        if (common::fs::is_directory(p)) {
-            for (const auto& e : common::fs::directory_iterator(p))
-                if (e.is_regular_file() && spec_file(e.path()))
-                    files.push_back(e.path());
-            std::sort(files.begin(), files.end());
+        dstd::Vector<dstd::Path> files;
+        if (common::unwrap(dstd::fs::is_directory(p.view()))) {
+            const auto dir = common::unwrap(dstd::fs::Dir::open(p.view()));
+            auto listing = common::unwrap(dir.entries());
+            for (const dstd::fs::DirEntry& e : listing) {
+                if (!spec_file(dstd::PathView(e.name))) continue;
+                const auto st = dir.stat(e.name);
+                if (st && st->kind == dstd::fs::FileKind::File) {
+                    files.push_back(p.view() / e.name);
+                }
+            }
+            std::sort(files.begin(), files.end(),
+                      [](const dstd::Path& a, const dstd::Path& b) {
+                          return a.str() < b.str();
+                      });
         } else {
             files.push_back(p);
         }
         for (const auto& f : files) {
-            std::ifstream in(f, std::ios::binary);
-            if (!in)
+            auto text = dstd::fs::read_file(f.view());
+            if (!text)
                 throw common::DFTUtilsException::cat(
                     common::ErrorCode::Io, "cannot read record schema spec ",
-                    f.string());
-            std::stringstream text;
-            text << in.rdbuf();
-            register_into(reg, text.str(), f.string());
+                    f.str());
+            register_into(reg, *text, std::string(f.str()));
         }
     } catch (...) {
         reg.forget_load(key);
@@ -881,12 +895,23 @@ void load_into(Registry& reg, const std::string& path) {
 // next access retries.
 Registry& registry() {
     Registry& r = dstd::Singleton<Registry>::get();
+    [[maybe_unused]] static const bool hooked = [] {
+        dstd::add_shutdown_hook(dstd::ShutdownStage::FreeCaches, [] {
+            dstd::Singleton<Registry>::get().drop_loads();
+        });
+        return true;
+    }();
     static std::once_flag env;
     std::call_once(env, [&r] {
         if (const auto paths = common::Env::get("DFTRACER_UTILS_SCHEMA_PATH")) {
-            std::stringstream ss{std::string(*paths)};
-            for (std::string p; std::getline(ss, p, ':');)
-                if (!p.empty()) load_into(r, p);
+            dstd::StringView rest = *paths;
+            while (!rest.empty()) {
+                const std::size_t colon = rest.find(':');
+                const dstd::StringView part = rest.substr(0, colon);
+                rest.remove_prefix(colon == dstd::StringView::npos ? rest.size()
+                                                                   : colon + 1);
+                if (!part.empty()) load_into(r, part);
+            }
         }
     });
     return r;
@@ -938,7 +963,7 @@ const RecordSchema& register_schema(std::string_view text,
     return register_into(registry(), text, std::string(source));
 }
 
-void load_schemas(const std::string& path) { load_into(registry(), path); }
+void load_schemas(dstd::StringView path) { load_into(registry(), path); }
 
 std::string schemas_json() {
     dstd::String out = "[";
@@ -1005,10 +1030,11 @@ std::string schemas_json() {
     return std::string(out);
 }
 
-void load_index_schemas(const std::string& index_path) {
-    const common::fs::path dir =
-        common::fs::path(index_path).parent_path() / "schemas";
-    if (common::fs::is_directory(dir)) load_schemas(dir.string());
+void load_index_schemas(dstd::StringView index_path) {
+    const dstd::Path dir = dstd::PathView(index_path).parent() / "schemas";
+    if (common::unwrap(dstd::fs::is_directory(dir.view()))) {
+        load_schemas(dir.str());
+    }
 }
 
 SchemaDetection explain_schema(std::span<const std::string_view> lines) {

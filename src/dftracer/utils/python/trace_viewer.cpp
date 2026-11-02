@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/duql/query.h>
@@ -359,8 +360,10 @@ int tv_init(TraceViewerObject* self, PyObject* args, PyObject* kwds) {
     if (PyUnicode_Check(files)) {
         const char* path = PyUnicode_AsUTF8(files);
         if (!path) return -1;
-        std::error_code ec;
-        if (dftracer::utils::common::fs::is_directory(path, ec))
+        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
+            dftracer::utils::dstd::PathView(
+                dftracer::utils::dstd::StringView(path)));
+        if (is_dir && *is_dir)
             dir = path;
         else
             paths.emplace_back(path);

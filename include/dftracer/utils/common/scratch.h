@@ -2,6 +2,9 @@
 #ifndef DFTRACER_UTILS_COMMON_SCRATCH_H
 #define DFTRACER_UTILS_COMMON_SCRATCH_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/path.h>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -15,7 +18,7 @@ namespace dftracer::utils::common {
 /// overrides the choice; set it to "off"/"none"/"0" to disable staging
 /// entirely. Cached; this no-argument form ignores capacity, so use it only to
 /// test availability.
-const std::string& scratch_root() noexcept;
+const dstd::Path& scratch_root() noexcept;
 
 /// `<mount>/<user>/dftracer-utils/spill` on the node-local disk mount with the
 /// most free space that the user can write, created if missing. When no mount
@@ -23,14 +26,14 @@ const std::string& scratch_root() noexcept;
 /// local disk. "" when there is none. RAM-backed (tmpfs) and network mounts
 /// never qualify: spill files there would count against the memory limit or be
 /// slow. Cached. Independent of $DFTRACER_UTILS_INDEX_SCRATCH.
-const std::string& local_spill_root() noexcept;
+const dstd::Path& local_spill_root() noexcept;
 
 /// Whether an artifact whose final home is `dest` should be built on local
 /// scratch and copied back. True when a scratch root exists and either the
 /// destination is a network/parallel filesystem (the default "smart" policy) or
 /// $DFTRACER_UTILS_INDEX_STAGE=always. Set $DFTRACER_UTILS_INDEX_STAGE=never to
 /// force off.
-bool should_stage(const std::string& dest) noexcept;
+bool should_stage(dstd::CStringView dest) noexcept;
 
 /// A per-invocation scratch working directory:
 ///   `<scratch_root>/<user>/dftracer-utils/<unique-id>/`
@@ -51,13 +54,13 @@ class ScratchSession {
     ~ScratchSession();
 
     bool valid() const noexcept { return !dir_.empty(); }
-    const std::string& dir() const noexcept { return dir_; }
+    const dstd::Path& dir() const noexcept { return dir_; }
 
     /// Keep the directory on destruction instead of removing it.
     void release() noexcept { keep_ = true; }
 
    private:
-    std::string dir_;
+    dstd::Path dir_;
     bool keep_ = false;
 };
 
@@ -70,7 +73,7 @@ std::optional<ScratchSession> staged_build_scratch(
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any
 /// existing `dst`. Renames when both live on one filesystem, else recursively
 /// copies then removes `src`. Throws @ref DFTUtilsException on failure.
-void publish_path(const std::string& src, const std::string& dst);
+void publish_path(dstd::PathView src, dstd::PathView dst);
 
 }  // namespace dftracer::utils::common
 

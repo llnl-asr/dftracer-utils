@@ -247,6 +247,59 @@ Expected<std::uint64_t, Error> remove_children(Dir& dir, String& shown) {
     return count;
 }
 
+Expected<void, Error> copy_entry(PathView from, PathView to, CopyMode mode) {
+    const Expected<FileStat, Error> found = lstat(from);
+    if (!found) return Unexpected(found.error());
+    if (found->kind == FileKind::Directory) {
+        const PathCString target(to.str());
+        if (::mkdir(target.c_str(), 0777) != 0) {
+            const int error = errno;
+            if (error != EEXIST || mode == CopyMode::FailIfExists) {
+                return Unexpected(errno_error(error, to.str()));
+            }
+            const Expected<bool, Error> is_dir = is_directory(to);
+            if (!is_dir) return Unexpected(is_dir.error());
+            if (!*is_dir) return Unexpected(not_a_directory_error(to));
+        }
+        const Expected<Dir, Error> dir = Dir::open(from);
+        if (!dir) return Unexpected(dir.error());
+        Expected<DirEntries, Error> listing = dir->entries();
+        if (!listing) return Unexpected(listing.error());
+        for (const DirEntry& entry : *listing) {
+            const Path child_from = from / entry.name;
+            const Path child_to = to / entry.name;
+            const Expected<void, Error> copied =
+                copy_entry(child_from.view(), child_to.view(), mode);
+            if (!copied) return copied;
+        }
+        if (listing->error() != 0) {
+            return Unexpected(errno_error(listing->error(), from.str()));
+        }
+        if (::chmod(target.c_str(), found->mode & 07777) != 0) {
+            return Unexpected(errno_error(errno, to.str()));
+        }
+        return {};
+    }
+    if (found->kind != FileKind::Symlink) return copy_file(from, to, mode);
+    const PathCString source(from.str());
+    char target_text[PATH_MAX];
+    const ssize_t length =
+        ::readlink(source.c_str(), target_text, sizeof target_text - 1);
+    if (length < 0) return Unexpected(errno_error(errno, from.str()));
+    target_text[length] = '\0';
+    const PathCString link(to.str());
+    if (::symlink(target_text, link.c_str()) == 0) return {};
+    const int error = errno;
+    if (error != EEXIST || mode == CopyMode::FailIfExists) {
+        return Unexpected(errno_error(error, to.str()));
+    }
+    if (::unlink(link.c_str()) != 0 ||
+        ::symlink(target_text, link.c_str()) != 0) {
+        return Unexpected(errno_error(errno, to.str()));
+    }
+    return {};
+}
+
 }  // namespace
 
 Expected<FileStat, Error> stat(PathView path) {
@@ -274,6 +327,20 @@ Expected<bool, Error> exists(PathView path) {
     const int error = errno;
     if (error == ENOENT || error == ENOTDIR) return false;
     return Unexpected(errno_error(error, path.str()));
+}
+
+Expected<bool, Error> is_directory(PathView path) {
+    const Expected<FileStat, Error> found = stat(path);
+    if (found) return found->kind == FileKind::Directory;
+    if (found.error().is(Condition::NotFound)) return false;
+    return Unexpected(found.error());
+}
+
+Expected<bool, Error> is_regular_file(PathView path) {
+    const Expected<FileStat, Error> found = stat(path);
+    if (found) return found->kind == FileKind::File;
+    if (found.error().is(Condition::NotFound)) return false;
+    return Unexpected(found.error());
 }
 
 Expected<bool, Error> create_directory(PathView path) {
@@ -406,6 +473,9 @@ Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode) {
         in_info.st_ino == out_info.st_ino) {
         return fail(invalid_error("source and target are the same file"));
     }
+    if (::fchmod(out.get(), in_info.st_mode & 07777) != 0) {
+        return fail(errno_error(errno, to.str()));
+    }
     if (!created && ::ftruncate(out.get(), 0) != 0) {
         return fail(errno_error(errno, to.str()));
     }
@@ -431,9 +501,13 @@ Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode) {
     return {};
 }
 
+Expected<void, Error> copy_tree(PathView from, PathView to, CopyMode mode) {
+    return copy_entry(from, to, mode);
+}
+
 Expected<Path, Error> absolute(PathView path) {
     if (path_detail::is_absolute(path.str(), HOST_PATH_STYLE)) {
-        return normalize(path);
+        return Path(path.str());
     }
     char cwd[PATH_MAX];
     if (::getcwd(cwd, sizeof cwd) == nullptr) {
@@ -441,7 +515,7 @@ Expected<Path, Error> absolute(PathView path) {
     }
     Path joined(cwd);
     joined /= path.str();
-    return normalize(joined.view());
+    return joined;
 }
 
 Expected<Path, Error> canonical(PathView path) {
@@ -453,6 +527,53 @@ Expected<Path, Error> canonical(PathView path) {
     Path out(resolved);
     std::free(resolved);
     return out;
+}
+
+Expected<String, Error> read_file(PathView path) {
+    const PathCString name(path.str());
+    ScopedFd fd(::open(name.c_str(), O_RDONLY | O_CLOEXEC));
+    if (!fd.valid()) return Unexpected(errno_error(errno, path.str()));
+    String out;
+    char chunk[COPY_BUFFER_SIZE];
+    for (;;) {
+        const ssize_t got = ::read(fd.get(), chunk, sizeof chunk);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            return Unexpected(errno_error(errno, path.str()));
+        }
+        if (got == 0) break;
+        out.append(chunk, static_cast<std::size_t>(got));
+    }
+    return out;
+}
+
+Expected<Path, Error> weakly_canonical(PathView path) {
+    if (path.empty()) return Path();
+    StringView head = strip_trailing_separators(path.str());
+    String tail;
+    for (;;) {
+        const Expected<Path, Error> resolved = canonical(PathView(head));
+        if (resolved) {
+            Path joined = *resolved;
+            if (!tail.empty()) joined /= StringView(tail);
+            return normalize(joined.view());
+        }
+        if (!resolved.error().is(Condition::NotFound)) {
+            return Unexpected(resolved.error());
+        }
+        const PathView view{head};
+        const StringView name = view.filename();
+        // "." is the current directory, so a failure there ends the climb.
+        if (name.empty() || name == ".") return Unexpected(resolved.error());
+        String grown(name);
+        if (!tail.empty()) {
+            grown.append("/");
+            grown.append(StringView(tail));
+        }
+        tail = std::move(grown);
+        head = view.parent().str();
+        if (head.empty()) head = ".";
+    }
 }
 
 Path temp_directory() {

@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_SERVER_TRACE_INDEX_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/member.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -142,7 +143,7 @@ class TraceIndex {
     void persist_viz_summary() const;
 
    private:
-    std::string viz_summary_cache_path() const;
+    dstd::Path viz_summary_cache_path() const;
     std::string viz_summary_fingerprint() const;
 
     std::string directory_;

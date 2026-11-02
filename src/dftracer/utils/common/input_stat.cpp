@@ -3,7 +3,6 @@
 #include <dftracer/utils/dstd/memory.h>
 
 #include <mutex>
-#include <string_view>
 
 namespace dftracer::utils::common {
 
@@ -21,26 +20,26 @@ dstd::SharedPtr<InputStatCache> published() {
 
 }  // namespace
 
-bool InputStatCache::find(const std::string& path, InputFileStat& out) const {
+bool InputStatCache::find(dstd::StringView path, InputFileStat& out) const {
     std::shared_lock lock(mutex_);
     if (!map_) return false;
-    const auto it = map_->find(std::string_view(path));
+    const auto it = map_->find(path);
     if (it == map_->end()) return false;
     out = it->second;
     return true;
 }
 
-void InputStatCache::insert(const std::string& path, const InputFileStat& st) {
+void InputStatCache::insert(dstd::StringView path, const InputFileStat& st) {
     std::unique_lock lock(mutex_);
     if (!map_)
         map_ = dstd::make_unique<dstd::HashMap<dstd::String, InputFileStat>>();
-    map_->emplace(dstd::String(path.data(), path.size()), st);
+    map_->emplace(dstd::String(path), st);
 }
 
-void InputStatCache::erase(const std::string& path) {
+void InputStatCache::erase(dstd::StringView path) {
     std::unique_lock lock(mutex_);
     if (!map_) return;
-    const auto it = map_->find(std::string_view(path));
+    const auto it = map_->find(path);
     if (it != map_->end()) map_->erase(it);
 }
 
@@ -57,16 +56,16 @@ InputStatScope::~InputStatScope() {
     if (g_published == cache_) g_published.reset();
 }
 
-bool stat_input(const std::string& path, InputFileStat& out) {
+bool stat_input(dstd::CStringView path, InputFileStat& out) {
     const dstd::SharedPtr<InputStatCache> cache = published();
     if (!cache) return stat_path(path.c_str(), out);
-    if (cache->find(path, out)) return true;
+    if (cache->find(path.view(), out)) return true;
     if (!stat_path(path.c_str(), out)) return false;
-    cache->insert(path, out);
+    cache->insert(path.view(), out);
     return true;
 }
 
-void forget_input(const std::string& path) {
+void forget_input(dstd::StringView path) {
     const dstd::SharedPtr<InputStatCache> cache = published();
     if (cache) cache->erase(path);
 }

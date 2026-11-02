@@ -391,8 +391,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
             auto trusted_index_path =
                 internal::determine_index_path(directory, index_dir);
             if (!force_rebuild &&
-                common::fs::exists(
-                    dftracer::utils::index::store_dir(trusted_index_path))) {
+                common::unwrap(dstd::fs::exists(dstd::PathView(
+                    dftracer::utils::index::store_dir(trusted_index_path))))) {
                 if (summary_mode) {
                     common::ScopedTimer _rt(stages, "root_summary_read");
                     auto root_result =

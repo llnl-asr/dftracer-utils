@@ -12,9 +12,10 @@
 //           hierarchical tree first
 
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/mpi/mpi_utils.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -432,7 +433,8 @@ coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
         // full tree in memory first, so there's nothing to hide behind a
         // channel. We just call it from inside this task.
         if (ctx->cli->inputs.size() != 1 ||
-            !common::fs::is_directory(ctx->cli->inputs[0])) {
+            !common::unwrap(
+                dstd::fs::is_directory(dstd::PathView(ctx->cli->inputs[0])))) {
             if (ctx->is_root) {
                 std::fprintf(stderr,
                              "Error: --use-call-tree requires exactly one "

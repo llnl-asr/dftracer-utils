@@ -3,8 +3,9 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_LINES_STREAMING_LINE_READER_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/lines/line_types.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_indexed_file_bytes_generator.h>
@@ -97,7 +98,10 @@ class StreamingLineReader {
         std::string actual_index_path;
         if (!index_path.empty()) {
             actual_index_path = index_path;
-            has_index = common::fs::exists(actual_index_path);
+            const auto found =
+                dstd::fs::exists(dstd::PathView(actual_index_path));
+            if (!found) throw common::DFTUtilsException(found.error());
+            has_index = *found;
         }
 
         if (is_compressed && has_index) {
@@ -119,10 +123,7 @@ class StreamingLineReader {
      * @brief Check if file extension indicates compressed format.
      */
     static bool is_compressed_format(const std::string& file_path) {
-        common::fs::path p(file_path);
-        std::string ext = p.extension().string();
-
-        return ext == ".gz";
+        return dstd::PathView(file_path).extension() == ".gz";
     }
 };
 

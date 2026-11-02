@@ -4,13 +4,15 @@
 
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/duql/macros.h>
@@ -604,6 +606,13 @@ inline void warn_if_memory_tight(std::size_t required_bytes,
     }
 }
 
+// The absolute, normalized form of `path` as the std::string the options hold.
+// Throws when the current directory cannot be read.
+inline std::string absolute_path(dstd::StringView path) {
+    return std::string(
+        common::unwrap(dstd::fs::absolute(dstd::PathView(path))).str());
+}
+
 // The trace files under `directory`, scanned recursively on a pool of its own
 // (see scan_on_pool) with one I/O thread.
 inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
@@ -629,7 +638,7 @@ inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
     std::vector<std::string> files;
     files.reserve(matched.size());
     for (const auto& entry : matched) {
-        files.push_back(entry.path.string());
+        files.emplace_back(entry.path.str());
     }
     co_return files;
 }
@@ -699,7 +708,7 @@ inline coro::CoroTask<int> ensure_indexes_fresh_task(
             utilities::filesystem::PatternDirectoryScannerUtilityInput{
                 directory, utilities::filesystem::trace_file_patterns(), true});
     } else {
-        for (const auto& f : files) entries->emplace_back(common::fs::path(f));
+        for (const auto& f : files) entries->emplace_back(dstd::StringView(f));
     }
     if (entries->empty()) co_return 0;
     dftracer::utils::index::IndexerOptions options;

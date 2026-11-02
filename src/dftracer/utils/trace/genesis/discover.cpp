@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
@@ -30,10 +33,10 @@ std::optional<std::int64_t> suffix_number(std::string_view name,
 }
 
 // `<stem>-<k>_chunk<c>.pfw.gz` -> k.
-std::optional<std::int64_t> slice_index(const std::string& file_name) {
+std::optional<std::int64_t> slice_index(dstd::StringView file_name) {
     const auto chunk = file_name.rfind("_chunk");
     const auto dash = file_name.rfind('-', chunk);
-    if (chunk == std::string::npos || dash == std::string::npos)
+    if (chunk == dstd::StringView::npos || dash == dstd::StringView::npos)
         return std::nullopt;
     std::int64_t v = 0;
     const char* first = file_name.data() + dash + 1;
@@ -65,14 +68,14 @@ void set_files(RunGroup& g,
 }
 
 // <app>/<system>[/<system>]/<input>/nodes_<N>/ppn_<M>
-void keys_from_path(const common::fs::path& dir, RunKeys& k) {
-    const common::fs::path input = dir.parent_path().parent_path();
-    const common::fs::path system = input.parent_path();
-    common::fs::path app = system.parent_path();
-    if (app.filename() == system.filename()) app = app.parent_path();
-    k.unique_input = input.filename().string();
-    k.system = system.filename().string();
-    k.app = app.filename().string();
+void keys_from_path(dstd::PathView dir, RunKeys& k) {
+    const dstd::PathView input = dir.parent().parent();
+    const dstd::PathView system = input.parent();
+    dstd::PathView app = system.parent();
+    if (app.filename() == system.filename()) app = app.parent();
+    k.unique_input = std::string(input.filename());
+    k.system = std::string(system.filename());
+    k.app = std::string(app.filename());
 }
 
 std::string get_string(simdjson::dom::object o, std::string_view key) {
@@ -97,7 +100,7 @@ bool slices_complete(RunGroup& base, const DirFiles& files, Discovery& out) {
     }
     std::vector<std::int64_t> idx;
     for (const auto& f : base.files) {
-        const auto i = slice_index(common::fs::path(f).filename().string());
+        const auto i = slice_index(dstd::PathView(f).filename());
         if (!i) {
             out.skips.push_back({base.dir, f, "unrecognized trace file name"});
             return false;
@@ -123,7 +126,7 @@ bool slices_complete(RunGroup& base, const DirFiles& files, Discovery& out) {
     return true;
 }
 
-void discover_v1(const common::fs::path& dir, const DirFiles& files,
+void discover_v1(dstd::PathView dir, const DirFiles& files,
                  simdjson::dom::object s, RunGroup base, Discovery& out) {
     bool ok = true;
     if (s["ok"].get(ok) == simdjson::SUCCESS && !ok) {
@@ -152,8 +155,8 @@ void discover_v1(const common::fs::path& dir, const DirFiles& files,
     }
     std::sort(names.begin(), names.end());
     for (const auto& set : names) {
-        const std::string file =
-            (dir / "compacted" / (set + ".pfw.gz")).string();
+        const std::string file(
+            ((dir / "compacted").view() / (set + ".pfw.gz")).str());
         const auto it =
             std::find_if(files.traces.begin(), files.traces.end(),
                          [&](const auto& t) { return t.first == file; });
@@ -178,7 +181,7 @@ void discover_v1(const common::fs::path& dir, const DirFiles& files,
     }
 }
 
-void discover_v2(const common::fs::path& dir, const DirFiles& files,
+void discover_v2(dstd::PathView dir, const DirFiles& files,
                  simdjson::dom::object s, RunGroup base, Discovery& out) {
     RunKeys k;
     keys_from_path(dir, k);
@@ -227,7 +230,7 @@ void discover_v2(const common::fs::path& dir, const DirFiles& files,
 
 // No summary: the slices mix one execution per PAPI set, so the sets are
 // taken from the counters each process reports (process_group).
-void discover_path_only(const common::fs::path& dir, const DirFiles& files,
+void discover_path_only(dstd::PathView dir, const DirFiles& files,
                         const std::int64_t nodes, const std::int64_t ppn,
                         RunGroup base, Discovery& out) {
     if (!slices_complete(base, files, out)) return;
@@ -240,18 +243,21 @@ void discover_path_only(const common::fs::path& dir, const DirFiles& files,
     out.groups.push_back(std::move(base));
 }
 
-void discover_dir(const common::fs::path& root, const common::fs::path& dir,
+void discover_dir(dstd::PathView root, dstd::PathView dir,
                   const DirFiles& files, Discovery& out) {
-    const auto ppn = suffix_number(dir.filename().string(), "ppn_");
-    const auto nodes =
-        suffix_number(dir.parent_path().filename().string(), "nodes_");
+    const auto ppn = suffix_number(dir.filename(), "ppn_");
+    const auto nodes = suffix_number(dir.parent().filename(), "nodes_");
     if (!ppn || !nodes) return;
 
     RunGroup base;
-    base.dir = dir.string();
-    base.rel_dir = common::fs::relative(dir, root).string();
+    base.dir = std::string(dir.str());
+    // Relative to the resolved root, as std::filesystem::relative was.
+    base.rel_dir = std::string(
+        dstd::relative(common::unwrap(dstd::fs::weakly_canonical(dir)).view(),
+                       common::unwrap(dstd::fs::weakly_canonical(root)).view())
+            .str());
 
-    const common::fs::path summary = dir / "summary.json";
+    const dstd::Path summary = dir / "summary.json";
     if (!files.summary) {
         discover_path_only(dir, files, *nodes, *ppn, std::move(base), out);
         return;
@@ -259,7 +265,7 @@ void discover_dir(const common::fs::path& root, const common::fs::path& dir,
     simdjson::dom::parser parser;
     simdjson::padded_string text;
     simdjson::dom::object s;
-    if (simdjson::padded_string::load(summary.string()).get(text) !=
+    if (simdjson::padded_string::load(summary.str()).get(text) !=
             simdjson::SUCCESS ||
         parser.parse(text).get(s) != simdjson::SUCCESS) {
         out.skips.push_back({base.dir, "summary.json", "unparsable JSON"});
@@ -278,6 +284,30 @@ void discover_dir(const common::fs::path& root, const common::fs::path& dir,
     }
 }
 
+// Orders paths component by component, as std::filesystem::path does, so a
+// separator sorts before every other byte.
+struct ComponentLess {
+    using is_transparent = void;
+    static unsigned rank(char c) {
+        return c == '/' ? 0u : static_cast<unsigned char>(c) + 1u;
+    }
+    bool operator()(dstd::StringView a, dstd::StringView b) const noexcept {
+        const std::size_t n = std::min(a.size(), b.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            if (a[i] != b[i]) return rank(a[i]) < rank(b[i]);
+        }
+        return a.size() < b.size();
+    }
+};
+
+using DirMap = dstd::Map<dstd::String, DirFiles, ComponentLess>;
+
+DirFiles& files_of(DirMap& dirs, dstd::PathView dir) {
+    const auto found = dirs.find(dir.str());
+    if (found != dirs.end()) return found->second;
+    return dirs.emplace(dstd::String(dir.str()), DirFiles{}).first->second;
+}
+
 }  // namespace
 
 std::string run_id(const RunKeys& k) {
@@ -292,39 +322,42 @@ coro::CoroTask<Discovery> discover(CoroScope& ctx,
     Discovery out;
     const utilities::filesystem::PatternDirectoryScannerUtility scan;
     for (const auto& r : roots) {
-        const common::fs::path root = common::fs::absolute(r);
+        const dstd::Path root =
+            common::unwrap(dstd::fs::absolute(dstd::PathView(r)));
         // A braced list inside the co_await expression crashes GCC 12.
         const std::vector<std::string> patterns{".pfw.gz", "summary.json",
                                                 ".csv"};
         utilities::filesystem::PatternDirectoryScannerUtilityInput input(
-            root.string(), patterns, true, true);
+            root.str(), patterns, true, true);
         const auto entries = co_await scan(ctx, input);
-        std::map<common::fs::path, DirFiles> dirs;
+        DirMap dirs;
         for (const auto& e : entries) {
-            const common::fs::path parent = e.path.parent_path();
-            if (e.path.filename() == "summary.json") {
-                dirs[parent].summary = true;
+            const dstd::PathView path = e.path.view();
+            const dstd::PathView parent = path.parent();
+            if (path.filename() == "summary.json") {
+                files_of(dirs, parent).summary = true;
             } else if (parent.filename() == "compacted") {
-                dirs[parent.parent_path()].traces.emplace_back(e.path.string(),
-                                                               e.size);
-            } else if (e.path.extension() == ".gz" &&
-                       parent.filename().string().rfind("ppn_", 0) == 0) {
+                files_of(dirs, parent.parent())
+                    .traces.emplace_back(std::string(path.str()), e.size);
+            } else if (path.extension() == ".gz" &&
+                       parent.filename().starts_with("ppn_")) {
                 // <run>/<stem>-<k>_chunk<c>.pfw.gz: slices kept in the run
                 // directory itself rather than in compacted/.
-                dirs[parent].run_traces.emplace_back(e.path.string(), e.size);
-            } else if (e.path.extension() == ".gz" &&
-                       parent.parent_path().filename() == "raw") {
+                files_of(dirs, parent)
+                    .run_traces.emplace_back(std::string(path.str()), e.size);
+            } else if (path.extension() == ".gz" &&
+                       parent.parent().filename() == "raw") {
                 // <run>/raw/<set>/<file>.pfw.gz
-                dirs[parent.parent_path().parent_path()]
-                    .raw[parent.filename().string()]
-                    .emplace_back(e.path.string(), e.size);
+                files_of(dirs, parent.parent().parent())
+                    .raw[std::string(parent.filename())]
+                    .emplace_back(std::string(path.str()), e.size);
             } else if (parent.filename() == "dftracer_service" &&
-                       e.path.filename().string().rfind("gpu_power_", 0) == 0) {
+                       path.filename().starts_with("gpu_power_")) {
                 // <run>/raw/<set>/dftracer_service/gpu_power_<host>.csv
-                const common::fs::path set = parent.parent_path();
-                dirs[set.parent_path().parent_path()]
-                    .gpu_csvs[set.filename().string()]
-                    .push_back(e.path.string());
+                const dstd::PathView set = parent.parent();
+                files_of(dirs, set.parent().parent())
+                    .gpu_csvs[std::string(set.filename())]
+                    .emplace_back(path.str());
             }
         }
         for (auto& [dir, files] : dirs) {
@@ -334,7 +367,7 @@ coro::CoroTask<Discovery> discover(CoroScope& ctx,
             for (auto& [_, raw] : files.raw) std::sort(raw.begin(), raw.end());
             for (auto& [_, csvs] : files.gpu_csvs)
                 std::sort(csvs.begin(), csvs.end());
-            discover_dir(root, dir, files, out);
+            discover_dir(root.view(), dstd::PathView(dir), files, out);
         }
     }
     co_return out;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 
@@ -24,11 +25,11 @@ std::shared_ptr<IndexRoot> index_root(const std::string& index_path) {
         const auto it = known.by_spelling.find(index_path);
         if (it != known.by_spelling.end()) return it->second;
     }
-    std::error_code ec;
-    const common::fs::path canonical =
-        common::fs::weakly_canonical(index_path, ec);
+    const auto canonical =
+        dstd::fs::weakly_canonical(dstd::PathView(index_path));
     const std::lock_guard<std::mutex> lock(known.guard);
-    auto& r = known.roots[ec ? index_path : canonical.string()];
+    auto& r =
+        known.roots[canonical ? std::string(canonical->str()) : index_path];
     if (!r) r = std::make_shared<IndexRoot>();
     known.by_spelling[index_path] = r;
     return r;

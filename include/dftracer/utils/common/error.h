@@ -137,12 +137,13 @@ dstd::Unexpected<dstd::Error> make_error(E code, std::string_view message) {
 
 /// Throwable carrying the (domain, condition) identity of a failure, so a
 /// domain error throws without collapsing to a coarse code.
-class DFTUtilsException : public std::runtime_error {
+class DFTUtilsException : public std::exception {
    public:
-    DFTUtilsException(ErrorCode code, const std::string& message)
-        : std::runtime_error(message), error_(code, message) {}
-    explicit DFTUtilsException(const dstd::Error& error)
-        : std::runtime_error(std::string(error.message())), error_(error) {}
+    DFTUtilsException(ErrorCode code, dstd::StringView message)
+        : error_(code, message) {}
+    explicit DFTUtilsException(const dstd::Error& error) : error_(error) {}
+
+    const char* what() const noexcept override { return error_.c_str(); }
 
     /// Concatenation factory (numbers via to_chars; no format string):
     ///   throw DFTUtilsException::cat(ErrorCode::IO,

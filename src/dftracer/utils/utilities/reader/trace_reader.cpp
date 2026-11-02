@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -435,9 +436,9 @@ void TraceReader::probe_index() {
     format_ = CheckpointIndexerFactory::detect_format(config_.file_path);
     index_path_ = dftu_internal::determine_index_path(config_.file_path,
                                                       config_.index_dir);
-    has_index_ =
-        format_ == common::ArchiveFormat::Gzip &&
-        common::fs::exists(dftracer::utils::index::store_dir(index_path_));
+    has_index_ = format_ == common::ArchiveFormat::Gzip &&
+                 common::unwrap(dstd::fs::exists(dstd::PathView(
+                     dftracer::utils::index::store_dir(index_path_))));
     // Do not trust an index whose source changed since it was built; fall back
     // to a raw read rather than serving stale data. Uses the shared stat-based
     // freshness predicate, so a record with no stored stat is treated as stale

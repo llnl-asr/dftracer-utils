@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -70,7 +71,7 @@ struct Indexer::Impl {
         }
         std::vector<utilities::filesystem::FileEntry> out;
         out.reserve(paths.size());
-        for (const auto& p : paths) out.emplace_back(common::fs::path(p));
+        for (const auto& p : paths) out.emplace_back(dstd::StringView(p));
         return out;
     }
 
@@ -219,10 +220,10 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
     impl->options = std::move(options);
     validate_options(*impl);
     for (auto& p : paths) {
-        utilities::filesystem::FileEntry self{common::fs::path(p)};
-        std::error_code ec;
+        utilities::filesystem::FileEntry self{dstd::StringView(p)};
+        const auto present = dstd::fs::exists(dstd::PathView(p));
         if (!self.is_directory && !self.is_regular_file &&
-            !common::fs::exists(p, ec))
+            !(present && *present))
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::NotFound,
                 "Indexer::open: no such path: ", p);
@@ -240,7 +241,8 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
                         p, utilities::filesystem::trace_file_patterns(), false,
                         /*with_size=*/false});
             });
-        for (auto& e : matched) impl->paths.push_back(e.path.string());
+        for (auto& e : matched)
+            impl->paths.push_back(std::string(e.path.str()));
     }
     return finish_open(std::move(impl));
 }
@@ -256,7 +258,7 @@ Indexer Indexer::open_scanned(
     impl->options = std::move(options);
     validate_options(*impl);
     for (auto& e : files) {
-        impl->paths.push_back(e.path.string());
+        impl->paths.emplace_back(e.path.str());
         impl->opened.push_back(std::move(e));
     }
     return finish_open(std::move(impl));
@@ -321,7 +323,9 @@ coro::CoroTask<IndexStatus> Indexer::rebuild(CoroScope& scope) {
 coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
     std::vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::fs::exists(store_of(index_path))) continue;
+        if (!common::unwrap(
+                dstd::fs::exists(dstd::PathView(store_of(index_path)))))
+            continue;
         const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         for (const auto* p : traces) {
             const auto logical = store::internal::get_logical_path(*p);
@@ -346,7 +350,9 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
     const auto config = impl_->bloom_config();
     std::vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::fs::exists(store_of(index_path))) continue;
+        if (!common::unwrap(
+                dstd::fs::exists(dstd::PathView(store_of(index_path)))))
+            continue;
         const auto snapshot = common::unwrap(plan::open_snapshot(index_path));
         const std::uint64_t agg_params =
             impl_->options.aggregation.params_hash();
@@ -401,7 +407,8 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
             "Indexer::explain: ", parsed.error().format());
     std::vector<FileExplain> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::fs::exists(store_of(index_path))) {
+        if (!common::unwrap(
+                dstd::fs::exists(dstd::PathView(store_of(index_path))))) {
             for (const auto* p : traces) {
                 FileExplain f;
                 f.path = *p;
@@ -449,7 +456,9 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
                                                     std::string extension) {
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
-        if (!common::fs::exists(store_of(index_path))) continue;
+        if (!common::unwrap(
+                dstd::fs::exists(dstd::PathView(store_of(index_path)))))
+            continue;
         if (ext == store::IndexExtension::Plugin) {
             co_await drop_plugin_extension(index_path, extension, traces);
             continue;

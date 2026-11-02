@@ -706,7 +706,8 @@ static coro::CoroTask<void> process_file_detailed(
     // Hash resolution (sequential, all chunks done)
     std::unordered_map<std::string, std::string> hash_resolutions;
     if (needs_hash_resolution &&
-        common::fs::exists(dftracer::utils::index::store_dir(index_path))) {
+        common::unwrap(dstd::fs::exists(
+            dstd::PathView(dftracer::utils::index::store_dir(index_path))))) {
         try {
             using dftracer::utils::index::plan::GroupResolver;
             const std::vector<dftracer::utils::index::plan::RowSetFile> files{
@@ -1516,8 +1517,9 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
             config.report_type != StatisticsQueryType::Detailed) {
             auto trusted_index_path = trace::internal::determine_index_path(
                 config.directory, config.index_dir);
-            const bool trusted_index_exists = common::fs::exists(
-                dftracer::utils::index::store_dir(trusted_index_path));
+            const bool trusted_index_exists =
+                common::unwrap(dstd::fs::exists(dstd::PathView(
+                    dftracer::utils::index::store_dir(trusted_index_path))));
             DFTRACER_UTILS_LOG_DEBUG(
                 "Stats direct-index decision: directory=%s index_path=%s "
                 "exists=%d json=%d report=%d",

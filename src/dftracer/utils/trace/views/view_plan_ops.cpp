@@ -342,7 +342,7 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
     std::vector<ViewFile> files;
     files.reserve(entries.size());
     for (auto& e : entries) {
-        std::string fp = e.path.string();
+        std::string fp(e.path.str());
         files.push_back(
             ViewFile{fp, internal::determine_index_path(fp, index_path)});
     }

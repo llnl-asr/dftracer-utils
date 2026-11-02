@@ -364,7 +364,8 @@ TEST_SUITE("IndexedFileBytesIterator") {
             }
 
             CHECK_FALSE(iter.has_next());
-            CHECK_THROWS_AS(iter.next(), std::runtime_error);
+            CHECK_THROWS_AS(iter.next(),
+                            dftracer::utils::common::DFTUtilsException);
         }
 
         SUBCASE("Byte range beyond file size") {

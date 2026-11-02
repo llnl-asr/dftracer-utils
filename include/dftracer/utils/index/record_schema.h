@@ -3,6 +3,7 @@
 #define DFTRACER_UTILS_INDEX_RECORD_SCHEMA_H
 
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <charconv>
 #include <cmath>
@@ -197,7 +198,7 @@ const RecordSchema& register_schema(std::string_view text,
 /// Registers every spec at `path`: a file, or the *.yaml, *.yml and *.json
 /// files of a directory in name order. A path is loaded once per process.
 /// Throws as register_schema, or IO when a file cannot be read.
-void load_schemas(const std::string& path);
+void load_schemas(dstd::StringView path);
 
 /// The registered schemas as a JSON array of objects with id, decoder
 /// ("dftracer" or "path"), fields, require, path_budget (null when unset) and
@@ -206,7 +207,7 @@ std::string schemas_json();
 
 /// load_schemas on `<index_dir>/schemas` for the index at `index_path`
 /// (`<index_dir>/.dftindex`), when that directory exists.
-void load_index_schemas(const std::string& index_path);
+void load_index_schemas(dstd::StringView index_path);
 
 /// Share of the records a schema judges that it must match to be chosen.
 inline constexpr double SCHEMA_MATCH_SHARE = 0.9;

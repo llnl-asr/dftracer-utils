@@ -385,7 +385,8 @@ TEST_SUITE("IndexedFileLineIterator") {
             iter.next();
             CHECK_FALSE(iter.has_next());
 
-            CHECK_THROWS_AS(iter.next(), std::runtime_error);
+            CHECK_THROWS_AS(iter.next(),
+                            dftracer::utils::common::DFTUtilsException);
         }
 
         SUBCASE("Non-existent file") {

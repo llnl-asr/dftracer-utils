@@ -74,12 +74,13 @@ static coro::CoroTask<FileResult> compress_file_parallel(
     result.output_path = file_path + ".gz";
 
     try {
-        if (!common::fs::exists(file_path)) {
+        if (!common::unwrap(dstd::fs::exists(dstd::PathView(file_path)))) {
             result.error_message = "File does not exist: " + file_path;
             co_return result;
         }
 
-        result.original_size = common::fs::file_size(file_path);
+        result.original_size = static_cast<std::size_t>(
+            common::unwrap(dstd::fs::file_size(dstd::PathView(file_path))));
         if (result.original_size == 0) {
             result.error_message = "Empty file: " + file_path;
             co_return result;
@@ -124,12 +125,12 @@ static coro::CoroTask<FileResult> compress_file_parallel(
         if (ifs.bad()) throw std::runtime_error("read error: " + file_path);
 
         common::unwrap(co_await writer.close(carry));
-        result.compressed_size = common::fs::file_size(result.output_path);
+        result.compressed_size = static_cast<std::size_t>(common::unwrap(
+            dstd::fs::file_size(dstd::PathView(result.output_path))));
         result.success = true;
     } catch (const std::exception& e) {
         result.error_message = std::string("Compression failed: ") + e.what();
-        std::error_code ec;
-        common::fs::remove(result.output_path, ec);
+        (void)dstd::fs::remove(dstd::PathView(result.output_path));
     }
 
     co_return result;
@@ -138,17 +139,22 @@ static coro::CoroTask<FileResult> compress_file_parallel(
 }  // namespace
 
 static int run_pgzip(const PgzipArgParse& cli) {
-    const auto input_dir = common::fs::absolute(cli.directory.value).string();
+    const auto input_dir = binaries::absolute_path(cli.directory.value);
     const auto executor_threads = cli.pipeline.executor_threads;
     const auto compression_level = cli.compression_level;
     const auto chunk_size = cli.chunk_size;
 
     std::vector<std::string> input_files;
-    for (const auto& entry : common::fs::directory_iterator(input_dir)) {
-        if (!entry.is_regular_file()) continue;
-        auto ext = entry.path().extension().string();
-        if (ext == ".pfw") {
-            input_files.push_back(entry.path().string());
+    {
+        const auto dir =
+            common::unwrap(dstd::fs::Dir::open(dstd::PathView(input_dir)));
+        auto listing = common::unwrap(dir.entries());
+        for (const dstd::fs::DirEntry& entry : listing) {
+            if (dstd::PathView(entry.name).extension() != ".pfw") continue;
+            const auto st = dir.stat(entry.name);
+            if (!st || st->kind != dstd::fs::FileKind::File) continue;
+            input_files.push_back(
+                std::string((dstd::PathView(input_dir) / entry.name).str()));
         }
     }
 
@@ -225,17 +231,20 @@ static int run_pgzip(const PgzipArgParse& cli) {
                                                   result.original_size) *
                                               100.0
                                         : 0.0;
+                                const dstd::StringView name =
+                                    dstd::PathView(path).filename();
                                 DFTRACER_UTILS_LOG_DEBUG(
-                                    "Compressed %s: %zu -> %zu "
+                                    "Compressed %.*s: %zu -> %zu "
                                     "bytes (%.1f%%)",
-                                    common::fs::path(path).filename().c_str(),
+                                    static_cast<int>(name.size()), name.data(),
                                     result.original_size,
                                     result.compressed_size, ratio);
                             }
 
                             if (result.success) {
                                 try {
-                                    common::fs::remove(path);
+                                    common::unwrap(
+                                        dstd::fs::remove(dstd::PathView(path)));
                                 } catch (const std::exception& e) {
                                     DFTRACER_UTILS_LOG_ERROR(
                                         "Failed to remove %s: %s", path.c_str(),

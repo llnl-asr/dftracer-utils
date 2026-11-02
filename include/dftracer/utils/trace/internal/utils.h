@@ -2,6 +2,8 @@
 #ifndef DFTRACER_UTILS_TRACE_INTERNAL_UTILS_H
 #define DFTRACER_UTILS_TRACE_INTERNAL_UTILS_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -174,8 +176,8 @@ bool is_data_transfer_op(std::string_view cat, std::string_view name);
  * @param index_dir Optional custom directory for the index root.
  * @return Path to the owning `.dftindex` directory.
  */
-std::string determine_index_path(const std::string& path,
-                                 const std::string& index_dir = "");
+std::string determine_index_path(dstd::CStringView path,
+                                 dstd::StringView index_dir = {});
 
 }  // namespace dftracer::utils::trace::internal
 

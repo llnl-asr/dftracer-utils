@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/hash/hash_combine.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/duql/subsumption.h>
 #include <dftracer/utils/index/cache/mv_store.h>
@@ -23,7 +25,6 @@
 #include <fstream>
 #include <optional>
 #include <string>
-#include <system_error>
 #include <vector>
 
 namespace dftracer::utils::index::cache {
@@ -163,8 +164,37 @@ std::string hex8(std::uint64_t h) {
     return std::string(buf);
 }
 
-std::string manifest_path(const std::string& dir) {
-    return (common::fs::path(dir) / MANIFEST_NAME).string();
+dstd::Path manifest_path(dstd::StringView dir) {
+    return dstd::PathView(dir) / MANIFEST_NAME;
+}
+
+// A listed entry is of `want` kind, following a symlink to find it out.
+bool entry_is(const dstd::fs::Dir& dir, const dstd::fs::DirEntry& entry,
+              dstd::fs::FileKind want) {
+    if (entry.kind == want) return true;
+    if (entry.kind != dstd::fs::FileKind::Symlink &&
+        entry.kind != dstd::fs::FileKind::Unknown) {
+        return false;
+    }
+    const auto found = dir.stat(entry.name);
+    return found && found->kind == want;
+}
+
+// The entries of `dir` that are of `want` kind, as full paths. A directory that
+// cannot be listed has none.
+dstd::Vector<dstd::Path> list_kind(dstd::StringView dir,
+                                   dstd::fs::FileKind want) {
+    dstd::Vector<dstd::Path> out;
+    const auto opened = dstd::fs::Dir::open(dstd::PathView(dir));
+    if (!opened) return out;
+    auto listing = opened->entries();
+    if (!listing) return out;
+    for (const dstd::fs::DirEntry& entry : *listing) {
+        if (entry_is(*opened, entry, want)) {
+            out.push_back(dstd::PathView(dir) / entry.name);
+        }
+    }
+    return out;
 }
 
 struct Manifest {
@@ -180,13 +210,13 @@ struct Manifest {
     std::vector<BaseId> bases;
 };
 
-std::optional<Manifest> read_manifest(const std::string& dir) {
-    const std::string path = manifest_path(dir);
-    std::error_code ec;
-    if (!common::fs::exists(path, ec)) return std::nullopt;
+std::optional<Manifest> read_manifest(dstd::StringView dir) {
+    const dstd::Path path = manifest_path(dir);
+    const auto found = dstd::fs::exists(path.view());
+    if (!found || !*found) return std::nullopt;
     try {
         simdjson::dom::parser parser;
-        simdjson::dom::element root = parser.load(path);
+        simdjson::dom::element root = parser.load(path.c_str());
         std::int64_t version = 0;
         if (root["version"].get(version) != simdjson::SUCCESS ||
             version != MANIFEST_VERSION)
@@ -223,35 +253,39 @@ std::optional<Manifest> read_manifest(const std::string& dir) {
     }
 }
 
-std::uint64_t dir_size(const std::string& dir) {
+std::uint64_t dir_size(dstd::StringView dir) {
     std::uint64_t sum = 0;
-    std::error_code ec;
-    for (common::fs::recursive_directory_iterator it(dir, ec), end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_regular_file(ec)) {
-            const auto sz = it->file_size(ec);
-            if (!ec) sum += sz;
-        }
+    // A tree that cannot be walked sums what was visited.
+    (void)dstd::fs::walk(
+        dstd::PathView(dir), [&](dstd::PathView path, dstd::fs::FileKind kind) {
+            if (kind == dstd::fs::FileKind::File ||
+                kind == dstd::fs::FileKind::Symlink) {
+                const auto found = dstd::fs::stat(path);
+                if (found && found->kind == dstd::fs::FileKind::File) {
+                    sum += found->size;
+                }
+            }
+            return dstd::fs::WalkAction::Continue;
+        });
     return sum;
 }
 
-// When a view was last used: its last_used file, else its manifest.
-std::int64_t last_used(const std::string& dir) {
-    std::error_code ec;
+// When a view was last used: its last_used file, else its manifest. Only the
+// order of two values matters.
+std::int64_t last_used(dstd::StringView dir) {
     for (const char* name : {LAST_USED_NAME, MANIFEST_NAME}) {
-        const auto t =
-            common::fs::last_write_time(common::fs::path(dir) / name, ec);
-        if (!ec) return static_cast<std::int64_t>(t.time_since_epoch().count());
+        const dstd::Path file = dstd::PathView(dir) / name;
+        const auto t = dstd::fs::mtime_ns(file.view());
+        if (t) return static_cast<std::int64_t>(*t);
     }
     return 0;
 }
 
-void touch_last_used(const std::string& dir) {
-    const auto path = common::fs::path(dir) / LAST_USED_NAME;
-    std::ofstream(path, std::ios::app).close();
-    std::error_code ec;
-    common::fs::last_write_time(path, common::fs::file_time_type::clock::now(),
-                                ec);
+void touch_last_used(dstd::StringView dir) {
+    const dstd::Path path = dstd::PathView(dir) / LAST_USED_NAME;
+    dstd::ScopedFd fd(
+        ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0666));
+    if (fd.valid()) ::futimens(fd.get(), nullptr);
 }
 
 // Removes the least recently used views under `root` until they hold at most
@@ -265,11 +299,9 @@ void evict_views(const std::string& root, const std::string& keep) {
     };
     std::vector<Entry> entries;
     std::uint64_t total = 0;
-    std::error_code ec;
-    for (common::fs::directory_iterator it(root, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        const std::string dir = it->path().string();
+    for (const dstd::Path& path :
+         list_kind(root, dstd::fs::FileKind::Directory)) {
+        const std::string dir(path.str());
         auto m = read_manifest(dir);
         if (!m) continue;
         const std::uint64_t bytes = m->bytes ? m->bytes : dir_size(dir);
@@ -286,11 +318,10 @@ void evict_views(const std::string& root, const std::string& keep) {
         // The caller wrote `keep` and may hold its lock.
         const int fd = e.dir == keep ? -1 : lock_view_dir(e.dir);
         if (fd < 0 && e.dir != keep) return;
-        std::error_code rm;
         release_root(e.dir);
-        common::fs::remove_all(e.dir, rm);
+        const auto removed = dstd::fs::remove_all(dstd::PathView(e.dir));
         unlock_view_dir(fd);
-        if (!rm) total -= e.bytes;
+        if (removed) total -= e.bytes;
     };
     for (const auto& e : entries) {
         if (total <= budget) break;
@@ -304,16 +335,13 @@ void evict_views(const std::string& root, const std::string& keep) {
 // Trace files inside an MV directory (its own index is a subdir, skipped).
 std::vector<std::string> view_trace_files(const std::string& dir) {
     std::vector<std::string> out;
-    std::error_code ec;
-    for (common::fs::directory_iterator it(dir, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        if (!it->is_regular_file(ec)) continue;
-        const std::string name = it->path().filename().string();
+    for (const dstd::Path& path : list_kind(dir, dstd::fs::FileKind::File)) {
+        const dstd::StringView name = path.view().filename();
         if (name.size() >= 4 && name.compare(name.size() - 4, 4, ".pfw") == 0)
-            out.push_back(it->path().string());
+            out.emplace_back(path.str());
         else if (name.size() >= 7 &&
                  name.compare(name.size() - 7, 7, ".pfw.gz") == 0)
-            out.push_back(it->path().string());
+            out.emplace_back(path.str());
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -330,11 +358,9 @@ std::vector<trace::views::ViewFile> gather_view_files(const std::string& dir) {
     const std::string parts = index::view_parts_dir(dir);
     for (const auto& t : view_trace_files(parts))
         out.push_back(trace::views::ViewFile{t, view_idx});
-    std::error_code ec;
-    for (common::fs::directory_iterator it(parts, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        const std::string sub = it->path().string();
+    for (const dstd::Path& sub_path :
+         list_kind(parts, dstd::fs::FileKind::Directory)) {
+        const std::string sub(sub_path.str());
         const std::string sidx = dfti::determine_index_path(sub, "");
         for (const auto& t : view_trace_files(sub))
             out.push_back(trace::views::ViewFile{t, sidx});
@@ -416,14 +442,14 @@ std::string view_slug(const trace::views::detail::ViewPlan& plan) {
 bool view_is_fresh(const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
     if (root.empty()) return false;
-    const std::string dir = (common::fs::path(root) / view_slug(plan)).string();
-    std::error_code ec;
-    return common::fs::exists(manifest_path(dir), ec) &&
-           !gather_view_files(dir).empty();
+    const dstd::Path dir = dstd::PathView(root) / view_slug(plan);
+    const auto present = dstd::fs::exists(manifest_path(dir.str()).view());
+    return present && *present &&
+           !gather_view_files(std::string(dir.str())).empty();
 }
 
 int lock_view_dir(const std::string& dir) {
-    const std::string path = (common::fs::path(dir) / ".lock").string();
+    const dstd::Path path = dstd::PathView(dir) / ".lock";
     const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0644);
     if (fd < 0) return -1;
     if (::flock(fd, LOCK_EX | LOCK_NB) != 0) {  // another builder holds it
@@ -442,11 +468,13 @@ void unlock_view_dir(int fd) {
 std::string materialize_view_dir(const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
     if (root.empty()) return {};
-    const std::string dir = (common::fs::path(root) / view_slug(plan)).string();
-    std::error_code ec;
-    common::fs::create_directories(index::view_parts_dir(dir), ec);
-    if (ec) return {};
-    return dir;
+    const dstd::Path dir = dstd::PathView(root) / view_slug(plan);
+    std::string dir_text(dir.str());
+    if (!dstd::fs::create_directories(
+            dstd::PathView(index::view_parts_dir(dir_text)))) {
+        return {};
+    }
+    return dir_text;
 }
 
 void register_view(const std::string& dir,
@@ -483,7 +511,7 @@ void register_view(const std::string& dir,
     j += bases.empty() ? "]\n}\n" : "\n  ]\n}\n";
 
     {
-        std::ofstream out(manifest_path(dir),
+        std::ofstream out(manifest_path(dir).c_str(),
                           std::ios::binary | std::ios::trunc);
         out << j;
     }
@@ -495,9 +523,9 @@ void register_view(const std::string& dir,
 std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     const trace::views::detail::ViewPlan& plan) {
     const std::string root = views_root(plan);
-    std::error_code ec;
-    if (root.empty() || !common::fs::is_directory(root, ec))
-        return std::nullopt;
+    if (root.empty()) return std::nullopt;
+    const auto root_is_dir = dstd::fs::is_directory(dstd::PathView(root));
+    if (!root_is_dir || !*root_is_dir) return std::nullopt;
 
     const auto q_bases = plan_bases(plan);
     if (q_bases.size() != plan.files.size())
@@ -511,18 +539,16 @@ std::optional<std::vector<trace::views::ViewFile>> find_subsuming_view(
     std::vector<trace::views::ViewFile> best;
     std::string best_dir;
     std::uint64_t best_bytes = base_bytes;  // must beat the base to be worth it
-    for (common::fs::directory_iterator it(root, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
-        const std::string dir = it->path().string();
+    for (const dstd::Path& path :
+         list_kind(root, dstd::fs::FileKind::Directory)) {
+        const std::string dir(path.str());
         auto m = read_manifest(dir);
         if (!m) continue;
         // Evict a view built from a base that has since changed or vanished: it
         // can never be served again, and nobody reads a non-matching MV.
         if (manifest_is_stale(*m)) {
-            std::error_code rm;
             release_root(dir);
-            common::fs::remove_all(dir, rm);
+            (void)dstd::fs::remove_all(dstd::PathView(dir));
             continue;
         }
         if (!manifest_matches(*m, plan, q_bases)) continue;

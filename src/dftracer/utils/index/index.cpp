@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/index/cache/cache_store.h>
@@ -11,12 +13,10 @@
 #include <dftracer/utils/memory/manager.h>
 
 #include <algorithm>
-#include <filesystem>
 #include <list>
 #include <map>
 #include <mutex>
 #include <string>
-#include <system_error>
 #include <utility>
 
 namespace dftracer::utils::index {
@@ -114,9 +114,8 @@ Index::Impl::find_store() {
         std::lock_guard<std::mutex> lock(mutex);
         if (store) return store;
     }
-    std::error_code missing;
-    if (!std::filesystem::exists(store_dir, missing))
-        return dstd::Optional<kv::Store>{};
+    const auto present = dstd::fs::exists(dstd::PathView(store_dir));
+    if (!present || !*present) return dstd::Optional<kv::Store>{};
     auto opened = open_store();
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     return dstd::Optional<kv::Store>(std::move(*opened));

@@ -586,7 +586,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             co_return 1;
         }
     } else if (!recipe_path.empty()) {
-        if (!common::fs::exists(recipe_path)) {
+        if (!common::unwrap(dstd::fs::exists(dstd::PathView(recipe_path)))) {
             DFTRACER_UTILS_LOG_ERROR("Recipe file not found: %s",
                                      recipe_path.c_str());
             co_return 1;
@@ -769,7 +769,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                                                /*populate_size=*/false);
 
         for (const auto& entry : matched) {
-            files.push_back(entry.path.string());
+            files.emplace_back(entry.path.str());
         }
         std::sort(files.begin(), files.end());
 
@@ -853,8 +853,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
     for (const auto& file_path : files) {
         std::string index_path =
             internal::determine_index_path(file_path, index_dir);
-        if (!common::fs::exists(
-                dftracer::utils::index::store_dir(index_path))) {
+        if (!common::unwrap(dstd::fs::exists(dstd::PathView(
+                dftracer::utils::index::store_dir(index_path))))) {
             files_needing_index.push_back(file_path);
         }
     }
@@ -1016,8 +1016,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                         for (int r = 0; r < transport.size(); ++r) {
                             std::string d = dftracer::utils::index::shard_root(
                                 idx_root, static_cast<std::size_t>(r));
-                            if (common::fs::exists(
-                                    dftracer::utils::index::store_dir(d)))
+                            if (common::unwrap(dstd::fs::exists(dstd::PathView(
+                                    dftracer::utils::index::store_dir(d)))))
                                 shard_dirs.push_back(std::move(d));
                         }
                         if (!shard_dirs.empty()) {
@@ -1059,8 +1059,8 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     shard_files(files, transport.rank(), transport.size());
                 std::string idx_base = index_dir;
                 if (idx_base.empty())
-                    idx_base =
-                        common::fs::path(files.front()).parent_path().string();
+                    idx_base = std::string(
+                        dstd::PathView(files.front()).parent().str());
                 std::string rank_idx =
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {

@@ -2,9 +2,11 @@
 #ifndef DFTRACER_UTILS_COMMON_FILESYSTEM_INFO_H
 #define DFTRACER_UTILS_COMMON_FILESYSTEM_INFO_H
 
+#include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/vector.h>
+
 #include <cstddef>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -40,22 +42,22 @@ inline bool is_memory_filesystem(FilesystemKind kind) noexcept {
 /// exist yet its nearest existing parent is probed instead (a file inherits its
 /// directory's filesystem on creation). Never throws; returns UNKNOWN only when
 /// statfs itself fails or the platform is unsupported.
-FilesystemKind filesystem_kind(const std::string& path) noexcept;
+FilesystemKind filesystem_kind(dstd::CStringView path) noexcept;
 
 /// The mount point that backs `path` (the longest mounted prefix), or "" when
 /// it cannot be determined. `path` need not exist; its nearest existing parent
 /// is used. Never throws.
-std::string find_mountpoint(const std::string& path) noexcept;
+dstd::Path find_mountpoint(dstd::CStringView path) noexcept;
 
 struct MountInfo {
-    std::string mountpoint;
+    dstd::Path mountpoint;
     FilesystemKind kind;
 };
 
 /// Every current mount and its filesystem kind, read from the OS mount table
 /// (Linux /proc/mounts, BSD getmntinfo) without a statfs per entry so a stale
 /// network mount cannot stall. Empty when the table is unavailable.
-std::vector<MountInfo> list_mounts() noexcept;
+dstd::Vector<MountInfo> list_mounts() noexcept;
 
 struct StripeInfo {
     std::size_t size = 0;   ///< bytes per stripe, 0 if unknown/not striped
@@ -66,7 +68,7 @@ struct StripeInfo {
 /// stripe size over the layout components and that component's stripe count.
 /// Returns an all-zero @ref StripeInfo off Lustre or when the query is
 /// unavailable.
-StripeInfo lustre_stripe(const std::string& path) noexcept;
+StripeInfo lustre_stripe(dstd::CStringView path) noexcept;
 
 }  // namespace dftracer::utils::common
 

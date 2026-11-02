@@ -5,8 +5,10 @@
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/index/cache/cache_store.h>
@@ -15,9 +17,7 @@
 
 #include <algorithm>
 #include <chrono>
-#include <filesystem>
 #include <mutex>
-#include <system_error>
 
 namespace dftracer::utils::index::cache {
 
@@ -149,8 +149,8 @@ std::uint64_t cache_max_bytes() {
 }
 
 bool CacheStore::exists(const std::string& path) {
-    std::error_code missing;
-    return std::filesystem::exists(store_dir(path), missing);
+    const auto found = dstd::fs::exists(dstd::PathView(store_dir(path)));
+    return found && *found;
 }
 
 std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
@@ -158,7 +158,7 @@ std::shared_ptr<CacheStore> CacheStore::open(const std::string& path,
     try {
         const bool writable = mode == Mode::ReadWrite;
         if (writable) {
-            std::filesystem::create_directories(path);
+            common::unwrap(dstd::fs::create_directories(dstd::PathView(path)));
         } else if (!exists(path)) {
             return nullptr;
         }

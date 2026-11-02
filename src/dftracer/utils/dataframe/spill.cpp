@@ -4,7 +4,6 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
-#include <dftracer/utils/common/filesystem.h>  // fs:: portability alias
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
@@ -14,6 +13,8 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/types.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/memory/heap.h>
 #include <fcntl.h>
@@ -633,16 +634,14 @@ Dir::~Dir() = default;
 int Dir::next_run() { return runs_.fetch_add(1); }
 
 void Dir::remove_run(const std::string& path) const noexcept {
-    std::error_code ec;
-    const std::uintmax_t size = common::fs::file_size(path, ec);
-    std::error_code rm;
-    if (common::fs::remove(path, rm) && !ec) dir_.charge().release(size);
+    const auto size = dstd::fs::file_size(dstd::PathView(path));
+    const auto removed = dstd::fs::remove(dstd::PathView(path));
+    if (removed && *removed && size) dir_.charge().release(*size);
 }
 
 std::string Dir::run_path(int id) const {
-    return (common::fs::path(dir_.path()) /
-            ("run_" + std::to_string(id) + ".bin"))
-        .string();
+    return std::string(
+        (dir_.path().view() / ("run_" + std::to_string(id) + ".bin")).str());
 }
 
 namespace {
@@ -685,7 +684,7 @@ struct Reader::Codec {
 
 Writer::Writer(const std::string& path)
     : os_(path, std::ios::binary | std::ios::trunc),
-      charge_(common::ScopedSpillSubdir::charge_for(path)) {
+      charge_(common::ScopedSpillSubdir::charge_for(dstd::PathView(path))) {
     if (!os_) throw std::runtime_error("spill: cannot open run file " + path);
     if (spill_compression_on(path)) codec_ = std::make_unique<Codec>();
 }
@@ -771,9 +770,9 @@ void HashPartitions::close() {
 
 Reader::Reader(const std::string& path) : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("spill: cannot open run file " + path);
-    std::error_code ec;
-    size_ = common::fs::file_size(path, ec);
-    if (ec) throw std::runtime_error("spill: cannot stat run file " + path);
+    const auto sized = dstd::fs::file_size(dstd::PathView(path));
+    if (!sized) throw std::runtime_error("spill: cannot stat run file " + path);
+    size_ = *sized;
 }
 
 Reader::~Reader() = default;
@@ -902,7 +901,7 @@ void write_agg_run(AggState& state, const std::string& path) {
     std::ofstream os(path, std::ios::binary);
     if (!os) throw std::runtime_error("agg spill: cannot open run " + path);
     const std::shared_ptr<common::SpillCharge> charge =
-        common::ScopedSpillSubdir::charge_for(path);
+        common::ScopedSpillSubdir::charge_for(dstd::PathView(path));
     const std::int64_t ng = agg_num_groups(state);
     for (std::int64_t g = 0; g < ng; ++g) {
         const std::string blob =
@@ -923,9 +922,9 @@ void write_agg_run(AggState& state, const std::string& path) {
 AggRunReader::AggRunReader(const std::string& path)
     : is_(path, std::ios::binary) {
     if (!is_) throw std::runtime_error("agg spill: cannot open run " + path);
-    std::error_code ec;
-    size_ = common::fs::file_size(path, ec);
-    if (ec) throw std::runtime_error("agg spill: cannot stat run " + path);
+    const auto sized = dstd::fs::file_size(dstd::PathView(path));
+    if (!sized) throw std::runtime_error("agg spill: cannot stat run " + path);
+    size_ = *sized;
     advance();
 }
 

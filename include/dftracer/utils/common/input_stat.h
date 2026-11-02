@@ -2,25 +2,66 @@
 #ifndef DFTRACER_UTILS_COMMON_INPUT_STAT_H
 #define DFTRACER_UTILS_COMMON_INPUT_STAT_H
 
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/cstring_view.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/string.h>
+#include <sys/stat.h>
 
-#include <memory>
+#include <cstdint>
+#include <ctime>
 #include <shared_mutex>
-#include <string>
 
 namespace dftracer::utils::common {
+
+/// Type, size and mtime of one path from a single stat that follows symlinks.
+struct InputFileStat {
+    std::uint64_t size = 0;
+    /// Unix seconds.
+    std::int64_t mtime = 0;
+    /// Nanoseconds since the epoch, to tell two writes within one second.
+    std::int64_t mtime_ns = 0;
+    bool is_directory = false;
+    bool is_regular_file = false;
+};
+
+/// The modification time of `st` in nanoseconds since the epoch.
+inline std::int64_t stat_mtime_ns(const struct stat& st) {
+#ifdef __APPLE__
+    const struct timespec& ts = st.st_mtimespec;
+#else
+    const struct timespec& ts = st.st_mtim;
+#endif
+    return static_cast<std::int64_t>(ts.tv_sec) * 1000000000 +
+           static_cast<std::int64_t>(ts.tv_nsec);
+}
+
+inline InputFileStat input_file_stat_from(const struct stat& st) {
+    InputFileStat out;
+    out.size = static_cast<std::uint64_t>(st.st_size);
+    out.mtime = static_cast<std::int64_t>(st.st_mtime);
+    out.mtime_ns = stat_mtime_ns(st);
+    out.is_directory = S_ISDIR(st.st_mode);
+    out.is_regular_file = S_ISREG(st.st_mode);
+    return out;
+}
+
+/// One stat of `path`. Returns false when the path cannot be stat'ed.
+inline bool stat_path(const char* path, InputFileStat& out) {
+    struct stat st{};
+    if (::stat(path, &st) != 0) return false;
+    out = input_file_stat_from(st);
+    return true;
+}
 
 /// The stat results of the paths one run has read, so an input is stat'ed once
 /// however many layers ask. Owned by one run (see @ref InputStatScope). Thread
 /// safe.
 class InputStatCache {
    public:
-    bool find(const std::string& path, InputFileStat& out) const;
-    void insert(const std::string& path, const InputFileStat& st);
-    void erase(const std::string& path);
+    bool find(dstd::StringView path, InputFileStat& out) const;
+    void insert(dstd::StringView path, const InputFileStat& st);
+    void erase(dstd::StringView path);
 
    private:
     mutable std::shared_mutex mutex_;
@@ -47,27 +88,23 @@ class InputStatScope {
 
 /// stat_path() through the published cache. A plain stat when none is
 /// published. A failed stat is not kept.
-bool stat_input(const std::string& path, InputFileStat& out);
-
-inline bool stat_input(const fs::path& path, InputFileStat& out) {
-    return stat_input(path.string(), out);
-}
+bool stat_input(dstd::CStringView path, InputFileStat& out);
 
 /// Drops `path` from the published cache. No-op without one. A caller that
 /// deletes a path it may have stat'ed through stat_input() calls it.
-void forget_input(const std::string& path);
+void forget_input(dstd::StringView path);
 
 /// Whether `path` exists, is a directory, or is a regular file, through the
 /// published cache.
-inline bool input_exists(const std::string& path) {
+inline bool input_exists(dstd::CStringView path) {
     InputFileStat st;
     return stat_input(path, st);
 }
-inline bool input_is_directory(const std::string& path) {
+inline bool input_is_directory(dstd::CStringView path) {
     InputFileStat st;
     return stat_input(path, st) && st.is_directory;
 }
-inline bool input_is_regular_file(const std::string& path) {
+inline bool input_is_regular_file(dstd::CStringView path) {
     InputFileStat st;
     return stat_input(path, st) && st.is_regular_file;
 }

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/function.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
@@ -16,8 +18,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <mutex>
 #include <sstream>
 #include <utility>
@@ -241,73 +241,70 @@ PathRegistry& registry() {
     return r;
 }
 
-void load_file(PathRegistry& r, const std::filesystem::path& file) {
-    std::ifstream in(file);
-    if (!in)
+void load_file(PathRegistry& r, dstd::PathView file) {
+    const dstd::String origin(file.str());
+    auto loaded = dstd::fs::read_file(file);
+    if (!loaded)
         throw common::DFTUtilsException(
-            common::ErrorCode::Io,
-            ("duql: cannot read macro file " + dstd::String(file.string()))
-                .c_str());
-    dstd::String text;
-    char chunk[4096];
-    while (in.read(chunk, sizeof(chunk)) || in.gcount() > 0)
-        text.append(chunk, static_cast<std::size_t>(in.gcount()));
+            common::ErrorCode::Io, "duql: cannot read macro file " + origin);
+    const dstd::String text = std::move(*loaded);
     auto tree = syntax::parse(text);
     if (!tree)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            ("duql macro file " + dstd::String(file.string()) + ": " +
-             tree.error().format())
-                .c_str());
+            "duql macro file " + origin + ": " + tree.error().format());
     if (tree->pipeline)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            ("duql macro file " + dstd::String(file.string()) +
-             " holds a pipeline; it may hold only "
-             "'def' declarations")
-                .c_str());
+            "duql macro file " + origin +
+                " holds a pipeline; it may hold only 'def' declarations");
     for (const auto& d : tree->decls)
         if (!std::holds_alternative<Def>(d))
             throw common::DFTUtilsException(
                 common::ErrorCode::InvalidArgument,
-                ("duql macro file " + dstd::String(file.string()) +
-                 " may hold only 'def' declarations")
-                    .c_str());
+                "duql macro file " + origin +
+                    " may hold only 'def' declarations");
     dstd::Vector<Def> defs = take_defs(tree->decls);
-    auto macros = macros_of(defs, text, dstd::String(file.string()));
+    auto macros = macros_of(defs, text, origin);
     if (!macros)
         throw common::DFTUtilsException(
             common::ErrorCode::InvalidArgument,
-            ("duql macro file " + dstd::String(file.string()) + ": " +
-             macros.error().format())
-                .c_str());
+            "duql macro file " + origin + ": " + macros.error().format());
     for (auto& m : *macros) {
         for (const auto& old : r.macros)
             if (old.name == m.name)
                 throw common::DFTUtilsException(
                     common::ErrorCode::InvalidArgument,
-                    ("duql macro '" + m.name + "' is defined in " + old.origin +
-                     " and " + dstd::String(file.string()))
-                        .c_str());
+                    "duql macro '" + m.name + "' is defined in " + old.origin +
+                        " and " + origin);
         r.macros.push_back(std::move(m));
     }
 }
 
 void load_locked(PathRegistry& r, dstd::StringView path_text) {
-    namespace fs = std::filesystem;
-    const fs::path path(path_text);
-    const dstd::String key(fs::weakly_canonical(path).string());
-    if (!r.loaded.insert(key).second) return;
-    if (!fs::is_directory(path)) {
+    const dstd::PathView path(path_text);
+    const dstd::Path canonical =
+        common::unwrap(dstd::fs::weakly_canonical(path));
+    if (!r.loaded.insert(dstd::String(canonical.str())).second) return;
+    if (!common::unwrap(dstd::fs::is_directory(path))) {
         load_file(r, path);
         return;
     }
-    dstd::Vector<fs::path> files;
-    for (const auto& e : fs::directory_iterator(path))
-        if (e.is_regular_file() && e.path().extension() == ".duql")
-            files.push_back(e.path());
-    std::sort(files.begin(), files.end());
-    for (const auto& f : files) load_file(r, f);
+    dstd::Vector<dstd::Path> files;
+    const auto dir = common::unwrap(dstd::fs::Dir::open(path));
+    auto listing = common::unwrap(dir.entries());
+    for (const dstd::fs::DirEntry& e : listing) {
+        if (dstd::PathView(e.name).extension() != ".duql") continue;
+        const auto st = dir.stat(e.name);
+        if (st && st->kind == dstd::fs::FileKind::File) {
+            files.push_back(path / e.name);
+        }
+    }
+    std::sort(files.begin(), files.end(),
+              [](const dstd::Path& a, const dstd::Path& b) {
+                  return a.str() < b.str();
+              });
+    for (const auto& f : files) load_file(r, f.view());
 }
 
 void load_env(PathRegistry& r) {

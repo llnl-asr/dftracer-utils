@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/raw_buffer.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/index/build/index_visitor.h>
@@ -1252,7 +1253,8 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
 bool GzipIndexer::is_valid() const { return cached_is_valid; }
 
 bool GzipIndexer::exists() const {
-    return common::fs::is_directory(index::store_dir(index_path));
+    return common::unwrap(
+        dstd::fs::is_directory(dstd::PathView(index::store_dir(index_path))));
 }
 
 bool GzipIndexer::need_rebuild() const {

@@ -374,7 +374,7 @@ TEST_CASE("C++ API - Exception handling comprehensive tests") {
     SUBCASE("Reader with invalid paths should throw in constructor") {
         CHECK_THROWS_AS(ReaderFactory::create("/definitely/nonexistent/path.gz",
                                               "/also/nonexistent/path.idx"),
-                        std::runtime_error);
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     SUBCASE("Reader operations on invalid reader should throw") {
@@ -1362,11 +1362,14 @@ TEST_CASE("C++ Reader - Line reading functionality" *
         REQUIRE(reader != nullptr);
 
         // 0-based line numbers should throw (we use 1-based)
-        CHECK_THROWS_AS(reader->read_lines(0, 5), std::runtime_error);
-        CHECK_THROWS_AS(reader->read_lines(1, 0), std::runtime_error);
+        CHECK_THROWS_AS(reader->read_lines(0, 5),
+                        dftracer::utils::common::DFTUtilsException);
+        CHECK_THROWS_AS(reader->read_lines(1, 0),
+                        dftracer::utils::common::DFTUtilsException);
 
         // start > end should throw
-        CHECK_THROWS_AS(reader->read_lines(10, 5), std::runtime_error);
+        CHECK_THROWS_AS(reader->read_lines(10, 5),
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     SUBCASE("Large line ranges") {

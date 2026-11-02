@@ -4,8 +4,9 @@
 
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/binary_file_reader_utility.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -131,14 +132,20 @@ class FileCompressorUtility {
 
         try {
             // Validate input file exists
-            if (!common::fs::exists(input.input_path)) {
+            const auto found =
+                dstd::fs::exists(dstd::PathView(input.input_path));
+            if (!found) throw common::DFTUtilsException(found.error());
+            if (!*found) {
                 co_return common::make_error(
                     common::ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
             // Get original file size
-            original_size = common::fs::file_size(input.input_path);
+            const auto original =
+                dstd::fs::file_size(dstd::PathView(input.input_path));
+            if (!original) throw common::DFTUtilsException(original.error());
+            original_size = static_cast<std::size_t>(*original);
 
             int level =
                 input.compression_level < 0 ? 6 : input.compression_level;
@@ -154,7 +161,8 @@ class FileCompressorUtility {
                 co_await GzipLineWriter::open(input.output_path, opts));
 
             std::string carry;
-            auto gen = fileio::read_binary_file(input.input_path, member_size);
+            auto gen = fileio::read_binary_file(dstd::Path(input.input_path),
+                                                member_size);
             for (;;) {
                 auto chunk = co_await gen.next();
                 if (!chunk) break;
@@ -171,11 +179,15 @@ class FileCompressorUtility {
             common::unwrap(co_await writer.close(carry));
 
             // Get final compressed size
-            compressed_size = common::fs::file_size(input.output_path);
+            const auto compressed =
+                dstd::fs::file_size(dstd::PathView(input.output_path));
+            if (!compressed)
+                throw common::DFTUtilsException(compressed.error());
+            compressed_size = static_cast<std::size_t>(*compressed);
 
         } catch (const std::exception& e) {
             // Clean up partial output file on error
-            common::remove_file_quietly(input.output_path);
+            (void)dstd::fs::remove(dstd::PathView(input.output_path));
 
             co_return common::make_error(
                 common::ErrorCode::Compression,

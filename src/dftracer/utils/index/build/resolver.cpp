@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/extensions/plugin_extension.h>
@@ -248,7 +249,8 @@ ResolveGroupOutput resolve_group_sync(ResolveGroupInput input) {
     if (!input.index_path.empty()) load_index_schemas(input.index_path);
 
     if (input.index_path.empty() ||
-        !common::fs::exists(index::store_of(input.index_path))) {
+        !common::unwrap(dstd::fs::exists(
+            dstd::PathView(index::store_of(input.index_path))))) {
         for (auto& f : input.files) {
             result.needs_checkpoint.push_back(
                 FileWorkItem{f.file_index, std::move(f.file_path), {}, {}});
@@ -363,7 +365,7 @@ std::vector<utilities::filesystem::FileEntry> scanned_entries(
     out.reserve(result.all_files.size());
     for (std::size_t i = 0; i < result.all_files.size(); ++i) {
         utilities::filesystem::FileEntry entry;
-        entry.path = result.all_files[i];
+        entry.path = dstd::Path(result.all_files[i]);
         entry.size = result.all_file_sizes[i];
         entry.mtime = result.all_file_mtimes[i];
         entry.is_regular_file = true;
@@ -378,7 +380,7 @@ std::vector<utilities::filesystem::FileEntry> scanned_entries(
     out.reserve(items.size());
     for (const auto& item : items) {
         utilities::filesystem::FileEntry entry;
-        entry.path = item.file_path;
+        entry.path = dstd::Path(item.file_path);
         entry.size = result.all_file_sizes[item.file_index];
         entry.mtime = result.all_file_mtimes[item.file_index];
         entry.is_regular_file = true;
@@ -397,7 +399,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         result.all_file_sizes.reserve(input.entries.size());
         result.all_file_mtimes.reserve(input.entries.size());
         for (const auto& entry : input.entries) {
-            result.all_files.push_back(entry.path.string());
+            result.all_files.push_back(std::string(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
             result.all_file_mtimes.push_back(entry.mtime);
         }
@@ -411,7 +413,7 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
         result.all_file_sizes.reserve(matched.size());
         result.all_file_mtimes.reserve(matched.size());
         for (const auto& entry : matched) {
-            result.all_files.push_back(entry.path.string());
+            result.all_files.push_back(std::string(entry.path.str()));
             result.all_file_sizes.push_back(entry.size);
             result.all_file_mtimes.push_back(entry.mtime);
         }

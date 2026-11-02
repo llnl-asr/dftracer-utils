@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <sys/stat.h>
 
 #ifdef __linux__
 #include <sys/vfs.h>
-
-#include <fstream>
-#include <sstream>
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__)
 #include <sys/mount.h>
@@ -20,10 +19,6 @@
 
 #include <cstdint>
 #endif
-
-#include <string>
-#include <string_view>
-#include <system_error>
 
 namespace dftracer::utils::common {
 
@@ -61,7 +56,7 @@ FilesystemKind classify_magic(unsigned long magic) noexcept {
 // to LOCAL, tmpfs/ramfs to TMPFS, known network stores to their kind, and
 // pseudo/kernel filesystems (proc, sysfs, ...) to UNKNOWN so they are never
 // mistaken for usable local storage.
-FilesystemKind classify_fstype_name(std::string_view name) noexcept {
+FilesystemKind classify_fstype_name(dstd::StringView name) noexcept {
     if (name == "tmpfs" || name == "ramfs") return FilesystemKind::Tmpfs;
     if (name == "nfs" || name == "nfs4") return FilesystemKind::Nfs;
     if (name == "lustre") return FilesystemKind::Lustre;
@@ -76,16 +71,17 @@ FilesystemKind classify_fstype_name(std::string_view name) noexcept {
     return FilesystemKind::Unknown;
 }
 
-std::string probe_path(const std::string& path) noexcept {
-    std::error_code ec;
-    if (fs::exists(path, ec)) return path;
-    auto parent = fs::path(path).parent_path();
-    if (parent.empty()) return std::string(".");
-    if (fs::exists(parent, ec)) return parent.string();
-    return std::string(".");
+dstd::Path probe_path(dstd::StringView path) noexcept {
+    const auto found = dstd::fs::exists(dstd::PathView(path));
+    if (found && *found) return dstd::Path(path);
+    const dstd::PathView parent = dstd::PathView(path).parent();
+    if (parent.empty()) return dstd::Path(".");
+    const auto parent_found = dstd::fs::exists(parent);
+    if (parent_found && *parent_found) return dstd::Path(parent.str());
+    return dstd::Path(".");
 }
 
-bool same_device(const std::string& a, const std::string& b) noexcept {
+bool same_device(dstd::CStringView a, dstd::CStringView b) noexcept {
     struct stat sa{};
     struct stat sb{};
     if (::stat(a.c_str(), &sa) != 0 || ::stat(b.c_str(), &sb) != 0)
@@ -93,10 +89,9 @@ bool same_device(const std::string& a, const std::string& b) noexcept {
     return sa.st_dev == sb.st_dev;
 }
 
-#ifdef __linux__
 // Decode /proc/mounts octal escapes (e.g. "\040" for space).
-std::string unescape_mount_field(const std::string& in) {
-    std::string out;
+[[maybe_unused]] dstd::String unescape_mount_field(dstd::StringView in) {
+    dstd::String out;
     out.reserve(in.size());
     for (std::size_t i = 0; i < in.size(); ++i) {
         if (in[i] == '\\' && i + 3 < in.size() && in[i + 1] >= '0' &&
@@ -111,12 +106,45 @@ std::string unescape_mount_field(const std::string& in) {
     }
     return out;
 }
-#endif
+
+constexpr bool is_field_space(char c) noexcept {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' ||
+           c == '\r';
+}
+
+// The next whitespace-delimited field of `line`, consumed from its front.
+dstd::StringView next_field(dstd::StringView& line) noexcept {
+    std::size_t begin = 0;
+    while (begin < line.size() && is_field_space(line[begin])) ++begin;
+    std::size_t end = begin;
+    while (end < line.size() && !is_field_space(line[end])) ++end;
+    const dstd::StringView field = line.substr(begin, end - begin);
+    line.remove_prefix(end);
+    return field;
+}
+
+// Appends one MountInfo per `<spec> <mountpoint> <fstype> ...` line of a
+// /proc/mounts style table. A line with fewer than three fields is skipped.
+[[maybe_unused]] void parse_mount_table(dstd::StringView text,
+                                        dstd::Vector<MountInfo>& mounts) {
+    while (!text.empty()) {
+        const std::size_t newline = text.find('\n');
+        dstd::StringView line = text.substr(0, newline);
+        text.remove_prefix(newline == dstd::StringView::npos ? text.size()
+                                                             : newline + 1);
+        const dstd::StringView spec = next_field(line);
+        const dstd::StringView mountpoint = next_field(line);
+        const dstd::StringView fstype = next_field(line);
+        if (spec.empty() || mountpoint.empty() || fstype.empty()) continue;
+        mounts.push_back({dstd::Path(unescape_mount_field(mountpoint)),
+                          classify_fstype_name(fstype)});
+    }
+}
 
 }  // namespace
 
-FilesystemKind filesystem_kind(const std::string& path) noexcept {
-    [[maybe_unused]] const std::string target = probe_path(path);
+FilesystemKind filesystem_kind(dstd::CStringView path) noexcept {
+    [[maybe_unused]] const dstd::Path target = probe_path(path.view());
 #if defined(__linux__)
     struct statfs st{};
     if (::statfs(target.c_str(), &st) != 0) return FilesystemKind::Unknown;
@@ -131,52 +159,46 @@ FilesystemKind filesystem_kind(const std::string& path) noexcept {
 #endif
 }
 
-std::string find_mountpoint(const std::string& path) noexcept {
-    std::error_code ec;
-    fs::path cur = fs::absolute(fs::path(probe_path(path)), ec);
-    if (ec) return {};
-    cur = cur.lexically_normal();
+dstd::Path find_mountpoint(dstd::CStringView path) noexcept {
+    const auto absolute =
+        dstd::fs::absolute(dstd::PathView(probe_path(path.view()).str()));
+    if (!absolute) return {};
+    dstd::Path cur = dstd::normalize(absolute->view());
     // Climb until the parent crosses a device boundary.
-    while (cur.has_relative_path() && cur != cur.root_path()) {
-        fs::path parent = cur.parent_path();
-        if (parent.empty() || parent == cur) break;
-        if (!same_device(cur.string(), parent.string())) return cur.string();
-        cur = parent;
+    while (cur.str() != cur.view().root()) {
+        const dstd::PathView parent = cur.view().parent();
+        if (parent.empty() || parent.str() == cur.str()) break;
+        const dstd::Path parent_path(parent.str());
+        if (!same_device(cur, parent_path)) return cur;
+        cur = parent_path;
     }
-    return cur.string();
+    return cur;
 }
 
-std::vector<MountInfo> list_mounts() noexcept {
-    std::vector<MountInfo> mounts;
+dstd::Vector<MountInfo> list_mounts() noexcept {
+    dstd::Vector<MountInfo> mounts;
 #if defined(__linux__)
-    std::ifstream f("/proc/mounts");
-    std::string line;
-    while (std::getline(f, line)) {
-        std::istringstream ls(line);
-        std::string spec, mountpoint, fstype;
-        if (!(ls >> spec >> mountpoint >> fstype)) continue;
-        mounts.push_back(
-            {unescape_mount_field(mountpoint), classify_fstype_name(fstype)});
-    }
+    const auto table = dstd::fs::read_file(dstd::PathView("/proc/mounts"));
+    if (table) parse_mount_table(*table, mounts);
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || \
     defined(__NetBSD__)
     struct statfs* buf = nullptr;
     const int n = ::getmntinfo(&buf, MNT_NOWAIT);
     for (int i = 0; i < n; ++i)
-        mounts.push_back(
-            {buf[i].f_mntonname, classify_fstype_name(buf[i].f_fstypename)});
+        mounts.push_back({dstd::Path(buf[i].f_mntonname),
+                          classify_fstype_name(buf[i].f_fstypename)});
 #endif
     return mounts;
 }
 
-StripeInfo lustre_stripe([[maybe_unused]] const std::string& path) noexcept {
+StripeInfo lustre_stripe([[maybe_unused]] dstd::CStringView path) noexcept {
     StripeInfo info;
 #ifdef DFTRACER_UTILS_HAVE_LUSTREAPI
     // Every value above this is a layout sentinel (LLAPI_LAYOUT_DEFAULT, the
     // raid0 or wide pattern markers), never a byte count.
     constexpr std::uint64_t MAX_STRIPE_BYTES = std::uint64_t{1} << 40;
 
-    const std::string probe = probe_path(path);
+    const dstd::Path probe = probe_path(path.view());
     // The layout, not a single getstripe ioctl: a progressive file layout
     // (PFL) has several components with a stripe size each.
     struct llapi_layout* layout =

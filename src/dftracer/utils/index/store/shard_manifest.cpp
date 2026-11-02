@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
@@ -108,56 +109,59 @@ IndexShardManifest parse_manifest(std::string_view json) {
 
 void write_shard_manifest(const std::string& root,
                           const IndexShardManifest& manifest) {
-    std::error_code ec;
-    common::fs::create_directories(root, ec);
+    // A directory that cannot be made fails the write below.
+    (void)dstd::fs::create_directories(dstd::PathView(root));
 
-    const common::fs::path final_path = shard_manifest_path(root);
-    const common::fs::path tmp_path =
-        common::fs::path(root) /
-        (std::string(SHARD_MANIFEST) + ".tmp." + std::to_string(::getpid()));
+    const dstd::Path final_path{shard_manifest_path(root)};
+    const dstd::Path tmp_path =
+        dstd::PathView(root) /
+        common::str_cat(SHARD_MANIFEST, ".tmp.", ::getpid());
 
     const std::string body = to_json(manifest);
     {
-        std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
+        std::ofstream out(tmp_path.c_str(), std::ios::binary | std::ios::trunc);
         out.write(body.data(), static_cast<std::streamsize>(body.size()));
         out.flush();
         if (!out) {
-            common::fs::remove(tmp_path, ec);
+            (void)dstd::fs::remove(tmp_path.view());
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
-                "failed to write shard manifest: " + tmp_path.string());
+                common::str_cat("failed to write shard manifest: ",
+                                tmp_path.str()));
         }
     }
 
-    common::fs::rename(tmp_path, final_path, ec);
-    if (ec) {
-        common::fs::remove(tmp_path, ec);
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "failed to publish shard manifest to " +
-                                            final_path.string() + ": " +
-                                            ec.message());
+    const auto renamed = dstd::fs::rename(tmp_path.view(), final_path.view());
+    if (!renamed) {
+        (void)dstd::fs::remove(tmp_path.view());
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            common::str_cat("failed to publish shard manifest to ",
+                            final_path.str(), ": ", renamed.error().message()));
     }
 }
 
 std::optional<IndexShardManifest> read_shard_manifest(const std::string& root) {
-    const common::fs::path path = shard_manifest_path(root);
-    std::error_code ec;
-    if (!common::fs::exists(path, ec)) return std::nullopt;
+    const dstd::Path path{shard_manifest_path(root)};
+    // An unreadable path reads as no manifest.
+    const auto found = dstd::fs::exists(path.view());
+    if (!found || !*found) return std::nullopt;
 
     simdjson::padded_string contents;
-    auto load_err = simdjson::padded_string::load(path.string()).get(contents);
+    auto load_err = simdjson::padded_string::load(path.str()).get(contents);
     if (load_err) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "failed to read shard manifest " +
-                                            path.string() + ": " +
-                                            simdjson::error_message(load_err));
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            common::str_cat("failed to read shard manifest ", path.str(), ": ",
+                            simdjson::error_message(load_err)));
     }
     return parse_manifest(std::string_view(contents.data(), contents.size()));
 }
 
 bool has_shard_manifest(const std::string& root) {
-    std::error_code ec;
-    return common::fs::exists(shard_manifest_path(root), ec);
+    const auto found =
+        dstd::fs::exists(dstd::PathView(shard_manifest_path(root)));
+    return found && *found;
 }
 
 std::string resolve_shard_set_root(const std::string& target) {

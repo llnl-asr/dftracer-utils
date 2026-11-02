@@ -3,7 +3,10 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_FILE_WRITER_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/types/streaming.h>
 
@@ -26,7 +29,7 @@ namespace dftracer::utils::utilities::fileio {
 class StreamingFileWriterUtility {
    private:
     std::ofstream file_;
-    common::fs::path path_;
+    dstd::Path path_;
     bool append_ = false;
     bool create_dirs_ = true;
     std::size_t total_bytes_ = 0;
@@ -39,20 +42,25 @@ class StreamingFileWriterUtility {
         }
 
         // Create parent directories if requested
-        if (create_dirs_ && path_.has_parent_path()) {
-            common::fs::path parent = path_.parent_path();
-            if (!common::fs::exists(parent)) {
-                common::fs::create_directories(parent);
+        const dstd::PathView parent = path_.view().parent();
+        if (create_dirs_ && !parent.empty()) {
+            const auto found = dstd::fs::exists(parent);
+            if (!found) throw common::DFTUtilsException(found.error());
+            if (!*found) {
+                const auto made = dstd::fs::create_directories(parent);
+                if (!made) throw common::DFTUtilsException(made.error());
             }
         }
 
         // Validate parent directory exists if not creating it
-        if (!create_dirs_ && path_.has_parent_path()) {
-            common::fs::path parent = path_.parent_path();
-            if (!common::fs::exists(parent)) {
+        if (!create_dirs_ && !parent.empty()) {
+            const auto found = dstd::fs::exists(parent);
+            if (!found) throw common::DFTUtilsException(found.error());
+            if (!*found) {
                 throw common::DFTUtilsException(
                     common::ErrorCode::NotFound,
-                    "Parent directory does not exist: " + parent.string());
+                    common::str_cat("Parent directory does not exist: ",
+                                    parent.str()));
             }
         }
 
@@ -64,11 +72,11 @@ class StreamingFileWriterUtility {
             mode |= std::ios::trunc;
         }
 
-        file_.open(path_, mode);
+        file_.open(path_.c_str(), mode);
         if (!file_) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
-                "Cannot open file for writing: " + path_.string());
+                common::str_cat("Cannot open file for writing: ", path_.str()));
         }
 
         opened_ = true;
@@ -82,10 +90,10 @@ class StreamingFileWriterUtility {
      * @param append Append to existing file (default: false)
      * @param create_dirs Create parent directories (default: true)
      */
-    explicit StreamingFileWriterUtility(common::fs::path path,
+    explicit StreamingFileWriterUtility(dstd::PathView path,
                                         bool append = false,
                                         bool create_dirs = true)
-        : path_(std::move(path)), append_(append), create_dirs_(create_dirs) {
+        : path_(path.str()), append_(append), create_dirs_(create_dirs) {
         open_file();
     }
 
@@ -123,7 +131,7 @@ class StreamingFileWriterUtility {
         if (!file_) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
-                "Error writing to file: " + path_.string());
+                common::str_cat("Error writing to file: ", path_.str()));
         }
 
         total_bytes_ += chunk.size();
@@ -145,7 +153,7 @@ class StreamingFileWriterUtility {
 
     std::size_t total_bytes() const { return total_bytes_; }
     std::size_t total_chunks() const { return total_chunks_; }
-    const common::fs::path& path() const { return path_; }
+    const dstd::Path& path() const { return path_; }
     bool is_closed() const { return !opened_; }
 };
 

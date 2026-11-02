@@ -3,7 +3,6 @@
 #define DFTRACER_UTILS_DATAFRAME_LAZY_COMMON_H
 
 #include <ankerl/unordered_dense.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state

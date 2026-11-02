@@ -2,7 +2,9 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/scope_filter.h>
 #include <dftracer/utils/store/snapshot.h>
@@ -15,7 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -59,10 +60,6 @@ ByteView bytes_of(const dstd::Vector<std::uint8_t>& bytes) {
 
 ByteView bytes_of(const dstd::RawBuffer<std::uint8_t>& bytes) {
     return {bytes.data(), bytes.size()};
-}
-
-dstd::String dstring(std::string_view value) {
-    return dstd::String(value.data(), value.size());
 }
 
 std::string path_string(dstd::StringView dir, std::string_view name) {
@@ -556,18 +553,15 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     pages_ = dstd::make_unique<PageCache>(cache_bytes);
     groups_ = dstd::make_unique<detail::GroupIndex>();
     const auto start = std::chrono::steady_clock::now();
-    const std::string dir_string(dir.data(), dir.size());
-    std::vector<std::string> names;
-    std::error_code error;
-    std::filesystem::directory_iterator iterator(dir_string, error);
-    if (error) return io_error();
-    const std::filesystem::directory_iterator end;
-    while (iterator != end) {
-        const std::string name = iterator->path().filename().string();
-        if (has_data_file_suffix(name)) names.push_back(name);
-        iterator.increment(error);
-        if (error) return io_error();
+    dstd::Vector<dstd::String> names;
+    const auto dir_handle = dstd::fs::Dir::open(dstd::PathView(dir));
+    if (!dir_handle) return io_error();
+    auto listing = dir_handle->entries();
+    if (!listing) return io_error();
+    for (const dstd::fs::DirEntry& entry : *listing) {
+        if (has_data_file_suffix(entry.name)) names.emplace_back(entry.name);
     }
+    if (listing->error() != 0) return io_error();
     std::sort(names.begin(), names.end());
     // A summary that cannot be read only leaves every file to open as before.
     auto summary = read_summary(dir);
@@ -587,14 +581,14 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
     std::vector<std::uint8_t> from_summary(names.size(), 0);
     const auto open_one = [&](std::size_t index) {
         const std::string path = path_string(dir, names[index]);
-        const auto listed_entry = summarized.find(dstring(names[index]));
+        const auto listed_entry = summarized.find(names[index]);
         if (listed_entry != summarized.end()) {
             auto reader =
                 DataFileReader::from_summary(path, *listed_entry->second);
             if (reader) {
                 detail::FileData& file =
                     opened[index].emplace(std::move(*reader));
-                file.name = dstring(names[index]);
+                file.name = names[index];
                 file.writer_random = file.reader.index().writer_random;
                 from_summary[index] = 1;
                 return;
@@ -606,7 +600,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
             return;
         }
         detail::FileData& file = opened[index].emplace(std::move(*reader));
-        file.name = dstring(names[index]);
+        file.name = names[index];
         file.writer_random = file.reader.index().writer_random;
     };
     for_each_index(runtime, names.size(), 1, open_one);
@@ -614,7 +608,7 @@ dstd::Expected<void, dstd::Error> Snapshot::load(dstd::StringView dir) {
 
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (open_errors[index]) {
-            skipped_.push_back({dstring(names[index]), *open_errors[index]});
+            skipped_.push_back({names[index], *open_errors[index]});
             continue;
         }
         files_.push_back(std::move(*opened[index]));

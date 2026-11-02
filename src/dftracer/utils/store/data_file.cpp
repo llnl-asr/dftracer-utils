@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/dstd/bits.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
 #include <dftracer/utils/store/extent_codec.h>
@@ -422,38 +423,63 @@ dstd::String data_file_name(dstd::StringView host, std::uint32_t pid,
 
 dstd::Expected<std::size_t, dstd::Error> move_data_files(dstd::StringView from,
                                                          dstd::StringView to) {
-    const std::string from_dir = path_string(from);
-    const std::string to_dir = path_string(to);
-    auto io_error = [](const std::string& what, const std::error_code& ec) {
+    const auto io_error = [](dstd::StringView what, dstd::StringView path,
+                             dstd::StringView cause) {
+        dstd::String text(what);
+        text.append(path);
+        text.append(": ");
+        text.append(cause);
         return dstd::Unexpected<dstd::Error>(
-            dstd::Error(dstd::Condition::Io, what + ": " + ec.message()));
+            dstd::Error(dstd::Condition::Io, text));
     };
-    std::error_code ec;
-    common::fs::create_directories(to_dir, ec);
-    if (ec) return io_error("store: cannot create the directory " + to_dir, ec);
+    const dstd::PathView from_dir(from);
+    const dstd::PathView to_dir(to);
+    const auto made = dstd::fs::create_directories(to_dir);
+    if (!made) {
+        return io_error("store: cannot create the directory ", to,
+                        made.error().message());
+    }
 
-    std::vector<std::string> names;
-    common::fs::directory_iterator it(from_dir, ec);
-    if (ec) return io_error("store: cannot list the directory " + from_dir, ec);
-    for (; it != common::fs::directory_iterator(); it.increment(ec)) {
-        if (ec) break;
-        std::error_code file_ec;
-        if (!it->is_regular_file(file_ec) || file_ec) continue;
-        std::string name = it->path().filename().string();
+    dstd::Vector<dstd::String> names;
+    const auto dir = dstd::fs::Dir::open(from_dir);
+    if (!dir) {
+        return io_error("store: cannot list the directory ", from,
+                        dir.error().message());
+    }
+    auto listing = dir->entries();
+    if (!listing) {
+        return io_error("store: cannot list the directory ", from,
+                        listing.error().message());
+    }
+    for (const dstd::fs::DirEntry& entry : *listing) {
+        dstd::fs::FileKind kind = entry.kind;
+        if (kind == dstd::fs::FileKind::Symlink ||
+            kind == dstd::fs::FileKind::Unknown) {
+            const auto found = dir->stat(entry.name);
+            if (!found) continue;
+            kind = found->kind;
+        }
+        if (kind != dstd::fs::FileKind::File) continue;
+        const dstd::StringView name = entry.name;
         if (name.size() <= DATA_FILE_SUFFIX.size()) continue;
         if (name.compare(name.size() - DATA_FILE_SUFFIX.size(),
                          DATA_FILE_SUFFIX.size(), DATA_FILE_SUFFIX) != 0) {
             continue;
         }
-        names.push_back(std::move(name));
+        names.emplace_back(name);
     }
-    if (ec) return io_error("store: cannot list the directory " + from_dir, ec);
+    if (listing->error() != 0) {
+        return io_error("store: cannot list the directory ", from,
+                        std::strerror(listing->error()));
+    }
     std::sort(names.begin(), names.end());
 
-    for (const std::string& name : names) {
-        const common::fs::path src = common::fs::path(from_dir) / name;
-        common::fs::rename(src, common::fs::path(to_dir) / name, ec);
-        if (ec) return io_error("store: cannot move " + src.string(), ec);
+    for (const dstd::String& name : names) {
+        const dstd::Path src = from_dir / name;
+        const auto moved = dstd::fs::rename(src.view(), (to_dir / name).view());
+        if (!moved)
+            return io_error("store: cannot move ", src.str(),
+                            moved.error().message());
     }
     return names.size();
 }

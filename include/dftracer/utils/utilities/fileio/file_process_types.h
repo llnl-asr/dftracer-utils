@@ -2,7 +2,6 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_H
 
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -244,7 +243,8 @@ int main(int argc, char** argv) {
             }
             const std::string index_path =
                 trace::internal::determine_index_path(
-                    scanned.front().path.string(), cli.indexing.index_dir);
+                    std::string(scanned.front().path.str()),
+                    cli.indexing.index_dir);
 
             // --- Load aggregated traces
             // ---------------------------------------------
@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
             try {
                 index::build::ResolverInput resolver_input;
                 resolver_input.directory =
-                    common::fs::absolute(cli.directory.value).string();
+                    binaries::absolute_path(cli.directory.value);
                 resolver_input.index_dir = cli.indexing.index_dir;
                 resolver_input.require_checkpoints = false;
                 const auto resolved =

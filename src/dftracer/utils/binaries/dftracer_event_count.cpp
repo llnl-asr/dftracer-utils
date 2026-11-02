@@ -2,7 +2,6 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -191,7 +190,7 @@ int main(int argc, char** argv) {
 }
 
 static int run_event_count(const EventCountArgParse* cli) {
-    const auto log_dir = common::fs::absolute(cli->directory.value).string();
+    const auto log_dir = binaries::absolute_path(cli->directory.value);
     const auto index_dir = cli->indexing.index_dir;
     const auto force = cli->indexing.force;
     const auto executor_threads = cli->pipeline.executor_threads;

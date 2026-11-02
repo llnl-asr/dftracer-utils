@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_STREAMING_H
 
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
 #include <functional>
@@ -14,17 +14,17 @@ namespace dftracer::utils::utilities::fileio {
  * @brief Configuration for streaming file read operations.
  */
 struct StreamReadInput {
-    common::fs::path path;
+    dstd::Path path;
     std::size_t chunk_size = 64 * 1024;  ///< 64KB default
 
     StreamReadInput() = default;
 
-    explicit StreamReadInput(common::fs::path p, std::size_t cs = 64 * 1024)
+    explicit StreamReadInput(dstd::Path p, std::size_t cs = 64 * 1024)
         : path(std::move(p)), chunk_size(cs) {}
 
     /// Equality for caching support
     bool operator==(const StreamReadInput& other) const {
-        return path == other.path && chunk_size == other.chunk_size;
+        return path.str() == other.path.str() && chunk_size == other.chunk_size;
     }
 
     bool operator!=(const StreamReadInput& other) const {
@@ -36,15 +36,14 @@ struct StreamReadInput {
  * @brief Result of a streaming write operation.
  */
 struct StreamWriteResult {
-    common::fs::path path;
+    dstd::Path path;
     std::size_t bytes_written = 0;
     std::size_t chunks_written = 0;
     bool success = false;
 
     StreamWriteResult() = default;
 
-    static StreamWriteResult success_result(common::fs::path p,
-                                            std::size_t bytes,
+    static StreamWriteResult success_result(dstd::Path p, std::size_t bytes,
                                             std::size_t chunks) {
         StreamWriteResult result;
         result.path = std::move(p);
@@ -65,7 +64,7 @@ struct hash<dftracer::utils::utilities::fileio::StreamReadInput> {
         const dftracer::utils::utilities::fileio::StreamReadInput& req)
         const noexcept {
         ::dftracer::utils::utilities::hash::HasherUtility hasher;
-        hasher.update(req.path.string());
+        hasher.update(req.path.str());
         hasher.update(req.chunk_size);
         return hasher.get_hash().value;
     }

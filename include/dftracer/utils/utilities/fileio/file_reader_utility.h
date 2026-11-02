@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_READER_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 #include <dftracer/utils/utilities/text/shared.h>
@@ -68,23 +70,26 @@ class FileReaderUtility {
      */
     coro::CoroTask<text::Text> operator()(
         const filesystem::FileEntry& input) const {
-        if (!common::fs::exists(input.path)) {
+        const auto found = dstd::fs::exists(input.path.view());
+        if (!found) throw common::DFTUtilsException(found.error());
+        if (!*found) {
             throw common::DFTUtilsException(
                 common::ErrorCode::NotFound,
-                "File does not exist: " + input.path.string());
+                common::str_cat("File does not exist: ", input.path.str()));
         }
 
         if (!input.is_regular_file) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
-                "Path is not a regular file: " + input.path.string());
+                common::str_cat("Path is not a regular file: ",
+                                input.path.str()));
         }
 
-        std::ifstream file(input.path, std::ios::binary);
+        std::ifstream file(input.path.c_str(), std::ios::binary);
         if (!file) {
             throw common::DFTUtilsException(
                 common::ErrorCode::Io,
-                "Cannot open file: " + input.path.string());
+                common::str_cat("Cannot open file: ", input.path.str()));
         }
 
         std::ostringstream content;

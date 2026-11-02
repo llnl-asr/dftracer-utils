@@ -176,9 +176,10 @@ TEST_SUITE("SerialStages") {
         REQUIRE(entries.size() == expected.size());
         CHECK(entries.size() == SCAN_FILES + NESTED_FILES);
         for (std::size_t i = 0; i < entries.size(); ++i) {
-            CHECK(entries[i].path.string() == expected[i]);
+            CHECK(entries[i].path.str() == expected[i]);
             CHECK(entries[i].is_regular_file);
-            CHECK(entries[i].size == common::fs::file_size(entries[i].path));
+            CHECK(entries[i].size ==
+                  common::fs::file_size(entries[i].path.c_str()));
             CHECK(entries[i].mtime > 0);
         }
         CHECK(batches > 2);

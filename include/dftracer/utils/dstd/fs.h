@@ -48,6 +48,12 @@ Expected<FileStat, Error> stat(PathView path);
 Expected<FileStat, Error> lstat(PathView path);
 /// False only when the path does not exist. Any other failure is an error.
 Expected<bool, Error> exists(PathView path);
+/// True when the path names a directory, following a symlink. False when the
+/// path does not exist. Any other failure is an error.
+Expected<bool, Error> is_directory(PathView path);
+/// True when the path names a regular file, following a symlink. False when the
+/// path does not exist. Any other failure is an error.
+Expected<bool, Error> is_regular_file(PathView path);
 /// True when the directory was created, false when it already existed.
 Expected<bool, Error> create_directory(PathView path);
 /// Creates every missing component. An existing directory is success, an
@@ -61,11 +67,24 @@ Expected<bool, Error> remove(PathView path);
 Expected<std::uint64_t, Error> remove_all(PathView path);
 Expected<void, Error> rename(PathView from, PathView to);
 Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode);
-/// The path with the current working directory prepended when it is relative,
-/// normalized lexically. No syscall touches the entry itself.
+/// Copies a directory tree, a symlink as a symlink and a file with copy_file.
+/// from may also be a single file or symlink. With FailIfExists every entry
+/// that already exists is an error, with Overwrite a file or symlink is
+/// replaced and a directory is merged into.
+Expected<void, Error> copy_tree(PathView from, PathView to, CopyMode mode);
+/// The path with the current working directory prepended when it is relative.
+/// Nothing is removed, so "." and ".." components and a trailing separator
+/// stay, as in std::filesystem::absolute. Call normalize() for a lexical form.
 Expected<Path, Error> absolute(PathView path);
 /// realpath: every symlink resolved, so the result names an existing entry.
 Expected<Path, Error> canonical(PathView path);
+/// The whole content of a file, read until end of file, so it also works on a
+/// file that reports no size such as one under /proc. A directory is an error.
+Expected<String, Error> read_file(PathView path);
+/// canonical of the longest existing prefix of path with the missing rest
+/// appended and normalized lexically. A relative path with no existing prefix
+/// resolves against the current directory. An empty path gives an empty path.
+Expected<Path, Error> weakly_canonical(PathView path);
 /// TMPDIR when it is set and not empty, else /tmp. Names an existing directory.
 Path temp_directory();
 Expected<SpaceInfo, Error> space(PathView path);

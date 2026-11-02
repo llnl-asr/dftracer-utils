@@ -27,7 +27,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             ofs << "This is a test file.\n";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content == "Hello, World!\nThis is a test file.\n");
@@ -42,7 +42,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             std::ofstream ofs(test_file);
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content.empty());
@@ -59,7 +59,7 @@ TEST_CASE("FileReaderUtility - Basic Operations") {
             ofs << "Tabs:\t\t\tSpaces:   \n";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content.find("Special: !@#$%^&*()") != std::string::npos);
@@ -74,7 +74,8 @@ TEST_CASE("FileReaderUtility - Error Handling") {
 
     SUBCASE("Non-existent file") {
         FileEntry entry{"non_existent_file_12345.txt"};
-        CHECK_THROWS_AS(reader(entry).get(), std::runtime_error);
+        CHECK_THROWS_AS(reader(entry).get(),
+                        dftracer::utils::common::DFTUtilsException);
     }
 
     SUBCASE("Directory instead of file") {
@@ -82,8 +83,9 @@ TEST_CASE("FileReaderUtility - Error Handling") {
             make_unique_test_path("test_dir_reader");
         dftracer::utils::common::fs::create_directory(test_dir);
 
-        FileEntry entry{test_dir};
-        CHECK_THROWS_AS(reader(entry).get(), std::runtime_error);
+        FileEntry entry{test_dir.string()};
+        CHECK_THROWS_AS(reader(entry).get(),
+                        dftracer::utils::common::DFTUtilsException);
 
         dftracer::utils::common::fs::remove(test_dir);
     }
@@ -100,7 +102,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             ofs << "x";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.size() == 1);
@@ -117,7 +119,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             }
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.size() == 1024);
@@ -133,7 +135,7 @@ TEST_CASE("FileReaderUtility - Different File Sizes") {
             }
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.size() == 100 * 1024);
@@ -153,7 +155,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
             ofs << "\n\n\n\n\n";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.size() == 5);
@@ -170,7 +172,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
             ofs << "Line 3\n";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content.find("Line 1") != std::string::npos);
@@ -186,7 +188,7 @@ TEST_CASE("FileReaderUtility - Different Content Types") {
             ofs << "No newline at end";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content == "No newline at end");
@@ -208,7 +210,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
             ofs << "[2024-01-01 10:00:02] INFO: Configuration loaded\n";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content.find("INFO: Application started") !=
@@ -228,7 +230,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
             ofs << "3,Charlie,300\n";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content.find("id,name,value") != std::string::npos);
@@ -247,7 +249,7 @@ TEST_CASE("FileReaderUtility - Real World Scenarios") {
 })";
         }
 
-        FileEntry entry{test_file};
+        FileEntry entry{test_file.string()};
         Text content = reader(entry).get();
 
         CHECK(content.content.find("\"name\": \"test\"") != std::string::npos);
@@ -276,7 +278,7 @@ TEST_CASE("FileReaderUtility - Composition with DirectoryScanner") {
     }
 
     // Scan and read
-    DirectoryScannerUtilityInput dir{test_dir};
+    DirectoryScannerUtilityInput dir{test_dir.string()};
     auto files = scanner(dir).get();
 
     int files_read = 0;

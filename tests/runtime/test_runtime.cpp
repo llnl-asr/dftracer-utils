@@ -170,13 +170,15 @@ TEST_CASE("Runtime - submit after shutdown throws") {
     Runtime rt(2);
     rt.submit(noop_async(), "noop").wait();
     rt.shutdown();
-    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"), std::runtime_error);
+    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"),
+                    dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("Runtime - submit after shutdown throws (void)") {
     Runtime rt(2);
     rt.shutdown();
-    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"), std::runtime_error);
+    CHECK_THROWS_AS(rt.submit(noop_async(), "fail"),
+                    dftracer::utils::common::DFTUtilsException);
 }
 
 TEST_CASE("Runtime - submit exception does not crash runtime") {

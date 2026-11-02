@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/yield.h>
 #include <dftracer/utils/utilities/fileio/chunk_writer.h>
 
@@ -19,8 +20,9 @@ ChunkWriter::~ChunkWriter() {
 }
 
 coro::CoroTask<void> ChunkWriter::open() {
-    if (!common::fs::exists(config_.output_dir)) {
-        common::fs::create_directories(config_.output_dir);
+    const dstd::PathView output_dir(config_.output_dir);
+    if (!common::unwrap(dstd::fs::exists(output_dir))) {
+        common::unwrap(dstd::fs::create_directories(output_dir));
     }
     GzipWriterOptions opts;
     opts.member_size = config_.member_size_bytes;

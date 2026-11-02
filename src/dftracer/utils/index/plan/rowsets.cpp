@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/plan/rowsets.h>
@@ -131,7 +132,8 @@ const RecordSchema& files_schema(const std::vector<RowSetFile>& files) {
         const auto& f = files[i];
         if (f.index.empty()) continue;
         auto [it, fresh] = snapshots.try_emplace(f.index);
-        if (fresh && common::fs::exists(store_of(f.index))) {
+        if (fresh && common::unwrap(
+                         dstd::fs::exists(dstd::PathView(store_of(f.index))))) {
             load_index_schemas(f.index);
             it->second.emplace(common::unwrap(open_snapshot(f.index)));
         }

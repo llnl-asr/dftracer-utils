@@ -2,8 +2,8 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 #define DFTRACER_UTILS_UTILITIES_FILEIO_TYPES_CHUNK_ITERATOR_H
 
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/path.h>
 
 #include <fstream>
 #include <iterator>
@@ -23,16 +23,16 @@ namespace dftracer::utils::utilities::fileio {
 class ChunkIterator {
    private:
     struct State {
-        common::fs::path path;
+        dstd::Path path;
         std::size_t chunk_size;
         std::ifstream file;
         std::vector<unsigned char> buffer;
         dstd::ByteView current_view;
         bool is_end = false;
 
-        State(common::fs::path p, std::size_t cs)
+        State(dstd::Path p, std::size_t cs)
             : path(std::move(p)), chunk_size(cs), buffer(cs) {
-            file.open(path, std::ios::binary);
+            file.open(path.c_str(), std::ios::binary);
             if (!file) {
                 is_end = true;
             } else {
@@ -65,7 +65,7 @@ class ChunkIterator {
 
     ChunkIterator() : state_(nullptr) {}
 
-    ChunkIterator(common::fs::path path, std::size_t chunk_size = 64 * 1024)
+    ChunkIterator(dstd::Path path, std::size_t chunk_size = 64 * 1024)
         : state_(std::make_shared<State>(std::move(path), chunk_size)) {
         if (state_->is_end) {
             state_ = nullptr;
@@ -94,7 +94,7 @@ class ChunkIterator {
     bool operator==(const ChunkIterator& other) const {
         if (!state_ && !other.state_) return true;
         if (!state_ || !other.state_) return false;
-        return state_->path == other.state_->path &&
+        return state_->path.str() == other.state_->path.str() &&
                state_->file.tellg() == other.state_->file.tellg();
     }
 
@@ -108,12 +108,12 @@ class ChunkIterator {
  */
 class ChunkRange {
    private:
-    common::fs::path path_;
+    dstd::Path path_;
     std::size_t chunk_size_;
 
    public:
     ChunkRange() : path_(), chunk_size_(64 * 1024) {}
-    ChunkRange(common::fs::path path, std::size_t chunk_size = 64 * 1024)
+    ChunkRange(dstd::Path path, std::size_t chunk_size = 64 * 1024)
         : path_(std::move(path)), chunk_size_(chunk_size) {}
 
     ChunkIterator begin() const { return ChunkIterator{path_, chunk_size_}; }

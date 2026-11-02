@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -46,7 +47,7 @@ IndexedFileReaderUtility::operator()(const IndexedReadInput& input) const {
             const std::string store =
                 dftracer::utils::index::store_of(normalized_index_path);
             dftracer::utils::index::release_root(normalized_index_path);
-            common::fs::remove_all(store);
+            common::unwrap(dstd::fs::remove_all(dstd::PathView(store)));
             common::forget_input(store);
         }
 

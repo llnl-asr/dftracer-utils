@@ -287,7 +287,7 @@ TEST_CASE("CoroScope - spawn_producer unwinds registration on spawn failure") {
     CHECK_THROWS_AS(
         scope->spawn_producer(
             channel, [](CoroScope&) -> coro::Generator<int> { co_yield 1; }),
-        std::runtime_error);
+        dftracer::utils::common::DFTUtilsException);
 
     CHECK(channel.num_producers() == 0);
     CHECK(channel.is_closed() == true);
@@ -305,7 +305,7 @@ TEST_CASE("CoroScope - spawn_transforms unwinds bulk registration on failure") {
                         [](CoroScope&, int value) -> coro::CoroTask<int> {
                             co_return value;
                         }),
-                    std::runtime_error);
+                    dftracer::utils::common::DFTUtilsException);
 
     CHECK(output.num_producers() == 0);
     CHECK(output.is_closed() == true);

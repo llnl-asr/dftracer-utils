@@ -3,8 +3,9 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_FILE_DECOMPRESSOR_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
@@ -125,14 +126,21 @@ class FileDecompressorUtility {
 
         try {
             // Validate input file exists
-            if (!common::fs::exists(input.input_path)) {
+            const auto found =
+                dstd::fs::exists(dstd::PathView(input.input_path));
+            if (!found) throw common::DFTUtilsException(found.error());
+            if (!*found) {
                 co_return common::make_error(
                     common::ErrorCode::NotFound,
                     "Input file does not exist: " + input.input_path);
             }
 
             // Get compressed file size
-            compressed_size = common::fs::file_size(input.input_path);
+            const auto compressed =
+                dstd::fs::file_size(dstd::PathView(input.input_path));
+            if (!compressed)
+                throw common::DFTUtilsException(compressed.error());
+            compressed_size = static_cast<std::size_t>(*compressed);
 
             ssize_t fd_result =
                 co_await io::open(input.input_path.c_str(), O_RDONLY);
@@ -150,7 +158,8 @@ class FileDecompressorUtility {
                     "Cannot stat file: " + input.input_path);
             }
 
-            fileio::StreamingFileWriterUtility writer(input.output_path);
+            fileio::StreamingFileWriterUtility writer(
+                dstd::PathView(input.output_path));
             auto gen = fileio::compress::decode_gzip_members(
                 fd.get(), static_cast<std::uint64_t>(st.st_size));
             for (;;) {
@@ -163,11 +172,16 @@ class FileDecompressorUtility {
             writer.close();
 
             // Get final decompressed size
-            decompressed_size = common::fs::file_size(input.output_path);
+            const auto decompressed =
+                dstd::fs::file_size(dstd::PathView(input.output_path));
+            if (!decompressed) {
+                throw common::DFTUtilsException(decompressed.error());
+            }
+            decompressed_size = static_cast<std::size_t>(*decompressed);
 
         } catch (const std::exception& e) {
             // Clean up partial output file on error
-            common::remove_file_quietly(input.output_path);
+            (void)dstd::fs::remove(dstd::PathView(input.output_path));
 
             co_return common::make_error(
                 common::ErrorCode::Compression,

@@ -278,7 +278,7 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
     if (!directory.empty()) {
         auto matched =
             binaries::scan_trace_files_on_pool(cli->pipeline, directory);
-        for (const auto& entry : matched) files.push_back(entry.path.string());
+        for (const auto& entry : matched) files.emplace_back(entry.path.str());
     } else {
         files = cli->files_args.value;
     }

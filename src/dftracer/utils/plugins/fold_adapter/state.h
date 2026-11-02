@@ -3,6 +3,8 @@
 #define DFTRACER_UTILS_PLUGINS_FOLD_ADAPTER_STATE_H
 
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/state_registry.h>
 
@@ -22,13 +24,13 @@ class SpillDir {
     SpillDir& operator=(const SpillDir&) = delete;
 
     /// The directory, created on first use; empty if it could not be created.
-    const std::string& path();
+    const dstd::Path& path();
     /// Charge `bytes` written to a file in the directory to the spill gauge.
     void charge(std::uint64_t bytes) noexcept;
 
    private:
     std::optional<dftracer::utils::common::ScopedSpillSubdir> dir_;
-    std::string empty_;
+    dstd::Path empty_;
 };
 
 /// One live instance of a plugin-registered dftu_state_desc: this slice's
@@ -64,7 +66,7 @@ class StateAccum {
     void maybe_spill();
     void adopt_runs(StateAccum& other);
     void drain_runs();
-    const std::string& dir_path();
+    const dstd::Path& dir_path();
 
     const RegisteredState* reg_;
     std::uint64_t budget_;
@@ -74,7 +76,7 @@ class StateAccum {
     // has adopted the runs inside it.
     std::shared_ptr<SpillDir> dir_;
     std::vector<std::shared_ptr<SpillDir>> adopted_dirs_;
-    std::vector<std::string> runs_;
+    dstd::Vector<dstd::Path> runs_;
 };
 
 }  // namespace dftracer::utils::plugins

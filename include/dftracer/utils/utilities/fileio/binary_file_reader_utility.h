@@ -3,8 +3,10 @@
 #define DFTRACER_UTILS_UTILITIES_FILEIO_BINARY_FILE_READER_UTILITY_H
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 
 #include <cstddef>
@@ -33,17 +35,20 @@ namespace dftracer::utils::utilities::fileio {
  * @endcode
  */
 inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
-    common::fs::path path, std::size_t chunk_size = 64 * 1024) {
-    if (!common::fs::exists(path)) {
+    dstd::Path path, std::size_t chunk_size = 64 * 1024) {
+    const auto found = dstd::fs::exists(path.view());
+    if (!found) throw common::DFTUtilsException(found.error());
+    if (!*found) {
         throw common::DFTUtilsException(
             common::ErrorCode::NotFound,
-            "File does not exist: " + path.string());
+            common::str_cat("File does not exist: ", path.str()));
     }
 
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(path.c_str(), std::ios::binary);
     if (!file) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "Cannot open file: " + path.string());
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            common::str_cat("Cannot open file: ", path.str()));
     }
 
     std::vector<unsigned char> buffer(chunk_size);
@@ -60,8 +65,9 @@ inline coro::AsyncGenerator<dstd::ByteView> read_binary_file(
     }
 
     if (file.bad()) {
-        throw common::DFTUtilsException(common::ErrorCode::Io,
-                                        "Error reading file: " + path.string());
+        throw common::DFTUtilsException(
+            common::ErrorCode::Io,
+            common::str_cat("Error reading file: ", path.str()));
     }
 }
 

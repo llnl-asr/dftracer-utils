@@ -176,7 +176,8 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("non_existent.gz")
                     .with_index("non_existent.gz.dftindex");
 
-            CHECK_THROWS_AS(reader_utility(input).get(), std::runtime_error);
+            CHECK_THROWS_AS(reader_utility(input).get(),
+                            dftracer::utils::common::DFTUtilsException);
         }
 
         SUBCASE("Invalid file path") {
@@ -185,7 +186,8 @@ TEST_SUITE("IndexedFileReader") {
                 IndexedReadInput::from_file("/invalid/path/file.gz")
                     .with_index("/invalid/path/.dftindex");
 
-            CHECK_THROWS_AS(reader_utility(input).get(), std::runtime_error);
+            CHECK_THROWS_AS(reader_utility(input).get(),
+                            dftracer::utils::common::DFTUtilsException);
         }
 
         SUBCASE("Empty file path") {
@@ -193,7 +195,8 @@ TEST_SUITE("IndexedFileReader") {
             IndexedReadInput input =
                 IndexedReadInput::from_file("").with_index(".dftindex");
 
-            CHECK_THROWS_AS(reader_utility(input).get(), std::runtime_error);
+            CHECK_THROWS_AS(reader_utility(input).get(),
+                            dftracer::utils::common::DFTUtilsException);
         }
     }
 

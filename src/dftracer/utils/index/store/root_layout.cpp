@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 
@@ -8,7 +8,7 @@ namespace dftracer::utils::index {
 namespace {
 
 std::string join(std::string_view base, std::string_view leaf) {
-    return (common::fs::path(std::string(base)) / std::string(leaf)).string();
+    return std::string((dstd::PathView(base) / leaf).str());
 }
 
 }  // namespace

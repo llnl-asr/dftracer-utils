@@ -2,7 +2,8 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -108,14 +109,15 @@ CoroTask<void> run_host_scan(CoroScope& scope, std::vector<std::string> inputs,
                              bool auto_index, PluginRun* out) {
     std::vector<std::string> files;
     for (const auto& p : inputs) {
-        std::error_code ec;
-        if (dftracer::utils::common::fs::is_directory(p, ec)) {
+        const auto is_dir = dftracer::utils::dstd::fs::is_directory(
+            dftracer::utils::dstd::PathView(p));
+        if (is_dir && *is_dir) {
             filesystem::PatternDirectoryScannerUtilityInput in(
                 p, filesystem::trace_file_patterns(), /*recursive=*/true,
                 /*populate_size=*/false);
             filesystem::PatternDirectoryScannerUtility scanner;
             auto entries = co_await scanner(scope, in);
-            for (auto& e : entries) files.push_back(e.path.string());
+            for (auto& e : entries) files.emplace_back(e.path.str());
         } else {
             files.push_back(p);
         }

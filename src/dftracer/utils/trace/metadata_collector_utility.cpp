@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -180,7 +180,8 @@ MetadataCollectorUtility::process_compressed(
                         dftracer::utils::index::release_root(input.index_path);
                         const std::string store =
                             dftracer::utils::index::store_of(input.index_path);
-                        common::fs::remove_all(store);
+                        common::unwrap(
+                            dstd::fs::remove_all(dstd::PathView(store)));
                         common::forget_input(store);
                     }
                     DFTRACER_UTILS_LOG_DEBUG("Building index for: %s",

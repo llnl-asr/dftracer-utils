@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/dataframe/containment.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/json/parser.h>
@@ -585,16 +586,24 @@ std::vector<std::string> glob_trace_files(const std::string& dir,
     if (auto star = suffix.find('*'); star != std::string::npos)
         suffix = suffix.substr(star + 1);
     std::vector<std::string> out;
-    std::error_code ec;
-    common::fs::recursive_directory_iterator it(dir, ec), end;
-    for (; !ec && it != end; it.increment(ec)) {
-        if (!it->is_regular_file()) continue;
-        const std::string s = it->path().string();
+    // An unreadable directory ends the walk with the files found so far.
+    (void)dstd::fs::walk(dstd::PathView(dir), [&](dstd::PathView path,
+                                                  dstd::fs::FileKind kind) {
+        if (kind == dstd::fs::FileKind::Symlink) {
+            const auto target = dstd::fs::stat(path);
+            if (!target || target->kind != dstd::fs::FileKind::File) {
+                return dstd::fs::WalkAction::Continue;
+            }
+        } else if (kind != dstd::fs::FileKind::File) {
+            return dstd::fs::WalkAction::Continue;
+        }
+        const dstd::StringView s = path.str();
         if (suffix.empty() ||
             (s.size() >= suffix.size() &&
              s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0))
-            out.push_back(s);
-    }
+            out.emplace_back(s);
+        return dstd::fs::WalkAction::Continue;
+    });
     std::sort(out.begin(), out.end());
     return out;
 }

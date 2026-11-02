@@ -43,17 +43,17 @@ TEST_CASE("list_mounts reports the root mount") {
     REQUIRE_FALSE(mounts.empty());
     bool has_root = false;
     for (const auto& m : mounts)
-        if (m.mountpoint == "/") has_root = true;
+        if (m.mountpoint.str() == "/") has_root = true;
     CHECK(has_root);
 }
 
 TEST_CASE("find_mountpoint returns a mounted ancestor") {
-    const std::string mp = common::find_mountpoint("/tmp/a/b/c/deep/path");
+    const std::string mp(common::find_mountpoint("/tmp/a/b/c/deep/path").str());
     REQUIRE_FALSE(mp.empty());
     // The result must be a prefix of the queried path and a real directory.
     CHECK(common::fs::exists(mp));
     // A mount root maps to itself.
-    CHECK(common::find_mountpoint("/") == "/");
+    CHECK(common::find_mountpoint("/").str() == "/");
 }
 
 TEST_CASE("ScratchSession creates and cleans up its directory") {
@@ -61,7 +61,7 @@ TEST_CASE("ScratchSession creates and cleans up its directory") {
     {
         common::ScratchSession s;
         REQUIRE(s.valid());  // /tmp forced above
-        dir = s.dir();
+        dir = std::string(s.dir().str());
         CHECK(common::fs::exists(dir));
         CHECK(common::fs::is_directory(dir));
     }
@@ -73,7 +73,7 @@ TEST_CASE("ScratchSession release keeps the directory") {
     {
         common::ScratchSession s;
         REQUIRE(s.valid());
-        dir = s.dir();
+        dir = std::string(s.dir().str());
         s.release();
     }
     CHECK(common::fs::exists(dir));
@@ -84,14 +84,15 @@ TEST_CASE("ScratchSession release keeps the directory") {
 TEST_CASE("publish_path moves a built directory to its destination") {
     common::ScratchSession s;
     REQUIRE(s.valid());
-    const std::string src = s.dir() + "/build";
+    const std::string src = std::string(s.dir().str()) + "/build";
     common::fs::create_directories(src);
     {
         std::ofstream(src + "/marker.txt") << "hello";
     }
 
-    const std::string dst = s.dir() + "/published";
-    common::publish_path(src, dst);
+    const std::string dst = std::string(s.dir().str()) + "/published";
+    common::publish_path(dftracer::utils::dstd::PathView(src),
+                         dftracer::utils::dstd::PathView(dst));
 
     CHECK_FALSE(common::fs::exists(src));
     CHECK(common::fs::exists(dst + "/marker.txt"));

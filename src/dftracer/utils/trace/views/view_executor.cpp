@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
@@ -11,6 +10,7 @@
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -1011,10 +1011,10 @@ coro::CoroTask<ExportStats> run_materialize(const ViewPlan& plan,
             co_return ExportStats{};
         constexpr std::uint64_t DEFAULT_PART_SIZE = 128ull * 1024 * 1024;
         TraceWriteOptions opts;
-        opts.output_path =
-            (common::fs::path(dftracer::utils::index::view_parts_dir(dir)) /
+        opts.output_path = std::string(
+            (dstd::PathView(dftracer::utils::index::view_parts_dir(dir)) /
              "part.pfw.gz")
-                .string();
+                .str());
         opts.index_path = dir;
         opts.build_index = true;
         opts.compress = true;

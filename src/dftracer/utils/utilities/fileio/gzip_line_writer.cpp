@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/async_mutex.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
@@ -492,8 +493,8 @@ struct GzipLineWriter::Impl {
             cleaned = true;
             if (writer) co_await writer->close();
             writer.reset();
-            std::error_code ec;
-            for (auto& p : created) common::fs::remove(p, ec);
+            // Cleanup of a failed write, so a file already gone is fine.
+            for (auto& p : created) (void)dstd::fs::remove(dstd::PathView(p));
         }
         co_return get_error();
     }

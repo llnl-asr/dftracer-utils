@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -178,7 +179,7 @@ static void print_summary(double seconds, std::size_t indexed,
 }
 
 static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
-    const auto log_dir = common::fs::absolute(cli->directory.value).string();
+    const auto log_dir = binaries::absolute_path(cli->directory.value);
     const auto& dimensions_str = cli->dimensions;
     const auto force_rebuild = cli->indexing.force;
     const auto checkpoint_size = cli->indexing.checkpoint_size;
@@ -313,7 +314,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
     input_files.reserve(matched_entries.size());
     scanned_sizes.reserve(matched_entries.size());
     for (const auto& entry : matched_entries) {
-        input_files.push_back(entry.path.string());
+        input_files.emplace_back(entry.path.str());
         scanned_sizes.push_back(entry.size);
     }
 
@@ -353,7 +354,8 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     const std::string agg_index =
         trace::internal::determine_index_path(input_files.front(), index_dir);
-    if (force_rebuild && common::fs::exists(agg_index))
+    if (force_rebuild &&
+        common::unwrap(dstd::fs::exists(dstd::PathView(agg_index))))
         stale_tiers.insert(agg_index);
     for (const auto& root : stale_tiers) clear_aggregation(root);
 

@@ -63,7 +63,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 
         CHECK(result.size() == 2);
         for (const auto& entry : result) {
-            CHECK(entry.path.extension() == ".txt");
+            CHECK(entry.path.view().extension() == ".txt");
         }
     }
 
@@ -79,7 +79,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Basic Operations") {
 
         CHECK(result.size() == 3);
         for (const auto& entry : result) {
-            std::string ext = entry.path.extension().string();
+            std::string ext(entry.path.view().extension());
             CHECK((ext == ".txt" || ext == ".dat"));
         }
     }
@@ -99,7 +99,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
-        CHECK(result[0].path.filename() == "document.pdf");
+        CHECK(result[0].path.view().filename() == "document.pdf");
     }
 
     SUBCASE("Compound extension pattern") {
@@ -114,7 +114,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
 
         CHECK(result.size() == 2);
         for (const auto& entry : result) {
-            std::string filename = entry.path.filename().string();
+            std::string filename(entry.path.view().filename());
             CHECK((filename == "archive.tar.gz" || filename == "data.pfw.gz"));
         }
     }
@@ -130,7 +130,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
 
         CHECK(result.size() == 2);
         for (const auto& entry : result) {
-            CHECK(entry.path.extension() == ".txt");
+            CHECK(entry.path.view().extension() == ".txt");
         }
     }
 
@@ -144,7 +144,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Pattern Matching") {
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
-        CHECK(result[0].path.filename() == "README.md");
+        CHECK(result[0].path.view().filename() == "README.md");
     }
 
     SUBCASE("No matches") {
@@ -189,7 +189,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
 
         CHECK(result.size() == 3);
         for (const auto& entry : result) {
-            CHECK(entry.path.extension() == ".txt");
+            CHECK(entry.path.view().extension() == ".txt");
         }
     }
 
@@ -224,7 +224,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Recursive Scanning") {
 
         CHECK(result.size() == 3);
         for (const auto& entry : result) {
-            CHECK(entry.path.extension() == ".pfw");
+            CHECK(entry.path.view().extension() == ".pfw");
         }
     }
 }
@@ -273,7 +273,7 @@ TEST_CASE(
     SUBCASE("Builder pattern - from_path") {
         auto input =
             PatternDirectoryScannerUtilityInput::from_path(fixture.str());
-        CHECK(input.path == fixture.str());
+        CHECK(input.path.str() == fixture.str());
         CHECK(input.patterns.empty());
         CHECK(input.recursive == false);
     }
@@ -302,7 +302,7 @@ TEST_CASE(
                 .with_patterns({".pfw", ".pfw.gz"})
                 .with_recursive(true);
 
-        CHECK(input.path == fixture.str());
+        CHECK(input.path.str() == fixture.str());
         CHECK(input.patterns.size() == 2);
         CHECK(input.recursive == true);
     }
@@ -311,7 +311,7 @@ TEST_CASE(
         PatternDirectoryScannerUtilityInput input{
             fixture.str(), {".txt", ".dat"}, true};
 
-        CHECK(input.path == fixture.str());
+        CHECK(input.path.str() == fixture.str());
         CHECK(input.patterns.size() == 2);
         CHECK(input.recursive == true);
     }
@@ -360,7 +360,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         // At least one .txt or .TXT file should be matched
         bool found_txt = false;
         for (const auto& entry : result) {
-            std::string ext = entry.path.extension().string();
+            std::string ext(entry.path.view().extension());
             if (ext == ".txt" || ext == ".TXT") {
                 found_txt = true;
             }
@@ -377,7 +377,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
-        CHECK(result[0].path.filename() == "file.v1.0.txt");
+        CHECK(result[0].path.view().filename() == "file.v1.0.txt");
     }
 
     SUBCASE("Files with similar extensions") {
@@ -390,7 +390,7 @@ TEST_CASE("PatternDirectoryScannerUtility - Edge Cases") {
         auto result = run_scan(*scanner, input);
 
         CHECK(result.size() == 1);
-        CHECK(result[0].path.extension() == ".txt");
+        CHECK(result[0].path.view().extension() == ".txt");
     }
 
     SUBCASE("Large number of patterns") {

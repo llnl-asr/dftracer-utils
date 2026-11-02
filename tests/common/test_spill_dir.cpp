@@ -68,7 +68,7 @@ TEST_CASE("a set variable is the spill directory and is created") {
     EnvGuard env(want.c_str());
     auto dir = dftracer::utils::common::spill_dir();
     REQUIRE(dir.has_value());
-    CHECK(*dir == want);
+    CHECK(dir->str() == want);
     CHECK(dftracer::utils::common::fs::is_directory(want));
 }
 
@@ -87,11 +87,11 @@ TEST_CASE("an unset variable gives a writable directory that is not RAM") {
     EnvGuard env(nullptr);
     auto dir = dftracer::utils::common::spill_dir();
     REQUIRE(dir.has_value());
-    CHECK(dftracer::utils::common::fs::is_directory(*dir));
+    CHECK(dftracer::utils::common::fs::is_directory(dir->c_str()));
     CHECK_FALSE(dftracer::utils::common::is_memory_filesystem(
         dftracer::utils::common::filesystem_kind(*dir)));
     const dftracer::utils::common::fs::path probe =
-        dftracer::utils::common::fs::path(*dir) / "dftu_probe";
+        dftracer::utils::common::fs::path(dir->c_str()) / "dftu_probe";
     std::ofstream out(probe);
     CHECK(out.good());
     out.close();
@@ -104,9 +104,11 @@ TEST_CASE("without a variable or a local disk the first usable fallback wins") {
     std::ofstream(file) << "x";
     const std::string good = (d.path() / "cache" / "spill").string();
     auto dir = dftracer::utils::common::detail::choose_spill_dir(
-        "", "", {(file / "sub").string(), good});
+        "", {},
+        {dftracer::utils::dstd::Path((file / "sub").string()),
+         dftracer::utils::dstd::Path(good)});
     REQUIRE(dir.has_value());
-    CHECK(*dir == good);
+    CHECK(dir->str() == good);
     CHECK(dftracer::utils::common::fs::is_directory(good));
 }
 
@@ -119,12 +121,13 @@ TEST_CASE("a RAM-backed fallback is never the spill directory") {
     DiskDir d("spill_dir_ram");
     const std::string disk = (d.path() / "spill").string();
     const std::string ram = "/dev/shm/dftu_spill_dir_test";
-    auto dir =
-        dftracer::utils::common::detail::choose_spill_dir("", "", {ram, disk});
+    auto dir = dftracer::utils::common::detail::choose_spill_dir(
+        "", {},
+        {dftracer::utils::dstd::Path(ram), dftracer::utils::dstd::Path(disk)});
     REQUIRE(dir.has_value());
-    CHECK(*dir == disk);
-    auto none =
-        dftracer::utils::common::detail::choose_spill_dir("", "", {ram});
+    CHECK(dir->str() == disk);
+    auto none = dftracer::utils::common::detail::choose_spill_dir(
+        "", {}, {dftracer::utils::dstd::Path(ram)});
     REQUIRE_FALSE(none.has_value());
     CHECK(none.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           std::string::npos);
@@ -136,7 +139,7 @@ TEST_CASE("no usable spill directory is an error naming the variable") {
     const dftracer::utils::common::fs::path file = d.path() / "file";
     std::ofstream(file) << "x";
     auto dir = dftracer::utils::common::detail::choose_spill_dir(
-        "", "", {(file / "sub").string()});
+        "", {}, {dftracer::utils::dstd::Path((file / "sub").string())});
     REQUIRE_FALSE(dir.has_value());
     CHECK(dir.error().message().find("DFTRACER_UTILS_SPILL_DIR") !=
           std::string::npos);
@@ -184,7 +187,7 @@ TEST_CASE("a spill dir on tmpfs warns once") {
     {
         EnvGuard env(ram.c_str());
         REQUIRE(dftracer::utils::common::spill_dir().has_value());
-        CHECK(dftracer::utils::common::spill_dir_in_memory(ram));
+        CHECK(dftracer::utils::common::spill_dir_in_memory(ram.c_str()));
         REQUIRE(dftracer::utils::common::spill_dir().has_value());
         auto file = dftracer::utils::common::SpillFile::create();
         REQUIRE(file.has_value());

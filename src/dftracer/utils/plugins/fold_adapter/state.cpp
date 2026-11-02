@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/fold_adapter/state.h>
@@ -9,12 +11,10 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <string>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -26,15 +26,13 @@
 namespace dftracer::utils::plugins {
 namespace {
 
-namespace fs = std::filesystem;
-
 const char* err_text(const ::dftu_error& e) {
     return e.message ? e.message : "(no message)";
 }
 
 }  // namespace
 
-const std::string& SpillDir::path() {
+const dstd::Path& SpillDir::path() {
     if (!dir_) {
         auto made =
             dftracer::utils::common::ScopedSpillSubdir::create("dftu_state");
@@ -52,7 +50,7 @@ void SpillDir::charge(std::uint64_t bytes) noexcept {
     if (dir_) dir_->charge().add(bytes);
 }
 
-const std::string& StateAccum::dir_path() {
+const dstd::Path& StateAccum::dir_path() {
     if (!dir_) dir_ = std::make_shared<SpillDir>();
     return dir_->path();
 }
@@ -109,12 +107,12 @@ void StateAccum::maybe_spill() {
         return;
     }
 
-    const std::string dir = dir_path();
+    const dstd::Path& dir = dir_path();
     bool written = false;
     if (!dir.empty()) {
-        const std::string path =
-            dir + "/run_" + std::to_string(runs_.size()) + ".bin";
-        std::ofstream os(path, std::ios::binary | std::ios::trunc);
+        const dstd::Path path =
+            dir.view() / ("run_" + std::to_string(runs_.size()) + ".bin");
+        std::ofstream os(path.c_str(), std::ios::binary | std::ios::trunc);
         os.write(static_cast<const char*>(out.data),
                  static_cast<std::streamsize>(out.len));
         os.close();
@@ -156,22 +154,21 @@ void StateAccum::adopt_runs(StateAccum& other) {
     // them over along with the in-memory half; the worker's temp directory has
     // to outlive the worker, hence the shared handle.
     if (other.dir_) adopted_dirs_.push_back(other.dir_);
-    for (std::string& r : other.runs_) runs_.push_back(std::move(r));
+    for (dstd::Path& r : other.runs_) runs_.push_back(std::move(r));
     other.runs_.clear();
 }
 
 void StateAccum::drain_runs() {
     if (!state_ || runs_.empty() || !reg_->desc.deserialize) return;
-    for (const std::string& path : runs_) {
-        std::ifstream is(path, std::ios::binary);
-        std::string buf((std::istreambuf_iterator<char>(is)),
-                        std::istreambuf_iterator<char>());
-        if (!is && !is.eof()) {
+    for (const dstd::Path& path : runs_) {
+        const auto read = dstd::fs::read_file(path.view());
+        if (!read) {
             DFTRACER_UTILS_LOG_ERROR(
                 "Plugin state '%s' could not read run '%s'", reg_->name.c_str(),
                 path.c_str());
             continue;
         }
+        const dstd::String& buf = *read;
         ::dftu_bytes in{buf.data(), static_cast<std::uint64_t>(buf.size()),
                         nullptr, nullptr};
         ::dftu_error err{};

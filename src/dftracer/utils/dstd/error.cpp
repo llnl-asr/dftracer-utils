@@ -61,6 +61,11 @@ std::string_view Error::message() const noexcept {
     return {reinterpret_cast<const char*>(context_ + 1), context_->length};
 }
 
+const char* Error::c_str() const noexcept {
+    if (context_ == nullptr) return "";
+    return reinterpret_cast<const char*>(context_ + 1);
+}
+
 String Error::format() const {
     const std::string_view domain_name = domain().name;
     const std::string_view condition_text = condition_name(condition());
@@ -85,9 +90,9 @@ String Error::format() const {
 
 Error::Context* Error::make_context(std::string_view message) noexcept {
     if (message.size() >
-        std::numeric_limits<std::size_t>::max() - sizeof(Context))
+        std::numeric_limits<std::size_t>::max() - sizeof(Context) - 1)
         return nullptr;
-    const std::size_t size = sizeof(Context) + message.size();
+    const std::size_t size = sizeof(Context) + message.size() + 1;
     void* block = memory::try_allocate(size, alignof(Context));
     if (block == nullptr) return nullptr;
     auto* context = ::new (block) Context;
@@ -95,6 +100,7 @@ Error::Context* Error::make_context(std::string_view message) noexcept {
     context->length = message.size();
     std::memcpy(reinterpret_cast<char*>(block) + sizeof(Context),
                 message.data(), message.size());
+    reinterpret_cast<char*>(block)[sizeof(Context) + message.size()] = '\0';
     return context;
 }
 
@@ -105,7 +111,7 @@ void Error::retain_context(Context* context) noexcept {
 void Error::release_context(Context* context) noexcept {
     if (context == nullptr) return;
     if (context->refs.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        memory::deallocate(context, sizeof(Context) + context->length);
+        memory::deallocate(context, sizeof(Context) + context->length + 1);
 }
 
 }  // namespace dftracer::utils::dstd

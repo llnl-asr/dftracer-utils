@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/index.h>
@@ -91,7 +92,7 @@ ShardedView ShardedView::from_manifest(const std::string& root) {
     dirs.reserve(manifest->shards.size());
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
-        dirs.push_back((common::fs::path(root) / shard.path).string());
+        dirs.push_back(std::string((dstd::PathView(root) / shard.path).str()));
     }
     return ShardedView(std::move(dirs));
 }
@@ -159,9 +160,11 @@ void write_shard_set(const std::string& root,
         entry.num_files =
             static_cast<std::uint64_t>(common::unwrap(snapshot.files()).size());
 
-        const std::string rel =
-            common::fs::path(dir).lexically_relative(root).string();
-        entry.path = (rel.empty() || rel.rfind("..", 0) == 0) ? dir : rel;
+        const dstd::Path rel =
+            dstd::relative(dstd::PathView(dir), dstd::PathView(root));
+        entry.path = (rel.empty() || rel.str().rfind("..", 0) == 0)
+                         ? dir
+                         : std::string(rel.str());
         manifest.shards.push_back(std::move(entry));
     }
     dftracer::utils::index::store::write_shard_manifest(root, manifest);
@@ -181,7 +184,8 @@ std::size_t consolidate_shard_set(const std::string& root) {
     std::size_t files = 0;
     for (const auto& shard : manifest->shards) {
         if (shard.empty()) continue;
-        shard_roots.push_back((common::fs::path(root) / shard.path).string());
+        shard_roots.push_back(
+            std::string((dstd::PathView(root) / shard.path).str()));
         files += shard.num_files;
     }
 
@@ -196,11 +200,13 @@ std::size_t consolidate_shard_set(const std::string& root) {
     }
     dftracer::utils::index::release_root(root);
 
-    std::error_code ec;
-    common::fs::remove(dftracer::utils::index::shard_manifest_path(root), ec);
+    // Cleanup after the merge, so a failed removal leaves only stray files.
+    (void)dstd::fs::remove(
+        dstd::PathView(dftracer::utils::index::shard_manifest_path(root)));
     for (const auto& shard : manifest->shards)
-        common::fs::remove_all(common::fs::path(root) / shard.path, ec);
-    common::fs::remove(dftracer::utils::index::shards_dir(root), ec);
+        (void)dstd::fs::remove_all((dstd::PathView(root) / shard.path).view());
+    (void)dstd::fs::remove(
+        dstd::PathView(dftracer::utils::index::shards_dir(root)));
     return files;
 }
 
@@ -289,8 +295,8 @@ std::size_t merge_shard_set(const std::string& root,
 
             for (const auto& shard : manifest->shards) {
                 if (shard.empty()) continue;
-                const std::string idx =
-                    (common::fs::path(root) / shard.path).string();
+                const std::string idx(
+                    (dstd::PathView(root) / shard.path).str());
                 auto snapshot = common::unwrap(idx::plan::open_snapshot(idx));
                 agg::AggInternTable shard_intern;
                 common::unwrap(idx::agg_dictionary(snapshot, shard_intern));

@@ -3,7 +3,8 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/arrow/array_view.h>
 #include <dftracer/utils/utilities/arrow/column_builder.h>
 #include <dftracer/utils/utilities/arrow/partition_router.h>
@@ -199,9 +200,7 @@ int PartitionRouter::open(const std::string& output_dir,
                           IpcCompression compression) {
     if (is_open_) return -1;
 
-    std::error_code ec;
-    common::fs::create_directories(output_dir, ec);
-    if (ec) return -1;
+    if (!dstd::fs::create_directories(dstd::PathView(output_dir))) return -1;
 
     output_dir_ = output_dir;
     config_ = config;
@@ -219,7 +218,7 @@ std::string PartitionRouter::partition_path(
     if (partition_key.empty()) {
         return output_dir_;
     }
-    return (common::fs::path(output_dir_) / partition_key).string();
+    return std::string((dstd::PathView(output_dir_) / partition_key).str());
 }
 
 coro::CoroTask<PartitionWriter*> PartitionRouter::get_or_create_writer(

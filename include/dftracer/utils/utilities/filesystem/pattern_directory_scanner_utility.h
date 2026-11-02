@@ -2,6 +2,7 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
@@ -33,24 +34,24 @@ inline bool is_trace_file(std::string_view path) {
  * @brief Input for pattern-based directory scanning.
  */
 struct PatternDirectoryScannerUtilityInput {
-    std::string path;
+    dstd::Path path;
     bool recursive = false;
     bool populate_size = true;
     std::vector<std::string> patterns;  ///< e.g., {".pfw", ".pfw.gz", "*.txt"}
 
     PatternDirectoryScannerUtilityInput() = default;
 
-    PatternDirectoryScannerUtilityInput(std::string p,
+    PatternDirectoryScannerUtilityInput(dstd::StringView p,
                                         std::vector<std::string> pats,
                                         bool rec = false, bool with_size = true)
-        : path(std::move(p)),
+        : path(p),
           recursive(rec),
           populate_size(with_size),
           patterns(std::move(pats)) {}
 
-    static PatternDirectoryScannerUtilityInput from_path(std::string p) {
+    static PatternDirectoryScannerUtilityInput from_path(dstd::StringView p) {
         PatternDirectoryScannerUtilityInput input;
-        input.path = std::move(p);
+        input.path = dstd::Path(p);
         return input;
     }
 
@@ -95,8 +96,8 @@ class PatternDirectoryScannerUtility {
     coro::CoroTask<std::vector<FileEntry>> operator()(
         CoroScope& ctx,
         const PatternDirectoryScannerUtilityInput& input) const {
-        DirectoryScannerUtilityInput dir_input{input.path, input.recursive,
-                                               input.populate_size};
+        DirectoryScannerUtilityInput dir_input{
+            input.path.str(), input.recursive, input.populate_size};
         std::vector<FileEntry> all_entries =
             co_await base_scanner_(ctx, dir_input);
 
@@ -107,10 +108,8 @@ class PatternDirectoryScannerUtility {
             // Only consider regular files
             if (!entry.is_regular_file) continue;
 
-            std::string path = entry.path.string();
-
             // Check if file matches any pattern
-            if (matches_any_pattern(path, input.patterns)) {
+            if (matches_any_pattern(entry.path.str(), input.patterns)) {
                 matched_entries.push_back(entry);
             }
         }
@@ -130,7 +129,7 @@ class PatternDirectoryScannerUtility {
     /**
      * @brief Check if a path matches any of the given patterns.
      */
-    bool matches_any_pattern(const std::string& path,
+    bool matches_any_pattern(dstd::StringView path,
                              const std::vector<std::string>& patterns) const {
         if (patterns.empty()) {
             return true;  // No patterns = match everything
@@ -153,7 +152,7 @@ class PatternDirectoryScannerUtility {
      * - Suffix matching: ".pfw.gz" matches "file.pfw.gz"
      * - Prefix glob: "*.txt" matches any file ending with ".txt"
      */
-    bool matches_pattern(const std::string& path,
+    bool matches_pattern(dstd::StringView path,
                          const std::string& pattern) const {
         if (pattern.empty()) {
             return true;
@@ -161,8 +160,7 @@ class PatternDirectoryScannerUtility {
 
         // Simple glob: "*.ext" -> matches any file ending with ".ext"
         if (pattern.size() > 2 && pattern[0] == '*' && pattern[1] == '.') {
-            std::string extension = pattern.substr(1);  // Remove '*'
-            return ends_with(path, extension);
+            return ends_with(path, dstd::StringView(pattern).substr(1));
         }
 
         // Direct extension/suffix match
@@ -171,14 +169,13 @@ class PatternDirectoryScannerUtility {
         }
 
         // Exact filename match
-        common::fs::path p(path);
-        return p.filename().string() == pattern;
+        return dstd::PathView(path).filename() == pattern;
     }
 
     /**
      * @brief Check if string ends with suffix.
      */
-    bool ends_with(const std::string& str, const std::string& suffix) const {
+    bool ends_with(dstd::StringView str, dstd::StringView suffix) const {
         if (suffix.size() > str.size()) {
             return false;
         }

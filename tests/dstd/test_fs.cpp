@@ -4,7 +4,10 @@
 #include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <testing_utilities.h>
 #include <unistd.h>
 
@@ -593,4 +596,207 @@ TEST_CASE("walk and remove_all hold one descriptor per level") {
     REQUIRE(removed.has_value());
     CHECK(*removed == 201);
     CHECK(::access(dir.file("root").c_str(), F_OK) != 0);
+}
+
+TEST_CASE("is_directory and is_regular_file are false for a missing entry") {
+    ScopedTestDir dir("dstd_fs_kinds");
+    dir.create_file("a.txt", "x");
+    dir.create_dir("sub");
+    REQUIRE(::symlink("sub", dir.file("dlink").c_str()) == 0);
+    REQUIRE(::symlink("a.txt", dir.file("flink").c_str()) == 0);
+
+    CHECK(dfs::is_directory(in(dir, "sub").view()).value());
+    CHECK_FALSE(dfs::is_directory(in(dir, "a.txt").view()).value());
+    CHECK(dfs::is_directory(in(dir, "dlink").view()).value());
+    CHECK_FALSE(dfs::is_directory(in(dir, "nope").view()).value());
+    CHECK_FALSE(dfs::is_directory(in(dir, "a.txt/x").view()).value());
+
+    CHECK(dfs::is_regular_file(in(dir, "a.txt").view()).value());
+    CHECK(dfs::is_regular_file(in(dir, "flink").view()).value());
+    CHECK_FALSE(dfs::is_regular_file(in(dir, "sub").view()).value());
+    CHECK_FALSE(dfs::is_regular_file(in(dir, "nope").view()).value());
+
+    if (!running_as_root()) {
+        dir.create_dir("locked");
+        dir.create_file("locked/inner", "x");
+        REQUIRE(::chmod(dir.file("locked").c_str(), 0) == 0);
+        const auto denied = dfs::is_directory(in(dir, "locked/inner").view());
+        ::chmod(dir.file("locked").c_str(), 0700);
+        REQUIRE_FALSE(denied.has_value());
+        CHECK(denied.error().is(dstd::Condition::Io));
+    }
+}
+
+TEST_CASE(
+    "weakly_canonical resolves the existing prefix and appends the rest") {
+    ScopedTestDir dir("dstd_fs_weak");
+    dir.create_dir("real");
+    REQUIRE(::symlink("real", dir.file("link").c_str()) == 0);
+    const std::string base = std::filesystem::canonical(dir.str()).string();
+
+    const auto existing = dfs::weakly_canonical(in(dir, "link").view());
+    REQUIRE(existing.has_value());
+    CHECK(existing->str() == base + "/real");
+
+    const auto partial = dfs::weakly_canonical(in(dir, "link/a/b").view());
+    REQUIRE(partial.has_value());
+    CHECK(partial->str() == base + "/real/a/b");
+
+    const auto dotdot = dfs::weakly_canonical(in(dir, "link/a/../b").view());
+    REQUIRE(dotdot.has_value());
+    CHECK(dotdot->str() == base + "/real/b");
+
+    const auto trailing = dfs::weakly_canonical(in(dir, "link/a/").view());
+    REQUIRE(trailing.has_value());
+    CHECK(trailing->str() == base + "/real/a");
+
+    const auto relative = dfs::weakly_canonical(PathView("no_such_dir/x"));
+    REQUIRE(relative.has_value());
+    CHECK(relative->str() ==
+          std::filesystem::canonical(".").string() + "/no_such_dir/x");
+
+    const auto empty = dfs::weakly_canonical(PathView());
+    REQUIRE(empty.has_value());
+    CHECK(empty->empty());
+}
+
+TEST_CASE("copy_tree copies files, directories and symlinks") {
+    ScopedTestDir dir("dstd_fs_copy_tree");
+    dir.create_dir("src");
+    dir.create_dir("src/sub");
+    dir.create_file("src/a.txt", "alpha");
+    dir.create_file("src/sub/b.txt", "beta");
+    REQUIRE(::symlink("a.txt", dir.file("src/ln").c_str()) == 0);
+
+    REQUIRE(dfs::copy_tree(in(dir, "src").view(), in(dir, "dst").view(),
+                           dfs::CopyMode::FailIfExists)
+                .has_value());
+    CHECK(read_text(in(dir, "dst/a.txt")) == "alpha");
+    CHECK(read_text(in(dir, "dst/sub/b.txt")) == "beta");
+    const auto link = dfs::lstat(in(dir, "dst/ln").view());
+    REQUIRE(link.has_value());
+    CHECK(link->kind == dfs::FileKind::Symlink);
+    char target[64] = {};
+    const auto got = ::readlink(dir.file("dst/ln").c_str(), target, 63);
+    REQUIRE(got > 0);
+    CHECK(std::string(target, static_cast<std::size_t>(got)) == "a.txt");
+
+    const auto again =
+        dfs::copy_tree(in(dir, "src").view(), in(dir, "dst").view(),
+                       dfs::CopyMode::FailIfExists);
+    CHECK_FALSE(again.has_value());
+
+    dir.create_file("src/a.txt", "changed");
+    REQUIRE(dfs::copy_tree(in(dir, "src").view(), in(dir, "dst").view(),
+                           dfs::CopyMode::Overwrite)
+                .has_value());
+    CHECK(read_text(in(dir, "dst/a.txt")) == "changed");
+    CHECK(read_text(in(dir, "dst/sub/b.txt")) == "beta");
+
+    REQUIRE(dfs::copy_tree(in(dir, "src/a.txt").view(),
+                           in(dir, "single").view(),
+                           dfs::CopyMode::FailIfExists)
+                .has_value());
+    CHECK(read_text(in(dir, "single")) == "changed");
+
+    const auto missing =
+        dfs::copy_tree(in(dir, "nope").view(), in(dir, "out").view(),
+                       dfs::CopyMode::FailIfExists);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+}
+
+TEST_CASE("read_file returns the whole file") {
+    ScopedTestDir dir("dstd_fs_read_file");
+    dir.create_file("a.txt", "hello\nworld\n");
+    dir.create_file("empty.txt", "");
+    std::string big(200000, 'x');
+    dir.create_file("big.txt", big);
+
+    const auto text = dfs::read_file(in(dir, "a.txt").view());
+    REQUIRE(text.has_value());
+    CHECK(*text == "hello\nworld\n");
+
+    const auto empty = dfs::read_file(in(dir, "empty.txt").view());
+    REQUIRE(empty.has_value());
+    CHECK(empty->empty());
+
+    const auto large = dfs::read_file(in(dir, "big.txt").view());
+    REQUIRE(large.has_value());
+    CHECK(large->size() == big.size());
+
+    const auto missing = dfs::read_file(in(dir, "nope").view());
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+
+    const auto directory = dfs::read_file(in(dir, ".").view());
+    CHECK_FALSE(directory.has_value());
+}
+
+TEST_CASE("absolute only joins the current directory") {
+    char cwd[4096];
+    REQUIRE(::getcwd(cwd, sizeof cwd) != nullptr);
+    const std::string base(cwd);
+
+    const auto dotted = dfs::absolute(PathView("a/../b"));
+    REQUIRE(dotted.has_value());
+    CHECK(dotted->str() == base + "/a/../b");
+
+    const auto trailing = dfs::absolute(PathView("x/"));
+    REQUIRE(trailing.has_value());
+    CHECK(trailing->str() == base + "/x/");
+
+    const auto kept = dfs::absolute(PathView("/p/./q/../r"));
+    REQUIRE(kept.has_value());
+    CHECK(kept->str() == "/p/./q/../r");
+}
+
+TEST_CASE("weakly_canonical ends when the current directory is gone") {
+    const pid_t child = ::fork();
+    REQUIRE(child >= 0);
+    if (child == 0) {
+        char templ[] = "/tmp/dstd_fs_gone_XXXXXX";
+        if (::mkdtemp(templ) == nullptr) ::_exit(2);
+        if (::chdir(templ) != 0) ::_exit(3);
+        if (::rmdir(templ) != 0) ::_exit(4);
+        const auto result = dfs::weakly_canonical(PathView("x/y"));
+        ::_exit(result.has_value() ? 5 : 0);
+    }
+    int status = 0;
+    bool done = false;
+    for (int waited = 0; waited < 50; ++waited) {
+        if (::waitpid(child, &status, WNOHANG) == child) {
+            done = true;
+            break;
+        }
+        ::usleep(100000);
+    }
+    if (!done) {
+        ::kill(child, SIGKILL);
+        ::waitpid(child, &status, 0);
+    }
+    REQUIRE(done);
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("copy_tree keeps file and directory modes") {
+    ScopedTestDir dir("dstd_fs_copy_modes");
+    dir.create_dir("src");
+    dir.create_dir("src/private");
+    dir.create_file("src/secret.txt", "s");
+    dir.create_file("src/private/inner.txt", "i");
+    REQUIRE(::chmod(dir.file("src/secret.txt").c_str(), 0600) == 0);
+    REQUIRE(::chmod(dir.file("src/private").c_str(), 0700) == 0);
+    REQUIRE(::chmod(dir.file("src/private/inner.txt").c_str(), 0640) == 0);
+
+    REQUIRE(dfs::copy_tree(in(dir, "src").view(), in(dir, "dst").view(),
+                           dfs::CopyMode::FailIfExists)
+                .has_value());
+    const auto mode_of = [&](const char* name) {
+        return dfs::stat(in(dir, name).view())->mode & 07777;
+    };
+    CHECK(mode_of("dst/secret.txt") == 0600);
+    CHECK(mode_of("dst/private") == 0700);
+    CHECK(mode_of("dst/private/inner.txt") == 0640);
 }

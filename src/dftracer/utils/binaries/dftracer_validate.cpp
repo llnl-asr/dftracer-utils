@@ -2,7 +2,6 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>

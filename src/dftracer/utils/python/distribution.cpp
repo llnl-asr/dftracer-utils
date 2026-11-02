@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_partition.h>
 #include <dftracer/utils/index/index.h>
@@ -147,7 +148,8 @@ static PyObject *plan_lpt_partition_fn(PyObject * /*self*/, PyObject *args) {
             return NULL;
         }
         FileEntry fe;
-        fe.path = path;
+        fe.path = dftracer::utils::dstd::Path(
+            dftracer::utils::dstd::StringView(path));
         fe.size = static_cast<std::size_t>(size);
         fe.is_regular_file = true;
         entries.push_back(std::move(fe));
@@ -267,12 +269,13 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
             index_dir);
     std::optional<dftracer::utils::common::ScratchSession> scratch;
     std::string build_dir = index_dir;
-    if (!dftracer::utils::common::fs::exists(
-            dftracer::utils::index::store_dir(final_root)) &&
+    if (!dftracer::utils::common::unwrap(
+            dftracer::utils::dstd::fs::exists(dftracer::utils::dstd::PathView(
+                dftracer::utils::index::store_dir(final_root)))) &&
         dftracer::utils::common::should_stage(final_root)) {
         auto staged = dftracer::utils::common::staged_build_scratch(files);
         if (staged) {
-            build_dir = staged->dir();
+            build_dir = std::string(staged->dir().str());
             scratch.emplace(std::move(*staged));
         }
     }
@@ -363,10 +366,11 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
                 build_dir));
         dftracer::utils::index::release_root(final_root);
         dftracer::utils::common::publish_path(
-            dftracer::utils::index::store_dir(
+            dftracer::utils::dstd::PathView(dftracer::utils::index::store_dir(
                 dftracer::utils::index::store::internal::normalize_index_root(
-                    build_dir)),
-            dftracer::utils::index::store_dir(final_root));
+                    build_dir))),
+            dftracer::utils::dstd::PathView(
+                dftracer::utils::index::store_dir(final_root)));
     }
 
     Py_RETURN_NONE;

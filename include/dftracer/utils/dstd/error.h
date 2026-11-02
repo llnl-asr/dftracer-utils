@@ -113,6 +113,8 @@ class [[nodiscard]] Error {
     const ErrorDomain& domain() const noexcept { return *info_->domain; }
     std::string_view name() const noexcept { return info_->name; }
     std::string_view message() const noexcept;
+    /// The message with a terminating NUL, "" when there is none.
+    const char* c_str() const noexcept;
     String format() const;
 
    private:

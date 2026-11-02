@@ -2,9 +2,12 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/no_destructor.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/executor/executor.h>
@@ -20,12 +23,10 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
-#include <system_error>
 #include <utility>
 
 namespace dftracer::utils::store {
@@ -46,16 +47,10 @@ dstd::Unexpected<dstd::Error> invalid_error() {
 
 /// Absolute and without a trailing separator, so two spellings of one directory
 /// share one State.
-std::string directory_key(dstd::StringView dir) {
-    const std::string text(dir.data(), dir.size());
-    std::error_code error;
-    std::filesystem::path path = std::filesystem::absolute(text, error);
-    if (error) return text;
-    path = path.lexically_normal();
-    if (!path.has_filename() && path.has_parent_path()) {
-        path = path.parent_path();
-    }
-    return path.string();
+dstd::Path directory_key(dstd::StringView dir) {
+    const auto absolute = dstd::fs::absolute(dstd::PathView(dir));
+    if (!absolute) return dstd::Path(dir);
+    return dstd::normalize(absolute->view());
 }
 
 }  // namespace
@@ -287,7 +282,7 @@ struct Store::State {
     /// that made the call. First, so it closes after every other member is
     /// gone.
     memory::PoolHandle pool;
-    std::string dir;
+    dstd::Path dir;
     mutable std::mutex mutex;
     dstd::SharedPtr<Runtime> runtime;
     dstd::SharedPtr<engine::Writer> writer;
@@ -295,7 +290,7 @@ struct Store::State {
     /// this store opens.
     dstd::Vector<Namespace> namespaces;
     dstd::SharedPtr<const engine::Snapshot> held;
-    dstd::Vector<std::pair<std::string, std::uint64_t>> foreign_seen;
+    dstd::Vector<std::pair<dstd::String, std::uint64_t>> foreign_seen;
     std::chrono::steady_clock::time_point foreign_checked{};
     /// Changed under the mutex, read without it by snapshot()'s shortcut.
     std::atomic<std::uint64_t> version{0};
@@ -311,14 +306,14 @@ struct Store::State {
     /// makes every snapshot() look.
     std::atomic<std::int64_t> next_look{0};
 
-    using Registry = dstd::Map<std::string, std::weak_ptr<State>>;
+    using Registry = dstd::Map<dstd::String, std::weak_ptr<State>>;
 
     static Registry& registry() {
         static dstd::NoDestructor<Registry> value;
         return *value;
     }
 
-    explicit State(std::string directory);
+    explicit State(dstd::Path directory);
     State(const State&) = delete;
     State& operator=(const State&) = delete;
     ~State();
@@ -333,7 +328,7 @@ struct Store::State {
     open_snapshot_locked();
     dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
     snapshot_locked();
-    dstd::Vector<std::pair<std::string, std::uint64_t>> foreign_files_locked()
+    dstd::Vector<std::pair<dstd::String, std::uint64_t>> foreign_files_locked()
         const;
     void refresh_if_changed_locked();
     dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
@@ -362,7 +357,7 @@ struct Store::State {
         dstd::SharedPtr<State> self);
 };
 
-Store::State::State(std::string directory)
+Store::State::State(dstd::Path directory)
     : pool(memory::Manager::get().root().child("store",
                                                memory::PoolKind::Results)),
       dir(std::move(directory)) {}
@@ -376,26 +371,26 @@ Store::State::~State() {
     }
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto& states = registry();
-    auto found = states.find(dir);
+    auto found = states.find(dir.str());
     if (found != states.end() && found->second.expired()) states.erase(found);
 }
 
 dstd::Expected<dstd::SharedPtr<Store::State>, dstd::Error>
 Store::State::get_or_open(dstd::StringView dir) {
     Store::register_shutdown_close();
-    const std::string key = directory_key(dir);
+    const dstd::Path key = directory_key(dir);
     std::lock_guard<std::mutex> lock(registry_mutex());
     auto& states = registry();
-    auto found = states.find(key);
+    auto found = states.find(key.str());
     if (found != states.end()) {
         if (auto live = found->second.lock()) return live;
     }
-    std::error_code error;
-    std::filesystem::create_directories(key, error);
-    if (error) {
+    const auto made = dstd::fs::create_directories(key.view());
+    if (!made) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Io, "store: cannot create the directory " + key +
-                                     ": " + error.message()));
+            dstd::Condition::Io,
+            common::str_cat("store: cannot create the directory ", key.str(),
+                            ": ", made.error().message())));
     }
     // A state outlives the call that opened it, so it is not charged to that
     // call's pool.
@@ -405,18 +400,18 @@ Store::State::get_or_open(dstd::StringView dir) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(
             dstd::Condition::Internal, "store: the pool table is full"));
     }
-    states.insert_or_assign(key, created);
+    states.insert_or_assign(dstd::String(key.str()), created);
     open_count.fetch_add(1, std::memory_order_relaxed);
     return created;
 }
 
 dstd::Expected<void, dstd::Error> Store::State::ensure_dir_locked() {
-    std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (error) {
+    const auto made = dstd::fs::create_directories(dir.view());
+    if (!made) {
         return dstd::Unexpected<dstd::Error>(dstd::Error(
-            dstd::Condition::Io, "store: cannot create the directory " + dir +
-                                     ": " + error.message()));
+            dstd::Condition::Io,
+            common::str_cat("store: cannot create the directory ", dir.str(),
+                            ": ", made.error().message())));
     }
     return {};
 }
@@ -429,8 +424,7 @@ Store::State::writer_for_use() {
     auto made = ensure_dir_locked();
     if (!made) return dstd::Unexpected<dstd::Error>(made.error());
     auto shared = default_runtime_shared();
-    auto created = engine::Writer::create(
-        dstd::StringView(dir.data(), dir.size()), *shared->executor());
+    auto created = engine::Writer::create(dir.str(), *shared->executor());
     if (!created) return dstd::Unexpected<dstd::Error>(created.error());
     dstd::SharedPtr<engine::Writer> opened(std::move(*created));
     for (const Namespace& known : namespaces) {
@@ -452,8 +446,7 @@ dstd::Expected<dstd::SharedPtr<const engine::Snapshot>, dstd::Error>
 Store::State::open_snapshot_locked() {
     auto made = ensure_dir_locked();
     if (!made) return dstd::Unexpected<dstd::Error>(made.error());
-    auto opened =
-        engine::Snapshot::open(dstd::StringView(dir.data(), dir.size()));
+    auto opened = engine::Snapshot::open(dir.str());
     if (!opened) return dstd::Unexpected<dstd::Error>(opened.error());
     return dstd::make_shared<const engine::Snapshot>(std::move(*opened));
 }
@@ -474,28 +467,23 @@ Store::State::snapshot_locked() {
     return held;
 }
 
-dstd::Vector<std::pair<std::string, std::uint64_t>>
+dstd::Vector<std::pair<dstd::String, std::uint64_t>>
 Store::State::foreign_files_locked() const {
-    dstd::Vector<std::pair<std::string, std::uint64_t>> files;
-    std::error_code error;
-    std::filesystem::directory_iterator it(dir, error);
-    if (error) return files;
-    const std::string own =
-        writer ? std::filesystem::path(
-                     std::string(writer->path().data(), writer->path().size()))
-                     .filename()
-                     .string()
-               : std::string();
-    for (; it != std::filesystem::directory_iterator(); it.increment(error)) {
-        if (error) break;
-        const auto& path = it->path();
-        if (path.extension() != engine::DATA_FILE_SUFFIX) continue;
-        std::string name = path.filename().string();
-        if (name == own) continue;
-        std::error_code size_error;
-        const auto size = it->file_size(size_error);
-        files.emplace_back(std::move(name),
-                           size_error ? 0 : static_cast<std::uint64_t>(size));
+    dstd::Vector<std::pair<dstd::String, std::uint64_t>> files;
+    const auto opened = dstd::fs::Dir::open(dir.view());
+    if (!opened) return files;
+    auto listing = opened->entries();
+    if (!listing) return files;
+    const dstd::StringView own =
+        writer ? dstd::PathView(writer->path()).filename() : dstd::StringView();
+    for (const dstd::fs::DirEntry& entry : *listing) {
+        if (dstd::PathView(entry.name).extension() !=
+            engine::DATA_FILE_SUFFIX) {
+            continue;
+        }
+        if (entry.name == own) continue;
+        const auto found = opened->stat(entry.name);
+        files.emplace_back(dstd::String(entry.name), found ? found->size : 0);
     }
     std::sort(files.begin(), files.end());
     return files;
@@ -798,11 +786,11 @@ dstd::Expected<void, dstd::Error> Store::close_all() {
 dstd::Expected<std::size_t, dstd::Error> Store::adopt(dstd::StringView from_dir,
                                                       dstd::StringView to_dir) {
     auto moved = engine::move_data_files(from_dir, to_dir);
-    const std::string key = directory_key(to_dir);
+    const dstd::Path key = directory_key(to_dir);
     dstd::SharedPtr<State> live;
     {
         std::lock_guard<std::mutex> lock(registry_mutex());
-        auto found = State::registry().find(key);
+        auto found = State::registry().find(key.str());
         if (found != State::registry().end()) live = found->second.lock();
     }
     if (live) {

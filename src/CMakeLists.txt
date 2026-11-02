@@ -67,7 +67,6 @@ set(DFTRACER_UTILS_COMMON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/logging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/symbolize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/format_detector.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/filesystem_info.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/input_stat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dftracer/utils/common/scratch.cpp

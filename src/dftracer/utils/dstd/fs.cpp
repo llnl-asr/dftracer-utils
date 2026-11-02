@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 namespace dftracer::utils::dstd::fs {
 
@@ -18,6 +19,7 @@ namespace {
 
 constexpr std::uint64_t NANOSECONDS_PER_SECOND = 1000000000ULL;
 constexpr std::size_t COPY_BUFFER_SIZE = 64 * 1024;
+constexpr std::uint32_t PERMISSION_BITS = 017777;
 
 Condition condition_from_errno(int error) noexcept {
     if (error == ENOENT || error == ENOTDIR) return Condition::NotFound;
@@ -505,6 +507,26 @@ Expected<void, Error> copy_tree(PathView from, PathView to, CopyMode mode) {
     return copy_entry(from, to, mode);
 }
 
+Expected<void, Error> set_permissions(PathView path, std::uint32_t mode) {
+    if ((mode & ~PERMISSION_BITS) != 0) {
+        return Unexpected(invalid_error("mode has a bit above 017777"));
+    }
+    const PathCString name(path.str());
+    if (::chmod(name.c_str(), static_cast<mode_t>(mode)) != 0) {
+        return Unexpected(errno_error(errno, path.str()));
+    }
+    return {};
+}
+
+Expected<void, Error> create_symlink(PathView target, PathView link) {
+    const PathCString to(target.str());
+    const PathCString from(link.str());
+    if (::symlink(to.c_str(), from.c_str()) != 0) {
+        return Unexpected(errno_error(errno, link.str(), target.str()));
+    }
+    return {};
+}
+
 Expected<Path, Error> absolute(PathView path) {
     if (path_detail::is_absolute(path.str(), HOST_PATH_STYLE)) {
         return Path(path.str());
@@ -583,6 +605,14 @@ Path temp_directory() {
     return Path(StringView("/tmp"));
 }
 
+Expected<Path, Error> current_path() {
+    char buffer[PATH_MAX];
+    if (::getcwd(buffer, sizeof buffer) == nullptr) {
+        return Unexpected(errno_error(errno, "getcwd"));
+    }
+    return Path(StringView(buffer));
+}
+
 Expected<SpaceInfo, Error> space(PathView path) {
     const PathCString name(path.str());
     struct statvfs info;
@@ -608,6 +638,27 @@ Expected<std::uint64_t, Error> mtime_ns(PathView path) {
     const Expected<FileStat, Error> found = stat(path);
     if (!found) return Unexpected(found.error());
     return found->mtime_ns;
+}
+
+Expected<void, Error> resize_file(PathView path, std::uint64_t size) {
+    const PathCString name(path.str());
+    if (::truncate(name.c_str(), static_cast<off_t>(size)) != 0) {
+        return Unexpected(errno_error(errno, path.str()));
+    }
+    return {};
+}
+
+Expected<void, Error> set_mtime_ns(PathView path, std::uint64_t ns) {
+    const PathCString name(path.str());
+    struct timespec times[2];
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = UTIME_OMIT;
+    times[1].tv_sec = static_cast<time_t>(ns / NANOSECONDS_PER_SECOND);
+    times[1].tv_nsec = static_cast<long>(ns % NANOSECONDS_PER_SECOND);
+    if (::utimensat(AT_FDCWD, name.c_str(), times, 0) != 0) {
+        return Unexpected(errno_error(errno, path.str()));
+    }
+    return {};
 }
 
 DirEntries::DirEntries(void* listing) noexcept : listing_(listing) {

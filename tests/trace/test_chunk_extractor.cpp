@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/chunk_extractor_utility.h>
@@ -103,7 +103,7 @@ TEST_SUITE("ChunkExtractor") {
         CHECK(output.chunks.size() >= 2);
         std::size_t chunk_events = 0;
         for (const auto& chunk : output.chunks) {
-            CHECK(common::fs::exists(chunk.path));
+            CHECK(dstd::fs::exists(chunk.path).value());
             chunk_events += chunk.events_written;
         }
         CHECK(chunk_events == output.events);
@@ -156,7 +156,7 @@ TEST_SUITE("ChunkExtractor") {
 
         const std::string plain = env.get_dir() + "/plain.pfw.gz";
         {
-            std::ofstream out(plain);
+            std::ofstream out(plain.c_str());
             out << "{\"name\":\"read\",\"cat\":\"POSIX\",\"ph\":\"X\"}\n";
         }
 

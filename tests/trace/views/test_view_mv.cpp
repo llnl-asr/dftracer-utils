@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
@@ -21,30 +23,27 @@ std::string views_root_of(const std::string& gz) {
 
 // Every part file of the single MV, including the rank subdirs below parts/.
 void collect_parts(const std::string& dir, std::vector<std::string>& parts) {
-    std::error_code ec;
-    for (dftracer::utils::common::fs::directory_iterator it(dir, ec), end;
-         !ec && it != end; it.increment(ec)) {
-        if (it->is_directory(ec)) {
-            collect_parts(it->path().string(), parts);
+    for (const auto& e : dftu_utils_test::list_dir(dir)) {
+        if (e.kind == dftracer::utils::dstd::fs::FileKind::Directory) {
+            collect_parts(std::string(e.path.str()), parts);
             continue;
         }
-        const std::string name = it->path().filename().string();
+        const std::string name(e.path.view().filename());
         if (name.size() >= 7 &&
             name.compare(name.size() - 7, 7, ".pfw.gz") == 0)
-            parts.push_back(it->path().string());
+            parts.push_back(std::string(e.path.str()));
     }
 }
 
 // The part files inside the single MV directory under the views root.
 std::vector<std::string> mv_parts(const std::string& gz) {
     std::vector<std::string> parts;
-    std::error_code ec;
     const std::string root = views_root_of(gz);
-    for (dftracer::utils::common::fs::directory_iterator it(root, ec), end;
-         !ec && it != end; it.increment(ec)) {
-        if (!it->is_directory(ec)) continue;
+    for (const auto& e : dftu_utils_test::list_dir(root)) {
+        if (e.kind != dftracer::utils::dstd::fs::FileKind::Directory) continue;
         collect_parts(
-            dftracer::utils::index::view_parts_dir(it->path().string()), parts);
+            dftracer::utils::index::view_parts_dir(std::string(e.path.str())),
+            parts);
     }
     std::sort(parts.begin(), parts.end());
     return parts;
@@ -52,12 +51,9 @@ std::vector<std::string> mv_parts(const std::string& gz) {
 
 // The one MV directory (slug dir) under the views root.
 std::string mv_root(const std::string& gz) {
-    std::error_code ec;
-    for (dftracer::utils::common::fs::directory_iterator
-             it(views_root_of(gz), ec),
-         end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_directory(ec)) return it->path().string();
+    for (const auto& e : dftu_utils_test::list_dir(views_root_of(gz)))
+        if (e.kind == dftracer::utils::dstd::fs::FileKind::Directory)
+            return std::string(e.path.str());
     return {};
 }
 
@@ -66,12 +62,10 @@ std::map<std::string, std::string> part_stamps(
     const std::vector<std::string>& parts) {
     std::map<std::string, std::string> out;
     for (const auto& p : parts) {
-        std::error_code ec;
-        const auto stamp = dftracer::utils::common::fs::last_write_time(p, ec);
-        out[p] = std::to_string(dftracer::utils::common::fs::file_size(p, ec)) +
-                 ":" +
-                 std::to_string(
-                     static_cast<long long>(stamp.time_since_epoch().count()));
+        const auto stamp = dftracer::utils::dstd::fs::mtime_ns(p).value();
+        out[p] =
+            std::to_string(dftracer::utils::dstd::fs::file_size(p).value()) +
+            ":" + std::to_string(stamp);
     }
     return out;
 }
@@ -79,12 +73,9 @@ std::map<std::string, std::string> part_stamps(
 // Data files in the store of one index root.
 std::size_t store_files(const std::string& root) {
     std::size_t n = 0;
-    std::error_code ec;
-    for (dftracer::utils::common::fs::recursive_directory_iterator
-             it(dftracer::utils::index::store_dir(root), ec),
-         end;
-         !ec && it != end; it.increment(ec))
-        if (it->path().extension() == ".dfs") ++n;
+    for (const auto& e :
+         dftu_utils_test::walk_dir(dftracer::utils::index::store_dir(root)))
+        if (e.path.view().extension() == ".dfs") ++n;
     return n;
 }
 
@@ -97,12 +88,8 @@ std::vector<std::string> sorted_lines(StringSink& s) {
 // Number of MV directories (slug dirs) under the views root.
 std::size_t mv_dir_count(const std::string& gz) {
     std::size_t n = 0;
-    std::error_code ec;
-    for (dftracer::utils::common::fs::directory_iterator
-             it(views_root_of(gz), ec),
-         end;
-         !ec && it != end; it.increment(ec))
-        if (it->is_directory(ec)) ++n;
+    for (const auto& e : dftu_utils_test::list_dir(views_root_of(gz)))
+        if (e.kind == dftracer::utils::dstd::fs::FileKind::Directory) ++n;
     return n;
 }
 
@@ -225,9 +212,10 @@ TEST_SUITE("ViewMV") {
         // 30 read + 20 fwrite events at a distinct ts range.
         auto write_mixed = [&](const char* sub, int ts0) {
             std::string d = env.get_dir() + "/" + sub;
-            dftracer::utils::common::fs::create_directories(d);
+            REQUIRE(
+                dftracer::utils::dstd::fs::create_directories(d).has_value());
             std::string pfw = d + "/trace.pfw";
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 30; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
                        R"("tid":1,"ts":)"
@@ -239,7 +227,7 @@ TEST_SUITE("ViewMV") {
             ofs.close();
             std::string gz = pfw + ".gz";
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            dftracer::utils::common::fs::remove(pfw);
+            (void)dftracer::utils::dstd::fs::remove(pfw);
             return gz;
         };
         std::string a = write_mixed("da", 1000);
@@ -268,7 +256,8 @@ TEST_SUITE("ViewMV") {
             const std::string sub =
                 dftracer::utils::index::view_parts_dir(dir) + "/shard-" +
                 std::to_string(r++);
-            dftracer::utils::common::fs::create_directories(sub);
+            REQUIRE(
+                dftracer::utils::dstd::fs::create_directories(sub).has_value());
             TraceWriteOptions opts;
             opts.output_path = sub + "/part.pfw.gz";
             // The view sits outside .dftindex, so each rank indexes its own
@@ -291,11 +280,12 @@ TEST_SUITE("ViewMV") {
         CHECK(again.lines().size() == 60);
         CHECK(astats.events_scanned == 60);  // only the shards' read events
         for (int k = 0; k < r; ++k)
-            CHECK(dftracer::utils::common::fs::exists(
-                dftracer::utils::index::store_dir(determine_index_path(
-                    dftracer::utils::index::view_parts_dir(dir) + "/shard-" +
-                        std::to_string(k),
-                    ""))));
+            CHECK(dftracer::utils::dstd::fs::exists(
+                      dftracer::utils::index::store_dir(determine_index_path(
+                          dftracer::utils::index::view_parts_dir(dir) +
+                              "/shard-" + std::to_string(k),
+                          "")))
+                      .value());
     }
 
     TEST_CASE("MV - a view is its own index root and a repeat query is no-op") {
@@ -312,20 +302,23 @@ TEST_SUITE("ViewMV") {
         const std::string root = mv_root(gz);
         REQUIRE(!root.empty());
         // <dir>/.dftindex/views/<slug>/{parts,store}
-        CHECK(dftracer::utils::common::fs::path(views_root_of(gz))
-                  .parent_path() == dftracer::utils::common::fs::path(idx));
-        CHECK(dftracer::utils::common::fs::path(root).parent_path() ==
-              dftracer::utils::common::fs::path(views_root_of(gz)));
-        CHECK(dftracer::utils::common::fs::exists(
-            dftracer::utils::common::fs::path(root) / "parts"));
+        CHECK(
+            dftracer::utils::dstd::PathView(views_root_of(gz)).parent().str() ==
+            dftracer::utils::dstd::PathView(idx).str());
+        CHECK(dftracer::utils::dstd::PathView(root).parent().str() ==
+              dftracer::utils::dstd::PathView(views_root_of(gz)).str());
+        CHECK(dftracer::utils::dstd::fs::exists(
+                  dftracer::utils::dstd::Path(root) / "parts")
+                  .value());
         // The index of the view's parts is the view root itself.
-        CHECK(dftracer::utils::common::fs::exists(
-            dftracer::utils::common::fs::path(root) / "store"));
+        CHECK(dftracer::utils::dstd::fs::exists(
+                  dftracer::utils::dstd::Path(root) / "store")
+                  .value());
         CHECK(determine_index_path(root, "") == root);
         const auto parts = mv_parts(gz);
         REQUIRE(parts.size() == 1);
-        CHECK(dftracer::utils::common::fs::path(parts.front()).parent_path() ==
-              dftracer::utils::common::fs::path(root) / "parts");
+        CHECK(dftracer::utils::dstd::PathView(parts.front()).parent().str() ==
+              (dftracer::utils::dstd::Path(root) / "parts").str());
 
         const auto parts_before = part_stamps(parts);
         const std::size_t files_before = store_files(root);

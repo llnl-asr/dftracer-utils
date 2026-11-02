@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <doctest/doctest.h>
 #include <simdjson.h>
@@ -212,7 +213,7 @@ TEST_SUITE("Fold") {
         // One FH and one HH metadata record, then data events.
         std::string pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})"
                 << "\n";
             ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})"
@@ -224,7 +225,7 @@ TEST_SUITE("Fold") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        dstd::fs::remove(pfw).has_value();
         std::string idx = determine_index_path(gz, "");
         {
             StringSink s;

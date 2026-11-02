@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -30,7 +32,7 @@ const char* op_of(int i) {
 std::string write_ndjson(TestEnvironment& env, const std::string& name) {
     const std::string plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (int i = 0; i < RECORDS; ++i)
             out << R"({"op":")" << op_of(i) << R"(","host":"n)" << i % 4
                 << R"(","t":)" << 1000 + i * 10 << R"(,"lat":)" << i % 50
@@ -40,7 +42,7 @@ std::string write_ndjson(TestEnvironment& env, const std::string& name) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -188,38 +190,39 @@ TEST_SUITE("GenericView") {
     TEST_CASE("files without records take no vote") {
         TestEnvironment env(10);
         const auto dft = create_mixed_trace(env, 5, 5);
-        const auto dir = dftracer::utils::common::fs::path(dft).parent_path();
-        std::ofstream(dir / "rank_1.pfw.gz");
+        const dstd::Path dir(dstd::PathView(dft).parent().str());
+        std::ofstream((dir / "rank_1.pfw.gz").c_str());
         {
-            const auto meta = (dir / "rank_2.pfw").string();
-            std::ofstream(meta)
+            const std::string meta((dir / "rank_2.pfw").str());
+            std::ofstream(meta.c_str())
                 << R"({"name":"HH","cat":"dftracer","pid":2,"tid":2,)"
                    R"("ph":"M","args":{"name":"host","value":"h1"}})"
                 << "\n";
             REQUIRE(dftu_utils_test::compress_file_to_gzip(meta, meta + ".gz"));
-            dftracer::utils::common::fs::remove(meta);
+            (void)dstd::fs::remove(meta);
         }
         // Unindexed, then indexed with each file's own detection.
         auto rows = [&] {
-            return run(View::from_directory(dir.string()))
+            return run(View::from_directory(std::string(dir.str())))
                 .collect()
                 .get()
                 .num_rows();
         };
         CHECK(rows() == 10);
-        dftracer::utils::index::Indexer::open({dir.string()}).build();
+        dftracer::utils::index::Indexer::open({std::string(dir.str())}).build();
         CHECK(rows() == 10);
 
         TestEnvironment empty_env(10);
-        std::ofstream(empty_env.get_dir() + "/a.pfw.gz");
-        std::ofstream(empty_env.get_dir() + "/b.pfw.gz");
+        std::ofstream((empty_env.get_dir() + "/a.pfw.gz").c_str());
+        std::ofstream((empty_env.get_dir() + "/b.pfw.gz").c_str());
         View empty = run(View::from_directory(empty_env.get_dir()));
         CHECK(empty.collect().get().num_rows() == 0);
     }
 
     TEST_CASE("from_directory reads plain files as an error, not as empty") {
         TestEnvironment env(10);
-        std::ofstream(env.get_dir() + "/plain.jsonl") << R"({"k":1})" << "\n";
+        std::ofstream((env.get_dir() + "/plain.jsonl").c_str())
+            << R"({"k":1})" << "\n";
         try {
             run(View::from_directory(env.get_dir())).collect().get();
             FAIL("no error");

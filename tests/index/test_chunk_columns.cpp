@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -368,16 +368,16 @@ std::string write_trace(const std::string& dir, const std::string& name,
 std::string write_gzip(const std::string& dir, const std::string& name,
                        const std::string& text) {
     const std::string sub = dir + "/" + name;
-    common::fs::create_directories(sub);
+    REQUIRE(dstd::fs::create_directories(sub).has_value());
     const std::string pfw = sub + "/trace.pfw";
     {
-        std::ofstream file(pfw);
+        std::ofstream file(pfw.c_str());
         file << text;
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 

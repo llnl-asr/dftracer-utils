@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/extensions/bloom_filter.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view_definition.h>
@@ -94,10 +94,10 @@ static void populate_test_idx(const std::string& index_path,
 
 TEST_SUITE("ViewPlannerUtility") {
     TEST_CASE("ViewPlanner - IO view filters to POSIX chunks") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_view_builder_io")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
@@ -126,14 +126,14 @@ TEST_SUITE("ViewPlannerUtility") {
             CHECK(c.end_byte > c.start_byte);
         }
 
-        common::fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ViewPlanner - Compute view filters to compute chunks") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_view_builder_compute")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
@@ -156,14 +156,14 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.size() >= 2);
         CHECK(output->skipped_checkpoints >= 2);
 
-        common::fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ViewPlanner - File-level skip for absent values") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_view_builder_skip")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
@@ -187,14 +187,14 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.empty());
         CHECK(output->skipped_checkpoints == 4);
 
-        common::fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ViewPlanner - No bloom predicates returns all chunks") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_view_builder_nobl")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
@@ -218,7 +218,7 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->candidates.size() == 4);
         CHECK(output->skipped_checkpoints == 0);
 
-        common::fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ViewPlanner - No index reads the file as one unit") {
@@ -265,10 +265,10 @@ TEST_SUITE("ViewPlannerUtility") {
     }
 
     TEST_CASE("ViewPlanner - Dimension alias resolution") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_view_builder_alias")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
@@ -310,14 +310,14 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(output->file_may_match);
         CHECK(output->candidates.size() == 1);
 
-        common::fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 
     TEST_CASE("ViewPlanner - several chunks without a chunk table fail") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_view_builder_no_table")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
 
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
@@ -346,6 +346,6 @@ TEST_SUITE("ViewPlannerUtility") {
         CHECK(std::string(output.error().message()).find("chunk table") !=
               std::string::npos);
 
-        common::fs::remove_all(test_dir);
+        (void)dstd::fs::remove_all(test_dir);
     }
 }

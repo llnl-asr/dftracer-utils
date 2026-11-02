@@ -289,7 +289,7 @@ TEST_CASE("plugin host: trace close writes line-ended members and the tail") {
 
     std::string decoded, last;
     {
-        std::ifstream in(trace, std::ios::binary);
+        std::ifstream in(trace.c_str(), std::ios::binary);
         std::string gz((std::istreambuf_iterator<char>(in)),
                        std::istreambuf_iterator<char>());
         z_stream zs{};

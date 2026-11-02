@@ -201,7 +201,7 @@ dstd::Expected<void, dstd::Error> commit_waiting(Writer& writer,
 }
 
 std::vector<std::uint8_t> read_file(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(path.c_str(), std::ios::binary);
     return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
                                      std::istreambuf_iterator<char>());
 }
@@ -210,7 +210,7 @@ std::string copy_out(const std::string& source,
                      const dftu_utils_test::ScopedTestDir& target,
                      const std::string& name) {
     const std::vector<std::uint8_t> bytes = read_file(source);
-    std::ofstream output(target.file(name), std::ios::binary);
+    std::ofstream output((target.file(name)).c_str(), std::ios::binary);
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
     output.close();
@@ -548,7 +548,7 @@ TEST_CASE("flush makes a committed batch visible in a byte copy") {
 static std::vector<std::uint8_t> read_range(const std::string& path,
                                             std::uint64_t offset,
                                             std::size_t length) {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input(path.c_str(), std::ios::binary);
     input.seekg(static_cast<std::streamoff>(offset));
     std::vector<std::uint8_t> bytes(length);
     input.read(reinterpret_cast<char*>(bytes.data()),

@@ -9,6 +9,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/scalar.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/duql/builder.h>
 #include <dftracer/utils/duql/query.h>
@@ -101,7 +102,7 @@ std::vector<std::string> matching_names(const NameCollectorFold& f,
 // machine lost the race outright. At 200 it prunes about half.
 std::string create_grouped_trace(TestEnvironment& env, int per_name = 40) {
     std::string pfw = env.get_dir() + "/grouped.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     std::uint64_t ts = 1000;
     int pid = 1;
     for (const char* name : {"alpha", "beta", "gamma"}) {
@@ -116,7 +117,7 @@ std::string create_grouped_trace(TestEnvironment& env, int per_name = 40) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 200);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 

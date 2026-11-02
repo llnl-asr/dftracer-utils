@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -25,7 +26,6 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -117,7 +117,7 @@ void append(std::vector<std::uint8_t>& to, const std::string& text) {
 
 void write_file(const std::string& path,
                 const std::vector<std::uint8_t>& bytes) {
-    std::ofstream(path, std::ios::binary)
+    std::ofstream(path.c_str(), std::ios::binary)
         .write(reinterpret_cast<const char*>(bytes.data()),
                static_cast<std::streamsize>(bytes.size()));
 }
@@ -179,7 +179,7 @@ struct Files {
         write_file(big, one_big_member(trace));
         write_file(many, many_members(trace));
     }
-    ~Files() { std::filesystem::remove_all(dir); }
+    ~Files() { (void)dstd::fs::remove_all(dir); }
 };
 
 std::size_t inflate_mismatches(
@@ -420,7 +420,7 @@ TEST_SUITE("BigMemberReads") {
             const Trace t = short_lines(std::size_t{6} << 20, 100 + seed);
             const std::string dir =
                 "/tmp/dftu_bigmember_n_" + std::to_string(seed);
-            std::filesystem::create_directories(dir);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
             std::vector<std::uint8_t> bytes;
             append(bytes, t.text);
             write_file(dir + "/t.gz", bytes);
@@ -441,7 +441,7 @@ TEST_SUITE("BigMemberReads") {
                       lines_of(t.text, first, first + 2));
                 (newline_before ? after_newline : mid_line) = true;
             }
-            std::filesystem::remove_all(dir);
+            (void)dstd::fs::remove_all(dir);
         }
         CHECK(mid_line);
         CHECK(after_newline);
@@ -517,7 +517,7 @@ TEST_SUITE("BigMemberReads") {
             CHECK(inflate_mismatches(path, text, &cache,
                                      hinted ? &heads : nullptr) == 0);
         }
-        std::filesystem::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 
     TEST_CASE(
@@ -528,7 +528,7 @@ TEST_SUITE("BigMemberReads") {
             const Trace t = short_lines(std::size_t{6} << 20, 300 + seed);
             const std::string dir =
                 "/tmp/dftu_bigmember_b_" + std::to_string(seed);
-            std::filesystem::create_directories(dir);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
             std::vector<std::uint8_t> bytes;
             append(bytes, t.text);
             write_file(dir + "/t.gz", bytes);
@@ -548,7 +548,7 @@ TEST_SUITE("BigMemberReads") {
                       t.text.substr(expect_from));
                 (newline_before ? after_newline : mid) = true;
             }
-            std::filesystem::remove_all(dir);
+            (void)dstd::fs::remove_all(dir);
         }
         CHECK(mid);
         CHECK(after_newline);
@@ -573,7 +573,7 @@ TEST_SUITE("BigMemberReads") {
         const std::string got = big.read_lines(first, first + 2);
         const std::uint64_t used = bytes_read_by_process() - before;
         CHECK(got == lines_of(fx.trace.text, first, first + 2));
-        const std::uint64_t file_bytes = std::filesystem::file_size(fx.big);
+        const std::uint64_t file_bytes = dstd::fs::file_size(fx.big).value();
         MESSAGE("bytes read: " << used << " of a " << file_bytes << " file");
         CHECK(used < file_bytes / 8);
     }
@@ -583,7 +583,7 @@ TEST_SUITE("BigMemberReads") {
         t.text.pop_back();
         --t.lines;  // the last line has no newline, and the index counts none
         const std::string dir = "/tmp/dftu_bigmember_nonl";
-        std::filesystem::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         std::vector<std::uint8_t> bytes;
         append(bytes, t.text);
         write_file(dir + "/t.gz", bytes);
@@ -606,6 +606,6 @@ TEST_SUITE("BigMemberReads") {
         const std::size_t numbered = ix.indexer->get_num_lines();
         CHECK(ix.read_lines(numbered - 2, numbered) ==
               lines_of(t.text, numbered - 2, numbered));
-        std::filesystem::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 }

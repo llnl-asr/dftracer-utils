@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -25,13 +26,13 @@ std::string gzip_of(TestEnvironment& env, const std::string& stem,
                     const std::string& body) {
     const std::string plain = env.get_dir() + "/" + stem + ".ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         out << body;
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 

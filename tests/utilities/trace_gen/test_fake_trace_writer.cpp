@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <dftracer/utils/utilities/trace_gen/fake_trace_writer.h>
@@ -55,8 +55,8 @@ TEST_SUITE("trace_gen::TraceWriter") {
             writer.write("]\n");
         }  // writer flushes and closes on scope exit
 
-        REQUIRE(dftracer::utils::common::fs::exists(gz_path));
-        CHECK(dftracer::utils::common::fs::file_size(gz_path) > 0);
+        REQUIRE(dftracer::utils::dstd::fs::exists(gz_path).value());
+        CHECK(dftracer::utils::dstd::fs::file_size(gz_path).value() > 0);
 
         TraceReader reader({.file_path = gz_path});
         CHECK_FALSE(reader.has_index());

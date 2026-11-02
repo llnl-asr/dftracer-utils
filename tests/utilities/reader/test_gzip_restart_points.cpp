@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -12,7 +13,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <filesystem>
 #include <memory>
 #include <random>
 #include <string>
@@ -77,7 +77,7 @@ struct Fixture {
             co_await indexer->build_async();
         });
     }
-    ~Fixture() { std::filesystem::remove_all(dir); }
+    ~Fixture() { (void)dstd::fs::remove_all(dir); }
 
     std::string read_from(std::size_t start) {
         GzipReader reader(indexer);

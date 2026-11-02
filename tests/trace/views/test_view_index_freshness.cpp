@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -33,7 +34,7 @@ void write_events(const std::string& gz, const char* cat, int n,
                   std::size_t member_bytes, const char* odd_cat = nullptr) {
     const std::string plain = gz + ".plain";
     {
-        std::ofstream ofs(plain);
+        std::ofstream ofs(plain.c_str());
         ofs << "[\n";
         for (int i = 0; i < n; ++i) {
             const char* c = (odd_cat && i >= n - 3) ? odd_cat : cat;
@@ -47,15 +48,14 @@ void write_events(const std::string& gz, const char* cat, int n,
             plain, gz, member_bytes));
     else
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
 }
 
 void rewrite_events(const std::string& gz, const char* cat, int n,
                     std::size_t member_bytes = 0) {
-    const auto before = dftracer::utils::common::fs::last_write_time(gz);
+    const auto before = dstd::fs::mtime_ns(gz).value();
     write_events(gz, cat, n, member_bytes);
-    dftracer::utils::common::fs::last_write_time(
-        gz, before + std::chrono::seconds(10));
+    REQUIRE(dstd::fs::set_mtime_ns(gz, before + 10'000'000'000ULL).has_value());
 }
 
 coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
@@ -164,9 +164,9 @@ TEST_SUITE("ViewIndexFreshness") {
         write_events(gz, "A", MEMBER_EVENTS, MEMBER_BYTES);
         CHECK(rows(dir_view(env.get_dir()), R"(cat == "A")") == MEMBER_EVENTS);
 
-        const auto before = dftracer::utils::common::fs::last_write_time(gz);
-        dftracer::utils::common::fs::last_write_time(
-            gz, before + std::chrono::seconds(10));
+        const auto before = dstd::fs::mtime_ns(gz).value();
+        REQUIRE(
+            dstd::fs::set_mtime_ns(gz, before + 10'000'000'000ULL).has_value());
         const auto want = static_cast<std::uint64_t>(
             st::internal::get_file_modification_time(gz));
 
@@ -184,8 +184,8 @@ TEST_SUITE("ViewIndexFreshness") {
         const std::string d1 = env.get_dir() + "/d1";
         const std::string d2 = env.get_dir() + "/d2";
         const std::string root = env.get_dir() + "/shared";
-        dftracer::utils::common::fs::create_directories(d1);
-        dftracer::utils::common::fs::create_directories(d2);
+        REQUIRE(dstd::fs::create_directories(d1).has_value());
+        REQUIRE(dstd::fs::create_directories(d2).has_value());
         const std::string f1 = d1 + "/a.pfw.gz";
         const std::string f2 = d2 + "/b.pfw.gz";
         write_events(f1, "A", OLD_EVENTS, 0);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
@@ -82,7 +83,7 @@ const std::vector<Case>& cases() {
 std::string write_trace(TestEnvironment& env) {
     const std::string plain = env.get_dir() + "/paths.pfw";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         int ts = 1000;
         for (const char* ev : EVENTS) {
             std::string line(ev);
@@ -94,7 +95,7 @@ std::string write_trace(TestEnvironment& env) {
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -254,7 +255,7 @@ TEST_SUITE("duql paths") {
         TestEnvironment env(10);
         const std::string plain = env.get_dir() + "/exprs.pfw";
         {
-            std::ofstream out(plain);
+            std::ofstream out(plain.c_str());
             int ts = 1000;
             for (const char* ev : RECORDS) {
                 std::string line(ev);
@@ -266,7 +267,7 @@ TEST_SUITE("duql paths") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
         reader::TraceReader tr({.file_path = gz, .index_dir = env.get_dir()});
         REQUIRE(tr.has_index());
@@ -310,13 +311,13 @@ TEST_SUITE("duql paths") {
         TestEnvironment env(10);
         const std::string plain = env.get_dir() + "/empty.pfw";
         {
-            std::ofstream out(plain);
+            std::ofstream out(plain.c_str());
             out << R"({"ph":"X","pid":1,"tid":1,"ts":1,"dur":1,"name":"e","args":{"tags":[]}})"
                 << "\n";
         }
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, gz));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
         CHECK(names_of(run(view_of(gz, "exists(tags)").collect())) ==
               Names{"e"});

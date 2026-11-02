@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -35,13 +35,13 @@ void append_member(std::vector<std::uint8_t>& out, const std::string& text) {
 }
 
 std::string write_gz(const std::vector<std::uint8_t>& bytes) {
-    dftracer::utils::common::fs::path p =
+    dftracer::utils::dstd::Path p =
         dftu_utils_test::make_unique_test_path("stream_gz.pfw.gz");
-    std::ofstream ofs(p, std::ios::binary);
+    std::ofstream ofs(p.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
     ofs.close();
-    return p.string();
+    return std::string(p.str());
 }
 
 }  // namespace

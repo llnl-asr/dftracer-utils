@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/store/crc.h>
 #include <dftracer/utils/store/data_file.h>
@@ -18,7 +20,6 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <random>
@@ -171,15 +172,17 @@ std::size_t first_item_payload_offset(const std::vector<std::uint8_t>& record) {
     return 43U;
 }
 
-std::vector<std::uint8_t> read_file(const std::filesystem::path& path) {
-    std::ifstream input(path, std::ios::binary);
+std::vector<std::uint8_t> read_file(dftracer::utils::dstd::PathView path) {
+    const dftracer::utils::dstd::Path owned(path.str());
+    std::ifstream input(owned.c_str(), std::ios::binary);
     return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
                                      std::istreambuf_iterator<char>());
 }
 
-void write_file(const std::filesystem::path& path,
+void write_file(dftracer::utils::dstd::PathView path,
                 const std::vector<std::uint8_t>& bytes) {
-    std::ofstream output(path, std::ios::binary);
+    const dftracer::utils::dstd::Path owned(path.str());
+    std::ofstream output(owned.c_str(), std::ios::binary);
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
 }
@@ -190,24 +193,22 @@ void corrupt_header(std::vector<std::uint8_t>& bytes) {
 }
 
 struct TempDir {
-    std::filesystem::path path;
+    dftracer::utils::dstd::Path path;
 
     TempDir() {
         const auto now =
             std::chrono::steady_clock::now().time_since_epoch().count();
-        path = std::filesystem::temp_directory_path() /
+        path = dftracer::utils::dstd::fs::temp_directory() /
                ("dftu_store_file_" + std::to_string(::getpid()) + "_" +
                 std::to_string(now));
-        std::filesystem::create_directories(path);
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(path).has_value());
     }
 
-    ~TempDir() {
-        std::error_code ec;
-        std::filesystem::remove_all(path, ec);
-    }
+    ~TempDir() { (void)dftracer::utils::dstd::fs::remove_all(path); }
 
     std::string file(const std::string& name) const {
-        return (path / name).string();
+        return std::string((path / name).str());
     }
 };
 
@@ -2049,7 +2050,8 @@ TEST_SUITE("index store file") {
         auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
         const store::engine::SpaceReport& space = *report;
-        CHECK(space.file_bytes == std::filesystem::file_size(path));
+        CHECK(space.file_bytes ==
+              dftracer::utils::dstd::fs::file_size(path).value());
         CHECK(space.header_bytes == store::engine::FILE_HEADER_BYTES);
         CHECK(space.header_bytes + space.extent_bytes + space.record_bytes +
                   space.gap_bytes + space.segment_block_bytes +
@@ -2160,7 +2162,8 @@ TEST_SUITE("index store file") {
         auto report = store::engine::space_report(path);
         REQUIRE(report.has_value());
         const store::engine::SpaceReport& space = *report;
-        CHECK(space.file_bytes == std::filesystem::file_size(path));
+        CHECK(space.file_bytes ==
+              dftracer::utils::dstd::fs::file_size(path).value());
         CHECK(space.extents == 0);
         CHECK(space.extent_bytes == 0);
         CHECK(space.pages == 0);

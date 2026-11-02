@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -29,7 +30,7 @@ constexpr int RECORDS = 3000;
 std::string write_log(TestEnvironment& env) {
     const std::string plain = env.get_dir() + "/log.ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (int i = 0; i < RECORDS; ++i) {
             out << R"({"op":")" << (i % 2 ? "read" : "write") << '"';
             if (i % 100 != 99) out << R"(,"ts_ms":)" << 1000 + i;
@@ -53,7 +54,7 @@ std::string write_log(TestEnvironment& env) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }

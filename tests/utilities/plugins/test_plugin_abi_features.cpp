@@ -397,7 +397,7 @@ TEST_CASE("plugin ABI: config tree reads scalars, nested, array, and default") {
     dftu_utils_test::TestEnvironment env(0);
     std::string path = env.get_dir() + "/config.json";
     {
-        std::ofstream f(path);
+        std::ofstream f(path.c_str());
         f << R"({"threshold":42,"ratio":2.5,"label":"posix","enabled":true,)"
           << R"("nested":{"inner":7},"buckets":[10,20,30]})";
     }

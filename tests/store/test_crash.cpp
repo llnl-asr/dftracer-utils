@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/little_endian.h>
@@ -21,7 +22,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -151,12 +151,12 @@ Runtime& store_runtime() {
 }
 
 void write_bytes(const std::string& path, const std::string& bytes) {
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    std::ofstream out(path.c_str(), std::ios::binary | std::ios::trunc);
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
 std::string read_bytes(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path.c_str(), std::ios::binary);
     return std::string(std::istreambuf_iterator<char>(in),
                        std::istreambuf_iterator<char>());
 }
@@ -894,7 +894,8 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
     // One directory and one file, truncated before every image: a fresh
     // directory per image would be several thousand directory trees.
     const std::string image_dir = dir.str() + "/images";
-    std::filesystem::create_directories(image_dir);
+    REQUIRE(
+        dftracer::utils::dstd::fs::create_directories(image_dir).has_value());
     const std::string image_path = image_dir + "/" + file_name;
     const auto dump_of = [&](const std::string& bytes) {
         write_bytes(image_path, bytes);
@@ -1043,10 +1044,11 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
             if (reported < FAILURE_REPORTS) {
                 ++reported;
                 const std::string root =
-                    (std::filesystem::temp_directory_path() /
-                     "dftu_store_crash_failure")
-                        .string();
-                std::filesystem::create_directories(root);
+                    std::string((dftracer::utils::dstd::fs::temp_directory() /
+                                 "dftu_store_crash_failure")
+                                    .str());
+                REQUIRE(dftracer::utils::dstd::fs::create_directories(root)
+                            .has_value());
                 const std::string tag =
                     std::string(stat.name) + "-k" + std::to_string(kill);
                 write_bytes(root + "/" + tag + ".dfs", image);

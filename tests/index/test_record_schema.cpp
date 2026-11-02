@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -37,12 +37,12 @@ std::string write_ndjson(const std::string& dir, int records) {
             << "}\n";
     const auto plain = dir + "/generic.ndjson";
     {
-        std::ofstream(plain) << out.str();
+        std::ofstream(plain.c_str()) << out.str();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 

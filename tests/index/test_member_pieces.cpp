@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -52,7 +52,8 @@ void persist(const std::string& index_root, const GzipBuildArtifacts& arts) {
 TEST_SUITE("member pieces") {
     TEST_CASE("member, head and restart records round trip with a window") {
         auto root = dftu_utils_test::make_unique_test_path("member_pieces");
-        dftracer::utils::common::fs::create_directories(root);
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(root).has_value());
 
         GzipBuildArtifacts arts;
         arts.checkpoint_size = 1000;
@@ -67,9 +68,9 @@ TEST_SUITE("member pieces") {
             window[i] = static_cast<char>(i * 31);
         arts.restart_windows = {{2, window}, {3, std::string(32768, 'x')}};
 
-        persist((root / ".dftindex").string(), arts);
-        const auto snapshot =
-            dftu_utils_test::index_snapshot((root / ".dftindex").string());
+        persist(std::string((root / ".dftindex").str()), arts);
+        const auto snapshot = dftu_utils_test::index_snapshot(
+            std::string((root / ".dftindex").str()));
         const auto file = snapshot.file("trace.pfw.gz");
         REQUIRE(file.has_value());
         const auto restart = [&](std::uint64_t member) {
@@ -105,7 +106,8 @@ TEST_SUITE("member pieces") {
 
     TEST_CASE("a rebuild drops the windows of the old pieces") {
         auto root = dftu_utils_test::make_unique_test_path("member_pieces_re");
-        dftracer::utils::common::fs::create_directories(root);
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(root).has_value());
 
         GzipBuildArtifacts split;
         split.members = {record(0, 0, 0, GzipRecordKind::Head, 0),
@@ -115,9 +117,9 @@ TEST_SUITE("member pieces") {
         whole.members = {record(0, 0, 0, GzipRecordKind::Member, 0)};
 
         for (const auto* arts : {&split, &whole})
-            persist((root / ".dftindex").string(), *arts);
-        const auto snapshot =
-            dftu_utils_test::index_snapshot((root / ".dftindex").string());
+            persist(std::string((root / ".dftindex").str()), *arts);
+        const auto snapshot = dftu_utils_test::index_snapshot(
+            std::string((root / ".dftindex").str()));
         const auto file = snapshot.file("trace.pfw.gz");
         REQUIRE(file.has_value());
         const auto got =

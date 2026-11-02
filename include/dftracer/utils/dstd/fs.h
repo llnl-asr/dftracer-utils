@@ -72,6 +72,12 @@ Expected<void, Error> copy_file(PathView from, PathView to, CopyMode mode);
 /// that already exists is an error, with Overwrite a file or symlink is
 /// replaced and a directory is merged into.
 Expected<void, Error> copy_tree(PathView from, PathView to, CopyMode mode);
+/// chmod with the low bits of mode, so 0600 and 01777 are both accepted. A
+/// mode with a bit above 017777 is InvalidArgument.
+Expected<void, Error> set_permissions(PathView path, std::uint32_t mode);
+/// A symlink to target, stored as given, so it may be relative to the
+/// directory holding the link and it may name nothing.
+Expected<void, Error> create_symlink(PathView target, PathView link);
 /// The path with the current working directory prepended when it is relative.
 /// Nothing is removed, so "." and ".." components and a trailing separator
 /// stay, as in std::filesystem::absolute. Call normalize() for a lexical form.
@@ -87,9 +93,17 @@ Expected<String, Error> read_file(PathView path);
 Expected<Path, Error> weakly_canonical(PathView path);
 /// TMPDIR when it is set and not empty, else /tmp. Names an existing directory.
 Path temp_directory();
+/// getcwd, so the result names an existing directory. A path longer than
+/// PATH_MAX is an error.
+Expected<Path, Error> current_path();
 Expected<SpaceInfo, Error> space(PathView path);
 Expected<std::uint64_t, Error> file_size(PathView path);
+/// truncate: a shorter file loses its tail and a longer one reads as zeros.
+Expected<void, Error> resize_file(PathView path, std::uint64_t size);
 Expected<std::uint64_t, Error> mtime_ns(PathView path);
+/// Changes the modification time only and leaves the access time alone. ns
+/// counts nanoseconds since the Unix epoch.
+Expected<void, Error> set_mtime_ns(PathView path, std::uint64_t ns);
 
 /// One entry of a listing, from readdir alone. name is a view of the entry name
 /// only, and it stays valid until the iterator that produced it is incremented

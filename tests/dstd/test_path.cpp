@@ -36,12 +36,12 @@ TEST_CASE("PathView queries match std::filesystem without a trailing slash") {
     for (const std::string& input : SAME_AS_STD) {
         CAPTURE(input);
         const PathView path(input);
-        const std::filesystem::path reference(input);
-        CHECK(path.filename() == reference.filename().string());
-        CHECK(path.parent().str() == reference.parent_path().string());
-        CHECK(path.stem() == reference.stem().string());
-        CHECK(path.extension() == reference.extension().string());
-        CHECK(path.is_absolute() == reference.is_absolute());
+        const dstd::Path reference(input);
+        CHECK(path.filename() == reference.view().filename());
+        CHECK(path.parent().str() == reference.view().parent().str());
+        CHECK(path.stem() == reference.view().stem());
+        CHECK(path.extension() == reference.view().extension());
+        CHECK(path.is_absolute() == reference.view().is_absolute());
         CHECK(path.str() == input);
     }
 }

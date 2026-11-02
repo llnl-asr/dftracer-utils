@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -27,9 +27,9 @@ std::string trace(int file) {
 
 std::set<std::string> files_under(const std::string& dir) {
     std::set<std::string> out;
-    for (const auto& e :
-         dftracer::utils::common::fs::recursive_directory_iterator(dir))
-        if (e.is_regular_file()) out.insert(e.path().string());
+    for (const auto& e : dftu_utils_test::walk_dir(dir))
+        if ((e.kind == dftracer::utils::dstd::fs::FileKind::File))
+            out.insert(std::string(e.path.str()));
     return out;
 }
 
@@ -62,12 +62,14 @@ TEST_SUITE("NestedInputs") {
         const std::vector<std::string> dirs = {in + "/a", in + "/a/b",
                                                in + "/c/d/e"};
         for (std::size_t i = 0; i < dirs.size(); ++i) {
-            dftracer::utils::common::fs::create_directories(dirs[i]);
+            REQUIRE(dftracer::utils::dstd::fs::create_directories(dirs[i])
+                        .has_value());
             dftu_utils_test::write_gz_trace(
                 dirs[i] + "/t" + std::to_string(i) + ".pfw.gz",
                 trace(static_cast<int>(i)));
         }
-        dftracer::utils::common::fs::create_directories(work);
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(work).has_value());
         const auto inputs = files_under(in);
         REQUIRE(inputs.size() == dirs.size());
         const std::string total =

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 
 #include <cstdlib>
@@ -51,7 +52,7 @@ TEST_CASE("find_mountpoint returns a mounted ancestor") {
     const std::string mp(common::find_mountpoint("/tmp/a/b/c/deep/path").str());
     REQUIRE_FALSE(mp.empty());
     // The result must be a prefix of the queried path and a real directory.
-    CHECK(common::fs::exists(mp));
+    CHECK(dstd::fs::exists(mp).value());
     // A mount root maps to itself.
     CHECK(common::find_mountpoint("/").str() == "/");
 }
@@ -62,10 +63,10 @@ TEST_CASE("ScratchSession creates and cleans up its directory") {
         common::ScratchSession s;
         REQUIRE(s.valid());  // /tmp forced above
         dir = std::string(s.dir().str());
-        CHECK(common::fs::exists(dir));
-        CHECK(common::fs::is_directory(dir));
+        CHECK(dstd::fs::exists(dir).value());
+        CHECK(dstd::fs::is_directory(dir).value());
     }
-    CHECK_FALSE(common::fs::exists(dir));  // removed on destruction
+    CHECK_FALSE(dstd::fs::exists(dir).value());  // removed on destruction
 }
 
 TEST_CASE("ScratchSession release keeps the directory") {
@@ -76,26 +77,25 @@ TEST_CASE("ScratchSession release keeps the directory") {
         dir = std::string(s.dir().str());
         s.release();
     }
-    CHECK(common::fs::exists(dir));
-    std::error_code ec;
-    common::fs::remove_all(dir, ec);
+    CHECK(dstd::fs::exists(dir).value());
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("publish_path moves a built directory to its destination") {
     common::ScratchSession s;
     REQUIRE(s.valid());
     const std::string src = std::string(s.dir().str()) + "/build";
-    common::fs::create_directories(src);
+    REQUIRE(dstd::fs::create_directories(src).has_value());
     {
-        std::ofstream(src + "/marker.txt") << "hello";
+        std::ofstream((src + "/marker.txt").c_str()) << "hello";
     }
 
     const std::string dst = std::string(s.dir().str()) + "/published";
     common::publish_path(dftracer::utils::dstd::PathView(src),
                          dftracer::utils::dstd::PathView(dst));
 
-    CHECK_FALSE(common::fs::exists(src));
-    CHECK(common::fs::exists(dst + "/marker.txt"));
+    CHECK_FALSE(dstd::fs::exists(src).value());
+    CHECK(dstd::fs::exists(dst + "/marker.txt").value());
 }
 
 TEST_CASE("should_stage honors the never override") {

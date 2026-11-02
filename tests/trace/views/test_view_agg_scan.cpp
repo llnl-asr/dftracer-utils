@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <trace/views/agg_parity_common.h>
 
 using namespace dftracer::utils;
@@ -20,7 +21,7 @@ TEST_SUITE("View") {
         // depth 2) while a third never joins them.
         std::string pfw = env.get_dir() + "/occ_engine.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             const char* names[] = {"read", "write", "open"};
             int ts = 1000;
             for (int i = 0; i < 90; ++i) {
@@ -32,7 +33,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         namespace detail = dftracer::utils::trace::views::detail;
@@ -142,7 +143,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/agg_global.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             const char* names[] = {"read", "write", "open"};
             const char* cats[] = {"POSIX", "STDIO"};
             int ts = 1000;
@@ -156,7 +157,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto build = [&](std::uint64_t mem) {
@@ -290,7 +291,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/agg_rank.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int pid : {1, 2, 3})
                 ofs << R"({"name":"PR","cat":"dftracer","pid":)" << pid
                     << R"(,"tid":1,"ph":"M","args":{"name":"rank","value":")"
@@ -305,7 +306,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto q = [&] {

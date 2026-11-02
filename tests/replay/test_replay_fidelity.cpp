@@ -14,8 +14,9 @@
 //      subsequent sleep be skipped).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
@@ -192,10 +193,10 @@ void check_fidelity(const FidelityStats& s, const char* label) {
 TEST_CASE("Replay fidelity - sync path") {
     common::logger::init();
 
-    common::fs::path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_sync");
-    common::fs::create_directories(temp_dir);
-    std::string trace_file = (temp_dir / "fid.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+    std::string trace_file = std::string((temp_dir / "fid.pfw.gz").str());
 
     constexpr std::size_t N = 40;
     constexpr std::uint64_t STEP_US = 5'000;
@@ -217,17 +218,16 @@ TEST_CASE("Replay fidelity - sync path") {
     auto stats = analyze(rec.samples);
     check_fidelity(stats, "sync");
 
-    std::error_code ec;
-    common::fs::remove_all(temp_dir, ec);
+    (void)dstd::fs::remove_all(temp_dir);
 }
 
 TEST_CASE("Replay fidelity - pipelined path") {
     common::logger::init();
 
-    common::fs::path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_pipelined");
-    common::fs::create_directories(temp_dir);
-    std::string trace_file = (temp_dir / "fid.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+    std::string trace_file = std::string((temp_dir / "fid.pfw.gz").str());
 
     constexpr std::size_t N = 40;
     constexpr std::uint64_t STEP_US = 5'000;
@@ -259,17 +259,16 @@ TEST_CASE("Replay fidelity - pipelined path") {
     auto stats = analyze(rec.samples);
     check_fidelity(stats, "pipelined");
 
-    std::error_code ec;
-    common::fs::remove_all(temp_dir, ec);
+    (void)dstd::fs::remove_all(temp_dir);
 }
 
 TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
     common::logger::init();
 
-    common::fs::path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_fid_anchor");
-    common::fs::create_directories(temp_dir);
-    std::string trace_file = (temp_dir / "fid.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+    std::string trace_file = std::string((temp_dir / "fid.pfw.gz").str());
 
     constexpr std::size_t N = 20;
     constexpr std::uint64_t STEP_US = 5'000;  // 95ms span
@@ -298,18 +297,17 @@ TEST_CASE("Replay fidelity - first-event anchor reset survives warmup gap") {
                                  "Valgrind/CI slowdown)");
     check_fidelity(stats, "anchor-reset");
 
-    std::error_code ec;
-    common::fs::remove_all(temp_dir, ec);
+    (void)dstd::fs::remove_all(temp_dir);
 }
 
 TEST_CASE("Replay pipelined - files replay at the same time") {
     common::logger::init();
 
-    common::fs::path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_concurrent");
-    common::fs::create_directories(temp_dir);
-    const std::string file_a = (temp_dir / "a.pfw.gz").string();
-    const std::string file_b = (temp_dir / "b.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+    const std::string file_a = std::string((temp_dir / "a.pfw.gz").str());
+    const std::string file_b = std::string((temp_dir / "b.pfw.gz").str());
     constexpr std::size_t N = 8;
     constexpr std::uint32_t PID_A = 100;
     constexpr std::uint32_t PID_B = 200;
@@ -348,18 +346,17 @@ TEST_CASE("Replay pipelined - files replay at the same time") {
     CHECK(result.pid_counts[PID_A] == N);
     CHECK(result.pid_counts[PID_B] == N);
 
-    std::error_code ec;
-    common::fs::remove_all(temp_dir, ec);
+    (void)dstd::fs::remove_all(temp_dir);
 }
 
 TEST_CASE("Replay pipelined - each file keeps its own timeline") {
     common::logger::init();
 
-    common::fs::path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_lanes");
-    common::fs::create_directories(temp_dir);
-    const std::string file_a = (temp_dir / "a.pfw.gz").string();
-    const std::string file_b = (temp_dir / "b.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(temp_dir).has_value());
+    const std::string file_a = std::string((temp_dir / "a.pfw.gz").str());
+    const std::string file_b = std::string((temp_dir / "b.pfw.gz").str());
     constexpr std::size_t N = 20;
     constexpr std::uint64_t STEP_US = 5'000;
     constexpr std::uint32_t PID_A = 100;
@@ -389,23 +386,22 @@ TEST_CASE("Replay pipelined - each file keeps its own timeline") {
     check_fidelity(analyze(rec_a.samples), "lane a");
     check_fidelity(analyze(rec_b.samples), "lane b");
 
-    std::error_code ec;
-    common::fs::remove_all(temp_dir, ec);
+    dstd::fs::remove_all(temp_dir).has_value();
 }
 
 TEST_CASE("Replay pipelined - max_events caps the whole run") {
     common::logger::init();
 
-    common::fs::path temp_dir =
+    dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_cap");
-    common::fs::create_directories(temp_dir);
+    dstd::fs::create_directories(temp_dir).has_value();
     constexpr std::size_t FILES = 3;
     constexpr std::size_t N = 50;
     constexpr std::size_t MAX_EVENTS = 60;
     std::vector<std::string> files;
     for (std::size_t i = 0; i < FILES; ++i) {
-        files.push_back(
-            (temp_dir / ("f" + std::to_string(i) + ".pfw.gz")).string());
+        files.push_back(std::string(
+            (temp_dir / ("f" + std::to_string(i) + ".pfw.gz")).str()));
         write_evenly_spaced_trace(files.back(), N, 1,
                                   static_cast<std::uint32_t>(100 + i));
     }
@@ -422,6 +418,5 @@ TEST_CASE("Replay pipelined - max_events caps the whole run") {
     CHECK(result.total_events == FILES * N);
     CHECK(result.executed_events == MAX_EVENTS);
 
-    std::error_code ec;
-    common::fs::remove_all(temp_dir, ec);
+    dstd::fs::remove_all(temp_dir).has_value();
 }

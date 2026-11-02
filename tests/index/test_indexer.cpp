@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -47,9 +48,11 @@ std::vector<std::string> sorted(std::vector<std::string> v) {
     return v;
 }
 
-void touch_later(const std::string& path) {
-    common::fs::last_write_time(
-        path, common::fs::last_write_time(path) + std::chrono::seconds(10));
+void touch_later(dstd::PathView path) {
+    constexpr std::uint64_t TEN_SECONDS_NS = 10'000'000'000ULL;
+    REQUIRE(dstd::fs::set_mtime_ns(
+                path, dstd::fs::mtime_ns(path).value() + TEN_SECONDS_NS)
+                .has_value());
 }
 
 }  // namespace
@@ -58,16 +61,16 @@ TEST_SUITE("Indexer") {
     TEST_CASE("open expands a directory to its trace files") {
         Runtime rt(2);
         TestEnvironment env(10);
-        const common::fs::path dir = common::fs::path(env.get_dir()) / "traces";
-        common::fs::create_directories(dir);
-        std::ofstream(dir / "a.pfw.gz") << "x";
-        std::ofstream(dir / "b.pfw") << "x";
-        std::ofstream(dir / "notes.txt") << "x";
+        const dstd::Path dir = dstd::Path(env.get_dir()) / "traces";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        std::ofstream((dir / "a.pfw.gz").c_str()) << "x";
+        std::ofstream((dir / "b.pfw").c_str()) << "x";
+        std::ofstream((dir / "notes.txt").c_str()) << "x";
 
-        auto ix = Indexer::open({dir.string()}, with_runtime(rt));
+        auto ix = Indexer::open({std::string(dir.str())}, with_runtime(rt));
         std::vector<std::string> names;
         for (const auto& p : ix.paths())
-            names.push_back(common::fs::path(p).filename().string());
+            names.push_back(std::string(dstd::PathView(p).filename()));
         CHECK(sorted(names) == std::vector<std::string>{"a.pfw.gz", "b.pfw"});
         rt.shutdown();
     }
@@ -99,7 +102,7 @@ TEST_SUITE("Indexer") {
         CHECK(st.ready.empty());
         CHECK(st.needs_work == std::vector<std::string>{trace});
         CHECK(st.indexed == 0);
-        CHECK_FALSE(common::fs::exists(index_of(trace)));
+        CHECK_FALSE(dstd::fs::exists(index_of(trace)).value());
         rt.shutdown();
     }
 
@@ -110,18 +113,19 @@ TEST_SUITE("Indexer") {
         CHECK(Indexer::open({trace}, with_runtime(rt)).build().indexed == 1);
 
         // A cache survives where the store does not, so the root stays.
-        const common::fs::path root = index_of(trace);
-        common::fs::create_directories(root / "rollups" / "store");
-        std::ofstream(root / "rollups" / "marker") << "r";
-        common::fs::remove_all(root / "store");
-        REQUIRE(common::fs::exists(root));
-        REQUIRE_FALSE(common::fs::exists(root / "store"));
+        const dstd::Path root(index_of(trace));
+        REQUIRE(dstd::fs::create_directories(root / "rollups" / "store")
+                    .has_value());
+        std::ofstream((root / "rollups" / "marker").c_str()) << "r";
+        (void)dstd::fs::remove_all(root / "store");
+        REQUIRE(dstd::fs::exists(root).value());
+        REQUIRE_FALSE(dstd::fs::exists(root / "store").value());
 
         auto ix = Indexer::open({trace}, with_runtime(rt));
         CHECK(ix.status().needs_work == std::vector<std::string>{trace});
         CHECK(ix.build().indexed == 1);
-        CHECK(common::fs::exists(root / "store"));
-        CHECK(common::fs::exists(root / "rollups" / "marker"));
+        CHECK(dstd::fs::exists(root / "store").value());
+        CHECK(dstd::fs::exists(root / "rollups" / "marker").value());
         rt.shutdown();
     }
 
@@ -136,15 +140,16 @@ TEST_SUITE("Indexer") {
         CHECK(first.indexed == 2);
         CHECK(first.needs_work.empty());
         CHECK(sorted(first.ready) == sorted({a, b}));
-        CHECK(common::fs::exists(first.index_path));
+        CHECK(dstd::fs::exists(first.index_path).value());
 
         auto second = ix.build();
         CHECK(second.indexed == 0);
         CHECK(sorted(second.ready) == sorted({a, b}));
 
         const auto replacement = env.create_dft_test_gzip_file(55);
-        common::fs::copy_file(replacement, a,
-                              common::fs::copy_options::overwrite_existing);
+        REQUIRE(
+            dstd::fs::copy_file(replacement, a, dstd::fs::CopyMode::Overwrite)
+                .has_value());
         touch_later(a);
         auto third = ix.build();
         CHECK(third.indexed == 1);
@@ -153,7 +158,7 @@ TEST_SUITE("Indexer") {
         auto files = ix.files();
         REQUIRE(files.size() == 2);
         for (const auto& f : files) {
-            CHECK(f.size_bytes == common::fs::file_size(f.path));
+            CHECK(f.size_bytes == dstd::fs::file_size(f.path).value());
             CHECK(f.size_bytes > 0);
             CHECK(f.index_path == index_of(f.path));
         }
@@ -168,8 +173,9 @@ TEST_SUITE("Indexer") {
 
         auto ix = Indexer::open({a}, with_runtime(rt));
         const auto replacement = env.create_dft_test_gzip_file(55);
-        common::fs::copy_file(replacement, a,
-                              common::fs::copy_options::overwrite_existing);
+        REQUIRE(
+            dstd::fs::copy_file(replacement, a, dstd::fs::CopyMode::Overwrite)
+                .has_value());
         touch_later(a);
         CHECK(ix.status().needs_work == std::vector<std::string>{a});
         CHECK(ix.build().indexed == 1);
@@ -233,15 +239,17 @@ TEST_SUITE("Indexer") {
         TestEnvironment env_b(10);
         const auto a = env_a.create_dft_test_gzip_file(25);
         const auto b =
-            common::fs::path(env_b.get_dir()) / common::fs::path(a).filename();
-        common::fs::copy_file(a, b);
-        common::fs::last_write_time(b, common::fs::last_write_time(a));
+            dstd::Path(env_b.get_dir()) / dstd::PathView(a).filename();
+        REQUIRE(dstd::fs::copy_file(a, b, dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
+        REQUIRE(dstd::fs::set_mtime_ns(b, dstd::fs::mtime_ns(a).value())
+                    .has_value());
 
         auto blocking = Indexer::open({a}, with_runtime(rt));
         const IndexStatus by_block = blocking.build();
         const auto files_block = blocking.files();
 
-        auto async = Indexer::open({b.string()}, with_runtime(rt));
+        auto async = Indexer::open({std::string(b.str())}, with_runtime(rt));
         IndexStatus by_async;
         std::vector<IndexedFile> files_async;
         rt.run_blocking("indexer-test",
@@ -255,8 +263,8 @@ TEST_SUITE("Indexer") {
         CHECK(by_async.ready.size() == by_block.ready.size());
         CHECK(by_async.needs_work == by_block.needs_work);
         REQUIRE(files_async.size() == files_block.size());
-        CHECK(common::fs::path(files_async[0].path).filename() ==
-              common::fs::path(files_block[0].path).filename());
+        CHECK(dstd::Path(files_async[0].path).view().filename() ==
+              dstd::Path(files_block[0].path).view().filename());
         CHECK(files_async[0].size_bytes == files_block[0].size_bytes);
         CHECK(files_async[0].mtime == files_block[0].mtime);
         rt.shutdown();
@@ -268,7 +276,7 @@ TEST_SUITE("Indexer") {
         TestEnvironment env(10);
         const auto good = env.create_dft_test_gzip_file(30);
         const auto locked = env.create_dft_test_gzip_file(30);
-        common::fs::permissions(locked, common::fs::perms::none);
+        REQUIRE(dstd::fs::set_permissions(locked, 0).has_value());
 
         auto ix = Indexer::open({good, locked}, with_runtime(rt));
         bool threw = false;
@@ -278,7 +286,7 @@ TEST_SUITE("Indexer") {
             threw = true;
             CHECK(std::string(e.what()).find(locked) != std::string::npos);
         }
-        common::fs::permissions(locked, common::fs::perms::owner_all);
+        REQUIRE(dstd::fs::set_permissions(locked, 0700).has_value());
         CHECK(threw);
         auto st = Indexer::open({good}, with_runtime(rt)).status();
         CHECK(st.ready == std::vector<std::string>{good});
@@ -312,7 +320,7 @@ struct ZlibPrefix {
 };
 
 ZlibPrefix zlib_prefix(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path.c_str(), std::ios::binary);
     std::vector<unsigned char> data((std::istreambuf_iterator<char>(in)),
                                     std::istreambuf_iterator<char>());
     ZlibPrefix r;
@@ -350,10 +358,10 @@ ZlibPrefix zlib_prefix(const std::string& path) {
 
 std::string write_prefix(const std::string& src, const std::string& dst,
                          double frac) {
-    std::ifstream in(src, std::ios::binary);
+    std::ifstream in(src.c_str(), std::ios::binary);
     std::string bytes((std::istreambuf_iterator<char>(in)),
                       std::istreambuf_iterator<char>());
-    std::ofstream(dst, std::ios::binary) << bytes.substr(
+    std::ofstream(dst.c_str(), std::ios::binary) << bytes.substr(
         0, static_cast<std::size_t>(static_cast<double>(bytes.size()) * frac));
     return dst;
 }
@@ -385,10 +393,10 @@ Indexed indexed(const std::string& trace) {
 std::string multimember_trace(TestEnvironment& env, int events,
                               const std::string& name) {
     const auto plain = env.create_dft_test_file(events);
-    const auto gz = (common::fs::path(env.get_dir()) / name).string();
+    const std::string gz((dstd::Path(env.get_dir()) / name).str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
@@ -403,10 +411,11 @@ TEST_SUITE("Truncated") {
             CAPTURE(frac);
             const auto cut = write_prefix(
                 full,
-                (common::fs::path(env.get_dir()) /
-                 ("cut" + std::to_string(static_cast<int>(frac * 100)) +
-                  ".pfw.gz"))
-                    .string(),
+                std::string(
+                    (dstd::Path(env.get_dir()) /
+                     ("cut" + std::to_string(static_cast<int>(frac * 100)) +
+                      ".pfw.gz"))
+                        .str()),
                 frac);
             auto st = Indexer::open({cut}, with_runtime(rt)).build();
             CHECK(st.ready == std::vector<std::string>{cut});
@@ -414,7 +423,7 @@ TEST_SUITE("Truncated") {
             const auto ref = zlib_prefix(cut);
             CHECK(got.lines == ref.lines);
             CHECK(got.truncated);
-            CHECK(got.members_end == common::fs::file_size(cut));
+            CHECK(got.members_end == dstd::fs::file_size(cut).value());
         }
         rt.shutdown();
     }
@@ -424,7 +433,7 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, (common::fs::path(env.get_dir()) / "cut.pfw.gz").string(),
+            full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.5);
         {
             std::fstream f(cut,
@@ -452,7 +461,7 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = env.create_dft_test_gzip_file(3000);
         const auto cut = write_prefix(
-            full, (common::fs::path(env.get_dir()) / "cut.pfw.gz").string(),
+            full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.5);
         Indexer::open({cut}, with_runtime(rt)).build();
         const auto got = indexed(cut);
@@ -486,7 +495,7 @@ TEST_SUITE("Truncated") {
             std::fstream f(full,
                            std::ios::in | std::ios::out | std::ios::binary);
             f.seekp(static_cast<std::streamoff>(last + 10));
-            const std::size_t n = common::fs::file_size(full) - last - 10;
+            const std::size_t n = dstd::fs::file_size(full).value() - last - 10;
             std::string noise(n, static_cast<char>(0xFF));
             f.write(noise.data(), static_cast<std::streamsize>(n));
         }
@@ -502,14 +511,14 @@ TEST_SUITE("Truncated") {
         Runtime rt(4);
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
-        const auto path =
-            (common::fs::path(env.get_dir()) / "live.pfw.gz").string();
+        const std::string path(
+            (dstd::Path(env.get_dir()) / "live.pfw.gz").str());
         write_prefix(full, path, 0.6);
         auto ix = Indexer::open({path}, with_runtime(rt));
         ix.build();
         REQUIRE(indexed(path).truncated);
-        common::fs::copy_file(full, path,
-                              common::fs::copy_options::overwrite_existing);
+        REQUIRE(dstd::fs::copy_file(full, path, dstd::fs::CopyMode::Overwrite)
+                    .has_value());
         touch_later(path);
         CHECK(ix.build().indexed == 1);
         const auto got = indexed(path);
@@ -523,7 +532,8 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, (common::fs::path(env.get_dir()) / "cut90.pfw.gz").string(),
+            full,
+            std::string((dstd::Path(env.get_dir()) / "cut90.pfw.gz").str()),
             0.9);
         const auto ref = zlib_prefix(cut);
         REQUIRE(ref.events > 0);
@@ -553,7 +563,7 @@ TEST_SUITE("Truncated") {
         TestEnvironment env(10);
         const auto full = multimember_trace(env, 4000, "full.pfw.gz");
         const auto cut = write_prefix(
-            full, (common::fs::path(env.get_dir()) / "cut.pfw.gz").string(),
+            full, std::string((dstd::Path(env.get_dir()) / "cut.pfw.gz").str()),
             0.7);
         auto ix = Indexer::open({full, cut}, with_runtime(rt));
         ix.build();

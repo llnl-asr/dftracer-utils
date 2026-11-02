@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/fold.h>
@@ -17,7 +19,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
@@ -308,11 +309,8 @@ Expected expected_durable(int round) {
 
 std::size_t count_data_files(const std::string& root) {
     std::size_t count = 0;
-    std::error_code error;
-    std::filesystem::directory_iterator iterator(root, error);
-    if (error) return 0;
-    for (const auto& entry : iterator) {
-        const std::string name = entry.path().filename().string();
+    for (const auto& e : dftu_utils_test::list_dir(root)) {
+        const std::string name(e.path.view().filename());
         if (name.size() > 4 && name.compare(name.size() - 4, 4, ".dfs") == 0) {
             ++count;
         }
@@ -669,11 +667,15 @@ void run_round(const std::string& root, int round) {
 }
 
 void copy_files(const std::string& from, const std::string& to) {
-    for (const auto& entry : std::filesystem::directory_iterator(from)) {
-        if (!entry.is_regular_file()) continue;
-        std::filesystem::copy_file(
-            entry.path(), std::filesystem::path(to) / entry.path().filename(),
-            std::filesystem::copy_options::overwrite_existing);
+    for (const auto& entry : dftu_utils_test::list_dir(from)) {
+        if (!(entry.kind == dftracer::utils::dstd::fs::FileKind::File))
+            continue;
+        REQUIRE(
+            dftracer::utils::dstd::fs::copy_file(
+                entry.path,
+                dftracer::utils::dstd::Path(to) / entry.path.view().filename(),
+                dftracer::utils::dstd::fs::CopyMode::Overwrite)
+                .has_value());
     }
 }
 

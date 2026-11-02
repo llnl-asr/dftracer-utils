@@ -51,7 +51,7 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
     const std::string gz = root + "/trace.pfw.gz";
     const std::string index_dir = root + "/idx";
     {
-        std::ofstream out(plain, std::ios::binary);
+        std::ofstream out(plain.c_str(), std::ios::binary);
         out << trace_text(4000);
     }
     REQUIRE(

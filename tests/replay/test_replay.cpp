@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/replay/replay.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -47,11 +48,13 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     dftracer::utils::common::logger::init();
 
     // Create a temporary trace file with sample data
-    dftracer::utils::common::fs::path temp_dir =
+    dftracer::utils::dstd::Path temp_dir =
         dftu_utils_test::make_unique_test_path("dftracer_replay_test");
-    dftracer::utils::common::fs::create_directories(temp_dir);
+    REQUIRE(
+        dftracer::utils::dstd::fs::create_directories(temp_dir).has_value());
 
-    std::string trace_file = (temp_dir / "test_trace.pfw.gz").string();
+    std::string trace_file =
+        std::string((temp_dir / "test_trace.pfw.gz").str());
 
     SUBCASE("Create sample trace file") {
         GzTraceWriter file(trace_file);
@@ -74,7 +77,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
         file << "]";
         file.close();
 
-        REQUIRE(dftracer::utils::common::fs::exists(trace_file));
+        REQUIRE(dftracer::utils::dstd::fs::exists(trace_file).value());
     }
 
     SUBCASE("Test DFTracer sleep-based replay mode") {
@@ -281,8 +284,7 @@ TEST_CASE("DFTracer Replay - Basic functionality") {
     }
 
     // Cleanup
-    std::error_code ec;
-    dftracer::utils::common::fs::remove_all(temp_dir, ec);
+    (void)dftracer::utils::dstd::fs::remove_all(temp_dir);
 }
 
 TEST_CASE("DFTracer Replay - Trace structure") {
@@ -343,7 +345,7 @@ TEST_CASE("DFTracer Replay - Real trace files") {
     std::string trace_dir = "trace_short/bert_v100-1.pfw";
 
     SUBCASE("Test with bert trace file") {
-        if (!dftracer::utils::common::fs::exists(trace_dir)) {
+        if (!dftracer::utils::dstd::fs::exists(trace_dir).value()) {
             MESSAGE("Skipping real trace test - file not found: ", trace_dir);
             return;
         }
@@ -379,7 +381,7 @@ TEST_CASE("DFTracer Replay - Call tree integration") {
     std::string trace_dir = "trace_short/cosmoflow_h100/nodes-1";
 
     SUBCASE("Test call tree replay") {
-        if (!dftracer::utils::common::fs::is_directory(trace_dir)) {
+        if (!dftracer::utils::dstd::fs::is_directory(trace_dir).value()) {
             MESSAGE("Skipping call tree test - directory not found: ",
                     trace_dir);
             return;

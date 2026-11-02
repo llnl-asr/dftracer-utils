@@ -7,7 +7,8 @@
 // DFTRACER_UTILS_PRUNE_ORACLE_RECORD=<path> to write a new recording instead.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -130,12 +131,12 @@ std::string write_trace(const std::string& dir, int seed, int events) {
     }
     out << "]\n";
     const auto plain = dir + "/trace" + std::to_string(seed) + ".pfw";
-    std::ofstream(plain) << out.str();
+    std::ofstream(plain.c_str()) << out.str();
     const auto gz = plain + ".gz";
     const std::size_t member = seed == 3 ? LARGE_MEMBER_BYTES : MEMBER_BYTES;
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, member));
-    common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
@@ -227,7 +228,7 @@ struct Corpus {
 std::vector<std::string> run_oracle(const Corpus& c) {
     std::vector<std::string> lines;
     for (const auto& trace : c.traces) {
-        const auto base = common::fs::path(trace).filename().string();
+        const std::string base(dstd::PathView(trace).filename());
         const auto index_path = c.index_of(trace);
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);
         const auto file =
@@ -282,9 +283,9 @@ std::vector<std::string> run_oracle(const Corpus& c) {
 }
 
 std::string recording_path() {
-    return (common::fs::path(DFTRACER_UTILS_TEST_SOURCE_DIR) / "index" /
-            "data" / "prune_oracle.txt")
-        .string();
+    return std::string((dstd::Path(DFTRACER_UTILS_TEST_SOURCE_DIR) / "index" /
+                        "data" / "prune_oracle.txt")
+                           .str());
 }
 
 std::size_t count_json(const std::string& trace, const std::string& index_dir,
@@ -367,7 +368,7 @@ TEST_CASE("prune decisions match the recording") {
         return;
     }
 
-    std::ifstream f(recording_path());
+    std::ifstream f((recording_path()).c_str());
     REQUIRE_MESSAGE(f.good(), "missing " << recording_path());
     std::vector<std::string> expected;
     for (std::string l; std::getline(f, l);) expected.push_back(l);
@@ -602,7 +603,7 @@ TEST_CASE("a spilled build indexes the corpus as an unbounded one") {
         }
         return rows;
     };
-    for (const auto& t : corpus.traces) common::fs::remove(t);
+    for (const auto& t : corpus.traces) dstd::fs::remove(t).has_value();
     const auto from_full = summary(corpus.index_of(trace));
     CHECK_FALSE(from_full.empty());
     CHECK(from_full == summary(spilled));
@@ -623,11 +624,11 @@ TEST_CASE("a name two traces hash differently is an arrow to both hashes") {
                 << R"(,"dur":5,"args":{"fhash":")" << hash << "\"}}\n";
         const auto plain =
             env.get_dir() + "/t" + std::to_string(traces.size()) + ".pfw";
-        std::ofstream(plain) << out.str();
+        std::ofstream(plain.c_str()) << out.str();
         const auto gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    1024));
-        common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         traces.push_back(gz);
     }
     index::IndexerOptions opts;

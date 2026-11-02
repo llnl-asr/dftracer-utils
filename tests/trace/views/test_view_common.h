@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_VIEW_COMMON_H
 #define DFTRACER_UTILS_TESTS_VIEW_COMMON_H
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -32,7 +32,7 @@ T run(dftracer::utils::coro::CoroTask<T> task) {
 inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
                                       int posix_n, int stdio_n) {
     std::string pfw = env.get_dir() + "/mixed.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < posix_n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
@@ -46,7 +46,7 @@ inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -57,7 +57,7 @@ inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
 inline std::string create_multimember_trace(
     dftu_utils_test::TestEnvironment& env, int n, std::size_t member_bytes) {
     std::string pfw = env.get_dir() + "/mm.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
@@ -66,7 +66,7 @@ inline std::string create_multimember_trace(
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -74,7 +74,7 @@ inline std::string create_multimember_trace(
 inline std::string create_trace_with_counters(
     dftu_utils_test::TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/ctr.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < 10; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
@@ -86,7 +86,7 @@ inline std::string create_trace_with_counters(
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -95,7 +95,7 @@ inline std::string create_trace_with_counters(
 inline std::string create_bulk_counters(dftu_utils_test::TestEnvironment& env,
                                         int n) {
     std::string pfw = env.get_dir() + "/bulk.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < n; ++i) {
         const char* nm = (i % 2 == 0) ? "cpu" : "gpu";
         ofs << R"({"ph":"C","name":")" << nm
@@ -105,7 +105,7 @@ inline std::string create_bulk_counters(dftu_utils_test::TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -117,9 +117,9 @@ inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
     // Each shard gets its own dir so its index (keyed off the parent dir) does
     // not collide with the other shard's.
     std::string dir = env.get_dir() + "/" + tag;
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     std::string pfw = dir + "/ctr.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     int ts = 1000;
     for (int v : user_pcts) {
         ofs << R"({"ph":"C","name":"cpu","cat":"sys","pid":0,"tid":0,"ts":)"
@@ -129,7 +129,7 @@ inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 

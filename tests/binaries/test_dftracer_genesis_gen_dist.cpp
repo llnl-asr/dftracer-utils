@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -34,29 +35,31 @@ std::string call(int pid, const std::string& name, int ts, int dur,
 }
 
 // One complete matrix-layout run under `root` with a single set.
-dftracer::utils::common::fs::path write_run(
-    const dftracer::utils::common::fs::path& root, const std::string& input) {
-    const dftracer::utils::common::fs::path dir =
+dftracer::utils::dstd::Path write_run(const dftracer::utils::dstd::Path& root,
+                                      const std::string& input) {
+    const dftracer::utils::dstd::Path dir =
         root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    dftracer::utils::common::fs::create_directories(dir / "compacted");
-    std::ofstream(dir / "summary.json")
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir / "compacted")
+                .has_value());
+    std::ofstream((dir / "summary.json").c_str())
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
     std::string t = "[\n" + call(1, "start", 0, 0, "dftracer") +
                     call(1, "end", 100000, 0, "dftracer");
     for (int i = 0; i < 500; ++i) t += call(1, "work", i * 100, 50);
     dftu_utils_test::write_gz_trace(
-        (dir / "compacted" / "set1.pfw.gz").string(), t);
+        std::string((dir / "compacted" / "set1.pfw.gz").str()), t);
     return dir / "compacted" / "set1.pfw.gz";
 }
 
 // A run with `paths` distinct call names, so records outnumber its run record.
-void write_wide_run(const dftracer::utils::common::fs::path& root,
+void write_wide_run(const dftracer::utils::dstd::Path& root,
                     const std::string& input, int paths) {
-    const dftracer::utils::common::fs::path dir =
+    const dftracer::utils::dstd::Path dir =
         root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    dftracer::utils::common::fs::create_directories(dir / "compacted");
-    std::ofstream(dir / "summary.json")
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir / "compacted")
+                .has_value());
+    std::ofstream((dir / "summary.json").c_str())
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
     std::string t = "[\n" + call(1, "start", 0, 0, "dftracer") +
@@ -64,17 +67,18 @@ void write_wide_run(const dftracer::utils::common::fs::path& root,
     for (int i = 0; i < 400; ++i)
         t += call(1, "f" + std::to_string(i % paths), i * 1000, 500);
     dftu_utils_test::write_gz_trace(
-        (dir / "compacted" / "set1.pfw.gz").string(), t);
+        std::string((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
 // A run of `depth` nested calls with long names: its path records hold about
 // depth * depth * 13 bytes of path text, from a small trace file.
-void write_deep_run(const dftracer::utils::common::fs::path& root,
+void write_deep_run(const dftracer::utils::dstd::Path& root,
                     const std::string& input, int depth) {
-    const dftracer::utils::common::fs::path dir =
+    const dftracer::utils::dstd::Path dir =
         root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    dftracer::utils::common::fs::create_directories(dir / "compacted");
-    std::ofstream(dir / "summary.json")
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir / "compacted")
+                .has_value());
+    std::ofstream((dir / "summary.json").c_str())
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
     std::string t = "[\n" + call(1, "start", 0, 0, "dftracer") +
@@ -85,7 +89,7 @@ void write_deep_run(const dftracer::utils::common::fs::path& root,
         t += call(1, name, i, 2 * (depth - i));
     }
     dftu_utils_test::write_gz_trace(
-        (dir / "compacted" / "set1.pfw.gz").string(), t);
+        std::string((dir / "compacted" / "set1.pfw.gz").str()), t);
 }
 
 std::vector<std::string> gz_lines(const std::string& path) {
@@ -106,7 +110,7 @@ std::vector<std::string> gz_lines(const std::string& path) {
 
 std::vector<std::size_t> member_sizes(const std::string& path) {
     const std::string gz = [&] {
-        std::ifstream in(path, std::ios::binary);
+        std::ifstream in(path.c_str(), std::ios::binary);
         return std::string(std::istreambuf_iterator<char>(in), {});
     }();
     std::vector<std::size_t> sizes;
@@ -130,7 +134,7 @@ std::vector<std::size_t> member_sizes(const std::string& path) {
 }
 
 std::string slurp(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path.c_str(), std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
 }
 
@@ -149,15 +153,14 @@ TEST_CASE("a truncated run is skipped and the others are written") {
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_trunc");
     write_run(d.path() / "root", "good");
-    const dftracer::utils::common::fs::path bad =
-        write_run(d.path() / "root", "bad");
-    dftracer::utils::common::fs::resize_file(
-        bad, dftracer::utils::common::fs::file_size(bad) / 2);
+    const dftracer::utils::dstd::Path bad = write_run(d.path() / "root", "bad");
+    REQUIRE(dftracer::utils::dstd::fs::resize_file(
+                bad, dftracer::utils::dstd::fs::file_size(bad).value() / 2)
+                .has_value());
     std::string text;
-    CHECK(run({(d.path() / "root").string(), "-o", d.file("out.pfw.gz")},
-              &text) == 0);
+    CHECK(run({d.file("root"), "-o", d.file("out.pfw.gz")}, &text) == 0);
     CHECK(text.find("Wrote 1 run(s)") != std::string::npos);
-    CHECK(text.find(bad.string()) != std::string::npos);
+    CHECK(text.find(bad.str()) != std::string::npos);
     const auto lines = gz_lines(d.file("out.pfw.gz"));
     REQUIRE(!lines.empty());
     CHECK(lines[0].find(R"("unique_input":"good")") != std::string::npos);
@@ -169,7 +172,7 @@ TEST_CASE("the output path must end with .pfw.gz") {
     ScopedTestDir d("gen_dist_ext");
     write_run(d.path(), "a");
     CHECK(run({d.str(), "-o", d.file("out.jsonl")}) != 0);
-    CHECK_FALSE(dftracer::utils::common::fs::exists(d.file("out.jsonl")));
+    CHECK_FALSE(dftracer::utils::dstd::fs::exists(d.file("out.jsonl")).value());
 }
 
 TEST_CASE(
@@ -179,8 +182,8 @@ TEST_CASE(
     ScopedTestDir d("gen_dist_det");
     write_run(d.path() / "a", "x");
     write_run(d.path() / "b", "y");
-    const std::string a = (d.path() / "a").string();
-    const std::string b = (d.path() / "b").string();
+    const std::string a = std::string(d.file("a"));
+    const std::string b = std::string(d.file("b"));
     CHECK(run({a, b, "-o", d.file("ab1.pfw.gz")}) == 0);
     CHECK(run({a, b, "-o", d.file("ab2.pfw.gz")}) == 0);
     // Workers write their runs as they finish, so only the set of lines is
@@ -193,7 +196,7 @@ TEST_CASE(
 
     CHECK(run({a, "-o", d.file("a.pfw.gz")}) == 0);
     CHECK(run({b, "-o", d.file("b.pfw.gz")}) == 0);
-    std::ofstream(d.file("cat.pfw.gz"), std::ios::binary)
+    std::ofstream((d.file("cat.pfw.gz")).c_str(), std::ios::binary)
         << slurp(d.file("a.pfw.gz")) << slurp(d.file("b.pfw.gz"));
     auto joined = gz_lines(d.file("cat.pfw.gz"));
     auto together = gz_lines(d.file("ab1.pfw.gz"));
@@ -207,7 +210,7 @@ TEST_CASE("members follow the member size, not the run") {
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_member");
     write_wide_run(d.path() / "root", "w", 300);
-    const std::string root = (d.path() / "root").string();
+    const std::string root = std::string(d.file("root"));
     constexpr std::size_t MEMBER = 2048;
     CHECK(run({root, "-o", d.file("small.pfw.gz"), "--member-size",
                std::to_string(MEMBER)}) == 0);
@@ -235,7 +238,7 @@ TEST_CASE("records carry the run id and resolve run keys through the index") {
     write_wide_run(d.path() / "root", "x", 20);
     write_wide_run(d.path() / "root", "y", 20);
     const std::string out = d.file("out.pfw.gz");
-    REQUIRE(run({(d.path() / "root").string(), "-o", out}) == 0);
+    REQUIRE(run({d.file("root"), "-o", out}) == 0);
 
     std::size_t records = 0;
     for (const auto& line : gz_lines(out)) {
@@ -325,15 +328,15 @@ TEST_CASE("a run over its share is still written") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_retry");
-    const dftracer::utils::common::fs::path root = d.path() / "root";
+    const dftracer::utils::dstd::Path root = d.path() / "root";
     for (int i = 0; i < 6; ++i) write_run(root, "small" + std::to_string(i));
     // About 25 MB of path text: over the state of a 70 MB share, so the run
     // borrows free memory of the 140 MB for groups of a 160 MB budget or runs
     // again with a larger share.
     write_deep_run(root, "deep", 1400);
     std::string text;
-    CHECK(run({root.string(), "-o", d.file("out.pfw.gz"), "--memory-budget",
-               "160MB", "--executor-threads", "2"},
+    CHECK(run({std::string(root.str()), "-o", d.file("out.pfw.gz"),
+               "--memory-budget", "160MB", "--executor-threads", "2"},
               &text) == 0);
     CHECK(text.find("Wrote 7 run(s)") != std::string::npos);
     CHECK(text.find("skipped 0") != std::string::npos);
@@ -350,10 +353,11 @@ TEST_CASE("the run and func records follow every counter record") {
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_layout");
     for (const std::string input : {"a", "b", "c"}) {
-        const dftracer::utils::common::fs::path dir =
+        const dftracer::utils::dstd::Path dir =
             d.path() / "root" / "app" / "sys" / input / "nodes_1" / "ppn_1";
-        dftracer::utils::common::fs::create_directories(dir / "compacted");
-        std::ofstream(dir / "summary.json")
+        dftracer::utils::dstd::fs::create_directories(dir / "compacted")
+            .has_value();
+        std::ofstream((dir / "summary.json").c_str())
             << R"({"ok":true,"app":"app","system":"sys","input":")" << input
             << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
         std::string t = "[\n" + call(1, "start", 0, 0, "dftracer") +
@@ -368,11 +372,10 @@ TEST_CASE("the run and func records follow every counter record") {
             t += o.str() + call(1, "f" + std::to_string(i % 40), i * 500, 200);
         }
         dftu_utils_test::write_gz_trace(
-            (dir / "compacted" / "set1.pfw.gz").string(), t);
+            std::string((dir / "compacted" / "set1.pfw.gz").str()), t);
     }
     const std::string out = d.file("out.pfw.gz");
-    REQUIRE(run({(d.path() / "root").string(), "-o", out, "--member-size",
-                 "4096"}) == 0);
+    REQUIRE(run({d.file("root"), "-o", out, "--member-size", "4096"}) == 0);
     const auto lines = gz_lines(out);
     const auto first_head =
         std::find_if(lines.begin(), lines.end(), [](const std::string& l) {
@@ -389,29 +392,30 @@ TEST_CASE("the run and func records follow every counter record") {
     }
     CHECK(runs == 3);
     CHECK(funcs == 3 * 40);
-    CHECK(dftracer::utils::common::fs::exists(out + ".head") == false);
+    CHECK(dftracer::utils::dstd::fs::exists(out + ".head").value() == false);
 }
 
 TEST_CASE("the shards of a sweep hold each run once") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_shard");
-    const dftracer::utils::common::fs::path root = d.path() / "root";
+    const dftracer::utils::dstd::Path root = d.path() / "root";
     for (int i = 0; i < 5; ++i) write_run(root, "in" + std::to_string(i));
-    const dftracer::utils::common::fs::path off =
+    const dftracer::utils::dstd::Path off =
         root / "app" / "sys" / "off" / "nodes_1" / "ppn_1";
-    dftracer::utils::common::fs::create_directories(off);
-    std::ofstream(off / "summary.json") << R"({"ok":false})";
+    dftracer::utils::dstd::fs::create_directories(off).has_value();
+    std::ofstream((off / "summary.json").c_str()) << R"({"ok":false})";
 
     std::string full_text;
-    REQUIRE(run({root.string(), "-o", d.file("full.pfw.gz")}, &full_text) == 0);
+    REQUIRE(run({std::string(root.str()), "-o", d.file("full.pfw.gz")},
+                &full_text) == 0);
     std::vector<std::string> parts;
     std::string texts[2];
     for (int i = 0; i < 2; ++i) {
         const std::string out = d.file("s" + std::to_string(i) + ".pfw.gz");
-        REQUIRE(
-            run({root.string(), "-o", out, "--shard", std::to_string(i) + "/2"},
-                &texts[i]) == 0);
+        REQUIRE(run({std::string(root.str()), "-o", out, "--shard",
+                     std::to_string(i) + "/2"},
+                    &texts[i]) == 0);
         const auto lines = gz_lines(out);
         CHECK_FALSE(lines.empty());
         parts.insert(parts.end(), lines.begin(), lines.end());
@@ -433,8 +437,8 @@ TEST_CASE("a shard outside i/N with 0 <= i < N is refused") {
     write_run(d.path() / "root", "in");
     for (const char* bad : {"2/2", "0/0", "1", "a/2", "1/2/3", "-1/2", "/2"}) {
         CAPTURE(bad);
-        CHECK(run({(d.path() / "root").string(), "-o", d.file("o.pfw.gz"),
-                   "--shard", bad}) != 0);
+        CHECK(run({d.file("root"), "-o", d.file("o.pfw.gz"), "--shard", bad}) !=
+              0);
     }
 }
 
@@ -442,10 +446,11 @@ TEST_CASE("the thread count does not change the output") {
     REQUIRE_FALSE(binary().empty());
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_threads");
-    const dftracer::utils::common::fs::path dir =
+    const dftracer::utils::dstd::Path dir =
         d.path() / "root" / "app" / "sys" / "in" / "nodes_1" / "ppn_4";
-    dftracer::utils::common::fs::create_directories(dir / "compacted");
-    std::ofstream(dir / "summary.json")
+    dftracer::utils::dstd::fs::create_directories(dir / "compacted")
+        .has_value();
+    std::ofstream((dir / "summary.json").c_str())
         << R"({"ok":true,"app":"app","system":"sys","input":"in","nodes":1,)"
            R"("ppn":4,"sets":["set1"]})";
     std::string t = "[\n";
@@ -457,14 +462,14 @@ TEST_CASE("the thread count does not change the output") {
                       30 + (i * 7 + pid) % 60);
     }
     dftu_utils_test::write_gz_trace(
-        (dir / "compacted" / "set1.pfw.gz").string(), t);
+        std::string((dir / "compacted" / "set1.pfw.gz").str()), t);
     std::vector<std::string> outs[2];
     const char* threads[2] = {"1", "4"};
     for (int k = 0; k < 2; ++k) {
         const std::string out =
             d.file(std::string("o") + threads[k] + ".pfw.gz");
-        REQUIRE(run({(d.path() / "root").string(), "-o", out,
-                     "--executor-threads", threads[k]}) == 0);
+        REQUIRE(run({d.file("root"), "-o", out, "--executor-threads",
+                     threads[k]}) == 0);
         outs[k] = gz_lines(out);
         std::sort(outs[k].begin(), outs[k].end());
     }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -46,12 +46,12 @@ std::string write_nginx(const std::string& dir, int records) {
             << "\"}\n";
     const auto plain = dir + "/access.ndjson";
     {
-        std::ofstream(plain) << out.str();
+        std::ofstream(plain.c_str()) << out.str();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                8 * 1024));
-    common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
@@ -403,17 +403,18 @@ TEST_SUITE("SchemaRegistry") {
     TEST_CASE("a directory of specs loads once") {
         dftu_utils_test::TestEnvironment env(1);
         const auto dir = env.get_dir() + "/specs";
-        common::fs::create_directories(dir);
-        std::ofstream(dir + "/a.yaml") << "id: dir_a\n";
-        std::ofstream(dir + "/b.json") << R"({"id":"dir_b","extends":"dir_a"})";
-        std::ofstream(dir + "/notes.txt") << "not a spec";
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        std::ofstream((dir + "/a.yaml").c_str()) << "id: dir_a\n";
+        std::ofstream((dir + "/b.json").c_str())
+            << R"({"id":"dir_b","extends":"dir_a"})";
+        std::ofstream((dir + "/notes.txt").c_str()) << "not a spec";
         ix::load_schemas(dir);
         REQUIRE(ix::find_schema("dir_b") != nullptr);
         ix::load_schemas(dir);
 
         const auto bad = env.get_dir() + "/broken";
-        common::fs::create_directories(bad);
-        std::ofstream(bad + "/c.yaml") << "id: dir_c\nbogus: 1\n";
+        REQUIRE(dstd::fs::create_directories(bad).has_value());
+        std::ofstream((bad + "/c.yaml").c_str()) << "id: dir_c\nbogus: 1\n";
         const auto what = error_of([&] { ix::load_schemas(bad); });
         CHECK(mentions(what, "c.yaml"));
         CHECK(mentions(what, "bogus"));
@@ -458,9 +459,10 @@ TEST_SUITE("SchemaRegistry") {
         dftu_utils_test::TestEnvironment env(1);
         const auto gz = write_nginx(env.get_dir(), 3000);
         const auto index_dir = env.get_dir() + "/idx";
-        common::fs::create_directories(index_dir + "/schemas");
+        REQUIRE(
+            dstd::fs::create_directories(index_dir + "/schemas").has_value());
         // path_budget 1: the always-indexed field and the first other path.
-        std::ofstream(index_dir + "/schemas/nginx.yaml")
+        std::ofstream((index_dir + "/schemas/nginx.yaml").c_str())
             << "id: idx_nginx\n"
                "fields:\n"
                "  remote_addr: {type: string}\n"
@@ -523,11 +525,11 @@ TEST_SUITE("SchemaDetection") {
                                   const std::string& name,
                                   const std::string& text, bool gz) {
         const auto plain = env.get_dir() + "/" + name;
-        std::ofstream(plain, std::ios::binary) << text;
+        std::ofstream(plain.c_str(), std::ios::binary) << text;
         if (!gz) return plain;
         const auto out = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(plain, out));
-        common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         return out;
     }
 
@@ -707,9 +709,10 @@ TEST_SUITE("SchemaDetection") {
     TEST_CASE("file detection is cached until the file changes") {
         dftu_utils_test::TestEnvironment env(1);
         const auto path = env.get_dir() + "/c.ndjson";
-        std::ofstream(path) << R"({"k":1})" << "\n";
+        std::ofstream(path.c_str()) << R"({"k":1})" << "\n";
         CHECK(ix::detect_file_schema(path).id == "generic");
-        std::ofstream(path) << dft_event(1) << "\n" << dft_event(2) << "\n";
+        std::ofstream(path.c_str()) << dft_event(1) << "\n"
+                                    << dft_event(2) << "\n";
         CHECK(ix::detect_file_schema(path).id == "dftracer");
     }
 

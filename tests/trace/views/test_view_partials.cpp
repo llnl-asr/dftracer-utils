@@ -4,6 +4,7 @@
 // every result still equals the raw scan taken before.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -65,13 +66,13 @@ struct Fixture {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            dftracer::utils::common::fs::create_directories(dir);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
             const std::string plain = dir + "/t.pfw";
             const std::string pid = std::to_string(100 + i);
             const std::string host =
                 std::string(R"("hhash":")") + HOSTS[i] + R"(")";
             {
-                std::ofstream o(plain);
+                std::ofstream o(plain.c_str());
                 auto extra_args = [&](int epoch, int step) {
                     return extras
                                ? std::string(R"(,"epoch":")") +
@@ -106,7 +107,7 @@ struct Fixture {
             const std::string out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            dftracer::utils::common::fs::remove(plain);
+            dstd::fs::remove(plain).has_value();
             gz.push_back(out);
         }
         aggregation.compute_percentiles = true;
@@ -128,7 +129,7 @@ struct Fixture {
     View view() const { return View::from_files(files()); }
 
     void delete_traces() const {
-        for (const auto& g : gz) dftracer::utils::common::fs::remove(g);
+        for (const auto& g : gz) dstd::fs::remove(g).has_value();
     }
 };
 

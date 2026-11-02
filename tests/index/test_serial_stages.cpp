@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -45,7 +45,7 @@ constexpr int VIEW_FILES = 12;
 constexpr std::size_t VIEW_WORKERS = 4;
 
 void write_sized_file(const std::string& path, std::size_t bytes) {
-    std::ofstream out(path, std::ios::binary);
+    std::ofstream out(path.c_str(), std::ios::binary);
     out << std::string(bytes, 'x');
 }
 
@@ -103,7 +103,7 @@ std::string write_corrupt_trace(const std::string& dir, int n) {
     char name[32];
     std::snprintf(name, sizeof(name), "/t%04d.pfw.gz", n);
     const auto path = dir + name;
-    std::ofstream out(path, std::ios::binary);
+    std::ofstream out(path.c_str(), std::ios::binary);
     out << std::string(4096, 'x');
     return path;
 }
@@ -153,7 +153,7 @@ TEST_SUITE("SerialStages") {
     TEST_CASE("a directory scan stats its files in parallel batches") {
         dftu_utils_test::TestEnvironment env(10);
         const std::string dir = env.get_dir() + "/scan";
-        common::fs::create_directories(dir + "/sub");
+        REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
             write_sized_file(dir + "/f" + std::to_string(i) + ".pfw",
                              static_cast<std::size_t>(i) * 7 + 1);
@@ -163,11 +163,12 @@ TEST_SUITE("SerialStages") {
         write_sized_file(dir + "/skip.txt", 5);
 
         std::vector<std::string> expected;
-        for (const auto& e : common::fs::directory_iterator(dir))
-            if (e.is_regular_file() && e.path().extension() == ".pfw")
-                expected.push_back(e.path().string());
-        for (const auto& e : common::fs::directory_iterator(dir + "/sub"))
-            expected.push_back(e.path().string());
+        for (const auto& e : dftu_utils_test::list_dir(dir))
+            if ((e.kind == dstd::fs::FileKind::File) &&
+                e.path.view().extension() == ".pfw")
+                expected.push_back(std::string(e.path.str()));
+        for (const auto& e : dftu_utils_test::list_dir(dir + "/sub"))
+            expected.push_back(std::string(e.path.str()));
 
         const auto before = scan::scan_stat_batches().load();
         const auto entries = scan_dir(dir);
@@ -179,7 +180,7 @@ TEST_SUITE("SerialStages") {
             CHECK(entries[i].path.str() == expected[i]);
             CHECK(entries[i].is_regular_file);
             CHECK(entries[i].size ==
-                  common::fs::file_size(entries[i].path.c_str()));
+                  dstd::fs::file_size(entries[i].path.c_str()).value());
             CHECK(entries[i].mtime > 0);
         }
         CHECK(batches > 2);
@@ -188,8 +189,8 @@ TEST_SUITE("SerialStages") {
     TEST_CASE("a CLI scan stats its files on the pool, not the main thread") {
         dftu_utils_test::TestEnvironment env(10);
         const std::string dir = env.get_dir() + "/cli_scan";
-        common::fs::create_directories(dir + "/a");
-        common::fs::create_directories(dir + "/b");
+        REQUIRE(dstd::fs::create_directories(dir + "/a").has_value());
+        REQUIRE(dstd::fs::create_directories(dir + "/b").has_value());
         for (int i = 0; i < SCAN_FILES; ++i)
             write_sized_file(
                 dir + (i % 2 ? "/a/f" : "/b/f") + std::to_string(i) + ".pfw",

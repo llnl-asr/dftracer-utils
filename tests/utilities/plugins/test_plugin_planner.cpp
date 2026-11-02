@@ -7,6 +7,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -97,9 +98,9 @@ std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
     // Own subdir per trace: the index root is keyed off the parent directory,
     // so same-dir traces would share (and clobber) one index.
     std::string dir = env.get_dir() + "/" + tag;
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < n; ++i)
         ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
             << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
@@ -107,7 +108,7 @@ std::string make_homog_trace(dftu_utils_test::TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 

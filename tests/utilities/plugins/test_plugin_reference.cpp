@@ -5,6 +5,7 @@
 // service checks race-free writes into the plugin's own status table.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -16,7 +17,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -30,7 +30,6 @@ using dftracer::utils::plugins::Plugins;
 using View = dftracer::utils::trace::views::View;
 using ViewFile = dftracer::utils::trace::views::ViewFile;
 namespace coro = dftracer::utils::coro;
-namespace fs = std::filesystem;
 using test_plugin_common::index_trace;
 using test_plugin_common::result_text;
 
@@ -40,9 +39,9 @@ constexpr int EVENTS = 16;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     const std::string dir = env.get_dir() + "/reference_trace";
-    fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     const std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < EVENTS; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
@@ -50,7 +49,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     ofs.close();
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return index_trace(gz);
 }
 

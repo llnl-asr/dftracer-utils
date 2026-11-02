@@ -7,15 +7,17 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
 #include <stdlib.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -24,7 +26,6 @@
 #include <vector>
 
 using namespace dftracer::utils::dataframe;
-namespace fs = std::filesystem;
 
 namespace {
 
@@ -37,22 +38,21 @@ DataFrame run(dftracer::utils::coro::CoroTask<DataFrame> t) {
 }
 
 struct SpillDirVar {
-    fs::path dir;
+    dftracer::utils::dstd::Path dir;
     explicit SpillDirVar(const std::string& name) {
-        dir = fs::temp_directory_path() /
+        dir = dftracer::utils::dstd::fs::temp_directory() /
               (name + "_" + std::to_string(::getpid()));
-        fs::remove_all(dir);
-        fs::create_directories(dir);
+        REQUIRE(dftracer::utils::dstd::fs::remove_all(dir).has_value());
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
         ::setenv(DIR_VAR, dir.c_str(), 1);
     }
     ~SpillDirVar() {
         ::unsetenv(DIR_VAR);
-        std::error_code ec;
-        fs::remove_all(dir, ec);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
     std::size_t entries() const {
         std::size_t n = 0;
-        for (const auto& e : fs::directory_iterator(dir)) {
+        for (const auto& e : dftu_utils_test::list_dir(dir)) {
             (void)e;
             ++n;
         }
@@ -189,19 +189,19 @@ TEST_SUITE("collect spill") {
             run(lazy_of(df, dftracer::utils::memory::NO_SPILL_BUDGET)
                     .collect(MORSEL));
         CHECK(got.num_rows() == N);
-        CHECK(!fs::exists(var.dir / "missing"));
+        CHECK(!dftracer::utils::dstd::fs::exists(var.dir / "missing").value());
     }
 
     TEST_CASE("a spill file goes to the directory the variable names") {
         SpillDirVar var("dftu_cs_dir");
-        const fs::path run_path = [] {
+        const dftracer::utils::dstd::Path run_path = [] {
             dftracer::utils::dataframe::spill::Dir d;
-            return fs::path(d.run_path(0));
+            return dftracer::utils::dstd::Path(d.run_path(0));
         }();
-        CHECK(run_path.string().rfind(var.dir.string(), 0) == 0);
+        CHECK(run_path.str().rfind(var.dir.str(), 0) == 0);
         {
             dftracer::utils::dataframe::spill::Dir d;
-            std::ofstream(d.run_path(0)) << "x";
+            std::ofstream((d.run_path(0)).c_str()) << "x";
             CHECK(var.entries() == 1);
         }
         CHECK(var.entries() == 0);
@@ -209,9 +209,9 @@ TEST_SUITE("collect spill") {
 
     TEST_CASE("an unusable directory fails naming it and the variable") {
         SpillDirVar var("dftu_cs_bad");
-        const fs::path blocker = var.dir / "file";
-        std::ofstream(blocker) << "x";
-        const fs::path bad = blocker / "sub";
+        const dftracer::utils::dstd::Path blocker = var.dir / "file";
+        std::ofstream(blocker.c_str()) << "x";
+        const dftracer::utils::dstd::Path bad = blocker / "sub";
         ::setenv(DIR_VAR, bad.c_str(), 1);
         const DataFrame df = make_frame();
         const auto msg_of = [](auto&& fn) {
@@ -224,11 +224,11 @@ TEST_SUITE("collect spill") {
         };
         const std::string collect_msg =
             msg_of([&] { run(lazy_of(df, 1).collect(MORSEL)); });
-        CHECK(collect_msg.find(bad.string()) != std::string::npos);
+        CHECK(collect_msg.find(bad.str()) != std::string::npos);
         CHECK(collect_msg.find(DIR_VAR) != std::string::npos);
         const std::string dir_msg =
             msg_of([] { dftracer::utils::dataframe::spill::Dir d; });
-        CHECK(dir_msg.find(bad.string()) != std::string::npos);
+        CHECK(dir_msg.find(bad.str()) != std::string::npos);
         CHECK(dir_msg.find(DIR_VAR) != std::string::npos);
     }
 }

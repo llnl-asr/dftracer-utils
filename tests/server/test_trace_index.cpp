@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -27,7 +27,7 @@ static std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env,
     // Rename to .pfw.gz so TraceIndex discovers it
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    common::fs::rename(trace_gz, pfw_path);
+    REQUIRE(dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
@@ -177,7 +177,7 @@ TEST_CASE("TraceIndex - file_at by index") {
 
 TEST_CASE("TraceIndex - empty directory") {
     auto dir = dftu_utils_test::make_unique_test_path("trace_index_empty");
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
 
     ThreadPoolExecutor executor(ExecutorConfig{.num_threads = 2});
     Scheduler scheduler(&executor);
@@ -186,7 +186,7 @@ TEST_CASE("TraceIndex - empty directory") {
 
     auto task = make_task(
         [&](CoroScope& /*scope*/) -> coro::CoroTask<void> {
-            TraceIndex index(dir.string(), dir.string());
+            TraceIndex index(std::string(dir.str()), std::string(dir.str()));
             co_await index.initialize();
 
             count.store(index.file_count());
@@ -199,7 +199,7 @@ TEST_CASE("TraceIndex - empty directory") {
     CHECK(count.load() == 0);
 
     executor.shutdown();
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("TraceIndex - directory and index_dir accessors") {

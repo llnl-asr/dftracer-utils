@@ -2,10 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/binaries/json_cell_printer.h>
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
 #include <dftracer/utils/dataframe/internal/float16.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/int128.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/root_layout.h>
@@ -45,7 +45,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
+    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
@@ -59,7 +59,7 @@ std::string make_multimember_pfw_gz(dftu_utils_test::TestEnvironment& env,
     std::string mm = env.get_dir() + "/mm_" + std::to_string(id) + ".pfw.gz";
     namespace gzc = dftracer::utils::utilities::fileio::compress;
     gzc::gzip_rechunk_to_members(single, mm, member_bytes, 6).get();
-    dftracer::utils::common::fs::remove(single);
+    (void)dftracer::utils::dstd::fs::remove(single);
     return mm;
 }
 
@@ -115,7 +115,7 @@ int run_view_capture(const std::string& binary,
     ::close(fd);
     int status = 0;
     ::waitpid(pid, &status, 0);
-    std::ifstream ifs(capture_path);
+    std::ifstream ifs(capture_path.c_str());
     out.assign((std::istreambuf_iterator<char>(ifs)),
                std::istreambuf_iterator<char>());
     if (WIFEXITED(status)) return WEXITSTATUS(status);
@@ -208,10 +208,10 @@ std::string build_aggregated_shard(dftu_utils_test::TestEnvironment& env,
                                    const std::string& index_dir = "") {
     namespace internal = dftracer::utils::trace::internal;
     std::string dir = env.get_dir() + "/" + tag;
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     std::string src = env.create_dft_test_gzip_file(num_events);
     std::string gz = dir + "/t.pfw.gz";
-    dftracer::utils::common::fs::rename(src, gz);
+    REQUIRE(dftracer::utils::dstd::fs::rename(src, gz).has_value());
 
     dftracer::utils::index::IndexerOptions options;
     options.index_dir = index_dir;
@@ -345,8 +345,8 @@ TEST_SUITE("DFTracerView") {
         int rc = run_view(binary, {"--duql", R"(cat == "POSIX")", "--no-index",
                                    "-d", env.get_dir(), "-o", output});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::common::fs::exists(output + ".gz"));
-        CHECK(dftracer::utils::common::fs::file_size(output + ".gz") > 0);
+        REQUIRE(dftracer::utils::dstd::fs::exists(output + ".gz").value());
+        CHECK(dftracer::utils::dstd::fs::file_size(output + ".gz").value() > 0);
     }
 
     TEST_CASE("fused index round-trips (--merge --verify)") {
@@ -362,10 +362,12 @@ TEST_SUITE("DFTracerView") {
         // Inputs in their own dir so the .pfw.gz output is not rescanned as
         // input on a subsequent run.
         std::string in = env.get_dir() + "/in";
-        dftracer::utils::common::fs::create_directories(in);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
         auto trace_gz = env.create_dft_test_gzip_file(50);
         REQUIRE(!trace_gz.empty());
-        dftracer::utils::common::fs::rename(trace_gz, in + "/trace_0.pfw.gz");
+        REQUIRE(
+            dftracer::utils::dstd::fs::rename(trace_gz, in + "/trace_0.pfw.gz")
+                .has_value());
 
         // Default write path builds the index during the write (fused).
         // --verify re-scans the written+indexed trace via that index and checks
@@ -375,11 +377,11 @@ TEST_SUITE("DFTracerView") {
         int rc =
             run_view(binary, {"-d", in, "--merge", "--verify", "-o", output});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::common::fs::exists(output + ".gz"));
+        REQUIRE(dftracer::utils::dstd::fs::exists(output + ".gz").value());
         // The index was built by the write, not a separate pass: its .dftindex
         // directory must exist next to the output.
-        CHECK(
-            dftracer::utils::common::fs::exists(env.get_dir() + "/.dftindex"));
+        CHECK(dftracer::utils::dstd::fs::exists(env.get_dir() + "/.dftindex")
+                  .value());
     }
 
     TEST_CASE("duql with name filter") {
@@ -477,11 +479,16 @@ TEST_SUITE("DFTracerView") {
 
         // A flat directory with the same two traces for the baseline query.
         std::string both = env.get_dir() + "/both";
-        dftracer::utils::common::fs::create_directories(both);
-        dftracer::utils::common::fs::copy_file(env.get_dir() + "/sa/t.pfw.gz",
-                                               both + "/a.pfw.gz");
-        dftracer::utils::common::fs::copy_file(env.get_dir() + "/sb/t.pfw.gz",
-                                               both + "/b.pfw.gz");
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(both).has_value());
+        REQUIRE(dftracer::utils::dstd::fs::copy_file(
+                    env.get_dir() + "/sa/t.pfw.gz", both + "/a.pfw.gz",
+                    dftracer::utils::dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
+        REQUIRE(dftracer::utils::dstd::fs::copy_file(
+                    env.get_dir() + "/sb/t.pfw.gz", both + "/b.pfw.gz",
+                    dftracer::utils::dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
 
         std::string cap = env.get_dir() + "/cap.txt";
         std::string shard_out, direct_out;
@@ -518,16 +525,16 @@ TEST_SUITE("DFTracerView") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
         std::string dir = env.get_dir() + "/sel";
-        dftracer::utils::common::fs::create_directories(dir);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
         std::string pfw = dir + "/t.pfw";
         {
-            std::ofstream out(pfw);
+            std::ofstream out(pfw.c_str());
             out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{"fhash":"abc","bytes":4096}})"
                 << "\n";
         }
         std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
 
         std::string cap = env.get_dir() + "/cap.txt";
         std::string out;
@@ -633,7 +640,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         const std::string pfw = env.get_dir() + "/files.pfw";
         {
-            std::ofstream o(pfw);
+            std::ofstream o(pfw.c_str());
             o << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/scratch/a","value":"f1"}})"
               << "\n"
               << R"({"ph":"M","name":"FH","pid":1,"tid":1,"args":{"name":"/data/b","value":"f2"}})"
@@ -705,7 +712,7 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         const std::string pfw = env.get_dir() + "/hosts.pfw";
         {
-            std::ofstream o(pfw);
+            std::ofstream o(pfw.c_str());
             for (int i = 0; i < 3; ++i)
                 o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,)"
                   << R"("ts":)" << 10 * (i + 1) << R"(,"dur":1,"args":)"
@@ -873,17 +880,19 @@ TEST_SUITE("DFTracerView") {
         REQUIRE(env.is_valid());
         std::string orig = create_pfw_gz(env, 50, 0);
         REQUIRE(!orig.empty());
-        const auto orig_size = dftracer::utils::common::fs::file_size(orig);
+        const auto orig_size =
+            dftracer::utils::dstd::fs::file_size(orig).value();
 
         int rc = run_view(
             binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
                      "2048", "-d", env.get_dir()});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::common::fs::file_size(orig) == orig_size);
-        CHECK_FALSE(
-            dftracer::utils::common::fs::exists(env.get_dir() + "/split"));
-        CHECK_FALSE(dftracer::utils::common::fs::exists(env.get_dir() +
-                                                        "/.dftindex.split"));
+        CHECK(dftracer::utils::dstd::fs::file_size(orig).value() == orig_size);
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() + "/split")
+                        .value());
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() +
+                                                      "/.dftindex.split")
+                        .value());
     }
 
     // A multi-member input whose members already fit under the checkpoint size
@@ -902,10 +911,11 @@ TEST_SUITE("DFTracerView") {
             binary, {"--group-by", "cat", "--agg", "count", "--checkpoint-size",
                      "1048576", "-d", env.get_dir()});
         CHECK(rc == 0);
-        CHECK_FALSE(
-            dftracer::utils::common::fs::exists(env.get_dir() + "/split"));
-        CHECK_FALSE(dftracer::utils::common::fs::exists(env.get_dir() +
-                                                        "/.dftindex.split"));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() + "/split")
+                        .value());
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(env.get_dir() +
+                                                      "/.dftindex.split")
+                        .value());
     }
 }
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/cache/lookup_store.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -43,7 +45,7 @@ std::shared_ptr<cache::CacheStore> store_in(TestEnvironment& env) {
 std::string lookup_trace(TestEnvironment& env) {
     const std::string plain = env.get_dir() + "/side.ndjson";
     {
-        std::ofstream o(plain);
+        std::ofstream o(plain.c_str());
         o << R"({"type":"run","run":1,"app":"laghos"})" << "\n";
         o << R"({"type":"run","run":2,"app":"amg"})" << "\n";
         for (int i = 0; i < 4; ++i)
@@ -52,7 +54,7 @@ std::string lookup_trace(TestEnvironment& env) {
     }
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -172,7 +174,7 @@ TEST_SUITE("LookupStore") {
             REQUIRE(db);
             cache::persist_lookup(*db, *sig, "rows");
         }
-        dftracer::utils::common::fs::remove_all(path);
+        (void)dftracer::utils::dstd::fs::remove_all(path);
 
         CHECK_FALSE(
             cache::open_lookup_db(path, cache::CacheStore::Mode::ReadOnly));
@@ -193,15 +195,12 @@ TEST_SUITE("LookupStore") {
             const auto g = run(v.duql(q).lazy().collect());
             CHECK(g.num_rows() == 4);
         }
-        const dftracer::utils::common::fs::path store =
-            dftracer::utils::index::store_dir(
-                dftracer::utils::index::lookups_dir(
-                    determine_index_path(gz, "")));
-        REQUIRE(dftracer::utils::common::fs::exists(store));
+        const auto store = dftracer::utils::index::store_dir(
+            dftracer::utils::index::lookups_dir(determine_index_path(gz, "")));
+        REQUIRE(dftracer::utils::dstd::fs::exists(store).value());
         std::size_t files = 0;
-        for (const auto& entry :
-             dftracer::utils::common::fs::directory_iterator(store))
-            if (entry.path().extension() == ".dfs") ++files;
+        for (const auto& entry : dftu_utils_test::list_dir(store))
+            if (entry.path.view().extension() == ".dfs") ++files;
         CHECK(files == 1);
     }
 
@@ -236,7 +235,7 @@ TEST_SUITE("LookupStore") {
     TEST_CASE("a store that cannot be opened is null") {
         TestEnvironment env(200);
         const std::string blocker = env.get_dir() + "/blocker";
-        std::ofstream(blocker) << "x";
+        std::ofstream(blocker.c_str()) << "x";
         CHECK_FALSE(cache::open_lookup_db(blocker + "/lookups",
                                           cache::CacheStore::Mode::ReadWrite));
     }

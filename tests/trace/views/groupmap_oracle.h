@@ -14,6 +14,7 @@
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/index/schemas/dft/agg/reserved_args.h>
@@ -36,7 +37,6 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
 #include <limits>
 #include <map>
 #include <set>
@@ -867,9 +867,10 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
     for (const auto& f : plan.files) key += f.file_path + "\n";
     auto it = bases.find(key);
     if (it == bases.end()) {
-        std::string base =
-            dftu_utils_test::make_unique_test_path("gmoracle").string();
-        std::filesystem::create_directories(base);
+        std::string base = std::string(
+            dftu_utils_test::make_unique_test_path("gmoracle").str());
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(base).has_value());
         it = bases.emplace(std::move(key), std::move(base)).first;
     }
     for (std::size_t i = 0; i < plan.files.size(); ++i)

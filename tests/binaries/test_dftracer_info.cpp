@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -24,7 +24,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
+    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
@@ -173,8 +173,8 @@ TEST_SUITE("DFTracerInfo") {
         // Rewrite the same file with more events; the index is now stale.
         auto raw = env.create_dft_test_gzip_file(300);
         REQUIRE(!raw.empty());
-        dftracer::utils::common::fs::remove(f);
-        dftracer::utils::common::fs::rename(raw, f);
+        (void)dftracer::utils::dstd::fs::remove(f);
+        REQUIRE(dftracer::utils::dstd::fs::rename(raw, f).has_value());
 
         long n2 =
             valid_events(run_info_capture(binary, {"-d", env.get_dir()}, &rc));

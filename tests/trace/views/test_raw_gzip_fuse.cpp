@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
@@ -67,7 +68,7 @@ ViewPlan count_plan(const std::string& gz, const std::string& idx) {
 std::string create_meta_trace(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/mt.pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         ofs << R"({"name":"FH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"/data/a.bin","value":"fh1"}})"
             << "\n";
         ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"name":"node0","value":"hh1"}})"
@@ -79,7 +80,7 @@ std::string create_meta_trace(TestEnvironment& env) {
     }
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 600);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -244,7 +245,7 @@ TEST_SUITE("RawGzipFuse") {
                        .get();
 
         std::string boot_idx = determine_index_path(gz, env.get_dir() + "/bi");
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(boot_idx));
+        REQUIRE_FALSE(dstd::fs::exists(boot_idx).value());
         auto boot = View::from_file(gz, boot_idx)
                         .group_by({GroupKey::cat()})
                         .agg({{AggOp::Count, "", "n"}})
@@ -271,7 +272,7 @@ TEST_SUITE("RawGzipFuse") {
         std::string gz = create_meta_trace(env);  // 2 metadata + 20 data events
 
         std::string idx = determine_index_path(gz, env.get_dir() + "/ei");
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(idx));
+        REQUIRE_FALSE(dstd::fs::exists(idx).value());
         StringSink boot;
         View::from_file(gz, idx).sink_json(boot).get();  // bootstrap path
 
@@ -315,7 +316,7 @@ TEST_SUITE("RawGzipFuse") {
         REQUIRE(ref.num_rows() == 1);  // only POSIX
 
         std::string fresh = determine_index_path(gz, env.get_dir() + "/ff");
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(fresh));
+        REQUIRE_FALSE(dstd::fs::exists(fresh).value());
         auto got = View::from_file(gz, fresh)
                        .duql(R"(cat == "POSIX")")
                        .group_by({GroupKey::cat()})
@@ -502,8 +503,8 @@ TEST_CASE("a first-touch query under a small budget spills the same index") {
           count(spilled, 4096));
     CHECK(count(runs, 0) ==
           count(held, dftracer::utils::memory::NO_SPILL_BUDGET));
-    CHECK_FALSE(dftracer::utils::common::fs::exists(spilled + ".spill"));
-    CHECK_FALSE(dftracer::utils::common::fs::exists(runs + ".spill"));
+    CHECK_FALSE(dstd::fs::exists(spilled + ".spill").value());
+    CHECK_FALSE(dstd::fs::exists(runs + ".spill").value());
     const auto expected = index_contents(held);
     CHECK(expected == index_contents(spilled));
     CHECK(expected == index_contents(runs));

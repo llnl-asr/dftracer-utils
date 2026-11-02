@@ -5,7 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
@@ -230,7 +230,7 @@ std::string write_trace(const std::string& dir, int n,
     out << "]\n";
     const std::string pfw = dir + "/t" + std::to_string(n) + ".pfw";
     {
-        std::ofstream file(pfw);
+        std::ofstream file(pfw.c_str());
         file << out.str();
     }
     const std::string gz = pfw + ".gz";
@@ -241,7 +241,7 @@ std::string write_trace(const std::string& dir, int n,
         const std::string text = out.str();
         utilities::fileio::compress::GzipMemberCompressor comp;
         REQUIRE(comp.valid());
-        std::ofstream file(gz, std::ios::binary);
+        std::ofstream file(gz.c_str(), std::ios::binary);
         for (std::size_t at = 0; at < text.size(); at += CHECKPOINT_SIZE) {
             const std::size_t len = std::min(CHECKPOINT_SIZE, text.size() - at);
             auto member = comp.compress_member(text.data() + at, len);
@@ -250,7 +250,7 @@ std::string write_trace(const std::string& dir, int n,
                        static_cast<std::streamsize>(member->size()));
         }
     }
-    common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -925,13 +925,13 @@ TEST_SUITE("AggQuery") {
         auto fx = std::make_unique<Fixture>();
         const std::string pfw = fx->env.get_dir() + "/mixed.pfw";
         {
-            std::ofstream file(pfw);
+            std::ofstream file(pfw.c_str());
             file << mixed_trace();
         }
         const std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             pfw, gz, CHECKPOINT_SIZE));
-        common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         fx->files.push_back(gz);
         fx->index_dir = fx->env.get_dir() + "/idx_mixed";
         index::IndexerOptions o;

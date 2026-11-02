@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/extensions/rowset_fold.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -73,12 +74,12 @@ std::string write_trace(TestEnvironment& env,
                         bool build = true) {
     const std::string pfw = env.get_dir() + "/rows.pfw";
     {
-        std::ofstream o(pfw);
+        std::ofstream o(pfw.c_str());
         for (const auto& l : lines) o << l << "\n";
     }
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     if (build) ix::Indexer::open({gz}).build();
     return gz;
 }

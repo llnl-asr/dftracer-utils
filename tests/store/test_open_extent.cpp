@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/io/thread_pool_backend.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/crc.h>
@@ -20,7 +22,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -44,7 +45,6 @@ namespace {
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io = dftracer::utils::io;
-namespace fs = std::filesystem;
 
 using dftracer::utils::Executor;
 using dftracer::utils::Runtime;
@@ -62,19 +62,17 @@ constexpr std::uint32_t EIGHT_KIB = 8 * 1024;
 constexpr std::chrono::milliseconds EXTENT_WRITE_DEADLINE{5000};
 
 struct TempDir {
-    fs::path path;
+    dftracer::utils::dstd::Path path;
     TempDir() {
-        path = fs::temp_directory_path() /
+        path = dftracer::utils::dstd::fs::temp_directory() /
                ("dftu_store_open_extent_" + std::to_string(::getpid()));
-        fs::remove_all(path);
-        fs::create_directories(path);
+        REQUIRE(dftracer::utils::dstd::fs::remove_all(path).has_value());
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(path).has_value());
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
-    }
+    ~TempDir() { (void)dftracer::utils::dstd::fs::remove_all(path); }
 };
 
 struct Collector {
@@ -335,9 +333,9 @@ TEST_CASE("store open extent: one thread fills one namespace") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
-    auto file = DataFileWriter::create(file_path.string(), SIXTY_FOUR_KIB,
-                                       "host", "label");
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
+    auto file = DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB, "host",
+                                       "label");
     REQUIRE(file.has_value());
     CHECK(file->fd() >= 0);
 
@@ -376,9 +374,9 @@ TEST_CASE("store open extent: many threads across three namespaces") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
-    auto file = DataFileWriter::create(file_path.string(), SIXTY_FOUR_KIB,
-                                       "host", "label");
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
+    auto file = DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB, "host",
+                                       "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -439,9 +437,9 @@ TEST_CASE("store open extent: a segment of three extents is written alone") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -483,9 +481,9 @@ TEST_CASE(
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -559,12 +557,12 @@ TEST_CASE("store open extent: a failed write latches and reports no extent") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
-    store::engine::DataFileWriterTestHook::reopen_read_only(*file,
-                                                            file_path.string());
+    store::engine::DataFileWriterTestHook::reopen_read_only(
+        *file, std::string(file_path.str()));
 
     Collector collector;
     std::atomic<std::size_t> discarded{0};
@@ -601,9 +599,9 @@ TEST_CASE(
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -628,9 +626,9 @@ TEST_CASE(
 TEST_CASE(
     "store open extent: the file hands out aligned ranges from one counter") {
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
-    auto file = DataFileWriter::create(file_path.string(), SIXTY_FOUR_KIB,
-                                       "host", "label");
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
+    auto file = DataFileWriter::create(file_path.str(), SIXTY_FOUR_KIB, "host",
+                                       "label");
     REQUIRE(file.has_value());
 
     CHECK(file->reserve_range(10, FOUR_KIB) == FOUR_KIB);
@@ -657,9 +655,9 @@ TEST_CASE("store open extent: stress a small extent from many threads") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -709,9 +707,9 @@ TEST_CASE("store open extent: a short write is finished with resubmissions") {
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::ShortWrite);
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -744,9 +742,9 @@ TEST_CASE("store open extent: an interrupted write is retried in full") {
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::EintrOnce);
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -778,9 +776,9 @@ TEST_CASE("store open extent: a zero write result latches an Io error") {
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::ZeroOnce);
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -805,9 +803,9 @@ TEST_CASE("store open extent: an extent write needs the backend flush") {
     FaultBackend backend(*runtime.executor(), FaultBackend::Fault::None);
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -843,9 +841,9 @@ TEST_CASE(
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -884,9 +882,9 @@ TEST_CASE("store open extent: appends concurrent with seal_all land once") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -952,9 +950,9 @@ TEST_CASE(
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;
@@ -999,9 +997,9 @@ TEST_CASE("store open extent: sealing an empty extent holds no buffer") {
     auto& backend = executor->io_backend();
 
     TempDir dir;
-    const fs::path file_path = dir.path / "data.dfs";
+    const dftracer::utils::dstd::Path file_path = dir.path / "data.dfs";
     auto file =
-        DataFileWriter::create(file_path.string(), EIGHT_KIB, "host", "label");
+        DataFileWriter::create(file_path.str(), EIGHT_KIB, "host", "label");
     REQUIRE(file.has_value());
 
     Collector collector;

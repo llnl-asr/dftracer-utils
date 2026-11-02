@@ -4,17 +4,17 @@
 // unit through the raw vtables, so this proves the plugin C ABIs work
 // end-to-end from real C, not just from C++.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
+#include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/runtime/runtime.h>
 // After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
 // arrow_abi.
-#include <dftracer/utils/dataframe/abi.h>
-#include <dftracer/utils/plugins/plugin.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -306,8 +306,7 @@ TEST_CASE("C ABI: dftu_svc_writer create/open/chunk/close from C") {
     rt.shutdown();
 
     // The sharded writer emits one file per worker: `<path>.shard_0`.
-    std::error_code ec;
-    auto sz = std::filesystem::file_size(path + ".shard_0", ec);
-    CHECK(!ec);
-    CHECK(sz > 0);
+    const auto sz = dftracer::utils::dstd::fs::file_size(path + ".shard_0");
+    CHECK(sz.has_value());
+    CHECK(sz.value_or(0) > 0);
 }

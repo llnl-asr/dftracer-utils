@@ -168,23 +168,6 @@ if(EXISTS \"\${CMAKE_CURRENT_LIST_DIR}/../zlib/ZlibTargets.cmake\")
     include(\"\${CMAKE_CURRENT_LIST_DIR}/../zlib/ZlibTargets.cmake\")
 endif()
 
-# GHC_FILESYSTEM dependency (header-only)
-find_path(GHC_FILESYSTEM_INCLUDE_DIR_BUNDLED
-    NAMES ghc/filesystem.hpp
-    PATHS \${_IMPORT_PREFIX}/include
-    NO_DEFAULT_PATH
-)
-
-if(GHC_FILESYSTEM_INCLUDE_DIR_BUNDLED AND NOT TARGET ghc_filesystem)
-    add_library(ghc_filesystem INTERFACE IMPORTED)
-    set_target_properties(ghc_filesystem PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES \"\${GHC_FILESYSTEM_INCLUDE_DIR_BUNDLED}\"
-    )
-else()
-    # Try to find system ghc_filesystem
-    find_dependency(ghc_filesystem QUIET)
-endif()
-
 # UNORDERED_DENSE dependency (header-only)
 find_path(UNORDERED_DENSE_INCLUDE_DIR_BUNDLED
     NAMES ankerl/unordered_dense.h

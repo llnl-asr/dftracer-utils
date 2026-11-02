@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -46,7 +47,7 @@ TEST_SUITE("View unified F filter") {
         TestEnvironment env(10);
         const std::string plain = env.get_dir() + "/shadow.pfw";
         {
-            std::ofstream out(plain);
+            std::ofstream out(plain.c_str());
             for (int i = 0; i < 4000; ++i)
                 out << R"({"name":"read","cat":"POSIX","pid":1,"tid":7,"ts":)"
                     << 1000 + i * 10 << R"(,"dur":)" << 1000 + i
@@ -60,7 +61,7 @@ TEST_SUITE("View unified F filter") {
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    16 * 1024));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dftracer::utils::dstd::fs::remove(plain);
         dftracer::utils::index::Indexer::open({gz}).build();
         const std::string idx = determine_index_path(gz, "");
         auto count = [&](Phase ph, const char* q) {

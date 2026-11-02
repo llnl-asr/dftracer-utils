@@ -16,7 +16,7 @@ target_include_directories(testing_utilities PUBLIC ${CMAKE_SOURCE_DIR}/tests)
 target_link_libraries(
   testing_utilities
   PUBLIC dftracer_utils
-  PRIVATE doctest::doctest ghc_filesystem)
+  PRIVATE doctest::doctest)
 # The tests write their .gz input with the system zlib. A test that includes a
 # private gzip header of ours also gets zlib-ng, whose zng_ names do not clash.
 target_link_libraries(testing_utilities PUBLIC ZLIB::ZLIB dftracer::zlib)

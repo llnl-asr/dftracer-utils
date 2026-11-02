@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dataframe/dataframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -53,10 +53,10 @@ TEST_SUITE("RollupStore") {
     // agg_merge, persisted as per-group blobs, and read back through a real
     // store into an equivalent state.
     TEST_CASE("agg_merge of rank partials persists and reads back") {
-        const std::string dir =
+        const std::string dir = std::string(
             dftu_utils_test::make_unique_test_path("dftu_rollup_store_test")
-                .string();
-        dftracer::utils::common::fs::remove_all(dir);
+                .str());
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -80,16 +80,17 @@ TEST_SUITE("RollupStore") {
         CHECK_FALSE(rollup_exists(*db, 0x99999999));
         CHECK(read_rollup(*db, 0x99999999) == nullptr);
 
-        dftracer::utils::common::fs::remove_all(dir);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
 
     // Two ranks' partials over three distinct groups round-trip: every group's
     // per-group blob persists and reads back into an equivalent merged state.
     TEST_CASE("multiple groups persist and read back") {
-        const std::string dir = dftu_utils_test::make_unique_test_path(
-                                    "dftu_rollup_store_multi_test")
-                                    .string();
-        dftracer::utils::common::fs::remove_all(dir);
+        const std::string dir =
+            std::string(dftu_utils_test::make_unique_test_path(
+                            "dftu_rollup_store_multi_test")
+                            .str());
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
 
         auto db = open_rollup_db(dir, CacheStore::Mode::ReadWrite);
         REQUIRE(db);
@@ -123,6 +124,6 @@ TEST_SUITE("RollupStore") {
         CHECK(by_group["g3"].first == 1);
         CHECK(by_group["g3"].second == doctest::Approx(7));
 
-        dftracer::utils::common::fs::remove_all(dir);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
 }

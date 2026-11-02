@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -31,7 +31,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
+    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
@@ -126,9 +126,9 @@ std::map<std::string, std::uint64_t> parse_counts(const std::string& output) {
 
 std::map<std::string, std::uintmax_t> snapshot(const std::string& dir) {
     std::map<std::string, std::uintmax_t> files;
-    for (const auto& e :
-         dftracer::utils::common::fs::recursive_directory_iterator(dir))
-        if (e.is_regular_file()) files[e.path().string()] = e.file_size();
+    for (const auto& e : dftu_utils_test::walk_dir(dir))
+        if ((e.kind == dftracer::utils::dstd::fs::FileKind::File))
+            files[std::string(e.path.str())] = e.size;
     return files;
 }
 
@@ -241,8 +241,8 @@ TEST_SUITE("DFTracerStats") {
         // Rewrite the same file with more events; the index is now stale.
         auto raw = env.create_dft_test_gzip_file(300);
         REQUIRE(!raw.empty());
-        dftracer::utils::common::fs::remove(f);
-        dftracer::utils::common::fs::rename(raw, f);
+        (void)dftracer::utils::dstd::fs::remove(f);
+        REQUIRE(dftracer::utils::dstd::fs::rename(raw, f).has_value());
 
         long n2 = total_events(
             run_stats_capture(binary, {"-d", env.get_dir(), "--json"}, &rc));

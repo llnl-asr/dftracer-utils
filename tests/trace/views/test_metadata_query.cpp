@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -31,9 +32,9 @@ namespace {
 std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     const std::string tag = numeric_ph ? "num" : "str";
     const std::string dir = env.get_dir() + "/" + tag;
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     const std::string pfw = dir + "/meta.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     if (numeric_ph)
         ofs << R"({"name":"CM","ph":4,"pid":0,"tid":0,"ts":0,"args":{"name":"time_metric","value":"NS"}})"
             << "\n";
@@ -48,7 +49,7 @@ std::string create_metadata_trace(TestEnvironment& env, bool numeric_ph) {
     ofs.close();
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -144,7 +145,7 @@ namespace {
 std::string create_threaded_trace(TestEnvironment& env) {
     const std::string pfw = env.get_dir() + "/threads.pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         ofs << "[\n";
         for (int t = 0; t < 40; ++t) {
             ofs << R"({"name":"thread_name","ph":"M","pid":1,"tid":)" << t
@@ -164,7 +165,7 @@ std::string create_threaded_trace(TestEnvironment& env) {
     const std::string gz = pfw + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4 * 1024));
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -229,7 +230,7 @@ TEST_SUITE("View - metadata under pruning") {
         TestEnvironment env(200);
         const std::string pfw = env.get_dir() + "/plain.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 2000; ++i)
                 ofs << R"({"name":"read","cat":"POSIX","ph":"X","pid":1,)"
                     << R"("tid":1,"ts":)" << i << R"(,"dur":1,"args":{}})"

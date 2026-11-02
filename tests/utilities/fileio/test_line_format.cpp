@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/json_line_format.h>
@@ -9,7 +10,6 @@
 #include <zlib.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <limits>
 #include <set>
 #include <string>
@@ -167,12 +167,11 @@ TEST_CASE("line_format - run-time parse errors") {
 }
 
 TEST_CASE("line_format - writer output equals hand-built lines") {
-    namespace fs = std::filesystem;
     // A unique folder, as two test processes must not share and remove it.
     dftu_utils_test::ScopedTestDir scoped("dftu_line_format_test");
-    const fs::path& dir = scoped.path();
-    const std::string p1 = (dir / "ordered.gz").string();
-    const std::string p2 = (dir / "producer.gz").string();
+    const dstd::Path& dir = scoped.path();
+    const std::string p1 = std::string((dir / "ordered.gz").str());
+    const std::string p2 = std::string((dir / "producer.gz").str());
     auto lf = JsonLineFormat::parse(R"({"id":{},"n":"{}","v":{}})");
     REQUIRE(lf.has_value());
     std::string want;

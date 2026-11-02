@@ -111,7 +111,7 @@ inline bool cgroup_anon_bytes(std::uint64_t& out) {
         if (line.compare(0, 3, "0::") == 0) path = line.substr(3);
     }
     if (path.empty()) return false;
-    std::ifstream stat("/sys/fs/cgroup" + path + "/memory.stat");
+    std::ifstream stat(("/sys/fs/cgroup" + path + "/memory.stat").c_str());
     if (!stat) return false;
     std::uint64_t anon = 0;
     std::uint64_t shmem = 0;

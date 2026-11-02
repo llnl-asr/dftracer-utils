@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace dftracer::utils::dstd {
 
@@ -143,6 +144,13 @@ class PathView {
    public:
     constexpr PathView() noexcept = default;
     constexpr PathView(StringView path) noexcept : path_(path) {}
+    /// Anything that views as a @ref StringView, such as a std::string or a
+    /// literal, so a caller holding one needs no separate cast.
+    template <class S,
+              std::enable_if_t<!std::is_same_v<std::decay_t<S>, PathView> &&
+                                   std::is_convertible_v<const S&, StringView>,
+                               int> = 0>
+    constexpr PathView(const S& path) noexcept : path_(StringView(path)) {}
 
     constexpr StringView str() const noexcept { return path_; }
     constexpr operator StringView() const noexcept { return path_; }
@@ -193,6 +201,9 @@ class Path {
     StringView str() const noexcept { return path_; }
     const char* c_str() const noexcept { return path_.c_str(); }
     bool empty() const noexcept { return path_.empty(); }
+
+    /// A @ref PathView of these bytes, valid until the next change.
+    operator PathView() const noexcept { return view(); }
 
     operator CStringView() const noexcept {
         return CStringView::unchecked(path_.c_str(), path_.size());

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/condition.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -25,7 +26,7 @@ std::string path_of(int f) { return "/data/f" + std::to_string(f); }
 std::string write_trace(TestEnvironment& env) {
     const std::string plain = env.get_dir() + "/r.pfw";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (int f = 0; f < FILES; ++f)
             out << R"({"name":"FH","ph":"M","pid":1,"tid":1,"args":{"name":")"
                 << path_of(f) << R"(","value":"k)" << f << "\"}}\n";
@@ -43,7 +44,7 @@ std::string write_trace(TestEnvironment& env) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }

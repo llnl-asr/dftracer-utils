@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -96,9 +96,9 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("each kind answers only the leaves it can") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_conditions");
-        common::fs::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const std::string trace = "/fake/kinds.pfw.gz";
-        const auto index = build_index(dir.string(), trace);
+        const auto index = build_index(std::string(dir.str()), trace);
 
         // counts: chunk 2 went over the cap, so it is kept.
         CHECK(prune(index, trace, R"(cat == "a")") ==
@@ -121,9 +121,9 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("a time range keeps a chunk whose events end inside it") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_time");
-        common::fs::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const std::string trace = "/fake/time.pfw.gz";
-        const auto path = dir.string() + "/.dftindex";
+        const std::string path((dir / ".dftindex").str());
         {
             auto idx = dftu_utils_test::open_test_index(path);
             auto w = dftu_utils_test::register_test_file(idx, trace, 1);
@@ -151,9 +151,9 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("a corrupt zone bound is an error, not a skipped prune") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_zone");
-        common::fs::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const std::string trace = "/fake/bad_zone.pfw.gz";
-        const auto path = dir.string() + "/.dftindex";
+        const std::string path((dir / ".dftindex").str());
         {
             auto idx = dftu_utils_test::open_test_index(path);
             auto w = dftu_utils_test::register_test_file(idx, trace, 1);
@@ -176,9 +176,9 @@ TEST_SUITE("index kinds") {
 
     TEST_CASE("a ts bound that is not an integer is an error") {
         auto dir = dftu_utils_test::make_unique_test_path("kinds_bad_ts");
-        common::fs::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         const std::string trace = "/fake/bad_ts.pfw.gz";
-        const auto index = build_index(dir.string(), trace);
+        const auto index = build_index(std::string(dir.str()), trace);
 
         auto bad = duql::Query::from_string(R"(ts > "abc")");
         REQUIRE(bad.has_value());

@@ -5,6 +5,7 @@
 // measured alone; the transform run may exceed the same aggregation without a
 // transform by a small margin only.
 #define DOCTEST_CONFIG_IMPLEMENT
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -56,7 +57,7 @@ std::string write_trace(const std::string& dir) {
     const std::string pfw = dir + "/transform_memory.pfw";
     const std::string pad = KEY_PAD ? "_" + std::string(KEY_PAD, 'x') : "";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         for (int i = 0; i < EVENTS; ++i)
             ofs << R"({"ph":"X","name":"read","cat":"category_)" << (i % 500)
                 << pad << R"(","pid":1,"tid":1,"ts":)" << (1000 + i * 10)
@@ -64,7 +65,7 @@ std::string write_trace(const std::string& dir) {
     }
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 

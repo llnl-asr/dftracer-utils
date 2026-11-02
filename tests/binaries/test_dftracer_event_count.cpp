@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -26,7 +26,7 @@ std::string create_pfw_gz(dftu_utils_test::TestEnvironment& env, int num_events,
 
     std::string pfw_path =
         env.get_dir() + "/trace_" + std::to_string(id) + ".pfw.gz";
-    dftracer::utils::common::fs::rename(trace_gz, pfw_path);
+    REQUIRE(dftracer::utils::dstd::fs::rename(trace_gz, pfw_path).has_value());
     return pfw_path;
 }
 
@@ -81,9 +81,8 @@ constexpr int DFTRACER_FIXTURE_EVENTS = 5;
 constexpr int PATH_FIXTURE_EVENTS = 8;
 
 bool dir_has_dftindex(const std::string& dir) {
-    for (const auto& entry :
-         dftracer::utils::common::fs::recursive_directory_iterator(dir)) {
-        if (entry.path().filename() == ".dftindex") return true;
+    for (const auto& entry : dftu_utils_test::walk_dir(dir)) {
+        if (entry.path.view().filename() == ".dftindex") return true;
     }
     return false;
 }
@@ -239,7 +238,8 @@ TEST_SUITE("DFTracerEventCount") {
         REQUIRE(!f.empty());
 
         std::string idx_dir = env.get_dir() + "/idx";
-        dftracer::utils::common::fs::create_directories(idx_dir);
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(idx_dir).has_value());
 
         auto output = run_event_count_capture(
             binary, {"-d", env.get_dir(), "-f", "--index-dir", idx_dir});
@@ -266,7 +266,7 @@ TEST_SUITE("DFTracerEventCount") {
             auto cold = run_event_count_capture(
                 binary, {"-d", dir.str(), "--index-dir", idx_dir});
             CHECK(parse_event_count(cold) == expected);
-            CHECK(!dftracer::utils::common::fs::exists(idx_dir));
+            CHECK(!dftracer::utils::dstd::fs::exists(idx_dir).value());
             CHECK(!dir_has_dftindex(dir.str()));
 
             int exit_code = -1;
@@ -274,7 +274,7 @@ TEST_SUITE("DFTracerEventCount") {
                 index_binary, {"-d", dir.str(), "--index-dir", idx_dir}, false,
                 &exit_code);
             REQUIRE(exit_code == 0);
-            REQUIRE(dftracer::utils::common::fs::exists(idx_dir));
+            REQUIRE(dftracer::utils::dstd::fs::exists(idx_dir).value());
 
             auto warm = run_event_count_capture(
                 binary, {"-d", dir.str(), "--index-dir", idx_dir});
@@ -313,14 +313,14 @@ TEST_SUITE("DFTracerEventCount") {
         constexpr int EVENTS = 300;
         const std::string plain = dir.file("plain.txt");
         {
-            std::ofstream ofs(plain);
+            std::ofstream ofs(plain.c_str());
             ofs << "[\n";
             for (int i = 1; i <= EVENTS; ++i) ofs << event_line(i, "X") << "\n";
         }
         const std::string gz = dir.file("members.pfw.gz");
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                    4096));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dftracer::utils::dstd::fs::remove(plain);
         const std::string idx_dir = dir.file("idx");
 
         auto cold = run_event_count_capture(

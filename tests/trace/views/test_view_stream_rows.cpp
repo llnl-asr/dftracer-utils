@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -31,7 +32,7 @@ namespace {
 // the streaming path must exercise name-based reconciliation.
 std::string create_mixed_arg_trace(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/mixed_args.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < 25; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i)
@@ -45,7 +46,7 @@ std::string create_mixed_arg_trace(TestEnvironment& env) {
     // A small member size forces the x-events and y-events into separate
     // gzip members, so the scan splits them into separate batches/morsels.
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -77,7 +78,7 @@ std::vector<std::tuple<std::string, double, double>> row_key_set(
 std::string create_args_trace(TestEnvironment& env, const std::string& name,
                               const std::vector<std::string>& keys) {
     const std::string pfw = env.get_dir() + "/" + name + ".pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < 40; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{)";
@@ -88,7 +89,7 @@ std::string create_args_trace(TestEnvironment& env, const std::string& name,
     ofs.close();
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    dftracer::utils::common::fs::remove(pfw);
+    dstd::fs::remove(pfw).has_value();
     return gz;
 }
 
@@ -121,7 +122,7 @@ std::string distinct_metric(int i) {
 std::string create_distinct_trace(TestEnvironment& env,
                                   const std::string& idx_dir) {
     std::string pfw = env.get_dir() + "/distinct.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < DISTINCT_EVENTS; ++i) {
         static const char* const NAMES[] = {"read", "write", "open", "lseek"};
         ofs << R"({"ph":"X","name":")" << NAMES[i % 4]
@@ -132,7 +133,7 @@ std::string create_distinct_trace(TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 512);
-    dftracer::utils::common::fs::remove(pfw);
+    dstd::fs::remove(pfw).has_value();
     REQUIRE(dftu_utils_test::build_index(gz, idx_dir,
                                          /*checkpoint_size=*/256));
     return gz;

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -31,20 +32,21 @@ std::string call(const std::string& name, int ts, int dur,
     return o.str();
 }
 
-void write_run(const dftracer::utils::common::fs::path& root,
+void write_run(const dftracer::utils::dstd::Path& root,
                const std::string& input, int calls) {
-    const dftracer::utils::common::fs::path dir =
+    const dftracer::utils::dstd::Path dir =
         root / "app" / "sys" / input / "nodes_1" / "ppn_1";
-    dftracer::utils::common::fs::create_directories(dir / "compacted");
-    std::ofstream(dir / "summary.json")
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir / "compacted")
+                .has_value());
+    std::ofstream((dir / "summary.json").c_str())
         << R"({"ok":true,"app":"app","system":"sys","input":")" << input
         << R"(","nodes":1,"ppn":1,"sets":["set1"]})";
     std::string t = "[\n" + call("start", 0, 0, "dftracer") +
                     call("end", calls * 100 + 100, 0, "dftracer");
     for (int i = 0; i < calls; ++i)
         t += call("f" + std::to_string(i % 7), i * 100, 50);
-    dftu_utils_test::write_gz_trace(
-        (dir / "compacted" / "set1.pfw.gz").string(), t);
+    dftu_utils_test::write_gz_trace((dir / "compacted" / "set1.pfw.gz").str(),
+                                    t);
 }
 
 std::vector<std::string> sorted_gz_lines(const std::string& path) {
@@ -74,22 +76,23 @@ TEST_CASE("ranks split the run groups and join one output") {
     }
     dftu_utils_test::set_test_library_path(binary());
     ScopedTestDir d("gen_dist_mpi");
-    const dftracer::utils::common::fs::path root = d.path() / "root";
+    const dftracer::utils::dstd::Path root = d.path() / "root";
     for (int i = 0; i < 6; ++i)
         write_run(root, "in" + std::to_string(i), 200 * (i + 1));
 
     REQUIRE(dftu_utils_test::run_mpi(
                 launcher, 1, binary(),
-                {root.string(), "-o", d.file("one.pfw.gz")}) == 0);
+                {root.str(), "-o", d.file("one.pfw.gz")}) == 0);
     REQUIRE(dftu_utils_test::run_mpi(
                 launcher, 3, binary(),
-                {root.string(), "-o", d.file("three.pfw.gz")}) == 0);
+                {root.str(), "-o", d.file("three.pfw.gz")}) == 0);
     const auto one = sorted_gz_lines(d.file("one.pfw.gz"));
     REQUIRE_FALSE(one.empty());
     CHECK(sorted_gz_lines(d.file("three.pfw.gz")) == one);
     for (int r = 0; r < 3; ++r)
-        CHECK_FALSE(dftracer::utils::common::fs::exists(
-            d.file("three.pfw.gz." + std::to_string(r) + ".part")));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(
+                        d.file("three.pfw.gz." + std::to_string(r) + ".part"))
+                        .value());
 }
 
 TEST_CASE("--shard is refused with more than one rank") {
@@ -102,7 +105,7 @@ TEST_CASE("--shard is refused with more than one rank") {
     ScopedTestDir d("gen_dist_mpi_shard");
     write_run(d.path() / "root", "in", 100);
     CHECK(dftu_utils_test::run_mpi(launcher, 2, binary(),
-                                   {(d.path() / "root").string(), "-o",
+                                   {(d.path() / "root").str(), "-o",
                                     d.file("o.pfw.gz"), "--shard", "0/2"}) !=
           0);
 }

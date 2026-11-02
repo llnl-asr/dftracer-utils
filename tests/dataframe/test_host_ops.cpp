@@ -2,12 +2,13 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/host_ops.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
 #include <algorithm>
-#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -16,8 +17,6 @@ using dftracer::utils::dataframe::Series;
 using dftracer::utils::dataframe::TypeId;
 
 namespace {
-
-namespace sfs = std::filesystem;
 
 dftu_op_val str_val(const std::string& s) {
     dftu_op_val v{};
@@ -51,8 +50,9 @@ std::vector<std::string> rows(const Series& s) {
     return out;
 }
 
-void write_file(const sfs::path& p, const std::string& text) {
-    std::ofstream f(p, std::ios::binary);
+void write_file(dftracer::utils::dstd::PathView p, const std::string& text) {
+    const dftracer::utils::dstd::Path owned(p.str());
+    std::ofstream f(owned.c_str(), std::ios::binary);
     f << text;
 }
 
@@ -94,7 +94,7 @@ TEST_SUITE("host_ops") {
         write_file(dir.path() / "a.log", "x");
         write_file(dir.path() / "b.txt", "y");
 
-        const std::string root = dir.path().string();
+        const std::string root = std::string(dir.path().str());
         dftu_op_arg arg{};
         arg.args[0] = str_val(root);
         Series out = run_series("dftu.fs.scan_dir", nullptr, arg);
@@ -102,13 +102,15 @@ TEST_SUITE("host_ops") {
         CHECK(out.type() == TypeId::String);
         std::vector<std::string> got = rows(out);
         REQUIRE(got.size() == 2);
-        CHECK(got[0] == (dir.path() / "a.log").string());
-        CHECK(got[1] == (dir.path() / "b.txt").string());
+        CHECK(got[0] == (dir.path() / "a.log").str());
+        CHECK(got[1] == (dir.path() / "b.txt").str());
     }
 
     TEST_CASE("dftu.fs.scan_dir reports a missing directory as a null column") {
         const std::string missing =
-            (sfs::current_path() / "dftu_host_ops_absent").string();
+            std::string((dftracer::utils::dstd::fs::current_path().value() /
+                         "dftu_host_ops_absent")
+                            .str());
         dftu_op_arg arg{};
         arg.args[0] = str_val(missing);
         Series out = run_series("dftu.fs.scan_dir", nullptr, arg);
@@ -121,7 +123,7 @@ TEST_SUITE("host_ops") {
         write_file(dir.path() / "b.txt", "y");
         write_file(dir.path() / "c.log", "z");
 
-        const std::string root = dir.path().string();
+        const std::string root = std::string(dir.path().str());
         const std::string pattern = ".log";
         dftu_op_arg arg{};
         arg.args[0] = str_val(root);
@@ -130,30 +132,30 @@ TEST_SUITE("host_ops") {
         REQUIRE(out.handle() != nullptr);
         std::vector<std::string> got = rows(out);
         REQUIRE(got.size() == 2);
-        CHECK(got[0] == (dir.path() / "a.log").string());
-        CHECK(got[1] == (dir.path() / "c.log").string());
+        CHECK(got[0] == (dir.path() / "a.log").str());
+        CHECK(got[1] == (dir.path() / "c.log").str());
     }
 
     TEST_CASE("dftu.file.compress and dftu.file.decompress round trip") {
         ScopedTestDir dir("dftu_host_ops_gzip");
         const std::string text(64 * 1024, 'q');
-        const std::string src = (dir.path() / "in.txt").string();
-        const std::string gz = (dir.path() / "in.txt.gz").string();
-        const std::string back = (dir.path() / "out.txt").string();
+        const std::string src = std::string((dir.path() / "in.txt").str());
+        const std::string gz = std::string((dir.path() / "in.txt.gz").str());
+        const std::string back = std::string((dir.path() / "out.txt").str());
         write_file(src, text);
 
         dftu_op_arg carg{};
         carg.args[0] = str_val(src);
         carg.args[1] = str_val(gz);
         CHECK(run_bool("dftu.file.compress", carg));
-        CHECK(sfs::exists(gz));
+        CHECK(dftracer::utils::dstd::fs::exists(gz).value());
 
         dftu_op_arg darg{};
         darg.args[0] = str_val(gz);
         darg.args[1] = str_val(back);
         CHECK(run_bool("dftu.file.decompress", darg));
 
-        std::ifstream f(back, std::ios::binary);
+        std::ifstream f(back.c_str(), std::ios::binary);
         std::string got((std::istreambuf_iterator<char>(f)),
                         std::istreambuf_iterator<char>());
         CHECK(got == text);
@@ -161,8 +163,9 @@ TEST_SUITE("host_ops") {
 
     TEST_CASE("dftu.file.compress reports a missing input as false") {
         ScopedTestDir dir("dftu_host_ops_gzip_missing");
-        const std::string src = (dir.path() / "absent.txt").string();
-        const std::string gz = (dir.path() / "absent.txt.gz").string();
+        const std::string src = std::string((dir.path() / "absent.txt").str());
+        const std::string gz =
+            std::string((dir.path() / "absent.txt.gz").str());
         dftu_op_arg arg{};
         arg.args[0] = str_val(src);
         arg.args[1] = str_val(gz);

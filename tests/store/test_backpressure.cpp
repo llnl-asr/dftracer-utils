@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -19,7 +20,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <future>
 #include <map>
 #include <memory>
@@ -1023,7 +1023,7 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     CHECK(WriterTestHook::extents(*writer).over_quota == 1);
 
     const std::string path = to_std(writer->path());
-    const auto size_before = std::filesystem::file_size(path);
+    const auto size_before = dftracer::utils::dstd::fs::file_size(path).value();
     Batch big = writer->batch(space, scope, 0);
     const std::string big_value(std::size_t{2} << 20, 'b');
     big.put(view_of(std::string("big")), view_of(big_value));
@@ -1032,7 +1032,8 @@ TEST_CASE("back pressure: a Busy commit writes none of its big values") {
     CHECK(is_busy(busy.error()));
     // The big value goes to the file as the segment is sealed. A Busy commit
     // sealed nothing, so the file did not grow by it.
-    CHECK(std::filesystem::file_size(path) < size_before + big_value.size());
+    CHECK(dftracer::utils::dstd::fs::file_size(path).value() <
+          size_before + big_value.size());
 
     auto retried = store_runtime().submit(
         commit_retrying(*writer, std::move(big), RETRY_ATTEMPTS));

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/file_process_types.h>
@@ -27,8 +28,8 @@ TEST_SUITE("IndexedFileReader") {
             std::string db_root = determine_index_path(gz_path, "");
 
             // Ensure no index exists initially
-            if (common::fs::exists(db_root)) {
-                common::fs::remove_all(db_root);
+            if (dstd::fs::exists(db_root).value()) {
+                (void)dstd::fs::remove_all(db_root);
             }
 
             IndexedFileReaderUtility reader_utility;
@@ -40,7 +41,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
 
             // Verify reader can read lines
             auto stream =
@@ -65,7 +66,7 @@ TEST_SUITE("IndexedFileReader") {
                 CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
-            REQUIRE(common::fs::exists(db_root));
+            REQUIRE(dstd::fs::exists(db_root).value());
 
             // Process with existing index (should not rebuild)
             IndexedFileReaderUtility reader_utility;
@@ -76,7 +77,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
             CHECK(reader->get_num_lines() > 0);
         }
 
@@ -90,7 +91,7 @@ TEST_SUITE("IndexedFileReader") {
                 CheckpointIndexerFactory::create(gz_path, db_root, 1024, true);
             REQUIRE(indexer != nullptr);
             indexer->build();
-            REQUIRE(common::fs::exists(db_root));
+            REQUIRE(dstd::fs::exists(db_root).value());
 
             // Sleep to ensure different timestamp
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -105,7 +106,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
 
             // Reader should work
             CHECK(reader->get_num_lines() > 0);
@@ -128,7 +129,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
 
             // Verify reader works
             CHECK(reader->get_num_lines() == 20);
@@ -165,7 +166,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
         }
     }
 
@@ -244,13 +245,13 @@ TEST_SUITE("IndexedFileReader") {
             auto indexer = CheckpointIndexerFactory::create(gz_path, index_path,
                                                             1024, true);
             indexer->build();
-            REQUIRE(common::fs::exists(db_root));
+            REQUIRE(dstd::fs::exists(db_root).value());
 
             // Sleep to ensure different timestamp
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Modify the gz file (touch it to update mtime)
-            std::ofstream ofs(gz_path, std::ios::app);
+            std::ofstream ofs(gz_path.c_str(), std::ios::app);
             ofs.close();
 
             // Process should detect outdated index and rebuild
@@ -284,7 +285,7 @@ TEST_SUITE("IndexedFileReader") {
             auto reader = reader_utility(input).get();
 
             CHECK(reader != nullptr);
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
             CHECK(reader->get_num_lines() > 0);
         }
     }

@@ -27,7 +27,6 @@ notices here cover only the third-party dependencies.
 | moodycamel readerwriterqueue | `BSD-2-Clause` | https://github.com/cameron314/readerwriterqueue |
 | unordered_dense | `MIT` | https://github.com/martinus/unordered_dense |
 | tl::expected | `CC0-1.0` | https://github.com/TartanLlama/expected |
-| ghc::filesystem | `MIT` | https://github.com/gulrak/filesystem |
 | PCRE2 | `BSD-3-Clause WITH PCRE2-exception` | https://github.com/PCRE2Project/pcre2 |
 | Vectorscan | `BSD-3-Clause` | https://github.com/VectorCamp/vectorscan |
 | utf8proc | MIT, and the Unicode, Inc. data files license (1991-2007) for `utf8proc_data.c` | https://github.com/JuliaStrings/utf8proc |

@@ -2,10 +2,11 @@
 #ifndef DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 #define DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
@@ -29,6 +30,20 @@
  * DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW.
  */
 namespace dftu::memory_workloads {
+
+/// Prints the error and exits with 1 when a setup call failed.
+template <class T>
+inline void require_ok(const dftracer::utils::dstd::Expected<
+                           T, dftracer::utils::dstd::Error>& result,
+                       const char* what) {
+    if (result.has_value()) return;
+    const auto& error = result.error();
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+                 static_cast<int>(error.name().size()), error.name().data(),
+                 static_cast<int>(error.message().size()),
+                 error.message().data());
+    std::exit(1);
+}
 
 using dftracer::utils::coro::CoroTask;
 
@@ -149,8 +164,9 @@ inline CoroTask<void> genesis_run(dftracer::utils::CoroScope& ctx,
 }
 
 inline void write_gz(const std::string& path, const std::string& content) {
-    dftracer::utils::common::fs::create_directories(
-        dftracer::utils::common::fs::path(path).parent_path());
+    require_ok(dftracer::utils::dstd::fs::create_directories(
+                   dftracer::utils::dstd::PathView(path).parent()),
+               "create_directories");
     dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(1);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(content.data()), content.size());
@@ -158,7 +174,7 @@ inline void write_gz(const std::string& path, const std::string& content) {
         std::fprintf(stderr, "compress failed\n");
         std::exit(1);
     }
-    std::ofstream(path, std::ios::binary)
+    std::ofstream(path.c_str(), std::ios::binary)
         .write(reinterpret_cast<const char*>(member->data()),
                static_cast<std::streamsize>(member->size()));
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -22,7 +23,7 @@ constexpr int RECORDS = 3000;
 std::string write_tagged(TestEnvironment& env, std::size_t path_budget) {
     const std::string plain = env.get_dir() + "/tagged.ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (int i = 0; i < RECORDS; ++i) {
             const std::string t = "\"t" + std::to_string(i / 300) + "\"";
             out << R"({"op":"read","tags":[)" << t;
@@ -34,7 +35,7 @@ std::string write_tagged(TestEnvironment& env, std::size_t path_budget) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     dftracer::utils::index::IndexerOptions o;
     o.bloom->path_budget = path_budget;
     dftracer::utils::index::Indexer::open({gz}, o).build();

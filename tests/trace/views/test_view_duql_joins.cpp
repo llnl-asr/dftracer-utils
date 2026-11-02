@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -45,7 +46,7 @@ std::string write_records(TestEnvironment& env, const std::string& name,
                           std::vector<std::string> extensions = {}) {
     const std::string plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream o(plain);
+        std::ofstream o(plain.c_str());
         for (const auto& l : lines) o << l << "\n";
     }
     const std::string gz = plain + ".gz";
@@ -54,7 +55,7 @@ std::string write_records(TestEnvironment& env, const std::string& name,
             plain, gz, member_bytes));
     else
         dftu_utils_test::compress_file_to_gzip(plain, gz);
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     dftracer::utils::index::IndexerOptions o;
     if (checkpoint_size) o.checkpoint_size = checkpoint_size;
     if (!extensions.empty()) o.extensions = std::move(extensions);
@@ -138,7 +139,7 @@ TEST_SUITE("View duql joins") {
         TestEnvironment env(10);
         const std::string pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream o(pfw);
+            std::ofstream o(pfw.c_str());
             for (int i = 0; i < 3; ++i)
                 o << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                   << 100 * (i + 1) << R"(,"dur":5,"args":{}})" << "\n";
@@ -148,7 +149,7 @@ TEST_SUITE("View duql joins") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         const View v = view_of(gz);
         const auto f = frame(v.duql(
             R"(let fh = from all | where ph == "M" and name == "FH"; from fh | agg { n = count() })"));
@@ -173,7 +174,7 @@ TEST_SUITE("View duql joins") {
             std::vector<int> name_of;
             std::vector<int> dur_of;
             {
-                std::ofstream o(pfw);
+                std::ofstream o(pfw.c_str());
                 for (int i = 0; i < 60; ++i) {
                     const int k = (i * 7 + i / 3) % 2;
                     const int dur = (i * 37) % 101;
@@ -188,9 +189,9 @@ TEST_SUITE("View duql joins") {
             }
             const std::string gz = pfw + ".gz";
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            dftracer::utils::common::fs::remove(pfw);
-            REQUIRE_FALSE(dftracer::utils::common::fs::exists(
-                determine_index_path(gz, "")));
+            (void)dstd::fs::remove(pfw);
+            REQUIRE_FALSE(
+                dstd::fs::exists(determine_index_path(gz, "")).value());
             std::vector<std::string> want;
             for (int i = 0; i < 60; ++i) {
                 const auto k = static_cast<std::size_t>(name_of[i]);
@@ -1053,7 +1054,7 @@ TEST_SUITE("View duql joins") {
         CHECK(column(frame(view_of(gz).duql(q)), "i") == first);
 
         lines.push_back(R"({"type":"run","run":3,"app":"laghos"})");
-        dftracer::utils::common::fs::remove(gz);
+        dstd::fs::remove(gz).has_value();
         const std::string again = write_records(env, "c", lines);
         REQUIRE(again == gz);
         CHECK(has(view_of(gz).explain_duql(q), {"not cached"}));
@@ -1062,8 +1063,8 @@ TEST_SUITE("View duql joins") {
 
         const std::string cache =
             dftracer::utils::index::lookups_dir(determine_index_path(gz, ""));
-        REQUIRE(dftracer::utils::common::fs::exists(cache));
-        dftracer::utils::common::fs::remove_all(cache);
+        REQUIRE(dstd::fs::exists(cache).value());
+        dstd::fs::remove_all(cache).has_value();
         CHECK(column(frame(view_of(gz).duql(q)), "i") ==
               std::vector<std::string>{"0", "2", "3", "5", "6", "8"});
     }
@@ -1103,7 +1104,7 @@ TEST_SUITE("View duql joins") {
                 determine_index_path(gz, ""));
             for (int pass = 0; pass < 3; ++pass) {
                 CAPTURE(pass);
-                if (pass == 2) dftracer::utils::common::fs::remove_all(cache);
+                if (pass == 2) dstd::fs::remove_all(cache).has_value();
                 for (std::size_t k = 0; k < queries.size(); ++k) {
                     CAPTURE(queries[k]);
                     const auto f = frame(view_of(gz).duql(queries[k]));

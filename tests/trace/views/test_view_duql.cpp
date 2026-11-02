@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/expr.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -235,12 +236,12 @@ View view_of_lines(TestEnvironment& env, const std::vector<std::string>& lines,
                    const std::string& name = "lines.pfw") {
     const std::string pfw = env.get_dir() + "/" + name;
     {
-        std::ofstream o(pfw);
+        std::ofstream o(pfw.c_str());
         for (const auto& l : lines) o << l << "\n";
     }
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     dftracer::utils::index::Indexer::open({gz}).build();
     return View::from_file(gz, determine_index_path(gz, ""));
 }
@@ -2390,7 +2391,7 @@ TEST_SUITE("View duql reshape determinism") {
                                      std::size_t member_bytes) {
         const std::string pfw = env.get_dir() + "/rs.pfw";
         {
-            std::ofstream o(pfw);
+            std::ofstream o(pfw.c_str());
             const char* tags[] = {R"(,"tags":["a","b"])", R"(,"tags":[])",
                                   R"(,"tags":["c"])", ""};
             for (int i = 0; i < RESHAPE_EVENTS; ++i)
@@ -2402,7 +2403,7 @@ TEST_SUITE("View duql reshape determinism") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         dftracer::utils::index::Indexer::open({gz}).build();
         return gz;
     }
@@ -2834,7 +2835,7 @@ TEST_SUITE("View duql session") {
         std::size_t member_bytes = 4096) {
         const std::string pfw = env.get_dir() + "/sess.pfw";
         {
-            std::ofstream o(pfw);
+            std::ofstream o(pfw.c_str());
             for (const auto& [pid, tid, ts, dur] : events)
                 o << R"({"ph":"X","name":"read","cat":"POSIX","pid":)" << pid
                   << R"(,"tid":)" << tid << R"(,"ts":)" << ts << R"(,"dur":)"
@@ -2843,7 +2844,7 @@ TEST_SUITE("View duql session") {
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz,
                                                            member_bytes);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         dftracer::utils::index::Indexer::open({gz}).build();
         return gz;
     }

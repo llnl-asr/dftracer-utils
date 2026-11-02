@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -252,13 +252,13 @@ TEST_CASE("the pre-filter never drops a match") {
     const auto lines = make_lines(rng, EVENT_LINES);
     const std::string plain = env.get_dir() + "/fuzz.pfw";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (const auto& l : lines) out << l << "\n";
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
     simdjson::dom::parser parser;
@@ -304,13 +304,13 @@ TEST_CASE("the pre-filter never drops a match on generic records") {
     }
     const std::string plain = env.get_dir() + "/fuzz.ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (const auto& l : lines) out << l << "\n";
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                MEMBER_BYTES));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     REQUIRE(dftu_utils_test::build_index(gz));
 
     auto leaf = [&]() -> std::string {

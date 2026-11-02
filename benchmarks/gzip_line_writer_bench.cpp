@@ -8,6 +8,8 @@
 //
 //   gzip_line_writer_bench <input.pfw> [workdir]
 
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 
@@ -17,7 +19,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -28,10 +29,23 @@
 
 namespace fileio = dftracer::utils::utilities::fileio;
 namespace compress = dftracer::utils::utilities::fileio::compress;
-namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 namespace {
+
+/// Prints the error and exits with 1 when a setup call failed.
+template <class T>
+void require_ok(const dftracer::utils::dstd::Expected<
+                    T, dftracer::utils::dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    const auto& error = result.error();
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+                 static_cast<int>(error.name().size()), error.name().data(),
+                 static_cast<int>(error.message().size()),
+                 error.message().data());
+    std::exit(1);
+}
 
 constexpr std::size_t MIB = 1024 * 1024;
 constexpr int ROUNDS = 3;
@@ -119,7 +133,7 @@ std::uint64_t run_pgzip(const std::string& data, const std::string& path) {
     std::vector<std::thread> pool;
     for (std::size_t t = 0; t < workers; ++t) pool.emplace_back(worker);
 
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     while (next_write < nchunks) {
         std::string blob;
         {
@@ -154,18 +168,19 @@ double memcpy_loop(const std::vector<std::string_view>& appends,
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
-double run_case(const char* name, std::size_t in_bytes, const fs::path& dir,
+double run_case(const char* name, std::size_t in_bytes,
+                const dftracer::utils::dstd::Path& dir,
                 const std::function<std::uint64_t(const std::string&)>& fn) {
     std::vector<double> ms;
     std::uint64_t out = 0;
-    const std::string path = (dir / "out.pfw.gz").string();
+    const std::string path((dir / "out.pfw.gz").str());
     for (int r = 0; r < ROUNDS; ++r) {
         auto t0 = Clock::now();
         out = fn(path);
         ms.push_back(
             std::chrono::duration<double, std::milli>(Clock::now() - t0)
                 .count());
-        fs::remove(path);
+        (void)dftracer::utils::dstd::fs::remove(path);
     }
     std::sort(ms.begin(), ms.end());
     double med = ms[ms.size() / 2];
@@ -195,9 +210,12 @@ int main(int argc, char** argv) {
         ifs.read(data.data(), static_cast<std::streamsize>(data.size()));
     }
     if (data.empty() || data.back() != '\n') data.push_back('\n');
-    fs::path base = argc > 2 ? fs::path(argv[2]) : fs::temp_directory_path();
-    fs::path dir = base / "gzip_line_writer_bench";
-    fs::create_directories(dir);
+    dftracer::utils::dstd::Path base =
+        argc > 2 ? dftracer::utils::dstd::Path(argv[2])
+                 : dftracer::utils::dstd::fs::temp_directory();
+    dftracer::utils::dstd::Path dir = base / "gzip_line_writer_bench";
+    require_ok(dftracer::utils::dstd::fs::create_directories(dir),
+               "create_directories");
     auto appends = split_appends(data);
 
     std::printf("input %.1f MB, %zu appends\n", data.size() / 1e6,
@@ -224,6 +242,6 @@ int main(int argc, char** argv) {
     std::printf("%-28s %9.1f ms %9.1f MB/s (append copy into a 4MiB member)\n",
                 "memcpy only", cp[1],
                 static_cast<double>(data.size()) / 1e6 / (cp[1] / 1e3));
-    fs::remove_all(dir);
+    (void)dftracer::utils::dstd::fs::remove_all(dir);
     return 0;
 }

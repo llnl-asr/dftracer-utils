@@ -137,7 +137,7 @@ TEST_CASE("plugin cxx: Io ops are co_await-able directly") {
     std::string path = env.get_dir() + "/probe.txt";
     const std::string body = "alpha\nbeta\ngamma\n";
     {
-        std::ofstream f(path, std::ios::binary);
+        std::ofstream f(path.c_str(), std::ios::binary);
         f << body;
     }
 

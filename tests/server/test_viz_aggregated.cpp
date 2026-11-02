@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -59,7 +61,7 @@ void write_single_member(const std::string& path, const std::string& content) {
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
 }
@@ -83,11 +85,11 @@ std::string density_body(Router& router, const std::string& target) {
 }
 
 std::unique_ptr<TraceIndex> build_index(const std::string& content,
-                                        const common::fs::path& dir) {
-    common::fs::create_directories(dir);
-    write_single_member((dir / "trace.pfw.gz").string(), content);
-    auto index =
-        std::make_unique<TraceIndex>(dir.string(), (dir / "idx").string());
+                                        const dstd::Path& dir) {
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    write_single_member(std::string((dir / "trace.pfw.gz").str()), content);
+    auto index = std::make_unique<TraceIndex>(std::string(dir.str()),
+                                              std::string((dir / "idx").str()));
     Runtime rt(4);
     auto task =
         run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {

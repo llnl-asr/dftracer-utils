@@ -4,6 +4,8 @@
 // keyed by record schema.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/store/store.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
@@ -90,13 +92,11 @@ TEST_SUITE("QueryCache") {
         CHECK(
             dftracer::utils::index::cache::CacheStore::exists(rollups_of(gz)));
         CHECK(rollup_sigs(gz).size() == 1);
-        CHECK_FALSE(dftracer::utils::common::fs::exists(
-            dftracer::utils::common::fs::path(cache_of(gz)).parent_path() /
-            ".dftindex-cache"));
+        CHECK_FALSE(dstd::fs::exists(dstd::Path(cache_of(gz)).view().parent() /
+                                     ".dftindex-cache")
+                        .value());
         auto store = dftracer::utils::store::Store::open(
-            (dftracer::utils::common::fs::path(determine_index_path(gz, "")) /
-             "store")
-                .string());
+            (dstd::Path(determine_index_path(gz, "")) / "store").str());
         REQUIRE(store.has_value());
         auto snapshot = store->snapshot();
         REQUIRE(snapshot.has_value());
@@ -124,13 +124,12 @@ TEST_SUITE("QueryCache") {
 
         by_cat(gz, "dur >= 0").materialize().get();
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
-        REQUIRE(dftracer::utils::common::fs::exists(
-            dftracer::utils::common::fs::path(views_of(gz))));
+        REQUIRE(dstd::fs::exists(dstd::Path(views_of(gz))).value());
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
 
         // Both caches are disposable. The index itself is not part of them.
-        dftracer::utils::common::fs::remove_all(rollups_of(gz));
-        dftracer::utils::common::fs::remove_all(views_of(gz));
+        dstd::fs::remove_all(rollups_of(gz)).has_value();
+        (void)dstd::fs::remove_all(views_of(gz));
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == agg);
         StringSink again;
         const auto st = View::from_file(gz, idx)
@@ -146,15 +145,13 @@ TEST_SUITE("QueryCache") {
         const auto gz = create_mixed_trace(env, 30, 20);
         const std::string idx = determine_index_path(gz, "");
         by_cat(gz, "dur >= 0").materialize().get();
-        const dftracer::utils::common::fs::path store =
-            dftracer::utils::common::fs::path(idx) / "store";
-        REQUIRE(dftracer::utils::common::fs::exists(store));
+        const dstd::Path store = dstd::Path(idx) / "store";
+        REQUIRE(dstd::fs::exists(store).value());
 
         // The caches outlive the index, so the root stays without its store.
-        dftracer::utils::common::fs::remove_all(store);
-        REQUIRE(dftracer::utils::common::fs::exists(
-            dftracer::utils::common::fs::path(rollups_of(gz))));
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(store));
+        dstd::fs::remove_all(store).has_value();
+        REQUIRE(dstd::fs::exists(dstd::Path(rollups_of(gz))).value());
+        REQUIRE_FALSE(dstd::fs::exists(store).value());
 
         StringSink rows;
         const auto st = View::from_file(gz, idx)
@@ -163,15 +160,15 @@ TEST_SUITE("QueryCache") {
                             .get();
         CHECK(rows.lines().size() == 30);
         CHECK(st.events_scanned == 50);
-        CHECK(dftracer::utils::common::fs::exists(store));
+        CHECK(dstd::fs::exists(store).value());
     }
 
     TEST_CASE("a rollup store that cannot be opened does not fail the query") {
         TestEnvironment env(200);
         const auto gz = indexed_trace(env);
         const auto want = canon(by_cat(gz, "dur >= 0").collect().get());
-        dftracer::utils::common::fs::create_directories(cache_of(gz));
-        std::ofstream(rollups_of(gz)) << "x";
+        REQUIRE(dstd::fs::create_directories(cache_of(gz)).has_value());
+        std::ofstream((rollups_of(gz)).c_str()) << "x";
         CHECK_NOTHROW(by_cat(gz, "dur >= 0").materialize().get());
         CHECK(canon(by_cat(gz, "dur >= 0").collect().get()) == want);
     }
@@ -235,12 +232,9 @@ TEST_SUITE("QueryCache") {
         View::from_file(gz, idx).duql(R"(name == "read")").materialize().get();
         ::unsetenv("DFTRACER_UTILS_CACHE_MAX_BYTES");
         std::vector<std::string> views;
-        std::error_code ec;
-        for (dftracer::utils::common::fs::directory_iterator
-                 it(dftracer::utils::common::fs::path(views_of(gz)), ec),
-             end;
-             !ec && it != end; it.increment(ec))
-            views.push_back(it->path().string());
+        for (const auto& e :
+             dftu_utils_test::list_dir(dstd::Path(views_of(gz))))
+            views.push_back(std::string(e.path.str()));
         CHECK(views.empty());
         StringSink rows;
         const auto st = View::from_file(gz, idx)

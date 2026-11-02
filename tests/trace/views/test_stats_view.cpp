@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/stats_view.h>
@@ -297,7 +298,7 @@ TEST_SUITE("stats via View") {
         // them as int64 would yield garbage keys.
         std::string pfw = env.get_dir() + "/pt.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 10; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1000,)"
                        R"("tid":5000,"ts":)"
@@ -309,7 +310,7 @@ TEST_SUITE("stats via View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         stats::ViewStats s = run_stats(stats::StatsView::from_file(gz, idx));

@@ -3,6 +3,7 @@
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/lazy_plan.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/trace/views/view_plan.h>
 #include <dftracer/utils/trace/views/view_plan_ops.h>
 #include <dftracer/utils/trace/views/view_source.h>
@@ -505,7 +506,7 @@ struct FnameTrace {
     std::string idx;
     FnameTrace() {
         std::string pfw = env.get_dir() + "/fname.pfw";
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         for (int i = 0; i < 20; ++i)
             ofs << R"({"ph":"X","name":"open","cat":"POSIX","pid":1,"tid":1,)"
                 << R"("ts":)" << (1000 + i * 100) << R"(,"dur":)" << (5 + i)
@@ -514,7 +515,7 @@ struct FnameTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         idx = determine_index_path(gz, "");
         StringSink sink;
         run(View::from_file(gz, idx).sink_json(sink));
@@ -709,7 +710,7 @@ struct NestedTrace {
     std::string gz;
     NestedTrace() {
         const std::string pfw = env.get_dir() + "/nested.pfw";
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         auto ev = [&](const char* name, const char* cat, int tid, int ts,
                       int dur) {
             ofs << R"({"ph":"X","name":")" << name << R"(","cat":")" << cat
@@ -728,7 +729,7 @@ struct NestedTrace {
         ofs.close();
         gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         StringSink sink;
         run(View::from_file(gz).sink_json(sink));
     }
@@ -976,7 +977,7 @@ TEST_SUITE("View - trace terminals") {
         TestEnvironment env(10);
         const std::string pfw = env.get_dir() + "/dur_gap.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"X","name":"a","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
                 << "\n"
                 << R"({"ph":"X","name":"b","cat":"APP","pid":1,"tid":2,"ts":150,"args":{}})"
@@ -984,7 +985,7 @@ TEST_SUITE("View - trace terminals") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         const TypedResult t =
             run(scan::collect_typed(scan::from_file(gz), 0, 4096));
         REQUIRE(t.regular.num_rows() == 2);
@@ -1021,7 +1022,7 @@ TEST_SUITE("View - trace terminals") {
         TestEnvironment env(10);
         const std::string pfw = env.get_dir() + "/phased.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"X","name":"step","cat":"APP","pid":1,"tid":1,"ts":100,"dur":50,"args":{}})"
                 << "\n"
                 << R"({"ph":"A","name":"folded","cat":"APP","pid":1,"tid":1,"ts":110,"dur":20,"args":{}})"
@@ -1172,7 +1173,7 @@ TEST_SUITE("View - trace terminals") {
         TestEnvironment env(10);
         const std::string pfw = env.get_dir() + "/args.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 4; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << 100 * i << R"(,"dur":10,"args":{"size":)" << i << "}}\n";
@@ -1296,7 +1297,7 @@ namespace {
 std::string write_args_trace(TestEnvironment& env) {
     const std::string pfw = env.get_dir() + "/args.pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1,"s":"a"}})"
             << "\n"
             << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"x":null}})"
@@ -1306,7 +1307,7 @@ std::string write_args_trace(TestEnvironment& env) {
     }
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -1449,7 +1450,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
 
         const std::string absent_pfw = env.get_dir() + "/absent.pfw";
         {
-            std::ofstream ofs(absent_pfw);
+            std::ofstream ofs(absent_pfw.c_str());
             ofs << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":1,"dur":10,"args":{"x":1}})"
                 << "\n"
                 << R"({"ph":"X","name":"op","cat":"POSIX","pid":1,"tid":1,"ts":2,"dur":10,"args":{"y":2}})"
@@ -1459,7 +1460,7 @@ TEST_SUITE("View - aggregate types over an untyped arg") {
         }
         const std::string absent = absent_pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(absent_pfw, absent);
-        dftracer::utils::common::fs::remove(absent_pfw);
+        (void)dstd::fs::remove(absent_pfw);
 
         for (const std::string& gz : {write_args_trace(env), absent}) {
             CAPTURE(gz);

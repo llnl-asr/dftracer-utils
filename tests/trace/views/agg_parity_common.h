@@ -8,6 +8,7 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -157,9 +158,9 @@ inline void frames_equal(const dftracer::utils::dataframe::DataFrame& a,
 inline std::string write_agg_engine_trace(const std::string& dir) {
     const std::string pfw = dir + "/agg_engine.pfw";
     const std::string gz = pfw + ".gz";
-    if (dftracer::utils::common::fs::exists(gz)) return gz;
+    if (dftracer::utils::dstd::fs::exists(gz).value()) return gz;
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         const char* names[] = {"read", "write", "open"};
         const char* cats[] = {"POSIX", "STDIO"};
         const int pids[] = {1, 2, 3};
@@ -174,7 +175,7 @@ inline std::string write_agg_engine_trace(const std::string& dir) {
         }
     }
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -340,7 +341,7 @@ inline dftu_utils_test::TestEnvironment& parity_env() {
 // One index root per trace set, so each set is one first touch.
 inline std::string parity_sub(const char* name) {
     const std::string d = parity_env().get_dir() + "/" + name;
-    dftracer::utils::common::fs::create_directories(d);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(d).has_value());
     return d;
 }
 

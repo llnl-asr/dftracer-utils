@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/store/error.h>
@@ -250,10 +251,10 @@ TEST_CASE("C++ API - Edge cases") {
 
     SUBCASE("Non-existent file should throw") {
         // Use cross-platform non-existent path
-        common::fs::path non_existent =
-            common::fs::temp_directory_path() / "nonexistent" / "file.gz";
-        CHECK_THROWS(ReaderFactory::create(non_existent.string(),
-                                           non_existent.string()));
+        dstd::Path non_existent =
+            dstd::fs::temp_directory() / "nonexistent" / "file.gz";
+        CHECK_THROWS(ReaderFactory::create(std::string(non_existent.str()),
+                                           std::string(non_existent.str())));
     }
 }
 
@@ -849,7 +850,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         std::string txt_file = test_dir + "/regression_test.txt";
 
         // Create test data similar to trace.pfw.gz format
-        std::ofstream f(txt_file);
+        std::ofstream f(txt_file.c_str());
         REQUIRE(f.is_open());
 
         f << "[\n";  // JSON array start
@@ -862,7 +863,7 @@ TEST_CASE("C++ API - Regression and stress tests") {
         bool success =
             dftu_utils_test::compress_file_to_gzip(txt_file, gz_file);
         REQUIRE(success);
-        common::fs::remove(txt_file);
+        (void)dstd::fs::remove(txt_file);
 
         // Build index
         {
@@ -1473,7 +1474,7 @@ TEST_CASE("C++ Advanced Functions - Error Paths and Edge Cases") {
                 gz_file, idx_file + std::to_string(ckpt_size_mb), ckpt_size);
             CHECK_NOTHROW(indexer->build());
             CHECK(indexer->get_checkpoint_size() <= ckpt_size);
-            common::fs::remove(idx_file + std::to_string(ckpt_size_mb));
+            (void)dstd::fs::remove(idx_file + std::to_string(ckpt_size_mb));
         }
     }
 

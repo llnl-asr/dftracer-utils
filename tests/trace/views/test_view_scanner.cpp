@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/runtime/coro/async_generator.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -26,7 +26,7 @@ using dftracer::utils::duql::Query;
 
 static std::string create_pfw_gz(TestEnvironment& env, int n) {
     std::string pfw = env.get_dir() + "/trace.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < n; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
@@ -35,7 +35,7 @@ static std::string create_pfw_gz(TestEnvironment& env, int n) {
     ofs.close();
     std::string gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -44,7 +44,7 @@ static std::string create_pfw_gz(TestEnvironment& env, int n) {
 // one SH nothing references.
 static std::string create_metadata_pfw_gz(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/meta.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     ofs << R"({"name":"HH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"host1","value":"H1"}})"
         << "\n"
         << R"({"name":"SH","cat":"dftracer","pid":1,"tid":1,"ph":"M","args":{"hhash":"H1","name":"myapp","value":"EX01"}})"
@@ -62,7 +62,7 @@ static std::string create_metadata_pfw_gz(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     compress_file_to_gzip(pfw, gz);
-    common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -102,7 +102,7 @@ static std::string write_newline_split_trace(TestEnvironment& env,
     for (int i = 10; i < 20; ++i) second += "\n" + line(i);
     first_len = first.size();
     const std::string gz = env.get_dir() + "/split_line.pfw.gz";
-    std::ofstream out(gz, std::ios::binary);
+    std::ofstream out(gz.c_str(), std::ios::binary);
     for (const auto* text : {&first, &second}) {
         dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp;
         auto member = comp.compress_member(text->data(), text->size());

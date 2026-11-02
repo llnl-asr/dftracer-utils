@@ -6,6 +6,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -18,7 +19,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -31,7 +31,6 @@ using ViewFile = dftracer::utils::trace::views::ViewFile;
 using test_plugin_common::index_trace;
 using test_plugin_common::result_text;
 using test_plugin_common::run_set;
-namespace fs = std::filesystem;
 
 #ifndef FACTORY_REGISTERS_OP_PLUGIN_PATH
 #error "FACTORY_REGISTERS_OP_PLUGIN_PATH must be defined by CMake"
@@ -50,9 +49,9 @@ constexpr int EVENTS = 64;
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
                     const std::string& tag) {
     const std::string dir = env.get_dir() + "/" + tag;
-    fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     const std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < EVENTS; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i) << R"(,"args":{}})"
@@ -60,7 +59,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env,
     ofs.close();
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
 
     return index_trace(gz);
 }

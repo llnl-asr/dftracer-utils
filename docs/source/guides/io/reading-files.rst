@@ -74,7 +74,7 @@ returning a ``text::Text``:
    #include <dftracer/utils/utilities/filesystem/types.h>
    using namespace dftracer::utils::utilities;
 
-   filesystem::FileEntry entry{std::filesystem::path{"trace-0.pfw"}};
+   filesystem::FileEntry entry{"trace-0.pfw"};
    fileio::FileReaderUtility read;
    text::Text contents = co_await read(entry);
 

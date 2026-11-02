@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/plan/view_resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
@@ -27,7 +27,7 @@ void write_single_member(const std::string& path, const std::string& content) {
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
 }
@@ -60,13 +60,13 @@ TEST_SUITE("hash_table_aggregation") {
     // populate the file dictionary, or fhash -> file_name never resolves.
     TEST_CASE("aggregation build populates the file hash table") {
         auto dir = dftu_utils_test::make_unique_test_path("hashagg");
-        common::fs::create_directories(dir);
-        const std::string gz = (dir / "trace.pfw.gz").string();
-        const std::string index_dir = (dir / "idx").string();
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const std::string gz = std::string((dir / "trace.pfw.gz").str());
+        const std::string index_dir = std::string((dir / "idx").str());
         write_single_member(gz, make_trace_with_fh(50));
 
         ResolveAndBuildInput input;
-        input.directory = dir.string();
+        input.directory = dir.str();
         input.index_dir = index_dir;
         input.require_checkpoints = true;
         input.require_bloom = false;

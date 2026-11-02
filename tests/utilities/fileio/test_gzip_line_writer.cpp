@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -124,9 +124,9 @@ TEST_CASE("GzipLineWriter - cut rule, long line, cut(), index equality") {
     GzipWriterOptions o;
     o.member_size = MS;
     o.workers = 3;
-    auto w = write_all(path.string(), o, pieces);
+    auto w = write_all(std::string(path.str()), o, pieces);
     REQUIRE(!w.err.has_value() == false);
-    CHECK(gunzip_all(path.string()) == all);
+    CHECK(gunzip_all(std::string(path.str())) == all);
     REQUIRE(w.members.size() > 10);
     CHECK(w.summary.members == w.members.size());
     CHECK(w.summary.uc_bytes == all.size());
@@ -148,22 +148,22 @@ TEST_CASE("GzipLineWriter - cut rule, long line, cut(), index equality") {
     CHECK(std::any_of(w.members.begin(), w.members.end(),
                       [](const MemberInfo& m) { return m.uc_size > 5 * MS; }));
     (void)long_alone;
-    expect_equal_to_index(w.members, index_of(path.string()), 0);
-    common::fs::remove(path);
+    expect_equal_to_index(w.members, index_of(std::string(path.str())), 0);
+    (void)dstd::fs::remove(path);
 
     // cut() ends the current member at once; a long line cut off is alone.
     GzipWriterOptions c;
     c.member_size = MS;
     c.workers = 2;
-    auto w2 = write_all(path.string(), c,
+    auto w2 = write_all(std::string(path.str()), c,
                         {line(1), line(2), line(3, 5 * MS), line(4), line(5)},
                         /*cut_after_each=*/true);
     REQUIRE(w2.members.size() == 5);
     CHECK(w2.members[2].lines == 1);
     CHECK(w2.members[2].uc_size > 5 * MS);
     CHECK(w2.members[0].lines == 1);
-    expect_equal_to_index(w2.members, index_of(path.string()), 0);
-    common::fs::remove(path);
+    expect_equal_to_index(w2.members, index_of(std::string(path.str())), 0);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
@@ -197,8 +197,8 @@ TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
         CHECK(!pt.empty());
         --running;
     };
-    auto w = write_all(path.string(), o, pieces);
-    CHECK(gunzip_all(path.string()) == all);
+    auto w = write_all(std::string(path.str()), o, pieces);
+    CHECK(gunzip_all(std::string(path.str())) == all);
     REQUIRE(w.members.size() > 50);
     std::uint64_t off = 0;
     for (std::size_t i = 0; i < w.members.size(); ++i) {
@@ -212,22 +212,22 @@ TEST_CASE("GzipLineWriter - order, bounded in flight, fold once") {
     CHECK(w.summary.peak_in_flight <= WORKERS + 2);
     CHECK(w.summary.peak_in_flight >= 1);
     CHECK(max_running.load() <= static_cast<int>(WORKERS));
-    expect_equal_to_index(w.members, index_of(path.string()), 0);
-    common::fs::remove(path);
+    expect_equal_to_index(w.members, index_of(std::string(path.str())), 0);
+    (void)dstd::fs::remove(path);
 
     GzipWriterOptions one;
     one.member_size = 4000;
     one.workers = 1;
-    auto w1 = write_all(path.string(), one, pieces);
+    auto w1 = write_all(std::string(path.str()), one, pieces);
     CHECK(w1.summary.peak_in_flight <= 3);
-    CHECK(gunzip_all(path.string()) == all);
-    common::fs::remove(path);
+    CHECK(gunzip_all(std::string(path.str())) == all);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("GzipLineWriter - part files") {
     auto dir = dftu_utils_test::make_unique_test_path("glw_parts");
-    common::fs::create_directories(dir);
-    auto base = (dir / "t.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const std::string base((dir / "t.pfw.gz").str());
     std::vector<std::string> pieces;
     std::string all;
     for (std::size_t i = 0; i < 200; ++i) {
@@ -238,13 +238,13 @@ TEST_CASE("GzipLineWriter - part files") {
     o.member_size = 2000;
     o.part_size = 5000;
     o.workers = 4;
-    auto w = write_all(base, o, pieces);
+    auto w = write_all(std::string(base), o, pieces);
     REQUIRE(w.summary.parts > 3);
     std::string joined;
     std::size_t files = 0;
     for (std::size_t p = 0; p < w.summary.parts; ++p) {
-        auto pp = gzip_part_path(base, static_cast<int>(p), true);
-        REQUIRE(common::fs::exists(pp));
+        auto pp = gzip_part_path(std::string(base), static_cast<int>(p), true);
+        REQUIRE(dstd::fs::exists(pp).value());
         ++files;
         joined += gunzip_all(pp);
         std::vector<MemberInfo> mine;
@@ -258,12 +258,12 @@ TEST_CASE("GzipLineWriter - part files") {
     }
     CHECK(joined == all);
     std::size_t on_disk = 0;
-    for (auto& e : common::fs::directory_iterator(dir)) {
+    for (auto& e : dftu_utils_test::list_dir(dir)) {
         (void)e;
         ++on_disk;
     }
     CHECK(on_disk == files);
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("GzipLineWriter - compress false") {
@@ -278,8 +278,8 @@ TEST_CASE("GzipLineWriter - compress false") {
     o.member_size = 1500;
     o.compress = false;
     o.workers = 3;
-    auto w = write_all(path.string(), o, pieces);
-    std::ifstream f(path, std::ios::binary);
+    auto w = write_all(std::string(path.str()), o, pieces);
+    std::ifstream f(path.c_str(), std::ios::binary);
     std::string got((std::istreambuf_iterator<char>(f)),
                     std::istreambuf_iterator<char>());
     CHECK(got == all);
@@ -288,7 +288,7 @@ TEST_CASE("GzipLineWriter - compress false") {
         CHECK(m.c_offset == m.uc_offset);
         CHECK(m.c_size == m.uc_size);
     }
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("GzipLineWriter - errors") {
@@ -296,10 +296,10 @@ TEST_CASE("GzipLineWriter - errors") {
         auto path = dftu_utils_test::make_unique_test_path("glw_nonl.pfw.gz");
         GzipWriterOptions o;
         o.member_size = 100;
-        Written w = write_all(path.string(), o, {"{\"a\":1}"});
+        Written w = write_all(std::string(path.str()), o, {"{\"a\":1}"});
         CHECK(!w.err.has_value());
         CHECK(w.err.error().is_code(common::ErrorCode::InvalidArgument));
-        common::fs::remove(path);
+        (void)dstd::fs::remove(path);
     }
     SUBCASE("a worker failure removes the output") {
         auto path = dftu_utils_test::make_unique_test_path("glw_fail.pfw.gz");
@@ -312,7 +312,7 @@ TEST_CASE("GzipLineWriter - errors") {
         };
         bool saw_error = false;
         run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-            auto wr = co_await GzipLineWriter::open(path.string(), o);
+            auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
             REQUIRE(wr.has_value());
             for (std::size_t i = 0; i < 2000 && !saw_error; ++i) {
                 auto r = co_await wr->append(line(i, 100));
@@ -326,25 +326,26 @@ TEST_CASE("GzipLineWriter - errors") {
             CHECK(!again.has_value());
         });
         CHECK(saw_error);
-        CHECK(!common::fs::exists(path));
+        CHECK(!dstd::fs::exists(path).value());
     }
     SUBCASE("an unwritable directory fails open") {
         if (geteuid() == 0) return;
         auto dir = dftu_utils_test::make_unique_test_path("glw_ro");
-        common::fs::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         chmod(dir.c_str(), 0555);
-        auto path = (dir / "t.pfw.gz").string();
+        const std::string path((dir / "t.pfw.gz").str());
         bool failed = false;
         run_coro([&](CoroScope&) -> coro::CoroTask<void> {
             // Named: GCC 12 destroys a temporary built inside co_await twice.
             GzipWriterOptions defaults;
-            auto wr = co_await GzipLineWriter::open(path, std::move(defaults));
+            auto wr = co_await GzipLineWriter::open(std::string(path),
+                                                    std::move(defaults));
             failed = !wr.has_value();
         });
         chmod(dir.c_str(), 0755);
         CHECK(failed);
-        CHECK(!common::fs::exists(path));
-        common::fs::remove_all(dir);
+        CHECK(!dstd::fs::exists(path).value());
+        (void)dstd::fs::remove_all(dir);
     }
 }
 
@@ -355,7 +356,7 @@ TEST_CASE("GzipLineWriterBlocking - round trip") {
     o.workers = 2;
     std::vector<MemberInfo> members;
     o.on_member = [&](const MemberInfo& m) { members.push_back(m); };
-    auto w = GzipLineWriterBlocking::open(path.string(), o);
+    auto w = GzipLineWriterBlocking::open(std::string(path.str()), o);
     REQUIRE(w.has_value());
     std::string all;
     for (std::size_t i = 0; i < 100; ++i) {
@@ -368,22 +369,22 @@ TEST_CASE("GzipLineWriterBlocking - round trip") {
     auto s = w->close();
     REQUIRE(s.has_value());
     CHECK(s->members == members.size());
-    CHECK(gunzip_all(path.string()) == all);
-    expect_equal_to_index(members, index_of(path.string()), 0);
-    common::fs::remove(path);
+    CHECK(gunzip_all(std::string(path.str())) == all);
+    expect_equal_to_index(members, index_of(std::string(path.str())), 0);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("GzipLineWriter - destroying without close aborts") {
     auto dir = dftu_utils_test::make_unique_test_path("glw_abort");
-    common::fs::create_directories(dir);
-    auto base = (dir / "t.pfw.gz").string();
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
+    const std::string base((dir / "t.pfw.gz").str());
     GzipWriterOptions o;
     o.member_size = 500;
     o.part_size = 2000;
     o.workers = 3;
     run_coro([&](CoroScope&) -> coro::CoroTask<void> {
         {
-            auto wr = co_await GzipLineWriter::open(base, o);
+            auto wr = co_await GzipLineWriter::open(std::string(base), o);
             REQUIRE(wr.has_value());
             for (std::size_t i = 0; i < 300; ++i)
                 REQUIRE(co_await wr->append(line(i, 100)));
@@ -395,12 +396,12 @@ TEST_CASE("GzipLineWriter - destroying without close aborts") {
         co_return;
     });
     std::size_t left = 0;
-    for (auto& e : common::fs::directory_iterator(dir)) {
+    for (auto& e : dftu_utils_test::list_dir(dir)) {
         (void)e;
         ++left;
     }
     CHECK(left == 0);
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("GzipLineWriter - a moved writer closes once") {
@@ -409,7 +410,7 @@ TEST_CASE("GzipLineWriter - a moved writer closes once") {
     run_coro([&](CoroScope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 300;
-        auto wr = co_await GzipLineWriter::open(path.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter a = std::move(*wr);
         GzipLineWriter b = std::move(a);
@@ -421,8 +422,8 @@ TEST_CASE("GzipLineWriter - a moved writer closes once") {
         REQUIRE(s.has_value());
         co_return;
     });
-    CHECK(gunzip_all(path.string()) == all);
-    common::fs::remove(path);
+    CHECK(gunzip_all(std::string(path.str())) == all);
+    (void)dstd::fs::remove(path);
 }
 
 namespace {
@@ -467,7 +468,7 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
     o.workers = 2;
     std::string all;
     run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-        auto wr = co_await GzipLineWriter::open(path.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         for (std::size_t i = 0; i < 50; ++i) {
             all += line(i, 30);
@@ -479,23 +480,23 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
         REQUIRE(s.has_value());
         CHECK(s->uc_bytes == all.size() + 20);
     });
-    CHECK(gunzip_all(path.string()) == all + "tail-without-newline");
-    common::fs::remove(path);
+    CHECK(gunzip_all(std::string(path.str())) == all + "tail-without-newline");
+    (void)dstd::fs::remove(path);
 
     // Only a tail: it forms its own member.
     auto only = dftu_utils_test::make_unique_test_path("glw_tail2.pfw.gz");
-    auto w = GzipLineWriterBlocking::open(only.string(), o);
+    auto w = GzipLineWriterBlocking::open(std::string(only.str()), o);
     REQUIRE(w.has_value());
     auto s = w->close("abc");
     REQUIRE(s.has_value());
     CHECK(s->members == 1);
-    CHECK(gunzip_all(only.string()) == "abc");
-    common::fs::remove(only);
+    CHECK(gunzip_all(std::string(only.str())) == "abc");
+    (void)dstd::fs::remove(only);
 }
 
 TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
     auto dir = dftu_utils_test::make_unique_test_path("glw_named");
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     std::vector<std::string> pieces;
     for (std::size_t i = 0; i < 100; ++i) pieces.push_back(line(i, 100));
 
@@ -512,23 +513,24 @@ TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
     o.part_header = "[\n";
     o.part_footer = "\n]\n";
     o.part_name = [&](std::size_t i) {
-        return (dir / ("chunk" + std::to_string(i) + ".pfw.gz")).string();
+        return std::string(
+            (dir / ("chunk" + std::to_string(i) + ".pfw.gz")).str());
     };
     o.on_part = [&](std::size_t p, const std::string& path, std::uint64_t uc,
                     std::uint64_t lines) {
-        CHECK(common::fs::exists(path));
+        CHECK(dstd::fs::exists(path).value());
         parts.push_back({p, path, uc, lines});
     };
-    auto w = write_all((dir / "ignored.pfw.gz").string(), o, pieces);
+    auto w = write_all(std::string((dir / "ignored.pfw.gz").str()), o, pieces);
     REQUIRE(w.summary.parts > 2);
     REQUIRE(parts.size() == w.summary.parts);
-    CHECK(!common::fs::exists(dir / "ignored.pfw.gz"));
+    CHECK(!dstd::fs::exists(dir / "ignored.pfw.gz").value());
 
     std::uint64_t total_lines = 0;
     for (std::size_t p = 0; p < parts.size(); ++p) {
         CHECK(parts[p].part == p);
         CHECK(parts[p].path ==
-              (dir / ("chunk" + std::to_string(p) + ".pfw.gz")).string());
+              (dir / ("chunk" + std::to_string(p) + ".pfw.gz")).str());
         const std::string file = slurp(parts[p].path);
         const std::string text = gunzip_all(parts[p].path);
         REQUIRE(text.size() == parts[p].uc + 5);
@@ -557,15 +559,15 @@ TEST_CASE("GzipLineWriter - named parts, header, footer, on_part") {
     CHECK(w.summary.lines == pieces.size());
 
     // One part: header and footer still apply.
-    auto one = (dir / "one.pfw").string();
+    const std::string one((dir / "one.pfw").str());
     GzipWriterOptions o1;
     o1.part_header = "H\n";
     o1.part_footer = "F\n";
     o1.compress = false;
-    auto w1 = write_all(one, o1, {"a\n", "b\n"});
-    CHECK(slurp(one) == "H\na\nb\nF\n");
+    auto w1 = write_all(std::string(one), o1, {"a\n", "b\n"});
+    CHECK(slurp(std::string(one)) == "H\na\nb\nF\n");
     CHECK(w1.summary.lines == 2);
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("GzipLineWriter - fold sees each member's decoded bytes once") {
@@ -585,17 +587,17 @@ TEST_CASE("GzipLineWriter - fold sees each member's decoded bytes once") {
     };
     std::vector<std::string> pieces;
     for (std::size_t i = 0; i < 200; ++i) pieces.push_back(line(i, 40));
-    write_all(path.string(), o, pieces);
+    write_all(std::string(path.str()), o, pieces);
     (void)members;
     CHECK(dup == 0);
     REQUIRE(folded.size() > 5);
-    const std::string file = slurp(path.string());
-    auto idx = index_of(path.string());
+    const std::string file = slurp(std::string(path.str()));
+    auto idx = index_of(std::string(path.str()));
     REQUIRE(idx.size() == folded.size());
     for (std::size_t i = 0; i < idx.size(); ++i)
         CHECK(inflate_member(file, idx[i].c_offset, idx[i].c_size) ==
               folded[i]);
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE(
@@ -613,7 +615,7 @@ TEST_CASE(
     };
     std::vector<std::string> pieces;
     for (std::size_t i = 0; i < 200; ++i) pieces.push_back(line(i, 40));
-    auto w = write_all(path.string(), o, pieces);
+    auto w = write_all(std::string(path.str()), o, pieces);
     REQUIRE(w.summary.parts > 2);
     REQUIRE(refs.size() == w.members.size());
     std::map<std::size_t, std::uint64_t> in_part;
@@ -622,10 +624,10 @@ TEST_CASE(
         CHECK(r.part == m.part);
         CHECK(r.part_index == in_part[m.part]++);
     }
-    std::error_code ec;
     for (std::size_t i = 0; i < w.summary.parts; ++i)
-        common::fs::remove(
-            gzip_part_path(path.string(), static_cast<int>(i), true), ec);
+        dstd::fs::remove(
+            gzip_part_path(std::string(path.str()), static_cast<int>(i), true))
+            .has_value();
 }
 
 TEST_CASE("GzipLineWriter - append_with equals append") {
@@ -636,9 +638,9 @@ TEST_CASE("GzipLineWriter - append_with equals append") {
     o.workers = 2;
     std::vector<std::string> pieces;
     for (std::size_t i = 0; i < 150; ++i) pieces.push_back(line(i, i % 50));
-    write_all(a.string(), o, pieces);
+    write_all(std::string(a.str()), o, pieces);
     run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-        auto wr = co_await GzipLineWriter::open(b.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(b.str()), o);
         REQUIRE(wr.has_value());
         for (auto& p : pieces) {
             const auto r = co_await wr->append_with(
@@ -656,9 +658,9 @@ TEST_CASE("GzipLineWriter - append_with equals append") {
         CHECK(!bad.has_value());
         REQUIRE(co_await wr->close());
     });
-    CHECK(slurp(a.string()) == slurp(b.string()));
-    common::fs::remove(a);
-    common::fs::remove(b);
+    CHECK(slurp(std::string(a.str())) == slurp(std::string(b.str())));
+    (void)dstd::fs::remove(a);
+    (void)dstd::fs::remove(b);
 }
 
 TEST_CASE("GzipLineWriter - unordered mode") {
@@ -668,12 +670,13 @@ TEST_CASE("GzipLineWriter - unordered mode") {
     bad.ordered = false;
     bad.on_member = [](const MemberInfo&) {};
     run_coro([&](CoroScope&) -> coro::CoroTask<void> {
-        auto r = co_await GzipLineWriter::open(path.string(), bad);
+        auto r = co_await GzipLineWriter::open(std::string(path.str()), bad);
         CHECK(!r.has_value());
         GzipWriterOptions b2;
         b2.ordered = false;
         b2.part_size = 10;
-        CHECK(!(co_await GzipLineWriter::open(path.string(), b2)).has_value());
+        CHECK(!(co_await GzipLineWriter::open(std::string(path.str()), b2))
+                   .has_value());
     });
 
     GzipWriterOptions o;
@@ -688,7 +691,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
             expect.insert(line(p * 1000 + i, i % 30));
     WriteSummary sum;
     run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-        auto wr = co_await GzipLineWriter::open(path.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
         coro::CoroSemaphore done(PRODUCERS);
@@ -715,7 +718,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
         REQUIRE(s.has_value());
         sum = *s;
     });
-    const std::string text = gunzip_all(path.string());
+    const std::string text = gunzip_all(std::string(path.str()));
     REQUIRE(text.size() > 4);
     CHECK(text.substr(0, 2) == "[\n");
     CHECK(text.substr(text.size() - 2) == "]\n");
@@ -728,12 +731,12 @@ TEST_CASE("GzipLineWriter - unordered mode") {
     }
     CHECK(got == expect);
     CHECK(sum.lines == expect.size());
-    for (auto& m : index_of(path.string())) {
-        const std::string file = slurp(path.string());
+    for (auto& m : index_of(std::string(path.str()))) {
+        const std::string file = slurp(std::string(path.str()));
         auto pt = inflate_member(file, m.c_offset, m.c_size);
         CHECK(pt.back() == '\n');
     }
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("GzipLineWriter - producers fill their own members") {
@@ -756,7 +759,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
     for (std::size_t p = 0; p < PRODUCERS; ++p)
         for (std::size_t i = 0; i < PER; ++i) expect.insert(mk(p, i));
     run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-        auto wr = co_await GzipLineWriter::open(path.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
         std::vector<GzipLineWriter::Producer> prods;
@@ -788,7 +791,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
         for (std::size_t p = 0; p < PRODUCERS; ++p) co_await done.acquire(1);
         REQUIRE(co_await w.close());
     });
-    const std::string text = gunzip_all(path.string());
+    const std::string text = gunzip_all(std::string(path.str()));
     std::multiset<std::string> got;
     for (std::size_t pos = 0; pos < text.size();) {
         auto nl = text.find('\n', pos);
@@ -800,29 +803,29 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
     for (auto& [tag, size] : members)
         if (size < MEMBER) ++small[tag];
     for (auto& [tag, n] : small) CHECK(n <= 1);
-    const std::string file = slurp(path.string());
-    for (auto& m : index_of(path.string()))
+    const std::string file = slurp(std::string(path.str()));
+    for (auto& m : index_of(std::string(path.str())))
         CHECK(inflate_member(file, m.c_offset, m.c_size).back() == '\n');
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("GzipLineWriter - producer refused when ordered, close needs flush") {
     auto path = dftu_utils_test::make_unique_test_path("glw_prod2.pfw.gz");
     run_coro([&](CoroScope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
-        auto wr = co_await GzipLineWriter::open(path.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         CHECK(!wr->producer().has_value());
         REQUIRE(co_await wr->close());
         o.ordered = false;
-        auto w2 = co_await GzipLineWriter::open(path.string(), o);
+        auto w2 = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(w2.has_value());
         auto pr = w2->producer();
         REQUIRE(pr.has_value());
         REQUIRE(co_await pr->append(line(1)));
         CHECK(!(co_await w2->close()).has_value());
     });
-    CHECK(!common::fs::exists(path));
+    CHECK(!dstd::fs::exists(path).value());
 }
 
 TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
@@ -834,7 +837,8 @@ TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
     Runtime rt(4);
     rt.scope("glw_dropped", [&](CoroScope&) -> coro::CoroTask<void> {
           {
-              auto wr = co_await GzipLineWriter::open(path.string(), o);
+              auto wr =
+                  co_await GzipLineWriter::open(std::string(path.str()), o);
               REQUIRE(wr.has_value());
               for (std::size_t i = 0; i < 100; ++i)
                   REQUIRE(co_await wr->append(line(i, 40)));
@@ -844,10 +848,10 @@ TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
       }).wait();
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (common::fs::exists(path) &&
+    while (dstd::fs::exists(path).value() &&
            std::chrono::steady_clock::now() < deadline)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    CHECK_FALSE(common::fs::exists(path));
+    CHECK_FALSE(dstd::fs::exists(path).value());
     CHECK(on_executor.load());
     rt.shutdown();
 }
@@ -865,7 +869,7 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
     std::uint64_t expect_lines = PRODUCERS * PER;
     WriteSummary sum;
     run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-        auto wr = co_await GzipLineWriter::open(path.string(), o);
+        auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
         std::vector<GzipLineWriter::Producer> prods;
@@ -892,8 +896,8 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
     CHECK(sum.peak_bytes <= o.memory_budget);
     CHECK(sum.peak_in_flight <= 4);
     CHECK(sum.lines == expect_lines);
-    const std::string text = gunzip_all(path.string());
+    const std::string text = gunzip_all(std::string(path.str()));
     CHECK(static_cast<std::uint64_t>(
               std::count(text.begin(), text.end(), '\n')) == expect_lines);
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }

@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <map>
 #include <set>
@@ -413,7 +412,7 @@ TEST_CASE("absolute and canonical") {
     REQUIRE(::symlink("target.txt", dir.file("link.txt").c_str()) == 0);
 
     const std::string expected =
-        std::filesystem::current_path().string() + "/child";
+        std::string(dstd::fs::current_path().value().str()) + "/child";
     const auto relative_to_cwd = dfs::absolute(PathView("child"));
     REQUIRE(relative_to_cwd.has_value());
     CHECK(relative_to_cwd->str() == expected);
@@ -425,11 +424,11 @@ TEST_CASE("absolute and canonical") {
     const auto resolved = dfs::canonical(in(dir, "link.txt").view());
     REQUIRE(resolved.has_value());
     CHECK(resolved->str() ==
-          std::filesystem::canonical(dir.file("target.txt")).string());
+          dstd::fs::canonical(dir.file("target.txt")).value().str());
 
     const auto dot = dfs::canonical(in(dir, ".").view());
     REQUIRE(dot.has_value());
-    CHECK(dot->str() == std::filesystem::canonical(dir.str()).string());
+    CHECK(dot->str() == dstd::fs::canonical(dir.str()).value().str());
 
     const auto missing = dfs::canonical(in(dir, "nope").view());
     REQUIRE_FALSE(missing.has_value());
@@ -447,7 +446,7 @@ TEST_CASE("space and temp_directory") {
 
     const Path temp = dfs::temp_directory();
     CHECK_FALSE(temp.empty());
-    CHECK(PathView(temp.view()).is_absolute());
+    CHECK(PathView(temp).is_absolute());
     CHECK(dfs::exists(temp.view()).value());
     const char* given = std::getenv("TMPDIR");
     if (given != nullptr && given[0] != '\0') {
@@ -632,7 +631,8 @@ TEST_CASE(
     ScopedTestDir dir("dstd_fs_weak");
     dir.create_dir("real");
     REQUIRE(::symlink("real", dir.file("link").c_str()) == 0);
-    const std::string base = std::filesystem::canonical(dir.str()).string();
+    const std::string base =
+        std::string(dstd::fs::canonical(dir.str()).value().str());
 
     const auto existing = dfs::weakly_canonical(in(dir, "link").view());
     REQUIRE(existing.has_value());
@@ -653,7 +653,8 @@ TEST_CASE(
     const auto relative = dfs::weakly_canonical(PathView("no_such_dir/x"));
     REQUIRE(relative.has_value());
     CHECK(relative->str() ==
-          std::filesystem::canonical(".").string() + "/no_such_dir/x");
+          std::string(dstd::fs::canonical(".").value().str()) +
+              "/no_such_dir/x");
 
     const auto empty = dfs::weakly_canonical(PathView());
     REQUIRE(empty.has_value());
@@ -778,6 +779,139 @@ TEST_CASE("weakly_canonical ends when the current directory is gone") {
     REQUIRE(done);
     CHECK(WIFEXITED(status));
     CHECK(WEXITSTATUS(status) == 0);
+}
+
+TEST_CASE("set_permissions replaces the mode bits it is given") {
+    ScopedTestDir dir("dstd_fs_permissions");
+    dir.create_file("a.txt", "x");
+    const Path file = in(dir, "a.txt");
+
+    REQUIRE(dfs::set_permissions(file.view(), 0600).has_value());
+    const auto first = dfs::stat(file.view());
+    REQUIRE(first.has_value());
+    CHECK((first->mode & 07777) == 0600);
+
+    REQUIRE(dfs::set_permissions(file.view(), 0755).has_value());
+    const auto second = dfs::stat(file.view());
+    REQUIRE(second.has_value());
+    CHECK((second->mode & 07777) == 0755);
+
+    if (!running_as_root()) {
+        REQUIRE(dfs::set_permissions(file.view(), 0).has_value());
+        const auto denied = dfs::read_file(file.view());
+        REQUIRE(dfs::set_permissions(file.view(), 0600).has_value());
+        REQUIRE_FALSE(denied.has_value());
+        CHECK(denied.error().is(dstd::Condition::Io));
+    }
+
+    const auto missing = dfs::set_permissions(in(dir, "nope").view(), 0600);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+
+    const auto too_wide = dfs::set_permissions(file.view(), 0100000);
+    REQUIRE_FALSE(too_wide.has_value());
+    CHECK(too_wide.error().is(dstd::Condition::InvalidArgument));
+}
+
+TEST_CASE("resize_file truncates and extends a file") {
+    ScopedTestDir dir("dstd_fs_resize");
+    dir.create_file("a.txt", "hello");
+    const Path file = in(dir, "a.txt");
+
+    REQUIRE(dfs::resize_file(file.view(), 2).has_value());
+    CHECK(dfs::file_size(file.view()).value() == 2);
+    CHECK(read_text(file) == "he");
+
+    REQUIRE(dfs::resize_file(file.view(), 6).has_value());
+    CHECK(dfs::file_size(file.view()).value() == 6);
+    CHECK(read_text(file) == std::string("he\0\0\0\0", 6));
+
+    REQUIRE(dfs::resize_file(file.view(), 0).has_value());
+    CHECK(read_text(file).empty());
+
+    const auto missing = dfs::resize_file(in(dir, "nope").view(), 1);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+
+    const auto directory = dfs::resize_file(in(dir, ".").view(), 1);
+    REQUIRE_FALSE(directory.has_value());
+    CHECK(directory.error().is(dstd::Condition::Io));
+}
+
+TEST_CASE("current_path names the working directory") {
+    char cwd[4096];
+    REQUIRE(::getcwd(cwd, sizeof cwd) != nullptr);
+    const Path base(cwd);
+
+    const auto current = dfs::current_path();
+    REQUIRE(current.has_value());
+    CHECK(current->str() == base.str());
+    CHECK(current->view().is_absolute());
+    CHECK(dfs::is_directory(current->view()).value());
+
+    ScopedTestDir dir("dstd_fs_current_path");
+    const auto resolved = dfs::canonical(in(dir, ".").view());
+    REQUIRE(resolved.has_value());
+    REQUIRE(::chdir(dir.str().c_str()) == 0);
+    const auto moved = dfs::current_path();
+    REQUIRE(::chdir(base.c_str()) == 0);
+    REQUIRE(moved.has_value());
+    CHECK(moved->str() == resolved->str());
+}
+
+TEST_CASE("set_mtime_ns sets the time that mtime_ns reports") {
+    ScopedTestDir dir("dstd_fs_mtime");
+    dir.create_file("a.txt", "x");
+    const Path file = in(dir, "a.txt");
+    dir.create_dir("sub");
+
+    struct stat before;
+    REQUIRE(::stat(file.c_str(), &before) == 0);
+    const std::uint64_t target =
+        dfs::mtime_ns(file.view()).value() + 90 * 1000000000ULL;
+    REQUIRE(dfs::set_mtime_ns(file.view(), target).has_value());
+    CHECK(dfs::mtime_ns(file.view()).value() == target);
+    struct stat after;
+    REQUIRE(::stat(file.c_str(), &after) == 0);
+    CHECK(after.st_atime == before.st_atime);
+
+    REQUIRE(dfs::set_mtime_ns(in(dir, "sub").view(), 123456789ULL).has_value());
+    CHECK(dfs::mtime_ns(in(dir, "sub").view()).value() == 123456789ULL);
+
+    const auto missing = dfs::set_mtime_ns(in(dir, "nope").view(), target);
+    REQUIRE_FALSE(missing.has_value());
+    CHECK(missing.error().is(dstd::Condition::NotFound));
+}
+
+TEST_CASE("create_symlink makes a link to a target that need not exist") {
+    ScopedTestDir dir("dstd_fs_symlink");
+    dir.create_file("a.txt", "x");
+    const Path link = in(dir, "link");
+
+    REQUIRE(dfs::create_symlink(PathView("a.txt"), link.view()).has_value());
+    const auto info = dfs::lstat(link.view());
+    REQUIRE(info.has_value());
+    CHECK(info->kind == dfs::FileKind::Symlink);
+    CHECK(dfs::file_size(link.view()).value() == 1);
+    char text[64] = {};
+    const auto got = ::readlink(link.c_str(), text, 63);
+    REQUIRE(got > 0);
+    CHECK(std::string(text, static_cast<std::size_t>(got)) == "a.txt");
+
+    REQUIRE(dfs::create_symlink(PathView("nope"), in(dir, "dangling").view())
+                .has_value());
+    CHECK_FALSE(dfs::exists(in(dir, "dangling").view()).value());
+    const auto dangling = dfs::lstat(in(dir, "dangling").view());
+    REQUIRE(dangling.has_value());
+    CHECK(dangling->kind == dfs::FileKind::Symlink);
+
+    REQUIRE(dfs::create_symlink(in(dir, ".").view(), in(dir, "dirlink").view())
+                .has_value());
+    CHECK(dfs::is_directory(in(dir, "dirlink").view()).value());
+
+    const auto again = dfs::create_symlink(PathView("a.txt"), link.view());
+    REQUIRE_FALSE(again.has_value());
+    CHECK(again.error().is(dstd::Condition::Io));
 }
 
 TEST_CASE("copy_tree keeps file and directory modes") {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <doctest/doctest.h>
@@ -43,7 +44,7 @@ struct Event {
 std::string write_access(TestEnvironment& env, const std::string& extra) {
     const std::string plain = env.get_dir() + "/access.ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (int i = 0; i < RECORDS; ++i) {
             out << R"({"op":")" << (i % 2 ? "write" : "read") << R"(","lat":)"
                 << i;
@@ -57,7 +58,7 @@ std::string write_access(TestEnvironment& env, const std::string& extra) {
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -128,7 +129,7 @@ TEST_SUITE("TypedRows") {
         TestEnvironment env(10);
         const std::string pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"M","name":"process_name","pid":1,"tid":1,)"
                    R"("args":{"name":"app"}})"
                 << "\n";
@@ -139,7 +140,7 @@ TEST_SUITE("TypedRows") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
         const auto events = run(rows<Event>(view_of(gz)));
         REQUIRE(events.size() == 20);
         for (const Event& e : events) {

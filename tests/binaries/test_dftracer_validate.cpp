@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -19,32 +20,29 @@ namespace {
 
 // Move a freshly generated valid pfw.gz into `dir`.
 std::string make_valid_pfw(dftu_utils_test::TestEnvironment& env,
-                           const dftracer::utils::common::fs::path& dir,
+                           const dftracer::utils::dstd::Path& dir,
                            int num_events, int id) {
     auto gz = env.create_dft_test_gzip_file(num_events);
     if (gz.empty()) return "";
-    std::error_code ec;
-    dftracer::utils::common::fs::create_directories(dir, ec);
-    dftracer::utils::common::fs::path dest =
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+    dftracer::utils::dstd::Path dest =
         dir / ("trace_" + std::to_string(id) + ".pfw.gz");
-    dftracer::utils::common::fs::rename(gz, dest, ec);
-    if (ec) return "";
-    return dest.string();
+    if (!dftracer::utils::dstd::fs::rename(gz, dest).has_value()) return "";
+    return std::string(dest.str());
 }
 
 // Write a plain .pfw whose second event line is not valid JSON.
-std::string make_bad_pfw(const dftracer::utils::common::fs::path& dir, int id) {
-    std::error_code ec;
-    dftracer::utils::common::fs::create_directories(dir, ec);
-    dftracer::utils::common::fs::path p =
+std::string make_bad_pfw(const dftracer::utils::dstd::Path& dir, int id) {
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+    dftracer::utils::dstd::Path p =
         dir / ("bad_" + std::to_string(id) + ".pfw");
-    std::ofstream ofs(p);
+    std::ofstream ofs(p.c_str());
     if (!ofs) return "";
     ofs << "[\n";
     ofs << "{\"name\":\"ok\",\"cat\":\"POSIX\",\"pid\":1,\"tid\":1,\"ts\":1,"
            "\"dur\":1,\"ph\":\"X\"}\n";
     ofs << "{\"name\": this is not valid json\n";
-    return p.string();
+    return std::string(p.str());
 }
 
 std::string find_validate_binary() {
@@ -87,13 +85,14 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dftracer::utils::common::fs::path work =
-            dftracer::utils::common::fs::path(env.get_dir()) / "valid";
+        dftracer::utils::dstd::Path work =
+            dftracer::utils::dstd::Path(env.get_dir()) / "valid";
         REQUIRE(!make_valid_pfw(env, work, 30, 0).empty());
         REQUIRE(!make_valid_pfw(env, work, 20, 1).empty());
 
         int rc = -1;
-        auto out = run_validate_capture(binary, {"-d", work.string()}, &rc);
+        auto out =
+            run_validate_capture(binary, {"-d", std::string(work.str())}, &rc);
         CHECK(rc == 0);
         CHECK(contains(out, "2 passed"));
         CHECK(contains(out, "0 failed"));
@@ -107,13 +106,14 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
-        dftracer::utils::common::fs::path root =
-            dftracer::utils::common::fs::path(env.get_dir()) / "nested";
+        dftracer::utils::dstd::Path root =
+            dftracer::utils::dstd::Path(env.get_dir()) / "nested";
         REQUIRE(!make_valid_pfw(env, root / "a", 10, 0).empty());
         REQUIRE(!make_valid_pfw(env, root / "b" / "c", 10, 1).empty());
 
         int rc = -1;
-        auto out = run_validate_capture(binary, {"-d", root.string()}, &rc);
+        auto out =
+            run_validate_capture(binary, {"-d", std::string(root.str())}, &rc);
         CHECK(rc == 0);
         CHECK(contains(out, "2 passed"));
     }
@@ -126,8 +126,8 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        auto bad = make_bad_pfw(
-            dftracer::utils::common::fs::path(env.get_dir()) / "bad", 0);
+        auto bad =
+            make_bad_pfw(dftracer::utils::dstd::Path(env.get_dir()) / "bad", 0);
         REQUIRE(!bad.empty());
 
         int rc = -1;
@@ -144,13 +144,13 @@ TEST_SUITE("dftracer_validate") {
         }
         dftu_utils_test::TestEnvironment env(1);
         REQUIRE(env.is_valid());
-        dftracer::utils::common::fs::path empty =
-            dftracer::utils::common::fs::path(env.get_dir()) / "empty";
-        std::error_code ec;
-        dftracer::utils::common::fs::create_directories(empty, ec);
+        dftracer::utils::dstd::Path empty =
+            dftracer::utils::dstd::Path(env.get_dir()) / "empty";
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(empty).has_value());
 
         int rc = -1;
-        run_validate_capture(binary, {"-d", empty.string()}, &rc);
+        run_validate_capture(binary, {"-d", std::string(empty.str())}, &rc);
         CHECK(rc == 1);
     }
 
@@ -163,8 +163,7 @@ TEST_SUITE("dftracer_validate") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
         auto f = make_valid_pfw(
-            env, dftracer::utils::common::fs::path(env.get_dir()) / "single",
-            25, 0);
+            env, dftracer::utils::dstd::Path(env.get_dir()) / "single", 25, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;
@@ -182,8 +181,7 @@ TEST_SUITE("dftracer_validate") {
         dftu_utils_test::TestEnvironment env(100);
         REQUIRE(env.is_valid());
         auto f = make_valid_pfw(
-            env, dftracer::utils::common::fs::path(env.get_dir()) / "loglvl",
-            10, 0);
+            env, dftracer::utils::dstd::Path(env.get_dir()) / "loglvl", 10, 0);
         REQUIRE(!f.empty());
 
         int rc = -1;

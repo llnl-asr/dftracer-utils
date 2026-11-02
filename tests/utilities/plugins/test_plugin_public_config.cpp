@@ -8,6 +8,7 @@
 // add().
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -17,7 +18,6 @@
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
-#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -28,7 +28,6 @@ using ViewFile = dftracer::utils::trace::views::ViewFile;
 using test_plugin_common::index_trace;
 using test_plugin_common::result_text;
 using test_plugin_common::run_set;
-namespace fs = std::filesystem;
 
 #ifndef CONFIG_KEYS_PLUGIN_PATH
 #error "CONFIG_KEYS_PLUGIN_PATH must be defined by CMake"
@@ -40,7 +39,7 @@ constexpr int NUM_EVENTS = 5;
 
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     const std::string pfw = env.get_dir() + "/public_config.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < NUM_EVENTS; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":10,"args":{}})"
@@ -50,7 +49,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
 
     return index_trace(gz);
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -75,7 +75,7 @@ TEST_SUITE("IndexBuilder") {
             CHECK(output.index_path == db_root);
             CHECK(output.success == true);
 
-            CHECK(common::fs::exists(db_root));
+            CHECK(dstd::fs::exists(db_root).value());
         }
 
         SUBCASE("Repeat build re-indexes") {

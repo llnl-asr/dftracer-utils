@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/extensions/kinds/payloads.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -74,13 +74,13 @@ std::pair<std::string, std::vector<std::uint64_t>> write_multi_member_gz(
     // temp root would still collapse every case onto one shared index and
     // corrupt it.
     auto dir = make_unique_test_path("members");
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     auto path = dir / "members.pfw.gz";
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
     ofs.close();
-    return {path.string(), offsets};
+    return {std::string(path.str()), offsets};
 }
 
 std::string dftu_lines(int start_id, int count,
@@ -115,7 +115,7 @@ TEST_SUITE("IndexBuilder") {
             "t2\nline4\n",           // starts mid-line
         };
         auto [gz_file, offs] = write_multi_member_gz(texts);
-        const std::uint64_t fsize = common::fs::file_size(gz_file);
+        const std::uint64_t fsize = dstd::fs::file_size(gz_file).value();
 
         std::vector<GzipMember> members(texts.size());
         for (std::size_t i = 0; i < texts.size(); ++i) {
@@ -161,21 +161,21 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
 
         CHECK(result.success);
-        CHECK(common::fs::exists(result.index_path));
+        CHECK(dstd::fs::exists(result.index_path).value());
     }
 
     TEST_CASE("Files under different index roots each build into their own") {
         std::vector<std::string> files;
         for (const char* name : {"a", "b"}) {
             auto dir = make_unique_test_path(name);
-            common::fs::create_directories(dir);
-            const std::string path = (dir / "t.pfw.gz").string();
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
+            const std::string path = std::string((dir / "t.pfw.gz").str());
             const std::string text = dftu_lines(0, 20);
             dftracer::utils::utilities::fileio::compress::GzipMemberCompressor
                 comp;
             auto member = comp.compress_member(text.data(), text.size());
             REQUIRE(member.has_value());
-            std::ofstream(path, std::ios::binary)
+            std::ofstream(path.c_str(), std::ios::binary)
                 .write(reinterpret_cast<const char*>(member->data()),
                        static_cast<std::streamsize>(member->size()));
             files.push_back(path);
@@ -208,7 +208,7 @@ TEST_SUITE("IndexBuilder") {
         auto result = build_one(gz_file);
 
         REQUIRE(result.success);
-        REQUIRE(common::fs::exists(result.index_path));
+        REQUIRE(dstd::fs::exists(result.index_path).value());
 
         const auto snapshot = index_snapshot(result.index_path);
         const auto file = require_indexed_file(snapshot, gz_file);
@@ -219,7 +219,7 @@ TEST_SUITE("IndexBuilder") {
         const std::vector<std::string> texts = {
             dftu_lines(0, 40), dftu_lines(40, 25), dftu_lines(65, 35)};
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-        const std::uint64_t file_size = common::fs::file_size(gz_file);
+        const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
 
         auto result = build_one(gz_file);
         REQUIRE(result.success);
@@ -268,7 +268,7 @@ TEST_SUITE("IndexBuilder") {
             texts.push_back(std::move(t));
         }
         auto [gz_file, c_offsets] = write_multi_member_gz(texts);
-        const std::uint64_t file_size = common::fs::file_size(gz_file);
+        const std::uint64_t file_size = dstd::fs::file_size(gz_file).value();
         REQUIRE(file_size >
                 2 * dftracer::utils::index::gzip::MEMBER_SCAN_WINDOW);
 

@@ -6,18 +6,19 @@
 // apply to the rewritten frame.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+
+#include <dftracer/utils/dataframe/abi.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
-#include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
-
-// After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
-// arrow_abi.
-#include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/plugins/plugins_internal.h>
+#include <dftracer/utils/runtime/runtime.h>
+#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
+// After fold_adapter.h so nanoarrow is set up before dataframe/abi.h's
+// arrow_abi.
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
@@ -194,9 +195,9 @@ dftu_plugin make_after_query() {
 
 std::string make_trace(dftu_utils_test::TestEnvironment& env) {
     std::string dir = env.get_dir() + "/t";
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     std::string pfw = dir + "/trace.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < EVENTS; ++i)
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":)" << (i % 2 + 1)
             << R"(,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
@@ -205,7 +206,7 @@ std::string make_trace(dftu_utils_test::TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 

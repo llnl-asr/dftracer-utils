@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
@@ -21,11 +21,11 @@ using namespace dftracer::utils::utilities::fileio::parallel;
 namespace {
 
 std::string tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).string();
+    return std::string(dftu_utils_test::make_unique_test_path(name).str());
 }
 
 std::string read_all(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path.c_str(), std::ios::binary);
     std::stringstream ss;
     ss << f.rdbuf();
     return ss.str();
@@ -92,7 +92,7 @@ TEST_CASE("ShardedWriter - gzip_extension appends .gz to shard names") {
     };
     CHECK(runtime.submit(task(), "sharded_gz").get() == 0);
     CHECK(paths == expected);
-    for (const auto& p : expected) CHECK(common::fs::exists(p));
+    for (const auto& p : expected) CHECK(dstd::fs::exists(p).value());
     cleanup(expected);
 }
 

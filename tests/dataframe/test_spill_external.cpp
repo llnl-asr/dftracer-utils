@@ -7,7 +7,9 @@
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -17,7 +19,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -28,7 +29,6 @@
 using namespace dftracer::utils::dataframe;
 using dftracer::utils::coro::CoroTask;
 namespace memory = dftracer::utils::memory;
-namespace fs = std::filesystem;
 
 namespace {
 
@@ -127,18 +127,17 @@ struct Budget {
 // A spill directory under the working directory, which is a disk in a build
 // tree. The system temp directory may be tmpfs.
 struct SpillDirVar {
-    fs::path dir;
+    dftracer::utils::dstd::Path dir;
     SpillDirVar() {
-        dir = fs::current_path() /
+        dir = dftracer::utils::dstd::fs::current_path().value() /
               ("spill_external_" + std::to_string(::getpid()));
-        fs::remove_all(dir);
-        fs::create_directories(dir);
+        REQUIRE(dftracer::utils::dstd::fs::remove_all(dir).has_value());
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
         ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
     }
     ~SpillDirVar() {
         ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
-        std::error_code ec;
-        fs::remove_all(dir, ec);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
 };
 
@@ -147,7 +146,7 @@ struct SpillDirVar {
 TEST_CASE("spill bytes show as external") {
     SpillDirVar var;
     const bool on_disk = !dftracer::utils::common::is_memory_filesystem(
-        dftracer::utils::common::filesystem_kind(var.dir.string()));
+        dftracer::utils::common::filesystem_kind(std::string(var.dir.str())));
     Budget budget(GLOBAL_BUDGET);
     REQUIRE(spill_slot_bytes() == 0);
 

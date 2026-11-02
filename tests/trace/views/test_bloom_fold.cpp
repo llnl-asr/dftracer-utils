@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/internal/frame_native.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/extensions/bloom_fold.h>
@@ -55,7 +56,7 @@ std::string create_bloom_trace(TestEnvironment& env, int n,
                                std::size_t member_bytes) {
     std::string pfw = env.get_dir() + "/bloom.pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         for (int i = 0; i < n; ++i) {
             ofs << R"({"ph":"X","name":")" << (i % 2 ? "read" : "write")
                 << R"(","cat":")" << (i % 3 ? "POSIX" : "STDIO")
@@ -68,7 +69,7 @@ std::string create_bloom_trace(TestEnvironment& env, int n,
     }
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -468,7 +469,7 @@ TEST_SUITE("BloomFold") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/schema.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             // hostname/size/rate are flat; pos is a nested object; tags is an
             // array; fhash/hhash are lifted hashes. Schema is harvested once
             // per event name, so a second "write" event carries size as a float
@@ -484,7 +485,7 @@ TEST_SUITE("BloomFold") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
         std::string index_path = determine_index_path(gz, "");
         {
             StringSink s;
@@ -604,7 +605,7 @@ TEST_SUITE("BloomFold - auto fields") {
     static std::string create_auto_trace(TestEnvironment & env) {
         std::string pfw = env.get_dir() + "/auto.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int m = 0; m < 4; ++m)
                 for (int i = 0; i < 60; ++i)
                     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
@@ -615,7 +616,7 @@ TEST_SUITE("BloomFold - auto fields") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, 4000);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
         return gz;
     }
 

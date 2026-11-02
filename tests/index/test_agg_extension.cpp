@@ -4,7 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/corrupt_index.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -51,7 +51,7 @@ std::string write_trace(const std::string& dir, const std::string& name, int n,
                         std::uint64_t start_us, bool system = false) {
     const std::string pfw = dir + "/" + name + ".pfw";
     {
-        std::ofstream out(pfw);
+        std::ofstream out(pfw.c_str());
         for (int i = 0; i < n; ++i)
             out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
                    R"("tid":1,"ts":)"
@@ -65,7 +65,7 @@ std::string write_trace(const std::string& dir, const std::string& name, int n,
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -291,8 +291,9 @@ TEST_SUITE("AggExtension") {
         plant_sentinel(a);
 
         write_trace(env.get_dir(), "b", 45, 500'000, true);
-        common::fs::last_write_time(
-            b, common::fs::last_write_time(b) + std::chrono::seconds(10));
+        REQUIRE(dstd::fs::set_mtime_ns(
+                    b, dstd::fs::mtime_ns(b).value() + 10'000'000'000ULL)
+                    .has_value());
 
         auto ix = Indexer::open({a, b}, with_aggregation(1'000'000));
         // Rebuilding `b` replaces its own partials and column blocks, so no
@@ -310,8 +311,10 @@ TEST_SUITE("AggExtension") {
         TestEnvironment fresh(10);
         const auto fa = fresh.get_dir() + "/a.pfw.gz";
         const auto fb = fresh.get_dir() + "/b.pfw.gz";
-        common::fs::copy_file(a, fa);
-        common::fs::copy_file(b, fb);
+        REQUIRE(dstd::fs::copy_file(a, fa, dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
+        REQUIRE(dstd::fs::copy_file(b, fb, dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
         Indexer::open({fa, fb}, with_aggregation(1'000'000)).build();
         CHECK(count_reads({fa, fb}) == 75);
         const auto rebuilt = counters_of({a, b});

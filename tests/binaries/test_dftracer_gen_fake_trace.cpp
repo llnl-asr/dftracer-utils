@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -63,8 +63,8 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         CHECK(rc == 0);
 
         std::string rank0 = out_dir + "/rank_0.pfw.gz";
-        REQUIRE(dftracer::utils::common::fs::exists(rank0));
-        CHECK(dftracer::utils::common::fs::file_size(rank0) > 0);
+        REQUIRE(dftracer::utils::dstd::fs::exists(rank0).value());
+        CHECK(dftracer::utils::dstd::fs::file_size(rank0).value() > 0);
     }
 
     TEST_CASE("generate multiple ranks") {
@@ -86,8 +86,8 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         for (int rank = 0; rank < 3; ++rank) {
             std::string path =
                 out_dir + "/rank_" + std::to_string(rank) + ".pfw.gz";
-            CHECK(dftracer::utils::common::fs::exists(path));
-            CHECK(dftracer::utils::common::fs::file_size(path) > 0);
+            CHECK(dftracer::utils::dstd::fs::exists(path).value());
+            CHECK(dftracer::utils::dstd::fs::file_size(path).value() > 0);
         }
     }
 
@@ -108,7 +108,7 @@ TEST_SUITE("DFTracerGenFakeTrace") {
         CHECK(rc == 0);
 
         std::string rank0 = out_dir + "/rank_0.pfw.gz";
-        REQUIRE(dftracer::utils::common::fs::exists(rank0));
+        REQUIRE(dftracer::utils::dstd::fs::exists(rank0).value());
 
         // First line is the opening JSON array bracket.
         auto first = dftu_utils_test::gz_first_line(rank0);
@@ -154,12 +154,12 @@ TEST_SUITE("DFTracerGenFakeTrace") {
 
         std::string f1 = out1 + "/rank_0.pfw.gz";
         std::string f2 = out2 + "/rank_0.pfw.gz";
-        REQUIRE(dftracer::utils::common::fs::exists(f1));
-        REQUIRE(dftracer::utils::common::fs::exists(f2));
+        REQUIRE(dftracer::utils::dstd::fs::exists(f1).value());
+        REQUIRE(dftracer::utils::dstd::fs::exists(f2).value());
 
         // Same seed + same parameters must produce identical file sizes.
-        CHECK(dftracer::utils::common::fs::file_size(f1) ==
-              dftracer::utils::common::fs::file_size(f2));
+        CHECK(dftracer::utils::dstd::fs::file_size(f1).value() ==
+              dftracer::utils::dstd::fs::file_size(f2).value());
     }
 
     TEST_CASE("verify mode succeeds") {

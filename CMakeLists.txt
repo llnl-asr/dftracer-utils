@@ -273,8 +273,6 @@ if(DFTRACER_UTILS_TESTS AND DFTRACER_UTILS_COVERAGE)
   add_compile_definitions(DFTRACER_UTILS_COVERAGE_BUILD)
 endif()
 
-check_std_filesystem()
-
 # Configuration summary
 dftracer_utils_section("dftracer-utils ${DFTRACER_UTILS_VERSION}")
 dftracer_utils_item("Build type     " "${CMAKE_BUILD_TYPE}")

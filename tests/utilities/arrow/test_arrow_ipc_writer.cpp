@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/arrow/arrow.h>
@@ -19,7 +19,7 @@ using namespace dftracer::utils::coro;
 using namespace dftracer::utils::utilities::arrow;
 
 static std::string tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).string();
+    return dftu_utils_test::make_unique_test_path(name).str();
 }
 
 TEST_CASE("IpcWriter - basic write and close") {
@@ -57,9 +57,9 @@ TEST_CASE("IpcWriter - basic write and close") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    CHECK(common::fs::exists(path));
-    CHECK(common::fs::file_size(path) > 0);
-    common::fs::remove(path);
+    CHECK(dstd::fs::exists(path).value());
+    CHECK(dstd::fs::file_size(path).value() > 0);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcWriter - multiple batches") {
@@ -91,9 +91,9 @@ TEST_CASE("IpcWriter - multiple batches") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    CHECK(common::fs::exists(path));
-    CHECK(common::fs::file_size(path) > 0);
-    common::fs::remove(path);
+    CHECK(dstd::fs::exists(path).value());
+    CHECK(dstd::fs::file_size(path).value() > 0);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcWriter - close without writing batches") {
@@ -111,7 +111,7 @@ TEST_CASE("IpcWriter - close without writing batches") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 // With no pooled slot every batch takes the overflow slot, which the writer
@@ -151,9 +151,10 @@ TEST_CASE("IpcWriter - batches without a pooled slot match the pooled file") {
         const std::string bare = tmp_path("test_ipc_bare.arrows");
         REQUIRE(write_file(pooled, mode, 4) == 0);
         REQUIRE(write_file(bare, mode, 0) == 0);
-        CHECK(common::fs::file_size(bare) == common::fs::file_size(pooled));
-        common::fs::remove(pooled);
-        common::fs::remove(bare);
+        CHECK(dstd::fs::file_size(bare).value() ==
+              dstd::fs::file_size(pooled).value());
+        (void)dstd::fs::remove(pooled);
+        (void)dstd::fs::remove(bare);
     }
 }
 
@@ -183,14 +184,14 @@ TEST_CASE("IpcWriter - explicit ZSTD compression") {
     auto result = runtime.submit(task(), "test").get();
 
     CHECK(result == 0);
-    CHECK(common::fs::exists(path));
-    CHECK(common::fs::file_size(path) > 0);
-    common::fs::remove(path);
+    CHECK(dstd::fs::exists(path).value());
+    CHECK(dstd::fs::file_size(path).value() > 0);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("PartitionWriter - basic single file") {
     std::string dir = tmp_path("test_partition_basic");
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 
     Runtime runtime(2);
     PartitionWriteStats stats;
@@ -221,14 +222,14 @@ TEST_CASE("PartitionWriter - basic single file") {
     CHECK(stats.total_rows == 100);
     CHECK(stats.row_counts.size() == 1);
     CHECK(stats.row_counts[0] == 100);
-    CHECK(common::fs::exists(stats.files[0]));
+    CHECK(dstd::fs::exists(stats.files[0]).value());
 
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("PartitionRouter - NONE mode pass-through") {
     std::string dir = tmp_path("test_router_none");
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 
     PartitionConfig config;
     config.mode = PartitionConfig::Mode::None;
@@ -262,12 +263,12 @@ TEST_CASE("PartitionRouter - NONE mode pass-through") {
     CHECK(stats.partitions.size() == 1);
     CHECK(stats.partitions.count("") == 1);
 
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("PartitionRouter - COLUMN mode single column") {
     std::string dir = tmp_path("test_router_column");
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 
     PartitionConfig config;
     config.mode = PartitionConfig::Mode::Column;
@@ -311,10 +312,10 @@ TEST_CASE("PartitionRouter - COLUMN mode single column") {
     CHECK(stats.partitions["cat=POSIX"].total_rows == 3);
     CHECK(stats.partitions["cat=APP"].total_rows == 3);
 
-    CHECK(common::fs::exists(dir + "/cat=POSIX"));
-    CHECK(common::fs::exists(dir + "/cat=APP"));
+    CHECK(dstd::fs::exists(dir + "/cat=POSIX").value());
+    CHECK(dstd::fs::exists(dir + "/cat=APP").value());
 
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 #else

@@ -71,7 +71,7 @@ void append_member(std::vector<std::uint8_t>& out, const std::string& text) {
 }
 
 void write_file(const std::string& path, const std::vector<std::uint8_t>& b) {
-    std::ofstream f(path, std::ios::binary);
+    std::ofstream f(path.c_str(), std::ios::binary);
     f.write(reinterpret_cast<const char*>(b.data()),
             static_cast<std::streamsize>(b.size()));
 }

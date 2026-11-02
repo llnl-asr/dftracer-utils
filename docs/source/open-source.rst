@@ -69,9 +69,6 @@ Runtime dependencies
    * - Vectorscan (optional)
      - ``BSD-3-Clause``
      - https://github.com/VectorCamp/vectorscan
-   * - ghc::filesystem
-     - ``MIT``
-     - https://github.com/gulrak/filesystem
 
 PCRE2 and Vectorscan are the regex engines of duql, and Vectorscan also
 prefilters raw lines. Vectorscan is built unless you configure with

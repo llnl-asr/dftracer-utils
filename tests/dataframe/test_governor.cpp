@@ -7,17 +7,19 @@
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <doctest/doctest.h>
+#include <testing_utilities.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -30,7 +32,6 @@
 using namespace dftracer::utils::dataframe;
 using dftracer::utils::coro::CoroTask;
 namespace memory = dftracer::utils::memory;
-namespace fs = std::filesystem;
 
 namespace {
 
@@ -471,14 +472,15 @@ TEST_CASE("a request posted to a join's build side turns it to grace") {
 TEST_CASE("unique and head_by keep their results when a grow is refused") {
     // The external path opens a spill directory of its own while it runs;
     // the in-memory path opens none.
-    const fs::path dir = fs::temp_directory_path() /
-                         ("dftu_governor_" + std::to_string(::getpid()));
-    fs::remove_all(dir);
-    fs::create_directories(dir);
+    const dftracer::utils::dstd::Path dir =
+        dftracer::utils::dstd::fs::temp_directory() /
+        ("dftu_governor_" + std::to_string(::getpid()));
+    dftracer::utils::dstd::fs::remove_all(dir).has_value();
+    dftracer::utils::dstd::fs::create_directories(dir).has_value();
     ::setenv("DFTRACER_UTILS_SPILL_DIR", dir.c_str(), 1);
     auto entries = [&] {
         std::size_t n = 0;
-        for (const auto& e : fs::directory_iterator(dir)) {
+        for (const auto& e : dftu_utils_test::list_dir(dir)) {
             (void)e;
             ++n;
         }
@@ -513,8 +515,7 @@ TEST_CASE("unique and head_by keep their results when a grow is refused") {
         CHECK(rows_of(got, false) == rows_of(plain, false));
     }
     ::unsetenv("DFTRACER_UTILS_SPILL_DIR");
-    std::error_code ec;
-    fs::remove_all(dir, ec);
+    dftracer::utils::dstd::fs::remove_all(dir).has_value();
 }
 
 TEST_CASE("a spool spilled on request replays every morsel in order") {

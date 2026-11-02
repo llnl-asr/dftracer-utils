@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/async_semaphore.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/yield.h>
@@ -17,7 +18,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <filesystem>
 #include <thread>
 #include <vector>
 
@@ -167,8 +167,7 @@ TEST_SUITE("ExecutorWakeups") {
         });
         rt.shutdown();
         ::close(fd);
-        std::error_code ec;
-        std::filesystem::remove(path, ec);
+        (void)dstd::fs::remove(path);
         CHECK(landed);
     }
 }

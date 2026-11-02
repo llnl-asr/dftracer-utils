@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -58,7 +59,7 @@ void write_single_member(const std::string& path, const std::string& content) {
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
 }
@@ -89,15 +90,15 @@ TEST_SUITE("viz_stats_fastpath") {
     TEST_CASE("fast path equals live scan over a multi-member trace") {
         const int n = 3000;
         auto dir = dftu_utils_test::make_unique_test_path("viz_stats_fast");
-        common::fs::create_directories(dir);
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
         // Not *.pfw.gz: TraceIndex scans the dir and must see only the trace.
-        const std::string src = (dir / "src.raw.gz").string();
-        const std::string gz = (dir / "trace.pfw.gz").string();
-        const std::string index_dir = (dir / "idx").string();
+        const std::string src = std::string((dir / "src.raw.gz").str());
+        const std::string gz = std::string((dir / "trace.pfw.gz").str());
+        const std::string index_dir = std::string((dir / "idx").str());
 
         write_single_member(src, make_trace(n));
 
-        TraceIndex index(dir.string(), index_dir);
+        TraceIndex index(std::string(dir.str()), index_dir);
         {
             // Rechunk into many small members, then build the index; both need
             // a runtime. Members are the atomic decode/aggregate unit, so

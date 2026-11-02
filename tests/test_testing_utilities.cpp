@@ -3,6 +3,8 @@
 // defect here reads as a failure somewhere unrelated.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 #include <testing_utilities.h>
@@ -16,36 +18,37 @@ TEST_SUITE("testing utilities") {
     TEST_CASE("make_unique_test_path never repeats, and carries the pid") {
         const auto a = make_unique_test_path("probe");
         const auto b = make_unique_test_path("probe");
-        CHECK(a != b);
+        CHECK(a.str() != b.str());
         // The pid is the component that keeps concurrent test PROCESSES apart,
         // which is the failure this path shape exists to prevent.
         const std::string pid = std::to_string(::getpid());
-        CHECK(a.filename().string().find("probe_" + pid + "_") == 0);
+        CHECK(a.view().filename().find("probe_" + pid + "_") == 0);
     }
 
     TEST_CASE(
         "ScopedTestDir creates on construction and removes on scope exit") {
-        dftracer::utils::common::fs::path kept;
+        dftracer::utils::dstd::Path kept;
         {
             ScopedTestDir dir("scoped_probe");
             kept = dir.path();
-            REQUIRE(dftracer::utils::common::fs::exists(kept));
-            std::ofstream(dir.file("inner.txt")) << "x";
-            CHECK(dftracer::utils::common::fs::exists(dir.file("inner.txt")));
+            REQUIRE(dftracer::utils::dstd::fs::exists(kept).value());
+            std::ofstream((dir.file("inner.txt")).c_str()) << "x";
+            CHECK(dftracer::utils::dstd::fs::exists(dir.file("inner.txt"))
+                      .value());
         }
-        CHECK_FALSE(dftracer::utils::common::fs::exists(kept));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(kept).value());
     }
 
     TEST_CASE("ScopedTestDir removes its tree even when the scope throws") {
-        dftracer::utils::common::fs::path kept;
+        dftracer::utils::dstd::Path kept;
         try {
             ScopedTestDir dir("throwing_probe");
             kept = dir.path();
-            REQUIRE(dftracer::utils::common::fs::exists(kept));
+            REQUIRE(dftracer::utils::dstd::fs::exists(kept).value());
             throw std::runtime_error("unwind");
         } catch (const std::runtime_error&) {
         }
-        CHECK_FALSE(dftracer::utils::common::fs::exists(kept));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(kept).value());
     }
 
     TEST_CASE("run_process reports the child's exit code") {
@@ -84,7 +87,7 @@ TEST_SUITE("testing utilities") {
         ScopedTestDir dir("gzline_probe");
         const std::string plain = dir.file("in.txt");
         {
-            std::ofstream ofs(plain);
+            std::ofstream ofs(plain.c_str());
             ofs << "\n\nfirst real line\nsecond\n";
         }
         const std::string gz = dir.file("in.txt.gz");

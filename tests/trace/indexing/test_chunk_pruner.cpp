@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/extensions/chunk_dimension_stats.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -161,9 +161,9 @@ static ChunkPrunerOutput run_pruner(const std::string& index_path,
 
 TEST_SUITE("ChunkPruner") {
     TEST_CASE("Pruner - equality match via dictionary") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_eq").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_eq").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -178,10 +178,10 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - equality no match") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_pruner_eq_none")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -193,9 +193,9 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - in operator") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_in").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_in").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -207,17 +207,16 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - not in operator") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_notin")
-                .string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_notin").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
-        // Chunk 0: only POSIX → excluded by not in ["POSIX"]
-        // Chunk 1: only STDIO → kept
-        // Chunk 2: POSIX + MPI → MPI not in list → kept
+        // Chunk 0: only POSIX -> excluded by not in ["POSIX"]
+        // Chunk 1: only STDIO -> kept
+        // Chunk 2: POSIX + MPI -> MPI not in list -> kept
         auto out = run_pruner(index_path, file_path, R"(cat not in ["POSIX"])");
         CHECK(out.success);
         CHECK(out.candidate_checkpoints.size() == 2);
@@ -226,16 +225,16 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - AND intersection") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_and").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_and").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
-        // cat == "POSIX" → chunks 0, 2
-        // name == "read" → chunks 0, 2
-        // AND → chunks 0, 2
+        // cat == "POSIX" -> chunks 0, 2
+        // name == "read" -> chunks 0, 2
+        // AND -> chunks 0, 2
         auto out = run_pruner(index_path, file_path,
                               R"(cat == "POSIX" and name == "read")");
         CHECK(out.success);
@@ -243,16 +242,16 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - AND narrows results") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_and2").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_and2").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
-        // cat == "POSIX" → chunks 0, 2
-        // name == "send" → chunk 2 only
-        // AND → chunk 2
+        // cat == "POSIX" -> chunks 0, 2
+        // name == "send" -> chunk 2 only
+        // AND -> chunk 2
         auto out = run_pruner(index_path, file_path,
                               R"(cat == "POSIX" and name == "send")");
         CHECK(out.success);
@@ -261,16 +260,16 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - OR union") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_or").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_or").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
-        // cat == "STDIO" → chunk 1
-        // name == "send" → chunk 2
-        // OR → chunks 1, 2
+        // cat == "STDIO" -> chunk 1
+        // name == "send" -> chunk 2
+        // OR -> chunks 1, 2
         auto out = run_pruner(index_path, file_path,
                               R"(cat == "STDIO" or name == "send")");
         CHECK(out.success);
@@ -280,15 +279,15 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT via dictionary") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_not").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_not").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
 
-        // cat == "STDIO" → chunk 1
-        // NOT → chunks 0, 2
+        // cat == "STDIO" -> chunk 1
+        // NOT -> chunks 0, 2
         auto out = run_pruner(index_path, file_path, R"(not cat == "STDIO")");
         CHECK(out.success);
         CHECK(out.candidate_checkpoints.size() == 2);
@@ -297,10 +296,10 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT keeps a chunk with records the stats missed") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_pruner_not_meta")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         // Chunk 1 holds a third line (a metadata record, say) that has no
@@ -321,10 +320,10 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - a member without statistics stays a candidate") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_pruner_bare_member")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         // Member 3 holds only metadata records, so the index has no
@@ -347,10 +346,10 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT keeps a chunk holding both sides") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_pruner_not_mixed")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -366,10 +365,10 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - NOT over a range keeps straddling chunks") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_pruner_not_range")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -385,10 +384,9 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - range via min/max") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_range")
-                .string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_range").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -403,9 +401,9 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - case-insensitive keywords") {
-        std::string test_dir =
-            dftu_utils_test::make_unique_test_path("test_pruner_case").string();
-        common::fs::create_directories(test_dir);
+        std::string test_dir = std::string(
+            dftu_utils_test::make_unique_test_path("test_pruner_case").str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path);
@@ -417,10 +415,10 @@ TEST_SUITE("ChunkPruner") {
     }
 
     TEST_CASE("Pruner - file bloom skips the file before any chunk work") {
-        std::string test_dir =
+        std::string test_dir = std::string(
             dftu_utils_test::make_unique_test_path("test_pruner_file_bloom")
-                .string();
-        common::fs::create_directories(test_dir);
+                .str());
+        REQUIRE(dstd::fs::create_directories(test_dir).has_value());
         std::string index_path = test_dir + "/test.pfw.gz.idx";
         std::string file_path = "/fake/test.pfw.gz";
         populate_test_idx(index_path, file_path, {}, true);

@@ -2,7 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/store/crc.h>
@@ -26,7 +28,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -200,15 +201,16 @@ std::vector<ScopedRow> collect_scoped(store::engine::ScanCursor& cursor) {
     return rows;
 }
 
-std::vector<std::uint8_t> read_file(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
+std::vector<std::uint8_t> read_file(dstd::PathView path) {
+    const dstd::Path owned(path.str());
+    std::ifstream input(owned.c_str(), std::ios::binary);
     return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(input),
                                      std::istreambuf_iterator<char>());
 }
 
-void write_file(const std::string& path,
-                const std::vector<std::uint8_t>& bytes) {
-    std::ofstream output(path, std::ios::binary);
+void write_file(dstd::PathView path, const std::vector<std::uint8_t>& bytes) {
+    const dstd::Path owned(path.str());
+    std::ofstream output(owned.c_str(), std::ios::binary);
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
 }
@@ -234,22 +236,24 @@ std::vector<std::uint8_t> without_footer(std::vector<std::uint8_t> bytes) {
     return bytes;
 }
 
-bool is_data_file(const std::filesystem::path& path) {
-    return path.extension() == ".dfs";
+bool is_data_file(const dftracer::utils::dstd::Path& path) {
+    return path.view().extension() == ".dfs";
 }
 
 std::string only_data_file(const std::string& dir) {
     std::vector<std::string> found;
-    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-        if (is_data_file(entry.path())) found.push_back(entry.path().string());
+    for (const auto& entry : dftu_utils_test::list_dir(dir)) {
+        if (is_data_file(entry.path))
+            found.push_back(std::string(entry.path.str()));
     }
     REQUIRE(found.size() == 1);
     return found.front();
 }
 
 void drop_summary(const std::string& dir) {
-    std::filesystem::remove(std::filesystem::path(dir) /
-                            std::string(store::engine::SUMMARY_FILE_NAME));
+    (void)dftracer::utils::dstd::fs::remove(
+        dftracer::utils::dstd::Path(dir) /
+        std::string(store::engine::SUMMARY_FILE_NAME));
 }
 
 std::vector<std::uint8_t> with_tail_version(std::vector<std::uint8_t> bytes,
@@ -3363,10 +3367,9 @@ TEST_SUITE("index store snapshot") {
             }
             REQUIRE(close_writer(*writer).has_value());
         }
-        for (const auto& entry :
-             std::filesystem::directory_iterator(dir.str())) {
-            if (!is_data_file(entry.path())) continue;
-            const std::string path = entry.path().string();
+        for (const auto& entry : dftu_utils_test::list_dir(dir.str())) {
+            if (!is_data_file(entry.path)) continue;
+            const std::string path(entry.path.str());
             auto light = DataFileReader::open(
                 path, store::engine::FooterItems::Directory);
             REQUIRE(light.has_value());
@@ -3376,7 +3379,7 @@ TEST_SUITE("index store snapshot") {
             auto full = DataFileReader::open(path);
             REQUIRE(full.has_value());
             CHECK_FALSE(full->index().scopes.empty());
-            write_file(cut_dir.file(entry.path().filename().string()),
+            write_file(cut_dir.file(entry.path.view().filename()),
                        without_footer(read_file(path)));
         }
 
@@ -3615,7 +3618,9 @@ TEST_SUITE("index store snapshot") {
         REQUIRE(light.has_value());
         REQUIRE(light->index().tail.has_value());
         REQUIRE(light->index().tail->extent_count >
-                std::filesystem::file_size(path) / (1U << 20U) + 1);
+                dftracer::utils::dstd::fs::file_size(path).value() /
+                        (1U << 20U) +
+                    1);
         CHECK(light->records_read() == 1);
     }
 
@@ -3663,9 +3668,9 @@ TEST_SUITE("index store snapshot") {
             write_scoped_file(dir, spec, scopes.back(), 1, 30, true);
         }
         const std::string summary =
-            (std::filesystem::path(dir.str()) /
-             std::string(store::engine::SUMMARY_FILE_NAME))
-                .string();
+            std::string((dftracer::utils::dstd::Path(dir.str()) /
+                         std::string(store::engine::SUMMARY_FILE_NAME))
+                            .str());
         std::vector<std::uint8_t> bytes = read_file(summary);
         auto listed = store::engine::read_summary(dir.str());
         REQUIRE(listed.has_value());
@@ -3710,9 +3715,10 @@ TEST_SUITE("index store snapshot") {
         auto listed = store::engine::read_summary(dir.str());
         REQUIRE(listed.has_value());
         REQUIRE(listed->size() == 2);
-        std::filesystem::remove(std::filesystem::path(dir.str()) /
-                                std::string(listed->back().name.data(),
-                                            listed->back().name.size()));
+        (void)dftracer::utils::dstd::fs::remove(
+            dftracer::utils::dstd::Path(dir.str()) /
+            std::string(listed->back().name.data(),
+                        listed->back().name.size()));
 
         auto snapshot = Snapshot::open(dir.str());
         REQUIRE(snapshot.has_value());
@@ -4039,11 +4045,10 @@ TEST_SUITE("index store snapshot") {
         }
 
         dftu_utils_test::ScopedTestDir cut_dir("snapshot_lazy_threads_cut");
-        for (const auto& entry :
-             std::filesystem::directory_iterator(dir.str())) {
-            if (!is_data_file(entry.path())) continue;
-            write_file(cut_dir.file(entry.path().filename().string()),
-                       without_footer(read_file(entry.path().string())));
+        for (const auto& entry : dftu_utils_test::list_dir(dir.str())) {
+            if (!is_data_file(entry.path)) continue;
+            write_file(cut_dir.file(entry.path.view().filename()),
+                       without_footer(read_file(entry.path)));
         }
         const auto touch_all = [&](const std::string& root, bool synced) {
             auto opened = Snapshot::open(root);

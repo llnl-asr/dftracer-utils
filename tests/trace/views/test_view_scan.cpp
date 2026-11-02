@@ -2,6 +2,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/internal/cell_ops.h>
 #include <dftracer/utils/dataframe/internal/column_data.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/trace/views/native_row_fold.h>
@@ -246,7 +248,7 @@ TEST_SUITE("View") {
 
         // A: write the output with the index fused into the write.
         std::string dirA = env.get_dir() + "/a";
-        dftracer::utils::common::fs::create_directories(dirA);
+        REQUIRE(dstd::fs::create_directories(dirA).has_value());
         const std::string outAgz = dirA + "/out.pfw.gz";
         TraceWriteOptions opts;
         opts.output_path = outAgz;
@@ -255,17 +257,19 @@ TEST_SUITE("View") {
         opts.compress = true;
         opts.build_index = true;
         auto st = View::from_file(gz, idx).sink_trace(opts).get();
-        REQUIRE(dftracer::utils::common::fs::exists(outAgz));
+        REQUIRE(dstd::fs::exists(outAgz).value());
         const std::string idxA = determine_index_path(outAgz, "");
         // The write built the index, not a separate pass.
-        REQUIRE(dftracer::utils::common::fs::exists(idxA));
+        REQUIRE(dstd::fs::exists(idxA).value());
 
         // B: identical output bytes in a fresh dir; View auto-indexes it lazily
         // via the standard indexer (the ground truth).
         std::string dirB = env.get_dir() + "/b";
-        dftracer::utils::common::fs::create_directories(dirB);
+        REQUIRE(dstd::fs::create_directories(dirB).has_value());
         const std::string outBgz = dirB + "/out.pfw.gz";
-        dftracer::utils::common::fs::copy_file(outAgz, outBgz);
+        REQUIRE(dstd::fs::copy_file(outAgz, outBgz,
+                                    dstd::fs::CopyMode::FailIfExists)
+                    .has_value());
         const std::string idxB = determine_index_path(outBgz, "");
 
         auto run = [](const std::string& f, const std::string& ix,
@@ -304,8 +308,8 @@ TEST_SUITE("View") {
 
         std::string dirA = env.get_dir() + "/a";
         std::string dirB = env.get_dir() + "/b";
-        dftracer::utils::common::fs::create_directories(dirA);
-        dftracer::utils::common::fs::create_directories(dirB);
+        REQUIRE(dstd::fs::create_directories(dirA).has_value());
+        REQUIRE(dstd::fs::create_directories(dirB).has_value());
         TraceWriteOptions opts;
         opts.output_path = dirA + "/out.pfw.gz";
         opts.member_size = 512;
@@ -315,17 +319,18 @@ TEST_SUITE("View") {
         View::from_file(gz, idx).sink_trace(opts).get();
 
         std::vector<std::string> partsA, partsB;
-        for (int i = 0; dftracer::utils::common::fs::exists(
-                 utilities::fileio::gzip_part_path(opts.output_path, i, true));
+        for (int i = 0; dstd::fs::exists(utilities::fileio::gzip_part_path(
+                                             opts.output_path, i, true))
+                            .value();
              ++i) {
             partsA.push_back(
                 utilities::fileio::gzip_part_path(opts.output_path, i, true));
-            partsB.push_back(dirB + "/" +
-                             dftracer::utils::common::fs::path(partsA.back())
-                                 .filename()
-                                 .string());
-            dftracer::utils::common::fs::copy_file(partsA.back(),
-                                                   partsB.back());
+            partsB.push_back(
+                dirB + "/" +
+                std::string(dstd::PathView(partsA.back()).filename()));
+            REQUIRE(dstd::fs::copy_file(partsA.back(), partsB.back(),
+                                        dstd::fs::CopyMode::FailIfExists)
+                        .has_value());
         }
         REQUIRE(partsA.size() > 2);
 
@@ -433,7 +438,7 @@ TEST_SUITE("View") {
         // and "args.name" (the arg) without a schema collision.
         std::string pfw = env.get_dir() + "/collide.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":10,"args":{"name":"inner_read"}})"
                 << "\n";
@@ -443,7 +448,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         // Empty select: every column, including both "name" and "args.name".
@@ -477,7 +482,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/nested.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"X","name":"hot","cat":"APP","pid":1,"tid":1,)"
                    R"("ts":1000,"dur":42,"args":{"dur":{"p99":7000},)"
                    R"("counters":{"X":{"p50":3}},"label":{"v":"A"},)"
@@ -493,7 +498,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         {
             StringSink index_build;
@@ -631,7 +636,7 @@ TEST_SUITE("View") {
         // column into the aggregator and segfault.
         std::string pfw = env.get_dir() + "/cyc.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 4; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 100) << R"(,"dur":10,"args":{}})" << "\n";
@@ -647,7 +652,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         // Non-deterministic corruption: repeat so an uninitialized/garbage read
@@ -746,21 +751,21 @@ TEST_SUITE("View") {
     TEST_CASE("View - from_directory scans a tree of traces") {
         TestEnvironment env{200};
         std::string dir = env.get_dir() + "/tree";
-        dftracer::utils::common::fs::create_directories(dir + "/sub");
+        REQUIRE(dstd::fs::create_directories(dir + "/sub").has_value());
 
         // Distinct cat + pid per file so the grouped counts unambiguously
         // report which files (and how many events) the scan actually read.
         auto write_trace = [](const std::string& gz, const std::string& cat,
                               int pid, int n) {
             std::string pfw = gz.substr(0, gz.size() - 3);  // drop ".gz"
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < n; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":")" << cat
                     << R"(","pid":)" << pid << R"(,"tid":1,"ts":)" << (1000 + i)
                     << R"(,"dur":5,"args":{}})" << "\n";
             ofs.close();
             dftu_utils_test::compress_file_to_gzip(pfw, gz);
-            dftracer::utils::common::fs::remove(pfw);
+            (void)dstd::fs::remove(pfw);
         };
         write_trace(dir + "/a.pfw.gz", "AAA", 1, 10);
         write_trace(dir + "/b.pfw.gz", "BBB", 2, 20);
@@ -793,7 +798,7 @@ constexpr int DICT_ROWS = 1000;
 View dict_trace(TestEnvironment& env) {
     const std::string pfw = env.get_dir() + "/dict.pfw";
     {
-        std::ofstream o(pfw);
+        std::ofstream o(pfw.c_str());
         for (int i = 0; i < DICT_ROWS; ++i) {
             o << R"({"ph":"X","name":"n)" << i % 2 << R"(","cat":"c)" << i % 3
               << R"(","pid":1,"tid":1,"ts":)" << 1000 + i * 10
@@ -804,7 +809,7 @@ View dict_trace(TestEnvironment& env) {
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    dftracer::utils::common::fs::remove(pfw);
+    dstd::fs::remove(pfw).has_value();
     dftracer::utils::index::Indexer::open({gz}).build();
     return View::from_file(gz, determine_index_path(gz, ""));
 }

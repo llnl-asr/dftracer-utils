@@ -65,7 +65,7 @@ std::uint64_t file_size(const std::string& path) {
 }
 
 std::string read_all(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path.c_str(), std::ios::binary);
     return std::string((std::istreambuf_iterator<char>(f)),
                        std::istreambuf_iterator<char>());
 }
@@ -258,7 +258,7 @@ TEST_CASE("plugin cxx: sendfile transfers a file into a socket") {
     std::string src = env.get_dir() + "/src.bin";
     const std::string body = "zero-copy transfer payload\n";
     {
-        std::ofstream f(src, std::ios::binary);
+        std::ofstream f(src.c_str(), std::ios::binary);
         f << body;
     }
 
@@ -332,9 +332,9 @@ TEST_CASE("plugin cxx: merge_shards concatenates shard files into a target") {
     std::string b = env.get_dir() + "/b.shard";
     std::string target = env.get_dir() + "/merged.out";
     {
-        std::ofstream fa(a, std::ios::binary);
+        std::ofstream fa(a.c_str(), std::ios::binary);
         fa << "AAAA";
-        std::ofstream fb(b, std::ios::binary);
+        std::ofstream fb(b.c_str(), std::ios::binary);
         fb << "BBBB";
     }
 

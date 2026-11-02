@@ -2,6 +2,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/cache/rollup_store.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -136,7 +137,7 @@ void build_tier_index(const std::string& gz) {
 std::string write_agg_trace(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/agg_parity.pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         for (int i = 0; i < 30; ++i)
             ofs << R"({"ph":"X","name":")" << (i % 2 ? "pread" : "read")
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << (1000 + i)
@@ -148,7 +149,7 @@ std::string write_agg_trace(TestEnvironment& env) {
     }
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -410,7 +411,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         const std::string pfw = env.get_dir() + "/overflow.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             auto event = [&](const char* name, int ts, std::uint64_t dur) {
                 ofs << R"({"ph":"X","name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
@@ -423,7 +424,7 @@ TEST_SUITE("View") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         const std::string idx = determine_index_path(gz, "");
         auto out = View::from_file(gz, idx)
                        .group_by({GroupKey::name()})
@@ -453,7 +454,7 @@ TEST_SUITE("View") {
         // path must match the mean the AggSpec form computes for that field.
         std::string pfw = env.get_dir() + "/args.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 10; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i * 10) << R"(,"dur":5,"args":{"level":)" << i
@@ -465,7 +466,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto any = View::from_file(gz, idx)
@@ -1412,7 +1413,7 @@ TEST_SUITE("View") {
         // POSIX: read(10), write(99), read(20). The longest is "write".
         std::string pfw = env.get_dir() + "/am.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
                 << "\n"
                 << R"({"ph":"X","name":"write","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":99,"args":{}})"
@@ -1422,7 +1423,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto table = View::from_file(gz, idx)
@@ -1446,7 +1447,7 @@ TEST_SUITE("View") {
         // relabels the pid groups to "0"/"1" at the resolver, like host_name.
         std::string pfw = env.get_dir() + "/rank.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"ph":"M","name":"PR","cat":"dftracer","pid":100,"tid":0,"args":{"name":"rank","value":"0"}})"
                 << "\n"
                 << R"({"ph":"M","name":"PR","cat":"dftracer","pid":200,"tid":0,"args":{"name":"rank","value":"1"}})"
@@ -1460,7 +1461,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         auto table = View::from_file(gz, idx)
@@ -1694,7 +1695,7 @@ TEST_SUITE("View") {
         // 200); "serial" has two disjoint ones (union == sum(dur)).
         std::string pfw = env.get_dir() + "/occ.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             auto ev = [&](const char* name, long ts, long dur) {
                 ofs << R"({"ph":"X","name":")" << name
                     << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
@@ -1707,7 +1708,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b =
             View::from_file(gz, idx)
@@ -1781,7 +1782,7 @@ TEST_SUITE("View") {
     static void write_occ_trace(const std::string& pfw,
                                 const std::vector<std::pair<long, long>>& iv,
                                 const char* name = "e") {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         for (const auto& [ts, dur] : iv) {
             ofs << R"({"ph":"X","name":")" << name
                 << R"(","cat":"POSIX","pid":1,"tid":1,"ts":)" << ts
@@ -1806,7 +1807,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b = View::from_file(gz, idx)
                                      .time_range(0, 1000000)
@@ -1833,7 +1834,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b =
             View::from_file(gz, idx)
@@ -1859,7 +1860,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         dataframe::DataFrame b = View::from_file(gz, idx)
                                      .time_range(0, 1000000)
@@ -1887,7 +1888,7 @@ TEST_SUITE("View") {
         write_occ_trace(pfw, iv);
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         {
@@ -2005,7 +2006,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/schemaless.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             auto ev = [&](const char* type, const char* host, const char* tag0,
                           int v, long ts) {
                 ofs << R"({"ph":"X","name":"op","cat":"POSIX","type":")" << type
@@ -2021,7 +2022,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         auto counts = [&](const std::string& col, const GroupKey& gk) {
             dataframe::DataFrame b = View::from_file(gz, idx)
@@ -2071,7 +2072,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/shadow.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             // Top-level type "mpi" on every record; four also carry an
             // unrelated args.type parameter (the shadowing trap).
             for (int i = 0; i < 4; ++i)
@@ -2084,7 +2085,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         auto counts = [&](const std::string& col, const GroupKey& gk) {
             dataframe::DataFrame b = View::from_file(gz, idx)
@@ -2117,7 +2118,7 @@ TEST_SUITE("View") {
         REQUIRE(env.is_valid());
         std::string pfw = env.get_dir() + "/time_metric.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"name":"CM","ph":"M","cat":"dftracer","pid":0,"tid":0,)"
                    R"("args":{"name":"time_metric","value":"NS"}})"
                 << "\n";
@@ -2131,7 +2132,7 @@ TEST_SUITE("View") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
 
         CHECK(View::from_file(gz, idx).time_metric() == trace::TimeMetric::Ns);

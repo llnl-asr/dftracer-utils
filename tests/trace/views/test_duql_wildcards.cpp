@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <doctest/doctest.h>
@@ -25,13 +26,12 @@ constexpr int RECORDS = 3000;
 std::string write_counters(TestEnvironment& env, const std::string& dir = "",
                            bool build = true) {
     if (!dir.empty())
-        dftracer::utils::common::fs::create_directories(env.get_dir() + "/" +
-                                                        dir);
+        dstd::fs::create_directories(env.get_dir() + "/" + dir).has_value();
     const std::string plain = env.get_dir() + "/" +
                               (dir.empty() ? "" : dir + "/") +
                               "counters.ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (int i = 0; i < RECORDS; ++i) {
             out << R"({"name":"ev)" << i << R"(","args":{"counters":{"a":)"
                 << R"({"p50":)" << i / 30 << R"(,"p99":)" << i / 30 + 5
@@ -45,7 +45,7 @@ std::string write_counters(TestEnvironment& env, const std::string& dir = "",
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                16 * 1024));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     if (build) dftracer::utils::index::Indexer::open({gz}).build();
     return gz;
 }
@@ -188,7 +188,7 @@ TEST_SUITE("DuqlWildcards") {
         TestEnvironment env(10);
         const std::string plain = env.get_dir() + "/first.ndjson";
         {
-            std::ofstream out(plain);
+            std::ofstream out(plain.c_str());
             for (int i = 0; i < 300; ++i)
                 out << R"({"name":"e","args":{"counters":{"a":{"p50":)" << i
                     << R"(},"b":{"p50":)" << i % 5 << "}}}}\n";
@@ -249,11 +249,11 @@ TEST_SUITE("DuqlWildcards") {
     TEST_CASE("a pattern on a fresh genesis trace builds the catalog") {
         TestEnvironment env(10);
         const auto mk = [&](const std::string& dir, bool build) {
-            dftracer::utils::common::fs::create_directories(env.get_dir() +
-                                                            "/" + dir);
+            REQUIRE(dstd::fs::create_directories(env.get_dir() + "/" + dir)
+                        .has_value());
             const std::string plain = env.get_dir() + "/" + dir + "/g.ndjson";
             {
-                std::ofstream out(plain);
+                std::ofstream out(plain.c_str());
                 for (int i = 0; i < 600; ++i)
                     out << R"({"gtype":"func","run":"ab","ts":)" << i
                         << R"(,"v":{"p50":)" << i / 30 << R"(,"p99":)"
@@ -262,7 +262,7 @@ TEST_SUITE("DuqlWildcards") {
             const std::string gz = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, gz, 2048));
-            dftracer::utils::common::fs::remove(plain);
+            (void)dstd::fs::remove(plain);
             if (build) dftracer::utils::index::Indexer::open({gz}).build();
             return view_of(gz);
         };

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dstd/byte_view.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
@@ -21,11 +21,11 @@ using namespace dftracer::utils::utilities::fileio::parallel;
 namespace {
 
 std::string tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).string();
+    return std::string(dftu_utils_test::make_unique_test_path(name).str());
 }
 
 std::string read_all(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(path.c_str(), std::ios::binary);
     std::stringstream ss;
     ss << f.rdbuf();
     return ss.str();
@@ -71,7 +71,7 @@ TEST_CASE("StripedWriter - header, chunks, footer land in single file") {
     CHECK(lines.count("worker2") == 1);
     CHECK(lines.count("END") == 1);
 
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("StripedWriter - empty chunks are no-ops") {
@@ -88,9 +88,9 @@ TEST_CASE("StripedWriter - empty chunks are no-ops") {
         co_return 0;
     };
     CHECK(runtime.submit(task(), "striped_empty").get() == 0);
-    CHECK(common::fs::exists(path));
-    CHECK(common::fs::file_size(path) == 0);
-    common::fs::remove(path);
+    CHECK(dstd::fs::exists(path).value());
+    CHECK(dstd::fs::file_size(path).value() == 0);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("StripedWriter - output_paths returns single entry") {
@@ -109,5 +109,5 @@ TEST_CASE("StripedWriter - output_paths returns single entry") {
     CHECK(runtime.submit(task(), "striped_paths").get() == 0);
     REQUIRE(paths.size() == 1);
     CHECK(paths[0] == path);
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/config.h>
-#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
+#include <dftracer/utils/common/config.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -20,7 +20,7 @@ using namespace dftracer::utils::coro;
 using namespace dftracer::utils::utilities::arrow;
 
 static std::string tmp_path(const char* name) {
-    return dftu_utils_test::make_unique_test_path(name).string();
+    return dftu_utils_test::make_unique_test_path(name).str();
 }
 
 static void write_test_file(const std::string& path, int num_batches,
@@ -84,7 +84,7 @@ TEST_CASE("IpcReader - basic read single batch") {
     reader.close();
     CHECK_FALSE(reader.is_open());
 
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - read multiple batches") {
@@ -107,7 +107,7 @@ TEST_CASE("IpcReader - read multiple batches") {
     CHECK(total_rows == 100);
 
     reader.close();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - read_all") {
@@ -130,7 +130,7 @@ TEST_CASE("IpcReader - read_all") {
     CHECK(total_rows == 45);
 
     reader.close();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - for_each_batch") {
@@ -156,7 +156,7 @@ TEST_CASE("IpcReader - for_each_batch") {
     CHECK(total_rows == 100);
 
     reader.close();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - open fails on non-existent file") {
@@ -179,7 +179,7 @@ TEST_CASE("IpcReader - open fails on invalid file") {
     CHECK(reader.open(path) != 0);
     CHECK_FALSE(reader.is_open());
 
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - move semantics") {
@@ -202,7 +202,7 @@ TEST_CASE("IpcReader - move semantics") {
     CHECK(batch.valid());
 
     r2.close();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - read batch out of range") {
@@ -224,7 +224,7 @@ TEST_CASE("IpcReader - read batch out of range") {
     CHECK_FALSE(reader.read_batch(100).valid());
 
     reader.close();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - read ZSTD compressed file") {
@@ -248,7 +248,7 @@ TEST_CASE("IpcReader - read ZSTD compressed file") {
     CHECK(total_rows == 150);
 
     reader.close();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("IpcReader - roundtrip with all column types") {
@@ -302,7 +302,7 @@ TEST_CASE("IpcReader - roundtrip with all column types") {
         reader.close();
     }
 
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,13 +336,13 @@ TEST_CASE("read_arrow_files_parallel - single file") {
     CHECK(result.file_results[0].batches->size() == 2);
 
     runtime.shutdown();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("read_arrow_files_parallel - multiple files") {
     std::string dir = tmp_path("test_parallel_multi");
-    common::fs::remove_all(dir);
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::remove_all(dir).has_value());
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
 
     std::vector<std::string> paths;
     for (int i = 0; i < 4; ++i) {
@@ -368,7 +368,7 @@ TEST_CASE("read_arrow_files_parallel - multiple files") {
     }
 
     runtime.shutdown();
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("read_arrow_files_parallel - handles non-existent files") {
@@ -387,7 +387,7 @@ TEST_CASE("read_arrow_files_parallel - handles non-existent files") {
     CHECK(result.total_rows == 10);
 
     runtime.shutdown();
-    common::fs::remove(path);
+    (void)dstd::fs::remove(path);
 }
 
 TEST_CASE("read_arrow_files_parallel - empty list") {
@@ -407,8 +407,8 @@ TEST_CASE("read_arrow_files_parallel - empty list") {
 
 TEST_CASE("read_arrow_files_streaming - completion order callback") {
     std::string dir = tmp_path("test_streaming");
-    common::fs::remove_all(dir);
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::remove_all(dir).has_value());
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
 
     std::vector<std::string> paths;
     for (int i = 0; i < 4; ++i) {
@@ -448,13 +448,13 @@ TEST_CASE("read_arrow_files_streaming - completion order callback") {
     CHECK(total_rows == 100);
 
     runtime.shutdown();
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("read_arrow_files_streaming - early cancel") {
     std::string dir = tmp_path("test_streaming_cancel");
-    common::fs::remove_all(dir);
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::remove_all(dir).has_value());
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
 
     std::vector<std::string> paths;
     for (int i = 0; i < 4; ++i) {
@@ -488,13 +488,13 @@ TEST_CASE("read_arrow_files_streaming - early cancel") {
     CHECK(callback_count == 2);  // Only 2 callbacks before cancel
 
     runtime.shutdown();
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 TEST_CASE("read_arrow_files_parallel - mixed compression") {
     std::string dir = tmp_path("test_parallel_mixed");
-    common::fs::remove_all(dir);
-    common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::remove_all(dir).has_value());
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
 
     std::string path_none = dir + "/none.arrow";
     std::string path_zstd = dir + "/zstd.arrow";
@@ -513,7 +513,7 @@ TEST_CASE("read_arrow_files_parallel - mixed compression") {
     CHECK(result.total_batches == 4);
 
     runtime.shutdown();
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
 }
 
 #else

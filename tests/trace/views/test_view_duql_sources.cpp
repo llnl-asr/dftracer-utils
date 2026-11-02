@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/duql/macros.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
@@ -26,12 +27,12 @@ std::string write_records(TestEnvironment& env, const std::string& name,
                           const std::vector<std::string>& lines) {
     const std::string plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream o(plain);
+        std::ofstream o(plain.c_str());
         for (const auto& l : lines) o << l << "\n";
     }
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     ix::Indexer::open({gz}).build();
     return gz;
 }
@@ -126,7 +127,7 @@ TEST_SUITE("View duql sources") {
         std::vector<std::string> gzs;
         for (const char* n : {"a", "b"}) {
             const std::string plain = env.get_dir() + "/" + n + ".pfw";
-            std::ofstream(plain) << event(10, R"("x":1)") << "\n";
+            std::ofstream(plain.c_str()) << event(10, R"("x":1)") << "\n";
             gzs.push_back(plain + ".gz");
             dftu_utils_test::compress_file_to_gzip(plain, gzs.back());
         }
@@ -211,7 +212,7 @@ TEST_SUITE("View duql sources") {
         TestEnvironment env(10);
         const std::string path = env.get_dir() + "/ms.duql";
         {
-            std::ofstream o(path);
+            std::ofstream o(path.c_str());
             o << "def ms(x) = x / 1000;\ndef long_io(t) = ms(dur) > t;\n";
         }
         dftracer::utils::duql::load_macros(path);
@@ -284,7 +285,7 @@ source: |
 
         const std::string path = env.get_dir() + "/pm.duql";
         {
-            std::ofstream o(path);
+            std::ofstream o(path.c_str());
             o << "def posix_rate(d) = where cat == \"POSIX\" | bucket d | agg "
                  "{ b = sum(dur) };\n";
         }

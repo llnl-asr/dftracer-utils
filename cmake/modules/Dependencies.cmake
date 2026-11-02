@@ -55,22 +55,6 @@ function(need_argparse)
   endif()
 endfunction()
 
-function(need_ghc_filesystem)
-  if(NOT ghc_filesystem_ADDED)
-    cpmaddpackage(
-      NAME
-      ghc_filesystem
-      GITHUB_REPOSITORY
-      gulrak/filesystem
-      VERSION
-      1.5.14
-      OPTIONS
-      "GHC_FILESYSTEM_WITH_INSTALL ON"
-      FORCE
-      YES)
-  endif()
-endfunction()
-
 function(need_nonstd_span)
   if(NOT nonstd_span_ADDED)
     cpmaddpackage(NAME nonstd_span GITHUB_REPOSITORY nonstd-lite/span-lite
@@ -1275,33 +1259,6 @@ endfunction()
 # ==============================================================================
 # Compiler Feature Checks and Helpers
 # ==============================================================================
-
-macro(check_std_filesystem)
-  # Probe once and cache; try_compile otherwise re-runs a compiler every
-  # reconfigure. The status message below still prints each configure.
-  if(NOT DEFINED DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    try_compile(
-      _dftracer_has_std_filesystem "${CMAKE_BINARY_DIR}/temp"
-      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/tests/has_filesystem.cpp" CXX_STANDARD
-      ${CMAKE_CXX_STANDARD} CXX_STANDARD_REQUIRED ON
-      LINK_LIBRARIES stdc++fs)
-    set(DFTRACER_UTILS_HAS_STD_FILESYSTEM
-        ${_dftracer_has_std_filesystem}
-        CACHE INTERNAL "Compiler provides a usable std::filesystem")
-  endif()
-  if(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    dftracer_utils_ok("Compiler has std::filesystem support")
-  else()
-    dftracer_utils_warn(
-      "Compiler does not have std::filesystem support. Use gulrak::filesystem")
-  endif(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-endmacro()
-
-function(add_stdfs_if_needed TARGET)
-  if(DFTRACER_UTILS_HAS_STD_FILESYSTEM)
-    target_link_libraries(${TARGET} PRIVATE stdc++fs)
-  endif()
-endfunction()
 
 macro(link_libatomic)
   # libatomic safety net for targets that can't inline the atomic (e.g. 32-bit;

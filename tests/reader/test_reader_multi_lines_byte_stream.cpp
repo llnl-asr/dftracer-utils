@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -32,7 +32,7 @@ static std::string create_variable_line_test_file(
     std::string gz_file = test_dir + "/variable_lines_multi.gz";
 
     // Create text file with variable line lengths
-    std::ofstream f(txt_file);
+    std::ofstream f(txt_file.c_str());
     if (!f.is_open()) {
         return "";
     }
@@ -70,7 +70,7 @@ static std::string create_variable_line_test_file(
         return "";
     }
 
-    common::fs::remove(txt_file);
+    (void)dstd::fs::remove(txt_file);
     return gz_file;
 }
 

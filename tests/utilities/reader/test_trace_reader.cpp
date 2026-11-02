@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -109,16 +110,16 @@ namespace {
 /// the temp root would pick up any .dftindex another test left there and be
 /// read through an index that does not list it.
 std::string gzip_fixture(const std::string& plain_path) {
-    const dftracer::utils::common::fs::path dir =
+    const dftracer::utils::dstd::Path dir =
         make_unique_test_path("trace_fixture");
-    dftracer::utils::common::fs::create_directories(dir);
-    const std::string gz_path =
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+    const std::string gz_path(
         (dir /
-         (dftracer::utils::common::fs::path(plain_path).filename().string() +
+         (std::string(dftracer::utils::dstd::PathView(plain_path).filename()) +
           ".gz"))
-            .string();
+            .str());
     REQUIRE(dftu_utils_test::compress_file_to_gzip(plain_path, gz_path));
-    dftracer::utils::common::fs::remove(plain_path);
+    (void)dftracer::utils::dstd::fs::remove(plain_path);
     return gz_path;
 }
 }  // namespace
@@ -147,8 +148,9 @@ TEST_SUITE("TraceReader") {
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(dftracer::utils::common::fs::exists(
-            determine_index_path(gz_file, index_dir)));
+        REQUIRE(dftracer::utils::dstd::fs::exists(
+                    determine_index_path(gz_file, index_dir))
+                    .value());
 
         TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
 
@@ -160,8 +162,9 @@ TEST_SUITE("TraceReader") {
 
         SUBCASE("Indexed and unindexed counts match") {
             // Remove the index and re-read to compare.
-            dftracer::utils::common::fs::remove_all(
-                determine_index_path(gz_file, index_dir));
+            dftracer::utils::dstd::fs::remove_all(
+                determine_index_path(gz_file, index_dir))
+                .has_value();
             TraceReader plain_reader({.file_path = gz_file});
             CHECK_FALSE(plain_reader.has_index());
             auto n_plain = count_lines(plain_reader.read_lines()).get();
@@ -296,8 +299,9 @@ TEST_SUITE("TraceReader") {
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(dftracer::utils::common::fs::exists(
-            determine_index_path(gz_file, index_dir)));
+        REQUIRE(dftracer::utils::dstd::fs::exists(
+                    determine_index_path(gz_file, index_dir))
+                    .value());
 
         TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
         CHECK(reader.has_index());
@@ -322,12 +326,12 @@ TEST_SUITE("TraceReader") {
         const std::string third_line =
             R"({"name":"close","cat":"POSIX","pid":1,"tid":1,"ts":3000,"dur":30,"ph":"X","args":{"ret":3}})";
         {
-            std::ofstream out(test_file);
+            std::ofstream out(test_file.c_str());
             out << first_line << "\n";
             out << second_line << "\n";
             out << third_line << "\n";
         }
-        auto gz_file = gzip_fixture(test_file.string());
+        auto gz_file = gzip_fixture(std::string(test_file.str()));
 
         TraceReader reader({.file_path = gz_file});
 
@@ -342,19 +346,19 @@ TEST_SUITE("TraceReader") {
         CHECK(lines[0].find(R"("name":"read")") != std::string::npos);
         CHECK(lines[1].find(R"("name":"write")") != std::string::npos);
 
-        dftracer::utils::common::fs::remove(gz_file);
+        (void)dftracer::utils::dstd::fs::remove(gz_file);
     }
 
     TEST_CASE("read_lines plain file byte range skips partial first line") {
         auto test_file =
             make_unique_test_path("trace_reader_plain_skip_partial.pfw");
         {
-            std::ofstream out(test_file);
+            std::ofstream out(test_file.c_str());
             out << "alpha\n";
             out << "beta\n";
             out << "gamma\n";
         }
-        auto gz_file = gzip_fixture(test_file.string());
+        auto gz_file = gzip_fixture(std::string(test_file.str()));
 
         TraceReader reader({.file_path = gz_file});
 
@@ -367,7 +371,7 @@ TEST_SUITE("TraceReader") {
         CHECK(lines[0] == "beta");
         CHECK(lines[1] == "gamma");
 
-        dftracer::utils::common::fs::remove(gz_file);
+        (void)dftracer::utils::dstd::fs::remove(gz_file);
     }
 
     TEST_CASE("read_raw indexed and unindexed produce same chunk count") {
@@ -461,7 +465,7 @@ TEST_SUITE("TraceReader") {
         auto test_file =
             make_unique_test_path("trace_reader_plain_query_range.pfw");
         {
-            std::ofstream out(test_file);
+            std::ofstream out(test_file.c_str());
             out << R"({"name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"ph":"X","args":{"ret":1}})"
                 << "\n";
             out << R"({"name":"write","cat":"POSIX","pid":1,"tid":1,"ts":2000,"dur":20,"ph":"X","args":{"ret":2}})"
@@ -469,8 +473,8 @@ TEST_SUITE("TraceReader") {
         }
 
         const auto uncompressed_size =
-            dftracer::utils::common::fs::file_size(test_file);
-        auto gz_file = gzip_fixture(test_file.string());
+            dftracer::utils::dstd::fs::file_size(test_file).value();
+        auto gz_file = gzip_fixture(std::string(test_file.str()));
 
         TraceReader reader({.file_path = gz_file});
 
@@ -483,7 +487,7 @@ TEST_SUITE("TraceReader") {
         REQUIRE(lines.size() == 1);
         CHECK(lines[0].find(R"("name":"write")") != std::string::npos);
 
-        dftracer::utils::common::fs::remove(gz_file);
+        (void)dftracer::utils::dstd::fs::remove(gz_file);
     }
 
     TEST_CASE("Query with AND narrows results") {
@@ -533,8 +537,9 @@ TEST_SUITE("TraceReader") {
             gz_file, index_path, 32 * 1024 * 1024, false);
         REQUIRE(indexer != nullptr);
         indexer->build();
-        REQUIRE(dftracer::utils::common::fs::exists(
-            determine_index_path(gz_file, index_dir)));
+        REQUIRE(dftracer::utils::dstd::fs::exists(
+                    determine_index_path(gz_file, index_dir))
+                    .value());
 
         TraceReader reader({.file_path = gz_file, .index_dir = index_dir});
         CHECK(reader.has_index());
@@ -579,7 +584,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string pfw = env.get_dir() + "/multi_cat.pfw";
         {
-            std::ofstream out(pfw);
+            std::ofstream out(pfw.c_str());
             for (int i = 0; i < 200; ++i) {
                 out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
@@ -591,7 +596,7 @@ TEST_SUITE("TraceReader") {
         }
         std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -624,7 +629,7 @@ TEST_SUITE("TraceReader") {
         TestEnvironment env(100);
         std::string pfw = env.get_dir() + "/raw_skip.pfw";
         {
-            std::ofstream out(pfw);
+            std::ofstream out(pfw.c_str());
             for (int i = 0; i < 100; ++i) {
                 out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
@@ -632,7 +637,7 @@ TEST_SUITE("TraceReader") {
         }
         std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz));
 
@@ -667,7 +672,7 @@ TEST_SUITE("TraceReader") {
         // COMPUTE events cluster in one checkpoint in the middle.
         std::string pad(400, 'x');
         {
-            std::ofstream out(pfw);
+            std::ofstream out(pfw.c_str());
             for (int i = 0; i < POSIX_BEFORE; ++i) {
                 out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
@@ -686,7 +691,7 @@ TEST_SUITE("TraceReader") {
         }
         std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
@@ -792,7 +797,7 @@ TEST_SUITE("TraceReader::read_json") {
         TestEnvironment env(100);
         std::string pfw = env.get_dir() + "/json_vs_lines.pfw";
         {
-            std::ofstream out(pfw);
+            std::ofstream out(pfw.c_str());
             for (int i = 0; i < 100; ++i) {
                 out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":10,"args":{}})" << "\n";
@@ -814,7 +819,7 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(line_count == json_count);
         CHECK(json_count == 100);
 
-        dftracer::utils::common::fs::remove(gz);
+        (void)dftracer::utils::dstd::fs::remove(gz);
     }
 
     TEST_CASE("read_json works with index and chunk pruning") {
@@ -822,7 +827,7 @@ TEST_SUITE("TraceReader::read_json") {
         std::string pfw = env.get_dir() + "/json_indexed.pfw";
         std::string pad(400, 'x');
         {
-            std::ofstream out(pfw);
+            std::ofstream out(pfw.c_str());
             for (int i = 0; i < 100; ++i) {
                 out << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
                     << (1000 + i) << R"(,"dur":10,"args":{"pad":")" << pad
@@ -841,7 +846,7 @@ TEST_SUITE("TraceReader::read_json") {
         }
         std::string gz = pfw + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
 
         REQUIRE(dftu_utils_test::build_index(gz, "",
                                              /*checkpoint_size=*/32 * 1024));
@@ -871,12 +876,12 @@ TEST_SUITE("TraceReader::read_json") {
     TEST_CASE("read_json parser fields are accessible") {
         auto test_file = make_unique_test_path("json_parser_fields.pfw");
         {
-            std::ofstream out(test_file);
+            std::ofstream out(test_file.c_str());
             out << R"({"ph":"X","name":"read","cat":"POSIX","pid":42,"tid":7,"ts":1000,"dur":10,"args":{"ret":1}})"
                 << "\n";
         }
 
-        auto gz_file = gzip_fixture(test_file.string());
+        auto gz_file = gzip_fixture(std::string(test_file.str()));
 
         TraceReader reader({.file_path = gz_file});
         auto events = collect_json_events(reader.read_json()).get();
@@ -885,6 +890,6 @@ TEST_SUITE("TraceReader::read_json") {
         CHECK(events[0].cat == "POSIX");
         CHECK(events[0].ph == "X");
 
-        dftracer::utils::common::fs::remove(gz_file);
+        (void)dftracer::utils::dstd::fs::remove(gz_file);
     }
 }

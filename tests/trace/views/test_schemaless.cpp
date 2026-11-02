@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/index.h>
@@ -41,13 +42,13 @@ std::string write_gz(TestEnvironment& env, const std::string& name,
                      std::size_t member_bytes = 256) {
     const std::string plain = env.get_dir() + "/" + name + ".ndjson";
     {
-        std::ofstream o(plain);
+        std::ofstream o(plain.c_str());
         for (const auto& l : lines) o << l << "\n";
     }
     const std::string gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
@@ -403,7 +404,7 @@ source: |
         TestEnvironment env(10);
         const std::string plain = env.get_dir() + "/t.ndjson";
         {
-            std::ofstream o(plain);
+            std::ofstream o(plain.c_str());
             o << R"({"n":2.0,"meta":{"b":1,"a":[1,2]}})" << "\n"
               << R"({"n":3,"meta":"x"})" << "\n";
         }
@@ -849,7 +850,7 @@ fields:
         const std::string agg = write_gz(env, "agg", lines, 1024);
         const std::string agg_idx =
             determine_index_path(agg, env.get_dir() + "/agg_index");
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(agg_idx));
+        REQUIRE_FALSE(dstd::fs::exists(agg_idx).value());
         const View va = View::from_file(agg, agg_idx);
         CHECK(counts_by_op(va) == counts_by_op(vr));
         const auto [agg_id, agg_tier] = index_state(agg, agg_idx);
@@ -860,7 +861,7 @@ fields:
         const std::string dump = write_gz(env, "dump", lines, 1024);
         const std::string dump_idx =
             determine_index_path(dump, env.get_dir() + "/dump_index");
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(dump_idx));
+        REQUIRE_FALSE(dstd::fs::exists(dump_idx).value());
         StringSink sink;
         (void)View::from_file(dump, dump_idx).sink_json(sink).get();
         CHECK(sink.lines().size() == lines.size());

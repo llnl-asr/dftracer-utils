@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/internal/spill.h>
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/coro/task.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <doctest/doctest.h>
@@ -103,7 +103,7 @@ TEST_SUITE("spill") {
                 w.write(cols, N);
                 w.close();
             }
-            *bytes = dftracer::utils::common::fs::file_size(path);
+            *bytes = dftracer::utils::dstd::fs::file_size(path).value();
             spill::Reader r(path);
             int morsels = 0;
             while (auto m = run(r.next(0))) {
@@ -176,7 +176,7 @@ TEST_SUITE("spill errors") {
             w.close();
         }
         const std::uintmax_t full =
-            dftracer::utils::common::fs::file_size(path);
+            dftracer::utils::dstd::fs::file_size(path).value();
         auto drain = [&] {
             spill::Reader r(path);
             while (auto m = run(r.next(0))) {
@@ -184,9 +184,10 @@ TEST_SUITE("spill errors") {
         };
         CHECK_NOTHROW(drain());
         // Cut inside the second morsel's payload, then inside its header.
-        dftracer::utils::common::fs::resize_file(path, full - 5);
+        dftracer::utils::dstd::fs::resize_file(path, full - 5).has_value();
         CHECK_THROWS(drain());
-        dftracer::utils::common::fs::resize_file(path, full / 2 + 5);
+        REQUIRE(dftracer::utils::dstd::fs::resize_file(path, full / 2 + 5)
+                    .has_value());
         CHECK_THROWS(drain());
     }
 
@@ -194,19 +195,19 @@ TEST_SUITE("spill errors") {
         spill::Dir dir;
         const std::string path = dir.run_path(0);
         {
-            std::ofstream os(path, std::ios::binary);
+            std::ofstream os(path.c_str(), std::ios::binary);
             const std::uint32_t len = 100;
             os.write(reinterpret_cast<const char*>(&len), sizeof(len));
             os.write("abcd", 4);
         }
         CHECK_THROWS(spill::AggRunReader(path));
         {
-            std::ofstream os(path, std::ios::binary);
+            std::ofstream os(path.c_str(), std::ios::binary);
             os.write("ab", 2);
         }
         CHECK_THROWS(spill::AggRunReader(path));
         {
-            std::ofstream os(path, std::ios::binary);
+            std::ofstream os(path.c_str(), std::ios::binary);
         }
         spill::AggRunReader empty(path);
         CHECK_FALSE(empty.valid());
@@ -216,7 +217,7 @@ TEST_SUITE("spill errors") {
         spill::Dir dir;
         const std::string path = dir.run_path(0);
         {
-            std::ofstream os(path, std::ios::binary);
+            std::ofstream os(path.c_str(), std::ios::binary);
             const std::int64_t sizes[2] = {std::int64_t{1} << 40,
                                            std::int64_t{1} << 40};
             os.write(reinterpret_cast<const char*>(sizes), sizeof(sizes));
@@ -225,7 +226,7 @@ TEST_SUITE("spill errors") {
         spill::Reader big(path);
         CHECK_THROWS(run(big.next(0)));
         {
-            std::ofstream os(path, std::ios::binary);
+            std::ofstream os(path.c_str(), std::ios::binary);
             const std::int64_t sizes[2] = {-5, -5};
             os.write(reinterpret_cast<const char*>(sizes), sizeof(sizes));
         }
@@ -236,7 +237,7 @@ TEST_SUITE("spill errors") {
     TEST_CASE("an aggregate state length past the file is an error") {
         spill::Dir dir;
         const std::string path = dir.run_path(0);
-        std::ofstream os(path, std::ios::binary);
+        std::ofstream os(path.c_str(), std::ios::binary);
         const std::uint32_t len = 0xFFFFFFF0u;
         os.write(reinterpret_cast<const char*>(&len), sizeof(len));
         os.write("abcdefgh", 8);

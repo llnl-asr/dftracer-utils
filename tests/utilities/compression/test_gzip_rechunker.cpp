@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_rechunker.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -31,7 +32,7 @@ std::string write_single_member_gz(const std::string& path,
     gzc::GzipMemberCompressor comp;
     auto member = comp.compress_member(payload.data(), payload.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
     ofs.close();
@@ -83,21 +84,21 @@ bool needs_rechunk(const std::string& path, std::size_t cap) {
 TEST_SUITE("gzip_rechunker") {
     TEST_CASE("needs_rechunk flags a member over the cap only") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_probe");
-        dftracer::utils::common::fs::create_directories(dir);
-        const std::string gz = (dir / "one.pfw.gz").string();
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        const std::string gz = std::string((dir / "one.pfw.gz").str());
         const auto payload = make_lines(2000);  // ~90 KB uncompressed
         write_single_member_gz(gz, payload);
 
         CHECK(needs_rechunk(gz, 1024));         // member > 1 KB -> yes
         CHECK_FALSE(needs_rechunk(gz, 10 * 1024 * 1024));  // under cap -> no
 
-        dftracer::utils::common::fs::remove_all(dir);
+        dftracer::utils::dstd::fs::remove_all(dir).has_value();
     }
 
     TEST_CASE("first_member samples past a tiny first member") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_sample");
-        dftracer::utils::common::fs::create_directories(dir);
-        const std::string gz = (dir / "wrapped.pfw.gz").string();
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        const std::string gz = std::string((dir / "wrapped.pfw.gz").str());
         const auto payload = make_lines(5000);
         {
             gzc::GzipMemberCompressor comp;
@@ -105,7 +106,7 @@ TEST_SUITE("gzip_rechunker") {
             auto body = comp.compress_member(payload.data(), payload.size());
             REQUIRE(head.has_value());
             REQUIRE(body.has_value());
-            std::ofstream ofs(gz, std::ios::binary);
+            std::ofstream ofs(gz.c_str(), std::ios::binary);
             ofs.write(reinterpret_cast<const char*>(head->data()),
                       static_cast<std::streamsize>(head->size()));
             ofs.write(reinterpret_cast<const char*>(body->data()),
@@ -133,14 +134,14 @@ TEST_SUITE("gzip_rechunker") {
         CHECK(sampled.compressed == size);
         CHECK_FALSE(sampled.exceeds_cap);
 
-        dftracer::utils::common::fs::remove_all(dir);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
 
     TEST_CASE("rechunk preserves bytes and produces multiple members") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_split");
-        dftracer::utils::common::fs::create_directories(dir);
-        const std::string in = (dir / "big.pfw.gz").string();
-        const std::string out = (dir / "out.pfw.gz").string();
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        const std::string in = std::string((dir / "big.pfw.gz").str());
+        const std::string out = std::string((dir / "out.pfw.gz").str());
         const auto payload = make_lines(5000);
         write_single_member_gz(in, payload);
 
@@ -158,14 +159,14 @@ TEST_SUITE("gzip_rechunker") {
             CHECK(last_bytes[i] == '\n');
         }
 
-        dftracer::utils::common::fs::remove_all(dir);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
 
     TEST_CASE("rechunk handles a payload with no trailing newline") {
         auto dir = dftu_utils_test::make_unique_test_path("rechunk_nonl");
-        dftracer::utils::common::fs::create_directories(dir);
-        const std::string in = (dir / "in.pfw.gz").string();
-        const std::string out = (dir / "out.pfw.gz").string();
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+        const std::string in = std::string((dir / "in.pfw.gz").str());
+        const std::string out = std::string((dir / "out.pfw.gz").str());
         std::string payload = make_lines(1000);
         payload += "{\"id\":99999,\"trailing\":true}";  // no final '\n'
         write_single_member_gz(in, payload);
@@ -173,6 +174,6 @@ TEST_SUITE("gzip_rechunker") {
         gzc::gzip_rechunk_to_members(in, out, 4 * 1024, 6).get();
         CHECK(decode_all(out).first == payload);
 
-        dftracer::utils::common::fs::remove_all(dir);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
 }

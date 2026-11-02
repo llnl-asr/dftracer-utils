@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -88,7 +89,7 @@ std::string write_stored_gz_trace(const std::string& path,
     put32(dftracer::utils::utilities::fileio::compress::gzip_crc32(
         0, content.data(), content.size()));
     put32(static_cast<std::uint32_t>(content.size()));
-    std::ofstream file(path, std::ios::binary);
+    std::ofstream file(path.c_str(), std::ios::binary);
     if (!file.write(out.data(), static_cast<std::streamsize>(out.size())))
         return "";
     return path;
@@ -96,7 +97,7 @@ std::string write_stored_gz_trace(const std::string& path,
 
 bool compress_file_to_gzip(const std::string& input_file,
                            const std::string& output_file) {
-    std::ifstream input(input_file, std::ios::binary);
+    std::ifstream input(input_file.c_str(), std::ios::binary);
     if (!input.is_open()) {
         return false;
     }
@@ -128,9 +129,9 @@ bool compress_file_to_gzip_multimember(const std::string& input_file,
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     if (member_bytes == 0) member_bytes = 4 * 1024 * 1024;
 
-    std::ifstream input(input_file, std::ios::binary);
+    std::ifstream input(input_file.c_str(), std::ios::binary);
     if (!input.is_open()) return false;
-    std::ofstream output(output_file, std::ios::binary);
+    std::ofstream output(output_file.c_str(), std::ios::binary);
     if (!output.is_open()) return false;
 
     GzipMemberCompressor comp;
@@ -163,23 +164,22 @@ TestEnvironment::TestEnvironment(std::size_t lines, Format format)
     : num_lines(lines), format_(format) {
     // @note: enable this for debugging
     // dftracer::utils::logger::init();
-    dftracer::utils::common::fs::path test_path =
+    const dftracer::utils::dstd::Path test_path =
         make_unique_test_path("dftracer_test");
 
-    try {
-        if (dftracer::utils::common::fs::create_directories(test_path) ||
-            (dftracer::utils::common::fs::exists(test_path) &&
-             dftracer::utils::common::fs::is_directory(test_path))) {
-            test_dir = test_path.string();
-        }
-    } catch (const std::exception& e) {
-        // Leave test_dir empty to indicate failure
-    }
+    // Leave test_dir empty to indicate failure
+    const bool made =
+        dftracer::utils::dstd::fs::create_directories(test_path).has_value();
+    const auto is_dir = dftracer::utils::dstd::fs::is_directory(test_path);
+    if (made && is_dir.has_value() && *is_dir)
+        test_dir = std::string(test_path.str());
 }
 
 TestEnvironment::~TestEnvironment() {
     if (!test_dir.empty()) {
-        dftracer::utils::common::fs::remove_all(test_dir);
+        (void)dftracer::utils::dstd::fs::remove_all(
+            dftracer::utils::dstd::PathView(test_dir))
+            .has_value();
     }
 }
 
@@ -209,7 +209,7 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
     std::string txt_file = test_dir + "/test_data.txt";
 
     // Write test data to text file
-    std::ofstream f(txt_file);
+    std::ofstream f(txt_file.c_str());
     if (!f.is_open()) {
         return "";
     }
@@ -222,7 +222,7 @@ std::string TestEnvironment::create_test_gzip_file_impl() {
 
     bool success = compress_file_to_gzip(txt_file, gz_file);
 
-    dftracer::utils::common::fs::remove(txt_file);
+    (void)dftracer::utils::dstd::fs::remove(txt_file).has_value();
 
     if (success) {
         return gz_file;
@@ -240,7 +240,7 @@ std::string TestEnvironment::create_dft_test_file(int num_events) {
     std::string file_path =
         test_dir + "/dftu_trace_" + std::to_string(file_counter++) + ".trace";
 
-    std::ofstream ofs(file_path);
+    std::ofstream ofs(file_path.c_str());
     if (!ofs.is_open()) {
         return "";
     }
@@ -278,7 +278,7 @@ std::string TestEnvironment::create_dft_multirun_gzip_file(
     static std::size_t multirun_counter = 0;
     std::string plain_file = test_dir + "/dftu_multirun_" +
                              std::to_string(multirun_counter++) + ".trace";
-    std::ofstream ofs(plain_file);
+    std::ofstream ofs(plain_file.c_str());
     if (!ofs.is_open()) return "";
 
     const std::uint64_t base = 1000000000ULL;
@@ -310,10 +310,10 @@ std::string TestEnvironment::create_dft_multirun_gzip_file(
 
     std::string gz_file = plain_file + ".gz";
     if (!compress_file_to_gzip(plain_file, gz_file)) {
-        dftracer::utils::common::fs::remove(plain_file);
+        (void)dftracer::utils::dstd::fs::remove(plain_file).has_value();
         return "";
     }
-    dftracer::utils::common::fs::remove(plain_file);
+    (void)dftracer::utils::dstd::fs::remove(plain_file).has_value();
     return gz_file;
 }
 
@@ -327,22 +327,25 @@ std::string TestEnvironment::create_dft_test_gzip_file(int num_events) {
     // Compress to gzip
     std::string gz_file = plain_file + ".gz";
     if (!compress_file_to_gzip(plain_file, gz_file)) {
-        dftracer::utils::common::fs::remove(plain_file);
+        (void)dftracer::utils::dstd::fs::remove(plain_file).has_value();
         return "";
     }
 
     // Remove the plain file after compression
-    dftracer::utils::common::fs::remove(plain_file);
+    (void)dftracer::utils::dstd::fs::remove(plain_file).has_value();
 
     return gz_file;
 }
 
 void set_test_library_path(const std::string& binary) {
-    const dftracer::utils::common::fs::path build_root =
-        dftracer::utils::common::fs::absolute(binary)
-            .parent_path()
-            .parent_path();
-    const std::string libs = (build_root / "lib").string();
+    auto resolved = dftracer::utils::dstd::fs::absolute(
+        dftracer::utils::dstd::PathView(binary));
+    if (!resolved) {
+        ::setenv("LD_LIBRARY_PATH", "", 1);
+        return;
+    }
+    const dftracer::utils::dstd::PathView parent = resolved->view().parent();
+    const std::string libs = std::string((parent.parent() / "lib").str());
     ::setenv("LD_LIBRARY_PATH", libs.c_str(), 1);
 }
 
@@ -450,7 +453,8 @@ const char* test_environment_get_dir(test_environment_handle_t env) {
 
 char* test_make_unique_test_path(const char* name) {
     if (!name) return nullptr;
-    std::string path = dftu_utils_test::make_unique_test_path(name).string();
+    std::string path =
+        std::string(dftu_utils_test::make_unique_test_path(name).str());
     char* result = static_cast<char*>(malloc(path.length() + 1));
     if (result) {
         std::memcpy(result, path.c_str(), path.length() + 1);
@@ -534,3 +538,56 @@ int compress_file_to_gzip_c(const char* input_file, const char* output_file) {
     }
 }
 }
+
+namespace dftu_utils_test {
+
+namespace dfs_impl = dftracer::utils::dstd::fs;
+using dftracer::utils::dstd::Path;
+using dftracer::utils::dstd::PathView;
+
+std::vector<ListedEntry> list_dir(PathView dir) {
+    std::vector<ListedEntry> out;
+    auto handle = dfs_impl::Dir::open(dir);
+    if (!handle) return out;
+    auto entries = handle->entries();
+    if (!entries) return out;
+    for (const auto& e : *entries) {
+        ListedEntry item;
+        item.path = Path(dir) / e.name;
+        auto st = handle->stat(e.name);
+        if (!st) continue;
+        item.kind = st->kind;
+        item.size = st->size;
+        out.push_back(std::move(item));
+    }
+    return out;
+}
+
+std::vector<ListedEntry> walk_dir(PathView dir) {
+    std::vector<ListedEntry> out;
+    bool at_root = true;
+    auto walked = dfs_impl::walk(dir, [&](PathView p, dfs_impl::FileKind kind) {
+        if (at_root) {
+            at_root = false;
+            return dfs_impl::WalkAction::Continue;
+        }
+        ListedEntry item;
+        item.path = Path(p);
+        item.kind = kind;
+        if (kind == dfs_impl::FileKind::File) {
+            auto st = dfs_impl::stat(p);
+            if (!st) return dfs_impl::WalkAction::Continue;
+            item.size = st->size;
+        }
+        out.push_back(std::move(item));
+        return dfs_impl::WalkAction::Continue;
+    });
+    if (!walked) out.clear();
+    std::sort(out.begin(), out.end(),
+              [](const ListedEntry& a, const ListedEntry& b) {
+                  return a.path.str() < b.path.str();
+              });
+    return out;
+}
+
+}  // namespace dftu_utils_test

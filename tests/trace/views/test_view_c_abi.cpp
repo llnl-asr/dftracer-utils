@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/trace/views/abi.h>
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
@@ -79,7 +80,7 @@ std::string abi_str(dftu_dataframe* df, std::int64_t row, const char* name) {
 // events at dur=20.
 std::string write_group_trace(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/grp.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1100,"dur":10,"args":{}})"
@@ -91,7 +92,7 @@ std::string write_group_trace(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -104,7 +105,7 @@ std::string write_group_trace(TestEnvironment& env) {
 // pid 2: "write" dur=5, "writev" dur=30, "pwrite" dur=15 (total 50).
 std::string write_argmax_trace(TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/argmax.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
         << "\n";
     ofs << R"({"ph":"X","name":"readv","cat":"POSIX","pid":1,"tid":1,"ts":1050,"dur":50,"args":{}})"
@@ -120,7 +121,7 @@ std::string write_argmax_trace(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 
@@ -128,9 +129,9 @@ std::string write_argmax_trace(TestEnvironment& env) {
 // index, for the directory-scan test.
 std::string write_and_index(const std::string& dir, const std::string& name,
                             int n, int pid) {
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dstd::fs::create_directories(dir).has_value());
     std::string pfw = dir + "/" + name + ".pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < n; ++i)
         ofs << R"({"ph":"X","name":")" << name << R"(","cat":"POSIX","pid":)"
             << pid << R"(,"tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
@@ -138,7 +139,7 @@ std::string write_and_index(const std::string& dir, const std::string& name,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     std::string idx = determine_index_path(gz, "");
     StringSink sink;
     View::from_file(gz, idx).sink_json(sink).get();
@@ -351,7 +352,7 @@ TEST_SUITE("View C ABI") {
         TestEnvironment env;
         const std::string pfw = env.get_dir() + "/hosts.pfw";
         {
-            std::ofstream o(pfw);
+            std::ofstream o(pfw.c_str());
             o << R"({"ph":"X","name":"op","cat":"io","pid":1,"tid":1,"ts":1,)"
                  R"("dur":1,"args":{"hosts":[4,5]}})"
               << "\n"
@@ -625,7 +626,7 @@ TEST_SUITE("View C ABI") {
         TestEnvironment env(50);
         std::string pfw = env.get_dir() + "/meta.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             ofs << R"({"name":"EH","cat":"dftracer","type":1,"pid":1,"tid":1,"ph":4,"args":{"hhash":"ab"}})"
                 << "\n";
             ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":1000,"dur":10,"args":{}})"
@@ -633,7 +634,7 @@ TEST_SUITE("View C ABI") {
         }
         std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dstd::fs::remove(pfw);
         std::string idx = determine_index_path(gz, "");
         StringSink sink;
         View::from_file(gz, idx).sink_json(sink).get();

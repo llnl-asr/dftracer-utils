@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <sys/wait.h>
 #include <testing_utilities.h>
@@ -38,7 +38,7 @@ std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
     const std::string plain_path =
         env.get_dir() + "/dlio_trace_" + std::to_string(id) + ".pfw";
     {
-        std::ofstream ofs(plain_path);
+        std::ofstream ofs(plain_path.c_str());
         if (!ofs.is_open()) return "";
         ofs << "[\n";
         std::uint64_t event_id = 1;
@@ -91,14 +91,14 @@ std::string create_dlio_pfw_gz(dftu_utils_test::TestEnvironment& env, int id,
     {
         gzFile gz = gzopen(gz_path.c_str(), "wb");
         if (!gz) return "";
-        std::ifstream ifs(plain_path, std::ios::binary);
+        std::ifstream ifs(plain_path.c_str(), std::ios::binary);
         std::stringstream ss;
         ss << ifs.rdbuf();
         const std::string body = ss.str();
         gzwrite(gz, body.data(), static_cast<unsigned>(body.size()));
         gzclose(gz);
     }
-    dftracer::utils::common::fs::remove(plain_path);
+    (void)dftracer::utils::dstd::fs::remove(plain_path);
     return gz_path;
 }
 
@@ -113,7 +113,7 @@ int run_binary(const std::string& binary,
 }
 
 std::string read_file(const std::string& path) {
-    std::ifstream ifs(path);
+    std::ifstream ifs(path.c_str());
     std::stringstream ss;
     ss << ifs.rdbuf();
     return ss.str();
@@ -162,7 +162,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         const int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out});
         // Non-zero exit and no YAML produced.
         CHECK(rc != 0);
-        CHECK_FALSE(dftracer::utils::common::fs::exists(out));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(out).value());
     }
 
     TEST_CASE(
@@ -182,7 +182,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         const int rc = run_binary(binary, {"-d", env.get_dir(), "-o", out,
                                            "--simulation-iterations", "2"});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::common::fs::exists(out));
+        REQUIRE(dftracer::utils::dstd::fs::exists(out).value());
 
         const std::string contents = read_file(out);
         // Spot-check the YAML schema. Don't pin specific distribution choice
@@ -220,12 +220,12 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             run_binary(binary, {"-d", env.get_dir(), "-o", out_default,
                                 "--simulation-iterations", "2"});
         CHECK(rc_default != 0);
-        CHECK_FALSE(dftracer::utils::common::fs::exists(out_default));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(out_default).value());
 
         // A YAML event map remaps the components onto the custom events.
         const std::string map_path = env.get_dir() + "/event_map.yaml";
         {
-            std::ofstream ofs(map_path);
+            std::ofstream ofs(map_path.c_str());
             REQUIRE(ofs.is_open());
             ofs << "fetch_block:\n"
                 << "  cat: " << labels.fetch_block_cat << "\n"
@@ -243,7 +243,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
                      "2", "--event-map", map_path});
         CHECK(rc == 0);
-        REQUIRE(dftracer::utils::common::fs::exists(out));
+        REQUIRE(dftracer::utils::dstd::fs::exists(out).value());
 
         const std::string contents = read_file(out);
         CHECK(contents.find("computation_time:") != std::string::npos);
@@ -271,7 +271,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
         // JSON is a YAML subset, so the same loader accepts a .json map.
         const std::string map_path = env.get_dir() + "/event_map.json";
         {
-            std::ofstream ofs(map_path);
+            std::ofstream ofs(map_path.c_str());
             REQUIRE(ofs.is_open());
             ofs << R"({"fetch_block":{"cat":")" << labels.fetch_block_cat
                 << R"(","name":")" << labels.fetch_block_name << R"("},)"
@@ -284,7 +284,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
                      "2", "--event-map", map_path});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::common::fs::exists(out));
+        CHECK(dftracer::utils::dstd::fs::exists(out).value());
     }
 
     TEST_CASE("malformed event map is rejected") {
@@ -299,7 +299,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
 
         const std::string map_path = env.get_dir() + "/bad_map.yaml";
         {
-            std::ofstream ofs(map_path);
+            std::ofstream ofs(map_path.c_str());
             REQUIRE(ofs.is_open());
             ofs << "fetch_block: {cat: dataloader, name: fetch.block\n";
         }
@@ -309,7 +309,7 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--simulation-iterations",
                      "2", "--event-map", map_path});
         CHECK(rc != 0);
-        CHECK_FALSE(dftracer::utils::common::fs::exists(out));
+        CHECK_FALSE(dftracer::utils::dstd::fs::exists(out).value());
     }
 
     TEST_CASE("respects --num-workers and --prefetch-factor") {
@@ -327,6 +327,6 @@ TEST_SUITE("DFTracerGenDlioConfig") {
             binary, {"-d", env.get_dir(), "-o", out, "--num-workers", "4",
                      "--prefetch-factor", "1", "--simulation-iterations", "2"});
         CHECK(rc == 0);
-        CHECK(dftracer::utils::common::fs::exists(out));
+        CHECK(dftracer::utils::dstd::fs::exists(out).value());
     }
 }

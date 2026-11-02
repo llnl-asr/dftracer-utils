@@ -20,9 +20,9 @@
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/coro/task.h>
@@ -265,7 +265,7 @@ void spill_cycle(const Sizes& s) {
 }
 
 void index_build(const Paths& p) {
-    common::fs::create_directories(p.index_dir);
+    require_ok(dstd::fs::create_directories(p.index_dir), "create_directories");
     index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
@@ -318,14 +318,14 @@ std::string trace_text(std::int64_t lines) {
 }
 
 Paths prepare(const std::string& dir, const Sizes& s) {
-    common::fs::remove_all(dir);
+    (void)dstd::fs::remove_all(dir);
     Paths p;
     p.trace = dir + "/trace/smoke.pfw.gz";
     write_gz(p.trace, trace_text(s.trace_lines));
     p.index_dir = dir + "/index";
     const std::string run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
-    common::fs::create_directories(run);
-    std::ofstream(run + "/summary.json")
+    require_ok(dstd::fs::create_directories(run), "create_directories");
+    std::ofstream((run + "/summary.json").c_str())
         << R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
            R"("nodes":1,"ppn":)"
         << RANKS << R"(,"sets":["set1"]})";
@@ -421,9 +421,8 @@ int main(int argc, char** argv) {
         return 2;
     }
     const Sizes sizes = smoke ? SMOKE_SIZES : FULL_SIZES;
-    const std::string dir =
-        (common::fs::temp_directory_path() / "memory_attribution_bench")
-            .string();
+    const std::string dir(
+        (dstd::fs::temp_directory() / "memory_attribution_bench").str());
     const Paths paths = prepare(dir, sizes);
 
     int failures = 0;

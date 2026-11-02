@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/coro/when_all.h>
@@ -44,7 +45,7 @@ void write_single_member(const std::string& path, const std::string& content) {
     GzipMemberCompressor comp;
     auto m = comp.compress_member(content.data(), content.size());
     REQUIRE(m.has_value());
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(m->data()),
               static_cast<std::streamsize>(m->size()));
 }
@@ -66,10 +67,10 @@ TEST_SUITE("member_cache_integration") {
     TEST_CASE("cached reads match uncached, and coalesce decodes") {
         const int n = 4000;
         auto dir = dftu_utils_test::make_unique_test_path("mcache");
-        common::fs::create_directories(dir);
-        const std::string src = (dir / "src.pfw.gz").string();
-        const std::string gz = (dir / "trace.pfw.gz").string();
-        const std::string index_dir = (dir / "idx").string();
+        REQUIRE(dstd::fs::create_directories(dir).has_value());
+        const std::string src = std::string((dir / "src.pfw.gz").str());
+        const std::string gz = std::string((dir / "trace.pfw.gz").str());
+        const std::string index_dir = std::string((dir / "idx").str());
 
         write_single_member(src, make_trace(n));
         run_coro([&](CoroScope&) -> coro::CoroTask<void> {
@@ -135,6 +136,6 @@ TEST_SUITE("member_cache_integration") {
         CHECK(decs < reqs);
         CHECK(decs * 2 < reqs);
 
-        common::fs::remove_all(dir);
+        (void)dstd::fs::remove_all(dir);
     }
 }

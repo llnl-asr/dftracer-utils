@@ -39,7 +39,7 @@ std::string write_rank(const std::string& dir, int file,
                        std::uint64_t& dur_sum) {
     const std::string pfw = dir + "/rank_" + std::to_string(file) + ".pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         const std::uint64_t pid = 1000 + static_cast<std::uint64_t>(file);
         std::uint64_t ts = BASE_TS;
         std::uint64_t id = 1;

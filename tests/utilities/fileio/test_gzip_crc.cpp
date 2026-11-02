@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/memory/manager.h>
@@ -16,7 +17,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
-#include <filesystem>
 #include <optional>
 #include <random>
 #include <string>
@@ -119,7 +119,7 @@ struct TempFile {
         REQUIRE(std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size());
         std::fclose(f);
     }
-    ~TempFile() { std::filesystem::remove_all(dir); }
+    ~TempFile() { (void)dstd::fs::remove_all(dir); }
 };
 
 // Whole-file reference decode with the system zlib.

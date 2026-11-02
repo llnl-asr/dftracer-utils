@@ -11,11 +11,11 @@
 //
 //   view_api_bench [events] [workdir] [case-substring]
 
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/expr.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dataframe/op.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/views/typed_rows.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -43,6 +43,20 @@ namespace scan = dftracer::utils::trace::views::detail::scan;
 
 namespace {
 
+/// Prints the error and exits with 1 when a setup call failed.
+template <class T>
+void require_ok(const dftracer::utils::dstd::Expected<
+                    T, dftracer::utils::dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    const auto& error = result.error();
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+                 static_cast<int>(error.name().size()), error.name().data(),
+                 static_cast<int>(error.message().size()),
+                 error.message().data());
+    std::exit(1);
+}
+
 constexpr int WARMUPS = 5;
 constexpr int RUNS = 20;
 constexpr double MAX_SLOWDOWN = 0.05;
@@ -56,7 +70,7 @@ T run(coro::CoroTask<T> t) {
 // string and a numeric arg, one gzip member per ~1 MB of lines.
 std::string write_trace(const std::string& dir, std::int64_t events) {
     const std::string gz = dir + "/bench.pfw.gz";
-    std::ofstream out(gz, std::ios::binary);
+    std::ofstream out(gz.c_str(), std::ios::binary);
     compress::GzipMemberCompressor comp(6);
     const char* names[] = {"read", "write", "open", "close", "fread", "fwrite"};
     const char* cats[] = {"POSIX", "POSIX", "POSIX", "POSIX", "STDIO", "STDIO"};
@@ -96,7 +110,7 @@ std::string write_trace(const std::string& dir, std::int64_t events) {
 // few chunks.
 std::string write_clustered(const std::string& dir, std::int64_t events) {
     const std::string gz = dir + "/clustered.pfw.gz";
-    std::ofstream out(gz, std::ios::binary);
+    std::ofstream out(gz.c_str(), std::ios::binary);
     compress::GzipMemberCompressor comp(6);
     std::string chunk;
     auto flush = [&] {
@@ -125,7 +139,7 @@ std::string write_clustered(const std::string& dir, std::int64_t events) {
 // The same records without a ph, read by path.
 std::string write_generic(const std::string& dir, std::int64_t records) {
     const std::string gz = dir + "/bench.ndjson.gz";
-    std::ofstream out(gz, std::ios::binary);
+    std::ofstream out(gz.c_str(), std::ios::binary);
     compress::GzipMemberCompressor comp(6);
     const char* ops[] = {"read", "write", "open", "close"};
     std::mt19937_64 rng(7);
@@ -238,9 +252,9 @@ int main(int argc, char** argv) {
         smoke ? 20'000 : (argc > 1 ? std::atoll(argv[1]) : 2'000'000);
     const std::string dir =
         !smoke && argc > 2 ? argv[2]
-                           : common::fs::temp_directory_path().string() +
+                           : std::string(dstd::fs::temp_directory().str()) +
                                  (smoke ? "/view_bench_smoke" : "/view_bench");
-    common::fs::create_directories(dir);
+    require_ok(dstd::fs::create_directories(dir), "create_directories");
     const std::string gz = write_trace(dir, events);
     std::printf("trace: %s (%lld events)\n", gz.c_str(),
                 static_cast<long long>(events));

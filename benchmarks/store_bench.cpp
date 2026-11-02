@@ -47,8 +47,10 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/dstd/error.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/little_endian.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/runtime/executor/executor.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -66,7 +68,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -553,8 +554,8 @@ std::vector<std::int64_t> fold_expectation(std::uint64_t scopes,
 
 /// A fresh directory under `base`, so concurrent runs never share one. The
 /// caller removes it.
-std::string make_temp_dir(const std::filesystem::path& base) {
-    const std::string pattern = (base / "dftu_store_bench_XXXXXX").string();
+std::string make_temp_dir(const dftracer::utils::dstd::Path& base) {
+    const std::string pattern((base / "dftu_store_bench_XXXXXX").str());
     std::vector<char> buffer(pattern.begin(), pattern.end());
     buffer.push_back('\0');
     const char* made = ::mkdtemp(buffer.data());
@@ -564,18 +565,19 @@ std::string make_temp_dir(const std::filesystem::path& base) {
 /// The bytes of every regular file under `dir`, at any depth.
 std::uint64_t directory_bytes(const std::string& dir) {
     std::uint64_t total = 0;
-    std::error_code error;
-    std::filesystem::recursive_directory_iterator iterator(dir, error);
-    if (error) return 0;
-    const std::filesystem::recursive_directory_iterator end;
-    while (iterator != end) {
-        std::error_code size_error;
-        if (iterator->is_regular_file(size_error)) {
-            const auto size = iterator->file_size(size_error);
-            if (!size_error) total += size;
-        }
-        iterator.increment(error);
-        if (error) break;
+    auto walked = dftracer::utils::dstd::fs::walk(
+        dir, [&](dftracer::utils::dstd::PathView p,
+                 dftracer::utils::dstd::fs::FileKind kind) {
+            if (kind == dftracer::utils::dstd::fs::FileKind::File) {
+                auto st = dftracer::utils::dstd::fs::stat(p);
+                if (st) total += st->size;
+            }
+            return dftracer::utils::dstd::fs::WalkAction::Continue;
+        });
+    if (!walked) {
+        std::cerr << "store_bench: cannot walk " << dir << ": "
+                  << to_std(walked.error()) << "\n";
+        std::exit(1);
     }
     return total;
 }
@@ -751,19 +753,21 @@ constexpr SpaceField SPACE_FIELDS[] = {
 /// Prints the space report of every data file of `dir`, then the sum and the
 /// bytes of its summary file: one `name value` per line.
 bool print_space(const std::string& dir) {
-    std::error_code error;
-    std::filesystem::directory_iterator entries(dir, error);
-    if (error) {
-        std::cerr << "store_bench: cannot list " << dir << ": "
-                  << error.message() << "\n";
+    std::vector<std::string> names;
+    auto handle = dftracer::utils::dstd::fs::Dir::open(dir);
+    if (!handle) {
+        std::cerr << "store_bench: cannot list " << dir << "\n";
         return false;
     }
-    std::vector<std::string> names;
-    for (const std::filesystem::directory_entry& entry : entries) {
-        std::error_code kind_error;
-        if (!entry.is_regular_file(kind_error)) continue;
-        if (entry.path().extension() != ".dfs") continue;
-        names.push_back(entry.path().filename().string());
+    auto listed = handle->entries();
+    if (!listed) return false;
+    for (const auto& entry : *listed) {
+        auto st = handle->stat(entry.name);
+        if (!st || st->kind != dftracer::utils::dstd::fs::FileKind::File)
+            continue;
+        if (dftracer::utils::dstd::PathView(entry.name).extension() != ".dfs")
+            continue;
+        names.push_back(std::string(entry.name));
     }
     std::sort(names.begin(), names.end());
     store::engine::SpaceReport sum;
@@ -784,11 +788,9 @@ bool print_space(const std::string& dir) {
     for (const SpaceField& field : SPACE_FIELDS) {
         std::cout << "sum." << field.name << " " << sum.*(field.value) << "\n";
     }
-    std::error_code size_error;
-    const std::uintmax_t summary_bytes = std::filesystem::file_size(
-        std::filesystem::path(dir) / store::engine::SUMMARY_FILE_NAME,
-        size_error);
-    std::cout << "summary_bytes " << (size_error ? 0 : summary_bytes) << "\n";
+    const auto summary_bytes = dftracer::utils::dstd::fs::file_size(
+        dftracer::utils::dstd::Path(dir) / store::engine::SUMMARY_FILE_NAME);
+    std::cout << "summary_bytes " << summary_bytes.value_or(0) << "\n";
     return true;
 }
 
@@ -830,30 +832,27 @@ struct Bench {
     }
 
     bool setup() {
-        std::error_code error;
-        std::filesystem::path base;
+        dftracer::utils::dstd::Path base;
         if (opt.smoke) {
-            base = std::filesystem::temp_directory_path(error);
-            if (error) {
-                fail("cannot find a temporary directory: " + error.message());
-                return false;
-            }
+            base = dftracer::utils::dstd::fs::temp_directory();
         } else {
             if (opt.dir.empty()) {
                 fail("--dir is required unless --smoke");
                 usage();
                 return false;
             }
-            base = opt.dir;
+            base = dftracer::utils::dstd::Path(opt.dir);
         }
-        std::filesystem::create_directories(base, error);
-        if (error) {
-            fail("cannot create " + base.string() + ": " + error.message());
+        const auto made_base =
+            dftracer::utils::dstd::fs::create_directories(base);
+        if (!made_base) {
+            fail("cannot create " + std::string(base.str()) + ": " +
+                 to_std(made_base.error()));
             return false;
         }
         root = make_temp_dir(base);
         if (root.empty()) {
-            fail("cannot create a directory under " + base.string());
+            fail("cannot create a directory under " + std::string(base.str()));
             return false;
         }
         auto chosen = store::engine::extent_size_for(root);
@@ -865,10 +864,7 @@ struct Bench {
         return true;
     }
 
-    void cleanup() {
-        std::error_code error;
-        std::filesystem::remove_all(root, error);
-    }
+    void cleanup() { (void)dftracer::utils::dstd::fs::remove_all(root); }
 
     std::string case_dir(const std::string& name) {
         return root + "/" + std::to_string(case_index++) + "-" + name;
@@ -1192,10 +1188,9 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     row.payload = workload.payload;
     row.keys = workload.total_keys;
     row.commits = workload.batches * workload.threads;
-    std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (error) {
-        fail("cannot create " + dir + ": " + error.message());
+    const auto made = dftracer::utils::dstd::fs::create_directories(dir);
+    if (!made) {
+        fail("cannot create " + dir + ": " + to_std(made.error()));
         return row;
     }
 
@@ -1278,7 +1273,7 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     if (keep_dir) {
         row.keep_dir = dir;
     } else {
-        std::filesystem::remove_all(dir, error);
+        (void)dftracer::utils::dstd::fs::remove_all(dir);
     }
     return row;
 }
@@ -1537,10 +1532,9 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     ScopeRow row;
     row.scopes = scopes;
     const std::string dir = case_dir("scopes-" + std::to_string(scopes));
-    std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (error) {
-        fail("cannot create " + dir + ": " + error.message());
+    const auto made = dftracer::utils::dstd::fs::create_directories(dir);
+    if (!made) {
+        fail("cannot create " + dir + ": " + to_std(made.error()));
         return row;
     }
     auto created = Writer::create(dir, *runtime.executor(), writer_options());
@@ -1618,7 +1612,7 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     row.ns_commit =
         static_cast<double>(commit_nanos) / static_cast<double>(opt.commits);
     writer.reset();
-    std::filesystem::remove_all(dir, error);
+    (void)dftracer::utils::dstd::fs::remove_all(dir);
     return row;
 }
 
@@ -1633,10 +1627,9 @@ NamespaceSpec Bench::fold_spec() const {
 
 bool Bench::write_fold(Runtime& runtime, const std::string& dir,
                        std::uint64_t scopes, std::uint64_t keys) {
-    std::error_code error;
-    std::filesystem::create_directories(dir, error);
-    if (error) {
-        fail("cannot create " + dir + ": " + error.message());
+    const auto made = dftracer::utils::dstd::fs::create_directories(dir);
+    if (!made) {
+        fail("cannot create " + dir + ": " + to_std(made.error()));
         return false;
     }
     auto created = Writer::create(dir, *runtime.executor(), writer_options());
@@ -1774,7 +1767,6 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
         scope_keys.push_back(ScopeKey::file(scope_name(0, scope)));
     }
     const std::string dir = case_dir("fold-" + std::to_string(scopes));
-    std::error_code error;
     bool ok = true;
     if (!write_fold(runtime, dir, scopes, keys)) {
         ok = false;
@@ -1825,7 +1817,7 @@ bool Bench::run_fold_case(Runtime& runtime, std::uint64_t scopes) {
             }
         }
     }
-    std::filesystem::remove_all(dir, error);
+    (void)dftracer::utils::dstd::fs::remove_all(dir);
     return ok;
 }
 
@@ -1842,8 +1834,8 @@ bool Bench::run_kept() {
             const std::string name = mode + "-" + std::to_string(threads) +
                                      "-" + std::to_string(opt.payload_mib);
             const std::string dir = base + "/" + name;
-            std::error_code error;
-            const bool exists = std::filesystem::exists(dir, error);
+            const bool exists =
+                dftracer::utils::dstd::fs::exists(dir).value_or(false);
             if (keep && exists) {
                 fail(dir + " exists; --keep writes only a new directory");
                 return false;
@@ -1894,9 +1886,8 @@ bool Bench::run() {
             }
             if (do_query) {
                 run_query_case(workload, query_dir);
-                std::error_code error;
                 if (!query_dir.empty()) {
-                    std::filesystem::remove_all(query_dir, error);
+                    (void)dftracer::utils::dstd::fs::remove_all(query_dir);
                 }
             }
         }

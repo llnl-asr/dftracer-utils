@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -109,9 +110,8 @@ std::vector<std::string> replay_args(const std::string& in, const std::string&,
 }
 
 std::string canonical_or_empty(const std::string& path) {
-    std::error_code ec;
-    auto p = dftracer::utils::common::fs::weakly_canonical(path, ec);
-    return ec ? std::string() : p.string();
+    auto p = dftracer::utils::dstd::fs::weakly_canonical(path);
+    return p.has_value() ? std::string(p->str()) : std::string();
 }
 
 struct RunCounts {
@@ -130,8 +130,7 @@ RunCounts run_once(const std::string& binary,
                    const std::vector<std::string>& inputs) {
     RunCounts rc;
     rc.per_input.resize(inputs.size());
-    std::error_code ec;
-    dftracer::utils::common::fs::remove(log_path, ec);
+    (void)dftracer::utils::dstd::fs::remove(log_path);
 
     dftu_utils_test::set_test_library_path(binary);
     ::setenv(PRELOAD_VAR, DFTRACER_UTILS_TEST_INTERPOSE_PATH, 1);
@@ -141,7 +140,7 @@ RunCounts run_once(const std::string& binary,
     ::unsetenv(PRELOAD_VAR);
     ::unsetenv("DFTRACER_UTILS_TEST_SYSCALL_LOG");
 
-    std::ifstream in(log_path);
+    std::ifstream in(log_path.c_str());
     if (!in) return rc;
     rc.log_found = true;
 
@@ -161,7 +160,7 @@ RunCounts run_once(const std::string& binary,
         const std::string path = line.substr(t2 + 1);
         if (path.empty() || path[0] != '/') continue;
         if (cls == "stat" &&
-            dftracer::utils::common::fs::path(path).filename() == "schemas")
+            dftracer::utils::dstd::Path(path).view().filename() == "schemas")
             rc.schema_lookups += n;
         auto it = canon_cache.find(path);
         if (it == canon_cache.end())
@@ -231,7 +230,8 @@ void run_tool(const Tool& tool) {
     if (tool.name == "comparator") roots.push_back(in + "_variant");
     std::vector<std::string> inputs;
     for (const auto& root : roots) {
-        dftracer::utils::common::fs::create_directories(root + "/sub");
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(root + "/sub")
+                    .has_value());
         for (int i = 0; i < 4; ++i)
             inputs.push_back(root + "/trace_" + std::to_string(i) + ".pfw.gz");
         inputs.push_back(root + "/sub/trace_4.pfw.gz");
@@ -243,8 +243,8 @@ void run_tool(const Tool& tool) {
 
     const std::string idx = dir.file("idx");
     const std::string out = dir.file("out");
-    dftracer::utils::common::fs::create_directories(idx);
-    dftracer::utils::common::fs::create_directories(out);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(idx).has_value());
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(out).has_value());
     const auto args = tool.args(in, idx, out);
 
     const auto cold =
@@ -266,8 +266,8 @@ TEST_CASE("a cold index build looks for the schemas folder once per root") {
     dftu_utils_test::ScopedTestDir dir("input_syscalls_schemas");
     const std::string in = dir.file("in");
     const std::string idx = dir.file("idx");
-    dftracer::utils::common::fs::create_directories(in);
-    dftracer::utils::common::fs::create_directories(idx);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(idx).has_value());
     constexpr int FILES = 24;
     std::vector<std::string> inputs;
     for (int i = 0; i < FILES; ++i) {

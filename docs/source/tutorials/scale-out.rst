@@ -68,18 +68,20 @@ such as across MPI ranks.
 
 .. code-block:: cpp
 
+   #include <dftracer/utils/dstd/fs.h>
    #include <dftracer/utils/trace/views/sharded_view.h>
 
    #include <cstdint>
    #include <cstdio>
-   #include <filesystem>
+   #include <string>
 
+   using namespace dftracer::utils;
    using namespace dftracer::utils::trace::views;
 
    int main() {
        write_shard_set("set/.dftindex",
-                       {std::filesystem::absolute("shard-a").string(),
-                        std::filesystem::absolute("shard-b").string()});
+                       {std::string(dstd::fs::absolute("shard-a").value().str()),
+                        std::string(dstd::fs::absolute("shard-b").value().str())});
 
        ShardedView sv = ShardedView::from_manifest("set/.dftindex");
 

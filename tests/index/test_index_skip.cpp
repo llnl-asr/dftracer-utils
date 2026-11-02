@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <unistd.h>
@@ -45,14 +46,13 @@ IndexRun run_index(const std::string& dir, bool force) {
 
 std::vector<std::string> index_files(const std::string& dir) {
     std::vector<std::string> files;
-    const dftracer::utils::common::fs::path root =
-        dftracer::utils::common::fs::path(dir) / ".dftindex";
-    if (!dftracer::utils::common::fs::exists(root)) return files;
-    for (const auto& entry :
-         dftracer::utils::common::fs::recursive_directory_iterator(root))
-        if (entry.is_regular_file())
-            files.push_back(entry.path().string() + " " +
-                            std::to_string(entry.file_size()));
+    const dftracer::utils::dstd::Path root =
+        dftracer::utils::dstd::Path(dir) / ".dftindex";
+    if (!dftracer::utils::dstd::fs::exists(root).value()) return files;
+    for (const auto& entry : dftu_utils_test::walk_dir(root))
+        if ((entry.kind == dftracer::utils::dstd::fs::FileKind::File))
+            files.push_back(std::string(entry.path.str()) + " " +
+                            std::to_string(entry.size));
     std::sort(files.begin(), files.end());
     return files;
 }
@@ -65,7 +65,9 @@ void write_trace(dftu_utils_test::TestEnvironment& env, int id,
                  int num_events) {
     auto made = env.create_dft_test_gzip_file(num_events);
     REQUIRE(!made.empty());
-    dftracer::utils::common::fs::rename(made, trace_path(env.get_dir(), id));
+    REQUIRE(
+        dftracer::utils::dstd::fs::rename(made, trace_path(env.get_dir(), id))
+            .has_value());
 }
 
 }  // namespace
@@ -101,9 +103,10 @@ TEST_CASE("a second dftracer_index skips files that did not change") {
 
     SUBCASE("a file with a newer mtime is indexed again") {
         const std::string path = trace_path(dir, 2);
-        dftracer::utils::common::fs::last_write_time(
-            path, dftracer::utils::common::fs::last_write_time(path) +
-                      std::chrono::seconds(60));
+        REQUIRE(dftracer::utils::dstd::fs::set_mtime_ns(
+                    path, dftracer::utils::dstd::fs::mtime_ns(path).value() +
+                              60'000'000'000ULL)
+                    .has_value());
         const auto second = run_index(dir, false);
         CHECK(second.exit_code == 0);
         CHECK(second.indexed == 1);

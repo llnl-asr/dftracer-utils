@@ -36,12 +36,12 @@ entry found.
 .. code-block:: cpp
 
    struct DirectoryScannerUtilityInput {
-       common::fs::path path;
+       dstd::Path path;
        bool recursive = false;
        bool populate_size = true;  // also stats mtime; costs one extra stat() per file
 
        DirectoryScannerUtilityInput() = default;
-       explicit DirectoryScannerUtilityInput(common::fs::path p, bool rec = false,
+       explicit DirectoryScannerUtilityInput(dstd::Path p, bool rec = false,
                                              bool with_size = true);
    };
 
@@ -50,7 +50,7 @@ entry found.
 .. code-block:: cpp
 
    struct FileEntry {
-       common::fs::path path;
+       dstd::Path path;
        std::size_t size = 0;
        std::uint64_t mtime = 0;  // Unix seconds; 0 when not populated
        bool is_directory = false;

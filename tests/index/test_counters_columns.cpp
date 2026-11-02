@@ -4,7 +4,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/prune.h>
@@ -55,7 +55,7 @@ constexpr std::size_t CHECKPOINT_SIZE = 2048;
 std::string write_trace(const std::string& dir) {
     const std::string pfw = dir + "/counters.pfw";
     {
-        std::ofstream out(pfw);
+        std::ofstream out(pfw.c_str());
         for (int i = 0; i < 24; ++i) {
             const std::string host = (i % 2 == 0) ? "h1" : "h2";
             const std::uint64_t ts =
@@ -86,7 +86,7 @@ std::string write_trace(const std::string& dir) {
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
         pfw, gz, CHECKPOINT_SIZE));
-    common::fs::remove(pfw);
+    (void)dstd::fs::remove(pfw);
     return gz;
 }
 

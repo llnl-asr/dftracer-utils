@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>

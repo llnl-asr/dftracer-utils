@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
 #include <dftracer/utils/common/filesystem_info.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/store/extent_size.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
@@ -39,19 +40,17 @@ struct ExtentBytesOverride {
 };
 
 struct TempDir {
-    dftracer::utils::common::fs::path path;
+    dftracer::utils::dstd::Path path;
     TempDir() {
-        path = dftracer::utils::common::fs::temp_directory_path() /
+        path = dftracer::utils::dstd::fs::temp_directory() /
                ("dftu_store_extent_size_" + std::to_string(::getpid()));
-        dftracer::utils::common::fs::remove_all(path);
-        dftracer::utils::common::fs::create_directories(path);
+        REQUIRE(dftracer::utils::dstd::fs::remove_all(path).has_value());
+        REQUIRE(
+            dftracer::utils::dstd::fs::create_directories(path).has_value());
     }
     TempDir(const TempDir&) = delete;
     TempDir& operator=(const TempDir&) = delete;
-    ~TempDir() {
-        std::error_code ec;
-        dftracer::utils::common::fs::remove_all(path, ec);
-    }
+    ~TempDir() { (void)dftracer::utils::dstd::fs::remove_all(path); }
 };
 
 std::uint32_t chosen(std::size_t stripe_size,
@@ -123,8 +122,9 @@ TEST_CASE(
     "default") {
     TempDir dir;
     const std::size_t stripe =
-        dftracer::utils::common::lustre_stripe(dir.path.string()).size;
-    auto result = store::engine::extent_size_for(dir.path.string());
+        dftracer::utils::common::lustre_stripe(std::string(dir.path.str()))
+            .size;
+    auto result = store::engine::extent_size_for(dir.path.str());
     REQUIRE(result.has_value());
     if (stripe == 0) {
         CHECK(*result == ONE_MIB);
@@ -139,16 +139,16 @@ TEST_CASE(
     TempDir dir;
     {
         ExtentBytesOverride override_value("262144");
-        auto result = store::engine::extent_size_for(dir.path.string());
+        auto result = store::engine::extent_size_for(dir.path.str());
         REQUIRE(result.has_value());
         CHECK(*result == 262144);
     }
     {
-        auto result = store::engine::extent_size_for(dir.path.string());
+        auto result = store::engine::extent_size_for(dir.path.str());
         REQUIRE(result.has_value());
-        CHECK(*result ==
-              chosen(dftracer::utils::common::lustre_stripe(dir.path.string())
-                         .size));
+        CHECK(*result == chosen(dftracer::utils::common::lustre_stripe(
+                                    std::string(dir.path.str()))
+                                    .size));
     }
 }
 
@@ -158,10 +158,10 @@ TEST_CASE(
     TempDir dir;
     {
         ExtentBytesOverride override_value("abc");
-        check_override_error(store::engine::extent_size_for(dir.path.string()));
+        check_override_error(store::engine::extent_size_for(dir.path.str()));
     }
     {
         ExtentBytesOverride override_value("5000");
-        check_override_error(store::engine::extent_size_for(dir.path.string()));
+        check_override_error(store::engine::extent_size_for(dir.path.str()));
     }
 }

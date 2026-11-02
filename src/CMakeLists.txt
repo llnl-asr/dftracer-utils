@@ -9,7 +9,6 @@ need_zlib()
 need_libdeflate()
 need_zstd()
 need_argparse()
-need_ghc_filesystem()
 need_simdjson()
 need_readerwriterqueue()
 need_concurrentqueue()
@@ -542,7 +541,6 @@ create_library(
   dftracer_utils_memory::static
   dftracer_utils_dstd::static
   PUBLIC_LINK_LIBRARIES
-  ghc_filesystem
   Threads::Threads
   PUBLIC_INCLUDE_DIRS
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
@@ -569,7 +567,6 @@ foreach(variant objects shared static)
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
 
-    add_stdfs_if_needed(${VARIANT_TARGET})
 
     if(DFTRACER_UTILS_HAVE_LUSTREAPI)
       target_link_libraries(${VARIANT_TARGET}
@@ -611,7 +608,6 @@ create_library(
   dftracer_utils_dstd::static
   dftracer_utils_common::static
   PUBLIC_LINK_LIBRARIES
-  ghc_filesystem
   Threads::Threads
   readerwriterqueue
   concurrentqueue
@@ -647,8 +643,6 @@ foreach(variant objects shared static)
     target_link_libraries(${VARIANT_TARGET}
                           PUBLIC ${CMAKE_DL_LIBS})
 
-    # Add stdfs if needed
-    add_stdfs_if_needed(${VARIANT_TARGET})
 
     # mpi_utils.cpp is part of the runtime library sources when MPI is enabled,
     # so runtime itself needs the MPI include path and runtime. Without this the
@@ -747,7 +741,6 @@ foreach(variant objects shared static)
     # The crc of every page, record and block (crc.cpp).
     link_libdeflate(${VARIANT_TARGET})
     link_zstd(${VARIANT_TARGET})
-    add_stdfs_if_needed(${VARIANT_TARGET})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_store_objects)
     elseif(COVERAGE_LINK_OPTIONS)
@@ -902,7 +895,6 @@ foreach(variant objects shared static)
   set(VARIANT_UPPER ${DFTU_LINK_TYPE_${variant}})
   if(TARGET ${VARIANT_TARGET})
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
-    add_stdfs_if_needed(${VARIANT_TARGET})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_json_objects)
     elseif(COVERAGE_LINK_OPTIONS)
@@ -994,7 +986,6 @@ foreach(variant objects shared static)
       endif()
     endif()
     link_simdjson(${VARIANT_TARGET} ${VARIANT_UPPER})
-    add_stdfs_if_needed(${VARIANT_TARGET})
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_duql_objects)
       target_compile_definitions(dftracer_utils_duql_objects
@@ -1095,7 +1086,6 @@ foreach(variant objects shared static)
     endif()
     target_link_libraries(${VARIANT_TARGET}
                           PRIVATE $<BUILD_INTERFACE:utf8proc_static>)
-    add_stdfs_if_needed(${VARIANT_TARGET})
     # Spill files compress each morsel with zstd (spill.cpp).
     link_zstd(${VARIANT_TARGET})
     if(DFTRACER_UTILS_ENABLE_ARROW)
@@ -1186,8 +1176,6 @@ foreach(variant objects shared static)
                             PRIVATE $<BUILD_INTERFACE:dftracer_utils_hs>)
     endif()
 
-    # Add stdfs if needed
-    add_stdfs_if_needed(${VARIANT_TARGET})
 
     if(variant STREQUAL "objects")
       target_set_warnings(dftracer_utils_utilities_objects)
@@ -1758,7 +1746,6 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
       ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                           ${CMAKE_CURRENT_SOURCE_DIR})
 
-    add_stdfs_if_needed(${bin_exec})
 
     target_set_warnings(${bin_exec})
 
@@ -1889,7 +1876,6 @@ if(DFTRACER_UTILS_BUILD_BINARIES)
     target_include_directories(
       ${bin_exec} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                           ${CMAKE_CURRENT_SOURCE_DIR})
-    add_stdfs_if_needed(${bin_exec})
     target_set_warnings(${bin_exec})
 
     if(DFTRACER_UTILS_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -1928,7 +1914,6 @@ if(DFTRACER_UTILS_BUILD_EXAMPLES)
     target_include_directories(${example_name}
                                PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
-    add_stdfs_if_needed(${example_name})
 
     target_set_warnings(${example_name})
 
@@ -1984,7 +1969,6 @@ if(DFTRACER_UTILS_BUILD_BENCHMARKS)
       ${bench_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                             ${CMAKE_CURRENT_SOURCE_DIR}
                             ${CMAKE_CURRENT_SOURCE_DIR}/../benchmarks)
-    add_stdfs_if_needed(${bench_name})
     target_set_warnings(${bench_name})
   endforeach()
 

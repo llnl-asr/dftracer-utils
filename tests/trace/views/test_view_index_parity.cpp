@@ -5,6 +5,7 @@
 // Every cell that differs is reported.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_agg_engine.h>
@@ -156,16 +157,16 @@ struct Fixture {
         REQUIRE(env.is_valid());
         for (int i = 0; i < FILES; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            dftracer::utils::common::fs::create_directories(dir);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
             const std::string plain = dir + "/t.pfw";
             {
-                std::ofstream o(plain);
+                std::ofstream o(plain.c_str());
                 write_trace(o, i);
             }
             const std::string out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            dftracer::utils::common::fs::remove(plain);
+            (void)dstd::fs::remove(plain);
             gz.push_back(out);
         }
         ix::IndexerOptions o;
@@ -184,7 +185,7 @@ struct Fixture {
     View view() const { return View::from_files(files()); }
 
     void delete_traces() const {
-        for (const auto& g : gz) dftracer::utils::common::fs::remove(g);
+        for (const auto& g : gz) dstd::fs::remove(g).has_value();
     }
 };
 
@@ -520,7 +521,7 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(env.is_valid());
         const std::string plain = env.get_dir() + "/preagg.pfw";
         {
-            std::ofstream o(plain);
+            std::ofstream o(plain.c_str());
             o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,"tid":2,)"
                  R"("ts":1000,"args":{"count":4,"dur_sum":40,"dur_min":5,)"
                  R"("dur_max":20,"ret_sum":4096,"offset_sum":8192}})"
@@ -528,7 +529,7 @@ TEST_SUITE("ViewIndexParity") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         ix::IndexerOptions o;
         o.index_dir = env.get_dir() + "/idx";
         ix::Indexer::open({gz}, o).build();
@@ -563,10 +564,10 @@ TEST_SUITE("ViewIndexParity") {
         std::vector<std::string> gz;
         for (int i = 0; i < 2; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            dftracer::utils::common::fs::create_directories(dir);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
             const std::string plain = dir + "/t.pfw";
             {
-                std::ofstream o(plain);
+                std::ofstream o(plain.c_str());
                 for (int k = 0; k < 4; ++k)
                     o << R"({"ph":"C","name":"ctr","cat":"sys","pid":7,)"
                       << R"("tid":1,"ts":)"
@@ -578,7 +579,7 @@ TEST_SUITE("ViewIndexParity") {
             }
             const std::string out = plain + ".gz";
             REQUIRE(compress_file_to_gzip(plain, out));
-            dftracer::utils::common::fs::remove(plain);
+            (void)dstd::fs::remove(plain);
             gz.push_back(out);
         }
         ix::IndexerOptions opts;
@@ -605,7 +606,7 @@ TEST_SUITE("ViewIndexParity") {
               doctest::Approx(2 * FILE_GAP + 200 + INTERVAL_US));
         CHECK(std::stod(ends.at("b|")) ==
               doctest::Approx(2 * FILE_GAP + 300 + INTERVAL_US));
-        for (const auto& g : gz) dftracer::utils::common::fs::remove(g);
+        for (const auto& g : gz) dstd::fs::remove(g).has_value();
         check_same_cells(view_cells(indexed, keys, columns, count), counts);
         check_same_cells(view_cells(indexed, keys, columns, max_te), ends);
     }
@@ -617,7 +618,7 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(env.is_valid());
         const std::string plain = env.get_dir() + "/t.pfw";
         {
-            std::ofstream o(plain);
+            std::ofstream o(plain.c_str());
             for (int k = 0; k < 2; ++k)
                 o << R"({"ph":"C","name":"pwrite","cat":"STDIO","pid":7,)"
                   << R"("tid":2,"ts":)" << (1000 + k * 100)
@@ -630,10 +631,10 @@ TEST_SUITE("ViewIndexParity") {
         }
         const std::string gz = plain + ".gz";
         REQUIRE(compress_file_to_gzip(plain, gz));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         const std::string index_dir = env.get_dir() + "/idx";
         const std::string index = determine_index_path(gz, index_dir);
-        REQUIRE_FALSE(dftracer::utils::common::fs::exists(index));
+        REQUIRE_FALSE(dstd::fs::exists(index).value());
 
         const std::vector<ViewFile> files{{gz, index}};
         const std::vector<GroupKey> keys{GroupKey::name()};
@@ -656,7 +657,7 @@ TEST_SUITE("ViewIndexParity") {
             {"max_dur", {{"pwrite|", 20}, {"read|", 30}}}};
 
         const df::DataFrame first = ask();
-        CHECK(dftracer::utils::common::fs::exists(index));
+        CHECK(dstd::fs::exists(index).value());
         const df::DataFrame next = ask();
         for (const auto& [column, cells] : want) {
             INFO(column);
@@ -675,7 +676,7 @@ TEST_SUITE("ViewIndexParity") {
         REQUIRE(env.is_valid());
         const std::string plain = env.get_dir() + "/t.pfw";
         {
-            std::ofstream o(plain);
+            std::ofstream o(plain.c_str());
             for (int i = 0; i < 12; ++i)
                 o << R"({"ph":"X","name":")" << (i % 3 == 0 ? "read" : "write")
                   << R"(","cat":"POSIX",)"
@@ -685,13 +686,13 @@ TEST_SUITE("ViewIndexParity") {
         }
         const std::string junk = env.get_dir() + "/junk.idx";
         {
-            std::ofstream o(junk);
+            std::ofstream o(junk.c_str());
             o << "not a database\n";
         }
         const std::string gz = plain + ".gz";
         REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
             plain, gz, MEMBER_BYTES));
-        dftracer::utils::common::fs::remove(plain);
+        (void)dstd::fs::remove(plain);
         ix::IndexerOptions opts;
         opts.index_dir = env.get_dir() + "/idx";
         opts.checkpoint_size = MEMBER_BYTES;
@@ -721,16 +722,16 @@ TEST_SUITE("ViewIndexParity") {
         std::vector<std::string> gz;
         for (int i = 0; i < 2; ++i) {
             const std::string dir = env.get_dir() + "/f" + std::to_string(i);
-            dftracer::utils::common::fs::create_directories(dir);
+            REQUIRE(dstd::fs::create_directories(dir).has_value());
             const std::string plain = dir + "/t.pfw";
             {
-                std::ofstream o(plain);
+                std::ofstream o(plain.c_str());
                 write_trace(o, i);
             }
             const std::string out = plain + ".gz";
             REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(
                 plain, out, MEMBER_BYTES));
-            dftracer::utils::common::fs::remove(plain);
+            (void)dstd::fs::remove(plain);
             gz.push_back(out);
         }
         ix::IndexerOptions opts;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/statistics/detail_stats_view.h>
@@ -52,7 +53,7 @@ TEST_SUITE("detail stats via View") {
         REQUIRE(env.is_valid());
         const std::string pfw = env.get_dir() + "/instants.pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             for (int i = 0; i < 5; ++i)
                 ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,)"
                     << R"("tid":1,"ts":)" << (1000 + i * 100) << R"(,"dur":)"
@@ -64,7 +65,7 @@ TEST_SUITE("detail stats via View") {
         }
         const std::string gz = pfw + ".gz";
         dftu_utils_test::compress_file_to_gzip(pfw, gz);
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
         const std::string idx = determine_index_path(gz, "");
 
         std::vector<std::string> group_by{"name"};

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/python/gzip_sink.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -16,7 +17,7 @@ namespace {
 
 // Inflates a multi-member gzip; returns the bytes and each member's last byte.
 std::string decode(const std::string& path, std::string& last_bytes) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path.c_str(), std::ios::binary);
     std::string gz((std::istreambuf_iterator<char>(in)),
                    std::istreambuf_iterator<char>());
     z_stream zs{};
@@ -48,8 +49,8 @@ std::string decode(const std::string& path, std::string& last_bytes) {
 
 TEST_CASE("GzipSink - pieces split mid-line") {
     auto dir = dftu_utils_test::make_unique_test_path("dftracer_test_sink");
-    dftracer::utils::common::fs::create_directories(dir);
-    const std::string path = (dir / "out.pfw.gz").string();
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
+    const std::string path = std::string((dir / "out.pfw.gz").str());
 
     std::string expected;
     for (int i = 0; i < 9000; ++i) {
@@ -68,5 +69,5 @@ TEST_CASE("GzipSink - pieces split mid-line") {
     CHECK(decode(path, last) == expected);
     REQUIRE(last.size() >= 2);
     for (std::size_t i = 0; i + 1 < last.size(); ++i) CHECK(last[i] == '\n');
-    dftracer::utils::common::fs::remove_all(dir);
+    (void)dftracer::utils::dstd::fs::remove_all(dir);
 }

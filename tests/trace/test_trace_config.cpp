@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/trace_config.h>
 #include <dftracer/utils/trace/views/view.h>
@@ -39,11 +39,11 @@ std::string end_event(std::uint64_t pid, bool with_args) {
 std::string make_gz(TestEnvironment& env, const std::string& body) {
     std::string pfw = env.get_dir() + "/tc.pfw";
     {
-        std::ofstream(pfw) << body;
+        std::ofstream(pfw.c_str()) << body;
     }
     std::string gz = pfw + ".gz";
     compress_file_to_gzip_multimember(pfw, gz, 512);
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 

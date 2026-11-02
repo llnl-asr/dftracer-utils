@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/file_admission.h>
 #include <dftracer/utils/index/build/index_fold_driver.h>
@@ -61,12 +62,12 @@ std::string write_trace(const std::string& dir, const std::string& name,
     out << "]\n";
     const auto plain = dir + "/" + name + ".pfw";
     {
-        std::ofstream(plain) << out.str();
+        std::ofstream(plain.c_str()) << out.str();
     }
     const auto gz = plain + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip_multimember(plain, gz,
                                                                member_bytes));
-    common::fs::remove(plain);
+    (void)dstd::fs::remove(plain);
     return gz;
 }
 
@@ -144,7 +145,7 @@ TEST_SUITE("IndexBuildMemory") {
         const std::uint64_t held =
             (build::FileAdmission::estimate(
                  build::FileAdmission::plaintext_estimate(
-                     0, common::fs::file_size(files[0])))
+                     0, dstd::fs::file_size(files[0]).value()))
                  .total +
              HELD_QUANTUM - 1) /
             HELD_QUANTUM * HELD_QUANTUM;
@@ -181,7 +182,7 @@ TEST_SUITE("IndexBuildMemory") {
                 CAPTURE(file);
                 CAPTURE(budget);
                 const auto tag =
-                    common::fs::path(file).stem().string() +
+                    std::string(dstd::PathView(file).stem()) +
                     std::to_string(budget == memory::NO_SPILL_BUDGET);
                 const auto serial_dir = env.get_dir() + "/serial" + tag;
                 const auto ahead_dir = env.get_dir() + "/ahead" + tag;
@@ -263,7 +264,8 @@ TEST_SUITE("IndexBuildMemory") {
             CHECK(a.size() == b.size());
             CHECK(a == b);
             CHECK_FALSE(
-                common::fs::exists(index_of(files[0], small_dir) + ".spill"));
+                dstd::fs::exists(index_of(files[0], small_dir) + ".spill")
+                    .value());
         }
     }
 

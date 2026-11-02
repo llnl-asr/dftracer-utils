@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
 #include <dftracer/utils/dstd/map.h>
 #include <dftracer/utils/dstd/string.h>
@@ -51,7 +51,7 @@ constexpr std::uint64_t ONE_SECOND_US = 1000000ULL;
 constexpr std::uint64_t FIVE_SECONDS_US = 5000000ULL;
 
 String read_text(const std::string& path) {
-    std::ifstream ifs(path, std::ios::binary);
+    std::ifstream ifs(path.c_str(), std::ios::binary);
     std::stringstream ss;
     ss << ifs.rdbuf();
     return String(ss.view());
@@ -61,7 +61,7 @@ String read_text(const std::string& path) {
 // reference text (a failure when the file is missing).
 String reference(const char* file, StringView produced) {
     if (const char* dir = std::getenv(RECORD_ENV)) {
-        dftracer::utils::common::fs::create_directories(dir);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
         std::ofstream ofs(std::string(dir) + "/" + file, std::ios::binary);
         ofs << produced;
         return String();
@@ -93,7 +93,7 @@ std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
                         bool variant) {
     const std::string pfw = dir + "/rank_" + std::to_string(file) + ".pfw";
     {
-        std::ofstream ofs(pfw);
+        std::ofstream ofs(pfw.c_str());
         Rng rng(seed * 1000 + static_cast<std::uint64_t>(file));
         const std::uint64_t pid = 1000 + static_cast<std::uint64_t>(file);
         const std::uint64_t step = SPAN_US / EVENTS_PER_FILE;
@@ -184,17 +184,17 @@ std::string write_trace(const std::string& dir, int file, std::uint64_t seed,
     }
     const std::string gz = pfw + ".gz";
     REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, gz));
-    dftracer::utils::common::fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
     return gz;
 }
 
 // A seeded jitter keeps the fitted distributions from being degenerate.
 void write_dlio_traces(const std::string& dir) {
-    dftracer::utils::common::fs::create_directories(dir);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(dir).has_value());
     for (int file = 0; file < 2; ++file) {
         const std::string pfw = dir + "/dlio_" + std::to_string(file) + ".pfw";
         {
-            std::ofstream ofs(pfw);
+            std::ofstream ofs(pfw.c_str());
             Rng rng(77 + static_cast<std::uint64_t>(file));
             ofs << "[\n";
             std::uint64_t id = 1;
@@ -230,7 +230,7 @@ void write_dlio_traces(const std::string& dir) {
             ofs << "]\n";
         }
         REQUIRE(dftu_utils_test::compress_file_to_gzip(pfw, pfw + ".gz"));
-        dftracer::utils::common::fs::remove(pfw);
+        (void)dftracer::utils::dstd::fs::remove(pfw);
     }
 }
 
@@ -245,8 +245,10 @@ struct Fixtures {
         baseline_dir = root.str() + "/baseline";
         variant_dir = root.str() + "/variant";
         dlio_dir = root.str() + "/dlio";
-        dftracer::utils::common::fs::create_directories(baseline_dir);
-        dftracer::utils::common::fs::create_directories(variant_dir);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(baseline_dir)
+                    .has_value());
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(variant_dir)
+                    .has_value());
         for (int f = 0; f < FILES_PER_SET; ++f) {
             baseline_files.push_back(write_trace(baseline_dir, f, 11, false));
             write_trace(variant_dir, f, 29, true);

@@ -4,6 +4,7 @@
 // distinct arg key in the batch - the cost this feature exists to avoid.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/plugins.h>
@@ -15,7 +16,6 @@
 #include <testing_utilities.h>
 #include <utilities/plugins/test_plugin_common.h>
 
-#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -27,7 +27,6 @@ using ViewFile = dftracer::utils::trace::views::ViewFile;
 using test_plugin_common::index_trace;
 using test_plugin_common::result_text;
 using test_plugin_common::run_set;
-namespace fs = std::filesystem;
 
 #ifndef READS_PROJECTION_PLUGIN_PATH
 #error "READS_PROJECTION_PLUGIN_PATH must be defined by CMake"
@@ -42,7 +41,7 @@ constexpr int NUM_EVENTS = 20;
 // undeclared plugin's frame has five arg columns, not one.
 ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
     const std::string pfw = env.get_dir() + "/reads_projection.pfw";
-    std::ofstream ofs(pfw);
+    std::ofstream ofs(pfw.c_str());
     for (int i = 0; i < NUM_EVENTS; ++i) {
         ofs << R"({"ph":"X","name":"read","cat":"POSIX","pid":1,"tid":1,"ts":)"
             << (1000 + i * 100) << R"(,"dur":)" << (10 + i)
@@ -57,7 +56,7 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 
     const std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    fs::remove(pfw);
+    (void)dftracer::utils::dstd::fs::remove(pfw);
 
     return index_trace(gz);
 }
@@ -124,13 +123,13 @@ TEST_CASE("a path-decoded file hands the plugin its own columns") {
     REQUIRE(env.is_valid());
     const std::string plain = env.get_dir() + "/generic.jsonl";
     {
-        std::ofstream ofs(plain);
+        std::ofstream ofs(plain.c_str());
         for (int i = 0; i < NUM_EVENTS; ++i)
             ofs << R"({"x":)" << i << R"(,"k":"a"})" << "\n";
     }
     const std::string gz = plain + ".gz";
     dftu_utils_test::compress_file_to_gzip(plain, gz);
-    fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     dftracer::utils::index::Indexer::open({gz}).build();
     using dftracer::utils::trace::internal::determine_index_path;
     View view = View::from_files({ViewFile{gz, determine_index_path(gz, "")}});

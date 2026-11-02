@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
@@ -29,16 +30,16 @@ using Catalog = std::map<std::string, std::tuple<int, int, std::uint64_t>>;
 std::string write_gz(TestEnvironment& env, const std::string& dir,
                      const std::vector<std::string>& lines) {
     const std::string d = env.get_dir() + "/" + dir;
-    dftracer::utils::common::fs::create_directories(d);
+    REQUIRE(dftracer::utils::dstd::fs::create_directories(d).has_value());
     const std::string plain = d + "/t.ndjson";
     {
-        std::ofstream out(plain);
+        std::ofstream out(plain.c_str());
         for (const auto& l : lines) out << l << "\n";
     }
     const std::string gz = plain + ".gz";
     REQUIRE(
         dftu_utils_test::compress_file_to_gzip_multimember(plain, gz, 2048));
-    dftracer::utils::common::fs::remove(plain);
+    (void)dftracer::utils::dstd::fs::remove(plain);
     return gz;
 }
 

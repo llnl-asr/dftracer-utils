@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 #include <zlib.h>
@@ -53,7 +53,7 @@ void write_event_file(const std::string& path, const char* name,
 }
 
 std::string read_sorted(const std::string& path) {
-    std::ifstream ifs(path, std::ios::binary);
+    std::ifstream ifs(path.c_str(), std::ios::binary);
     if (!ifs.is_open()) return {};
     std::vector<std::string> lines;
     std::string line;
@@ -112,7 +112,7 @@ TEST_SUITE("dftracer_view_mpi") {
         REQUIRE(env.is_valid());
         // Inputs live in their own dir so the .pfw outputs are not rescanned.
         const std::string in = env.get_dir() + "/in";
-        dftracer::utils::common::fs::create_directories(in);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
         // Two shards, cpu util means 40 and 80 -> combined mean 60 over 4.
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
@@ -148,7 +148,7 @@ TEST_SUITE("dftracer_view_mpi") {
         TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const std::string in = env.get_dir() + "/in";
-        dftracer::utils::common::fs::create_directories(in);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
 
@@ -184,7 +184,7 @@ TEST_SUITE("dftracer_view_mpi") {
         TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const std::string in = env.get_dir() + "/in";
-        dftracer::utils::common::fs::create_directories(in);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
         write_event_file(in + "/r0.pfw.gz", "io", 0, 500000);
         write_event_file(in + "/r1.pfw.gz", "io", 0, 500000);  // overlaps r0
 
@@ -217,7 +217,7 @@ TEST_SUITE("dftracer_view_mpi") {
         TestEnvironment env(1);
         REQUIRE(env.is_valid());
         const std::string in = env.get_dir() + "/in";
-        dftracer::utils::common::fs::create_directories(in);
+        REQUIRE(dftracer::utils::dstd::fs::create_directories(in).has_value());
         write_counter_file(in + "/r0.pfw.gz", "cpu", {40, 40});
         write_counter_file(in + "/r1.pfw.gz", "cpu", {80, 80});
 

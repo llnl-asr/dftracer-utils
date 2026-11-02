@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/record_schema.h>
 #include <dftracer/utils/runtime/coro/coro.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -70,12 +71,12 @@ void register_schemas() {
         index::register_schema(spec, "test_viz_schema");
 }
 
-void write_gz(const common::fs::path& path, const std::string& content) {
+void write_gz(const dstd::Path& path, const std::string& content) {
     using dftracer::utils::utilities::fileio::compress::GzipMemberCompressor;
     GzipMemberCompressor comp;
     auto member = comp.compress_member(content.data(), content.size());
     REQUIRE(member.has_value());
-    std::ofstream ofs(path, std::ios::binary);
+    std::ofstream ofs(path.c_str(), std::ios::binary);
     ofs.write(reinterpret_cast<const char*>(member->data()),
               static_cast<std::streamsize>(member->size()));
 }

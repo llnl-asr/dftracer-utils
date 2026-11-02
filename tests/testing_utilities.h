@@ -4,7 +4,8 @@
 
 #ifdef __cplusplus
 #include <dftracer/utils/common/config.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -141,7 +142,7 @@ inline int valgrind_threads(int n) {
 #endif
 }
 
-inline dftracer::utils::common::fs::path make_unique_test_path(
+inline dftracer::utils::dstd::Path make_unique_test_path(
     const std::string& name) {
     static std::atomic<unsigned long long> counter{0};
     // The pid is what keeps concurrently running test processes apart. None
@@ -160,7 +161,7 @@ inline dftracer::utils::common::fs::path make_unique_test_path(
         std::to_string(pid) + "_" + std::to_string(now) + "_" +
         std::to_string(tid) + "_" +
         std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
-    return dftracer::utils::common::fs::temp_directory_path() /
+    return dftracer::utils::dstd::fs::temp_directory() /
            (name + "_" + unique_id);
 }
 
@@ -288,45 +289,79 @@ std::string run_process_capture(const std::string& binary,
 /// or "" if the file cannot be read.
 std::string gz_first_line(const std::string& gz_path);
 
+/// Prints the error and aborts when a setup call failed. For code that runs
+/// outside a doctest assertion, such as a constructor of a shared fixture.
+template <class T>
+inline void require_ok(const dftracer::utils::dstd::Expected<
+                           T, dftracer::utils::dstd::Error>& result,
+                       const char* what) {
+    if (result.has_value()) return;
+    const auto& error = result.error();
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+                 static_cast<int>(error.name().size()), error.name().data(),
+                 static_cast<int>(error.message().size()),
+                 error.message().data());
+    std::abort();
+}
+
 /// A scratch directory that exists for the lifetime of the object. The path is
 /// unique per process (make_unique_test_path), and the destructor removes the
 /// tree, so a test case that returns early or throws still cleans up.
 class ScopedTestDir {
    public:
-    explicit ScopedTestDir(const std::string& tag) {
-        path_ = make_unique_test_path(tag);
-        dftracer::utils::common::fs::create_directories(path_);
+    explicit ScopedTestDir(const std::string& tag)
+        : path_(make_unique_test_path(tag)) {
+        dftu_utils_test::require_ok(
+            dftracer::utils::dstd::fs::create_directories(path_.view()),
+            "create_directories");
     }
     ScopedTestDir(const ScopedTestDir&) = delete;
     ScopedTestDir& operator=(const ScopedTestDir&) = delete;
     ~ScopedTestDir() {
-        std::error_code ec;
-        dftracer::utils::common::fs::remove_all(path_, ec);
+        (void)dftracer::utils::dstd::fs::remove_all(path_.view()).has_value();
     }
 
-    const dftracer::utils::common::fs::path& path() const { return path_; }
-    std::string str() const { return path_.string(); }
+    const dftracer::utils::dstd::Path& path() const { return path_; }
+    std::string str() const { return std::string(path_.str()); }
     /// `name` resolved inside the directory.
-    std::string file(const std::string& name) const {
-        return (path_ / name).string();
+    std::string file(dftracer::utils::dstd::StringView name) const {
+        return std::string((path_ / name).str());
     }
 
     /// Write `content` at `relative_path`, creating any parent directories.
     void create_file(const std::string& relative_path,
                      const std::string& content = "test") const {
-        const dftracer::utils::common::fs::path p = path_ / relative_path;
-        dftracer::utils::common::fs::create_directories(p.parent_path());
-        std::ofstream ofs(p);
+        const dftracer::utils::dstd::Path p = path_ / relative_path;
+        dftu_utils_test::require_ok(
+            dftracer::utils::dstd::fs::create_directories(p.view().parent()),
+            "create_directories");
+        std::ofstream ofs(p.c_str());
         ofs << content;
     }
 
     void create_dir(const std::string& relative_path) const {
-        dftracer::utils::common::fs::create_directories(path_ / relative_path);
+        dftu_utils_test::require_ok(
+            dftracer::utils::dstd::fs::create_directories(
+                (path_ / relative_path).view()),
+            "create_directories");
     }
 
    private:
-    dftracer::utils::common::fs::path path_;
+    dftracer::utils::dstd::Path path_;
 };
+
+/// One entry of a listing, with the kind and size of the entry itself.
+struct ListedEntry {
+    dftracer::utils::dstd::Path path;
+    dftracer::utils::dstd::fs::FileKind kind =
+        dftracer::utils::dstd::fs::FileKind::Unknown;
+    std::uint64_t size = 0;
+};
+
+/// The direct children of `dir` in directory order, each with its own stat.
+std::vector<ListedEntry> list_dir(dftracer::utils::dstd::PathView dir);
+/// Every descendant of `dir` below it, in walk order, skipping symlinks.
+std::vector<ListedEntry> walk_dir(dftracer::utils::dstd::PathView dir);
 
 #ifdef DFTRACER_UTILS_MPI_ENABLED
 // -- Shared helpers for the MPI binary integration tests --

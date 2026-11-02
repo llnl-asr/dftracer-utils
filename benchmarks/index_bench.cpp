@@ -24,7 +24,8 @@
 // reads one file's own columns.
 
 #include <dftracer/utils/common/error.h>
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/plan/chunk_pruner.h>
@@ -62,13 +63,27 @@ using namespace dftracer::utils::trace::views;
 
 namespace {
 
+/// Prints the error and exits with 1 when a setup call failed.
+template <class T>
+void require_ok(const dftracer::utils::dstd::Expected<
+                    T, dftracer::utils::dstd::Error>& result,
+                const char* what) {
+    if (result.has_value()) return;
+    const auto& error = result.error();
+    std::fprintf(stderr, "%s failed: %.*s %.*s\n", what,
+                 static_cast<int>(error.name().size()), error.name().data(),
+                 static_cast<int>(error.message().size()),
+                 error.message().data());
+    std::exit(1);
+}
+
 constexpr double MAX_SLOWDOWN = 0.05;
 
 struct Options {
     std::string out = "index_bench.json";
     std::string baseline;
     std::string workdir =
-        (common::fs::temp_directory_path() / "index_bench").string();
+        std::string((dstd::fs::temp_directory() / "index_bench").str());
     int build_runs = 3;
     int runs = 10;
     int warmups = 2;
@@ -109,10 +124,18 @@ std::vector<double> timed(const std::function<void()>& f, int warmups,
     return t;
 }
 
-std::uint64_t dir_bytes(const common::fs::path& p) {
+std::uint64_t dir_bytes(dstd::PathView p) {
     std::uint64_t n = 0;
-    for (const auto& e : common::fs::recursive_directory_iterator(p))
-        if (e.is_regular_file()) n += e.file_size();
+    require_ok(
+        dstd::fs::walk(p,
+                       [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                           if (kind == dstd::fs::FileKind::File) {
+                               const auto st = dstd::fs::stat(path);
+                               if (st) n += st->size;
+                           }
+                           return dstd::fs::WalkAction::Continue;
+                       }),
+        "walk");
     return n;
 }
 
@@ -128,13 +151,17 @@ std::uint64_t peak_rss_bytes() {
 
 std::vector<std::string> trace_files(const std::string& input) {
     std::vector<std::string> files;
-    if (common::fs::is_regular_file(input)) return {input};
-    for (const auto& e : common::fs::recursive_directory_iterator(input)) {
-        const std::string p = e.path().string();
-        if (e.is_regular_file() && p.size() > 7 &&
-            p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
-            files.push_back(p);
-    }
+    if (dstd::fs::is_regular_file(input).value()) return {input};
+    require_ok(dstd::fs::walk(
+                   input,
+                   [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                       const dstd::StringView p = path.str();
+                       if (kind == dstd::fs::FileKind::File && p.size() > 7 &&
+                           p.compare(p.size() - 7, 7, ".pfw.gz") == 0)
+                           files.emplace_back(p);
+                       return dstd::fs::WalkAction::Continue;
+                   }),
+               "walk");
     std::sort(files.begin(), files.end());
     return files;
 }
@@ -349,7 +376,7 @@ struct Result {
 };
 
 View open_view(const std::string& input, const std::string& index_dir) {
-    View v = common::fs::is_regular_file(input)
+    View v = dstd::fs::is_regular_file(input).value()
                  ? View::from_file(input, index_dir)
                  : run(View::from_directory(input, index_dir));
     return v;
@@ -360,12 +387,13 @@ Result measure(const Options& opt, const std::string& input,
     Result r;
     const auto files = trace_files(input);
     r.files = files.size();
-    for (const auto& f : files) r.compressed_bytes += common::fs::file_size(f);
+    for (const auto& f : files)
+        r.compressed_bytes += dstd::fs::file_size(f).value();
 
     for (int i = 0; i < opt.build_runs; ++i) {
-        std::error_code ec;
-        common::fs::remove_all(index_dir, ec);
-        common::fs::create_directories(index_dir);
+        (void)dstd::fs::remove_all(index_dir);
+        require_ok(dstd::fs::create_directories(index_dir),
+                   "create_directories");
         r.build_s.push_back(seconds([&] {
             dftracer::utils::index::IndexerOptions options;
             options.index_dir = index_dir;
@@ -383,9 +411,15 @@ Result measure(const Options& opt, const std::string& input,
     }
     r.build_peak_rss = peak_rss_bytes();
     std::string index_path;
-    for (const auto& e : common::fs::recursive_directory_iterator(index_dir))
-        if (e.is_directory() && e.path().filename() == ".dftindex")
-            index_path = e.path().string();
+    require_ok(
+        dstd::fs::walk(index_dir,
+                       [&](dstd::PathView path, dstd::fs::FileKind kind) {
+                           if (kind == dstd::fs::FileKind::Directory &&
+                               path.filename() == ".dftindex")
+                               index_path = std::string(path.str());
+                           return dstd::fs::WalkAction::Continue;
+                       }),
+        "walk");
     if (index_path.empty()) {
         std::fprintf(stderr, "no index built under %s\n", index_dir.c_str());
         std::exit(1);
@@ -656,7 +690,7 @@ bool compare(simdjson::dom::object base, simdjson::dom::object cur) {
 }
 
 std::string write_smoke_trace(const std::string& dir) {
-    common::fs::create_directories(dir);
+    require_ok(dstd::fs::create_directories(dir), "create_directories");
     const std::string gz = dir + "/smoke.pfw.gz";
     std::string lines;
     const char* names[] = {"read", "write", "open", "close"};
@@ -676,7 +710,7 @@ std::string write_smoke_trace(const std::string& dir) {
         std::fprintf(stderr, "compress failed\n");
         std::exit(1);
     }
-    std::ofstream(gz, std::ios::binary)
+    std::ofstream(gz.c_str(), std::ios::binary)
         .write(reinterpret_cast<const char*>(member->data()),
                static_cast<std::streamsize>(member->size()));
     return gz;
@@ -685,8 +719,7 @@ std::string write_smoke_trace(const std::string& dir) {
 Options parse_args(int argc, char** argv) {
     Options o;
     if (argc == 2 && std::string_view(argv[1]) == "--smoke") {
-        o.workdir =
-            (common::fs::temp_directory_path() / "index_bench_smoke").string();
+        o.workdir = (dstd::fs::temp_directory() / "index_bench_smoke").str();
         o.out = o.workdir + "/index_bench.json";
         o.build_runs = 1;
         o.runs = 1;
@@ -738,11 +771,12 @@ Options parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     const Options opt = parse_args(argc, argv);
-    common::fs::create_directories(opt.workdir);
+    require_ok(dstd::fs::create_directories(opt.workdir), "create_directories");
 
     std::string entries;
     for (std::size_t i = 0; i < opt.inputs.size(); ++i) {
-        const std::string input = common::fs::absolute(opt.inputs[i]).string();
+        const std::string input(
+            dstd::fs::absolute(opt.inputs[i]).value().str());
         const std::string part =
             opt.workdir + "/input_" + std::to_string(i) + ".json";
         const std::string index_dir =
@@ -750,7 +784,8 @@ int main(int argc, char** argv) {
         // No runtime threads exist before this fork; the child starts its own.
         const pid_t pid = fork();
         if (pid == 0) {
-            std::ofstream(part) << to_json(measure(opt, input, index_dir));
+            std::ofstream(part.c_str())
+                << to_json(measure(opt, input, index_dir));
             std::_Exit(0);
         }
         int status = 0;
@@ -760,7 +795,7 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::stringstream body;
-        body << std::ifstream(part).rdbuf();
+        body << std::ifstream(part.c_str()).rdbuf();
         if (!entries.empty()) entries += ",";
         entries += quote(input) + ":" + body.str();
         std::printf("measured %s\n", input.c_str());

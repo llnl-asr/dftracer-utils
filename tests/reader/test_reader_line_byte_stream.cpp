@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include <dftracer/utils/common/filesystem.h>
+#include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/utilities/reader/internal/reader.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
@@ -32,7 +32,7 @@ static std::string create_variable_line_test_file(
     std::string gz_file = test_dir + "/variable_lines.gz";
 
     // Create text file with variable line lengths
-    std::ofstream f(txt_file);
+    std::ofstream f(txt_file.c_str());
     if (!f.is_open()) {
         return "";
     }
@@ -70,7 +70,7 @@ static std::string create_variable_line_test_file(
         return "";
     }
 
-    common::fs::remove(txt_file);
+    (void)dstd::fs::remove(txt_file);
     return gz_file;
 }
 
@@ -753,14 +753,14 @@ TEST_CASE("LINE_BYTES Stream - Edge Cases") {
         std::string txt_file = env.get_dir() + "/uniform.txt";
         std::string gz_file = env.get_dir() + "/uniform.gz";
 
-        std::ofstream f(txt_file);
+        std::ofstream f(txt_file.c_str());
         for (int i = 1; i <= 100; ++i) {
             f << "{\"id\":" << i << ",\"fixed\":\"XXXXXXXXXXXXXXXXXXXX\"}\n";
         }
         f.close();
 
         compress_file_to_gzip(txt_file, gz_file);
-        common::fs::remove(txt_file);
+        (void)dstd::fs::remove(txt_file);
 
         std::string idx_file = env.get_index_path(gz_file);
 

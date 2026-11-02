@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -20,7 +21,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
@@ -306,7 +306,7 @@ static void print_file_info(const MetadataCollectorUtilityOutput& info,
 }
 
 static coro::CoroTask<void> auto_index_and_resolve(
-    CoroScope& ctx, std::vector<FileWorkItem>& files_needing_index,
+    std::vector<FileWorkItem>& files_needing_index,
     const std::string& index_dir, std::size_t checkpoint_size,
     std::size_t executor_threads,
     std::unordered_map<std::string, std::vector<ResolvedFile>>&
@@ -326,7 +326,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
         batch_config->parallelism = executor_threads;
 
         auto batch_result =
-            co_await BatchBuilder::process(&ctx, std::move(batch_config));
+            co_await BatchBuilder::process(std::move(batch_config));
 
         for (const auto& result : batch_result.results) {
             if (!result.success && !result.error_message.empty()) {
@@ -357,7 +357,7 @@ static coro::CoroTask<void> auto_index_and_resolve(
     }
 }
 
-static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
+static coro::CoroTask<int> run_info(const InfoArgParse* cli) {
     const auto& directory = cli->directory.value;
     const auto& query_type = cli->query_type;
     const auto force_rebuild = cli->force_rebuild;
@@ -385,7 +385,7 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
                 co_return 1;
             }
 
-            co_await ensure_index_fresh(&ctx, directory, "", index_dir,
+            co_await ensure_index_fresh(directory, "", index_dir,
                                         force_rebuild);
 
             auto trusted_index_path =
@@ -450,8 +450,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
             }
         } else {
             common::ScopedTimer _rs(stages, "resolve_index_state");
-            co_await ensure_indexes_fresh(&ctx, "", cli->files_args.value,
-                                          index_dir, force_rebuild);
+            co_await ensure_indexes_fresh("", cli->files_args.value, index_dir,
+                                          force_rebuild);
             Resolver resolver;
             auto input = std::make_unique<ResolverInput>();
             input->files = cli->files_args.value;
@@ -475,37 +475,8 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
 
     if (!indexed_groups.empty()) {
         common::ScopedTimer _t(stages, "index_batch_read");
-        co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto* all_results_ptr = &all_results;
-            auto* mutex_ptr = &results_mutex;
-            for (auto& [ip, group] : indexed_groups) {
-                auto idx_path_ptr = std::make_shared<std::string>(ip);
-                auto entries_ptr = std::make_shared<std::vector<ResolvedFile>>(
-                    std::move(group));
-                scope.spawn(
-                    [idx_path_ptr, entries_ptr, all_results_ptr,
-                     mutex_ptr](CoroScope&) mutable -> coro::CoroTask<void> {
-                        auto infos = co_await process_index_group_info(
-                            std::move(idx_path_ptr), std::move(entries_ptr));
-                        std::lock_guard<std::mutex> lock(*mutex_ptr);
-                        for (auto& info : infos) {
-                            all_results_ptr->push_back(std::move(info));
-                        }
-                    });
-            }
-            co_return;
-        });
-    }
-
-    if (!files_needing_index.empty()) {
-        common::ScopedTimer _t(stages, "auto_index_and_build");
-        co_await auto_index_and_resolve(ctx, files_needing_index, index_dir,
-                                        checkpoint_size, executor_threads,
-                                        indexed_groups);
-
-        if (!indexed_groups.empty()) {
-            common::ScopedTimer _t2(stages, "newly_indexed_batch_read");
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+        co_await coro::with_scope(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
                 auto* all_results_ptr = &all_results;
                 auto* mutex_ptr = &results_mutex;
                 for (auto& [ip, group] : indexed_groups) {
@@ -513,17 +484,46 @@ static coro::CoroTask<int> run_info(CoroScope& ctx, const InfoArgParse* cli) {
                     auto entries_ptr =
                         std::make_shared<std::vector<ResolvedFile>>(
                             std::move(group));
-                    scope.spawn(
-                        [idx_path_ptr, entries_ptr, all_results_ptr, mutex_ptr](
-                            CoroScope&) mutable -> coro::CoroTask<void> {
-                            auto infos = co_await process_index_group_info(
-                                std::move(idx_path_ptr),
-                                std::move(entries_ptr));
-                            std::lock_guard<std::mutex> lock(*mutex_ptr);
-                            for (auto& info : infos) {
-                                all_results_ptr->push_back(std::move(info));
-                            }
-                        });
+                    scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
+                                 mutex_ptr]() mutable -> coro::CoroTask<void> {
+                        auto infos = co_await process_index_group_info(
+                            std::move(idx_path_ptr), std::move(entries_ptr));
+                        std::lock_guard<std::mutex> lock(*mutex_ptr);
+                        for (auto& info : infos) {
+                            all_results_ptr->push_back(std::move(info));
+                        }
+                    });
+                }
+                co_return;
+            });
+    }
+
+    if (!files_needing_index.empty()) {
+        common::ScopedTimer _t(stages, "auto_index_and_build");
+        co_await auto_index_and_resolve(files_needing_index, index_dir,
+                                        checkpoint_size, executor_threads,
+                                        indexed_groups);
+
+        if (!indexed_groups.empty()) {
+            common::ScopedTimer _t2(stages, "newly_indexed_batch_read");
+            co_await coro::with_scope([&](coro::Scope& scope)
+                                          -> coro::CoroTask<void> {
+                auto* all_results_ptr = &all_results;
+                auto* mutex_ptr = &results_mutex;
+                for (auto& [ip, group] : indexed_groups) {
+                    auto idx_path_ptr = std::make_shared<std::string>(ip);
+                    auto entries_ptr =
+                        std::make_shared<std::vector<ResolvedFile>>(
+                            std::move(group));
+                    scope.spawn([idx_path_ptr, entries_ptr, all_results_ptr,
+                                 mutex_ptr]() mutable -> coro::CoroTask<void> {
+                        auto infos = co_await process_index_group_info(
+                            std::move(idx_path_ptr), std::move(entries_ptr));
+                        std::lock_guard<std::mutex> lock(*mutex_ptr);
+                        for (auto& info : infos) {
+                            all_results_ptr->push_back(std::move(info));
+                        }
+                    });
                 }
                 co_return;
             });
@@ -625,8 +625,8 @@ int main(int argc, char** argv) {
         [](InfoArgParse& cli) {
             return binaries::run_single_task(
                 "DFTracer Info", cli.pipeline,
-                [&cli](CoroScope& ctx) -> coro::CoroTask<int> {
-                    co_return co_await run_info(ctx, &cli);
+                [&cli](coro::Scope&) -> coro::CoroTask<int> {
+                    co_return co_await run_info(&cli);
                 });
         });
 }

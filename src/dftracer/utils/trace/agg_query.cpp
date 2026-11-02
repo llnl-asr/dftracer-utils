@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/field_stat.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/hash_map.h>
@@ -21,7 +22,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/agg_event_fold.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/parse_inflated.h>
@@ -432,23 +432,23 @@ coro::CoroTask<void> Runner::run() {
     for (const auto& s : rules.q.sources)
         sources.push_back(std::make_unique<Source>(s, default_params_hash));
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         std::size_t seq = 0;
         for (std::size_t si = 0; si < rules.q.sources.size(); ++si)
             for (std::size_t fi = 0; fi < rules.q.sources[si].files.size();
                  ++fi, ++seq)
-                scope.spawn([this, si, fi, seq](CoroScope&) {
-                    return file_task(si, fi, seq);
-                });
+                scope.spawn(
+                    [this, si, fi, seq]() { return file_task(si, fi, seq); });
         co_return;
     });
     if (error) std::rethrow_exception(error);
     if (rules.q.ordered) {
-        co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-            for (std::size_t at = 0; at < MERGE_STRIPES; ++at)
-                scope.spawn([this, at](CoroScope&) { return drain_task(at); });
-            co_return;
-        });
+        co_await coro::with_scope(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                for (std::size_t at = 0; at < MERGE_STRIPES; ++at)
+                    scope.spawn([this, at]() { return drain_task(at); });
+                co_return;
+            });
     }
     co_await collect();
     out.stats.groups = out.rows.size() + out.sums.size();
@@ -477,14 +477,15 @@ coro::CoroTask<void> Runner::join(Map Stripe::* member, Map& into) {
             end += (stripes[at].*member).size();
         }
         values.resize(end);
-        co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-            for (std::size_t at = first; at < last; ++at)
-                scope.spawn([this, member, at, values = &values,
-                             offset = offsets[at - first]](CoroScope&) {
-                    return move_task(member, at, values, offset);
-                });
-            co_return;
-        });
+        co_await coro::with_scope(
+            [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                for (std::size_t at = first; at < last; ++at)
+                    scope.spawn([this, member, at, values = &values,
+                                 offset = offsets[at - first]]() {
+                        return move_task(member, at, values, offset);
+                    });
+                co_return;
+            });
     }
     into.replace(std::move(values));
 }
@@ -525,13 +526,12 @@ coro::CoroTask<void> Runner::file_task(std::size_t source, std::size_t file,
         }
     }
     if (jobs.empty() || is_failed() || cancelled()) co_return;
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t at = 0; at < jobs.size(); ++at)
-            scope.spawn(
-                [this, &src, &path, &spans, &jobs, seq, at](CoroScope&) {
-                    return chunk_task(&src, &path, spans.data(), &jobs[at], seq,
-                                      at + 1);
-                });
+            scope.spawn([this, &src, &path, &spans, &jobs, seq, at]() {
+                return chunk_task(&src, &path, spans.data(), &jobs[at], seq,
+                                  at + 1);
+            });
         co_return;
     });
 }

@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/coverage.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -200,91 +200,84 @@ coro::CoroTask<ExportStats> run_export_trace_indexed(
 
     auto ch = coro::make_channel<std::string>(2 * num_producers + 1);
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
-        co_await scope.scope([&](CoroScope& child) -> coro::CoroTask<void> {
-            // Consumer: append batches in arrival order; the writer cuts
-            // members and names their parts.
-            child.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                auto cons = ch->consumer();
+    co_await coro::with_scope([&](coro::Scope& child) -> coro::CoroTask<void> {
+        // Consumer: append batches in arrival order; the writer cuts
+        // members and names their parts.
+        child.spawn([&]() -> coro::CoroTask<void> {
+            auto cons = ch->consumer();
+            for (;;) {
+                auto item = co_await cons.receive();
+                if (!item) break;
+                const auto append_ok = co_await writer.append(*item);
+                if (append_ok) continue;
+                ok = false;
+                failed.store(true, std::memory_order_relaxed);
+                // Drain, so producers blocked on the channel finish.
                 for (;;) {
-                    auto item = co_await cons.receive();
-                    if (!item) break;
-                    const auto append_ok = co_await writer.append(*item);
-                    if (append_ok) continue;
-                    ok = false;
-                    failed.store(true, std::memory_order_relaxed);
-                    // Drain, so producers blocked on the channel finish.
-                    for (;;) {
-                        const auto receive_ok = co_await cons.receive();
-                        if (!receive_ok) break;
-                    }
-                    co_return;
+                    const auto receive_ok = co_await cons.receive();
+                    if (!receive_ok) break;
                 }
                 co_return;
-            });
-
-            // One shared producer, captured by reference (GCC rejects a
-            // move-only init-capture in a coroutine lambda) and released when
-            // this sub-scope joins, so the channel closes and the consumer
-            // drains before close().
-            {
-                auto prod = ch->producer();
-                co_await child.scope([&](CoroScope& workers)
-                                         -> coro::CoroTask<void> {
-                    for (std::size_t w = 0; w < num_producers; ++w) {
-                        workers.spawn([&,
-                                       w](CoroScope&) -> coro::CoroTask<void> {
-                            std::string batch;
-                            for (std::size_t i = w; i < units.size();
-                                 i += num_producers) {
-                                if (is_cancelled(plan) ||
-                                    failed.load(std::memory_order_relaxed))
-                                    co_return;
-                                ViewScannerInput sin = make_scanner_input(
-                                    units[i], vdef, vdef.query);
-                                ViewScannerUtility scanner;
-                                auto gen = scanner(sin);
-                                for (;;) {
-                                    auto b = co_await gen.next();
-                                    if (!b) break;
-                                    if (is_cancelled(plan) ||
-                                        failed.load(std::memory_order_relaxed))
-                                        co_return;
-                                    matched.fetch_add(
-                                        b->events_matched,
-                                        std::memory_order_relaxed);
-                                    scanned.fetch_add(
-                                        b->events_scanned,
-                                        std::memory_order_relaxed);
-                                    invalid.fetch_add(
-                                        b->lines_invalid,
-                                        std::memory_order_relaxed);
-                                    unconverted.fetch_add(
-                                        b->values_unconverted,
-                                        std::memory_order_relaxed);
-                                    if (b->events.empty()) continue;
-                                    batch.clear();
-                                    for (const auto& ev : b->events) {
-                                        batch.append(ev);
-                                        batch.push_back('\n');
-                                    }
-                                    co_await prod.send(batch);
-                                }
-                                if (progress)
-                                    (*progress)(
-                                        units_done.fetch_add(
-                                            1, std::memory_order_relaxed) +
-                                            1,
-                                        units.size());
-                            }
-                            co_return;
-                        });
-                    }
-                    co_return;
-                });
             }
             co_return;
         });
+
+        // One shared producer, captured by reference (GCC rejects a
+        // move-only init-capture in a coroutine lambda) and released when
+        // this sub-scope joins, so the channel closes and the consumer
+        // drains before close().
+        {
+            auto prod = ch->producer();
+            co_await coro::with_scope([&](coro::Scope& workers)
+                                          -> coro::CoroTask<void> {
+                for (std::size_t w = 0; w < num_producers; ++w) {
+                    workers.spawn([&, w]() -> coro::CoroTask<void> {
+                        std::string batch;
+                        for (std::size_t i = w; i < units.size();
+                             i += num_producers) {
+                            if (is_cancelled(plan) ||
+                                failed.load(std::memory_order_relaxed))
+                                co_return;
+                            ViewScannerInput sin =
+                                make_scanner_input(units[i], vdef, vdef.query);
+                            ViewScannerUtility scanner;
+                            auto gen = scanner(sin);
+                            for (;;) {
+                                auto b = co_await gen.next();
+                                if (!b) break;
+                                if (is_cancelled(plan) ||
+                                    failed.load(std::memory_order_relaxed))
+                                    co_return;
+                                matched.fetch_add(b->events_matched,
+                                                  std::memory_order_relaxed);
+                                scanned.fetch_add(b->events_scanned,
+                                                  std::memory_order_relaxed);
+                                invalid.fetch_add(b->lines_invalid,
+                                                  std::memory_order_relaxed);
+                                unconverted.fetch_add(
+                                    b->values_unconverted,
+                                    std::memory_order_relaxed);
+                                if (b->events.empty()) continue;
+                                batch.clear();
+                                for (const auto& ev : b->events) {
+                                    batch.append(ev);
+                                    batch.push_back('\n');
+                                }
+                                co_await prod.send(batch);
+                            }
+                            if (progress)
+                                (*progress)(units_done.fetch_add(
+                                                1, std::memory_order_relaxed) +
+                                                1,
+                                            units.size());
+                        }
+                        co_return;
+                    });
+                }
+                co_return;
+            });
+        }
+        co_return;
     });
 
     if (ok) {

@@ -39,7 +39,7 @@ AdmittedRun run_admitted(const std::string& file, const std::string& out_dir,
     ExtractionAdmission admission(total_bytes, reserve_bytes, groups);
     AdmittedRun run;
     Runtime rt(4);
-    auto body = [&](CoroScope&) -> coro::CoroTask<void> {
+    auto body = [&](coro::Scope&) -> coro::CoroTask<void> {
         std::vector<coro::CoroTask<ChunkExtractorUtilityOutput>> tasks;
         for (std::size_t i = 0; i < groups; ++i) {
             tasks.push_back(admitted_extract(
@@ -54,7 +54,7 @@ AdmittedRun run_admitted(const std::string& file, const std::string& out_dir,
         }
         run.outputs = co_await coro::when_all(std::move(tasks));
     };
-    rt.submit(run_coro_scope(rt.executor(), body), "AdmittedExtract").wait();
+    rt.submit(coro::with_scope(body), "AdmittedExtract").wait();
     rt.shutdown();
     run.peak_in_flight = admission.peak_in_flight();
     run.peak_reserved = admission.peak_reserved_bytes();

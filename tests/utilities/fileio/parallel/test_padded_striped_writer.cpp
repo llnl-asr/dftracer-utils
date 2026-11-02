@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/parallel/parallel_writer.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -91,39 +91,39 @@ TEST_CASE("PaddedStripedWriter - gzip -t passes and payload round-trips") {
     Runtime runtime(2);
     int result = -1;
     runtime
-        .scope("padded_basic",
-               [&](CoroScope& s) -> CoroTask<void> {
-                   auto w = make_padded_striped_writer(STRIPE);
-                   if (co_await w->open(path, 3, true, &s) != 0) {
-                       result = 1;
-                       co_return;
-                   }
-                   if (co_await w->write_header(as_bv(hdr_mem)) != 0) {
-                       result = 2;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(0, as_bv(w0_mem)) != 0) {
-                       result = 3;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(1, as_bv(w1_mem)) != 0) {
-                       result = 4;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(2, as_bv(w2_mem)) != 0) {
-                       result = 5;
-                       co_return;
-                   }
-                   if (co_await w->write_footer(as_bv(ftr_mem)) != 0) {
-                       result = 6;
-                       co_return;
-                   }
-                   if (co_await w->close() != 0) {
-                       result = 7;
-                       co_return;
-                   }
-                   result = 0;
-               })
+        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                    auto w = make_padded_striped_writer(STRIPE);
+                    if (co_await w->open(path, 3, true, &s) != 0) {
+                        result = 1;
+                        co_return;
+                    }
+                    if (co_await w->write_header(as_bv(hdr_mem)) != 0) {
+                        result = 2;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(0, as_bv(w0_mem)) != 0) {
+                        result = 3;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(1, as_bv(w1_mem)) != 0) {
+                        result = 4;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(2, as_bv(w2_mem)) != 0) {
+                        result = 5;
+                        co_return;
+                    }
+                    if (co_await w->write_footer(as_bv(ftr_mem)) != 0) {
+                        result = 6;
+                        co_return;
+                    }
+                    if (co_await w->close() != 0) {
+                        result = 7;
+                        co_return;
+                    }
+                    result = 0;
+                }),
+                "padded_basic")
         .get();
     CHECK(result == 0);
 
@@ -157,18 +157,17 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
     Runtime runtime(4);
     int result = -1;
     runtime
-        .scope(
-            "padded_join",
-            [&](CoroScope&) -> CoroTask<void> {
+        .submit(
+            coro::with_scope([&](coro::Scope&) -> CoroTask<void> {
                 auto w = make_padded_striped_writer(STRIPE);
-                auto jobs = CoroScope::long_lived();
+                auto jobs = std::make_unique<coro::Scope>();
                 if (co_await w->open(path, WORKERS, true, jobs.get()) != 0) {
                     result = 1;
                     co_return;
                 }
                 std::atomic<int> failures{0};
                 for (std::size_t i = 0; i < WORKERS; ++i)
-                    jobs->spawn([&, i](CoroScope&) -> CoroTask<void> {
+                    jobs->spawn([&, i]() -> CoroTask<void> {
                         if (co_await w->write_chunk(i, as_bv(members[i])) != 0)
                             failures.fetch_add(1);
                     });
@@ -178,7 +177,8 @@ TEST_CASE("PaddedStripedWriter - the caller's scope joins before close") {
                     co_return;
                 }
                 result = co_await w->close() == 0 ? 0 : 3;
-            })
+            }),
+            "padded_join")
         .get();
     REQUIRE(result == 0);
     std::string all = gunzip_all(path);
@@ -220,31 +220,31 @@ TEST_CASE(
     Runtime runtime(2);
     int result = -1;
     runtime
-        .scope("padded_oversize",
-               [&](CoroScope& s) -> CoroTask<void> {
-                   auto w = make_padded_striped_writer(STRIPE);
-                   if (co_await w->open(path, 1, true, &s) != 0) {
-                       result = 1;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(0, as_bv(m0)) != 0) {
-                       result = 2;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(0, as_bv(big)) != 0) {
-                       result = 3;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(0, as_bv(m1)) != 0) {
-                       result = 4;
-                       co_return;
-                   }
-                   if (co_await w->write_footer(as_bv(ftr)) != 0) {
-                       result = 5;
-                       co_return;
-                   }
-                   result = co_await w->close() == 0 ? 0 : 6;
-               })
+        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                    auto w = make_padded_striped_writer(STRIPE);
+                    if (co_await w->open(path, 1, true, &s) != 0) {
+                        result = 1;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(0, as_bv(m0)) != 0) {
+                        result = 2;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(0, as_bv(big)) != 0) {
+                        result = 3;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(0, as_bv(m1)) != 0) {
+                        result = 4;
+                        co_return;
+                    }
+                    if (co_await w->write_footer(as_bv(ftr)) != 0) {
+                        result = 5;
+                        co_return;
+                    }
+                    result = co_await w->close() == 0 ? 0 : 6;
+                }),
+                "padded_oversize")
         .get();
     REQUIRE(result == 0);
 
@@ -276,29 +276,29 @@ TEST_CASE(
     Runtime runtime(2);
     int result = -1;
     runtime
-        .scope("padded_integrity",
-               [&](CoroScope& s) -> CoroTask<void> {
-                   auto w = make_padded_striped_writer(STRIPE);
-                   if (co_await w->open(path, 1, true, &s) != 0) {
-                       result = 1;
-                       co_return;
-                   }
-                   // Two chunks of the same payload; packer coalesces both
-                   // into a single stripe since they fit together.
-                   if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
-                       result = 2;
-                       co_return;
-                   }
-                   if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
-                       result = 3;
-                       co_return;
-                   }
-                   if (co_await w->close() != 0) {
-                       result = 4;
-                       co_return;
-                   }
-                   result = 0;
-               })
+        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                    auto w = make_padded_striped_writer(STRIPE);
+                    if (co_await w->open(path, 1, true, &s) != 0) {
+                        result = 1;
+                        co_return;
+                    }
+                    // Two chunks of the same payload; packer coalesces both
+                    // into a single stripe since they fit together.
+                    if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
+                        result = 2;
+                        co_return;
+                    }
+                    if (co_await w->write_chunk(0, as_bv(mem)) != 0) {
+                        result = 3;
+                        co_return;
+                    }
+                    if (co_await w->close() != 0) {
+                        result = 4;
+                        co_return;
+                    }
+                    result = 0;
+                }),
+                "padded_integrity")
         .get();
     CHECK(result == 0);
 
@@ -368,18 +368,18 @@ TEST_CASE("PaddedStripedWriter - a drop without close on an executor joins") {
     int result = -1;
     Runtime runtime(4);
     runtime
-        .scope("padded_dropped",
-               [&](CoroScope& s) -> CoroTask<void> {
-                   auto w = make_padded_striped_writer(STRIPE);
-                   if (co_await w->open(path, 2, true, &s) != 0) {
-                       result = 1;
-                       co_return;
-                   }
-                   result =
-                       co_await w->write_chunk(0, as_bv(member)) == 0 ? 0 : 2;
-                   on_executor = coro::Executor::current() != nullptr;
-                   w.reset();
-               })
+        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                    auto w = make_padded_striped_writer(STRIPE);
+                    if (co_await w->open(path, 2, true, &s) != 0) {
+                        result = 1;
+                        co_return;
+                    }
+                    result =
+                        co_await w->write_chunk(0, as_bv(member)) == 0 ? 0 : 2;
+                    on_executor = coro::Executor::current() != nullptr;
+                    w.reset();
+                }),
+                "padded_dropped")
         .get();
     REQUIRE(result == 0);
     const auto deadline =
@@ -409,21 +409,21 @@ TEST_CASE("PaddedStripedWriter - every stripe ends in whole gzip members") {
     Runtime runtime(2);
     int result = -1;
     runtime
-        .scope("padded_whole_members",
-               [&](CoroScope& s) -> CoroTask<void> {
-                   auto w = make_padded_striped_writer(STRIPE);
-                   if (co_await w->open(path, 1, true, &s) != 0) {
-                       result = 1;
-                       co_return;
-                   }
-                   for (const auto& m : members) {
-                       if (co_await w->write_chunk(0, as_bv(m)) != 0) {
-                           result = 2;
-                           co_return;
-                       }
-                   }
-                   result = co_await w->close() == 0 ? 0 : 3;
-               })
+        .submit(coro::with_scope([&](coro::Scope& s) -> CoroTask<void> {
+                    auto w = make_padded_striped_writer(STRIPE);
+                    if (co_await w->open(path, 1, true, &s) != 0) {
+                        result = 1;
+                        co_return;
+                    }
+                    for (const auto& m : members) {
+                        if (co_await w->write_chunk(0, as_bv(m)) != 0) {
+                            result = 2;
+                            co_return;
+                        }
+                    }
+                    result = co_await w->close() == 0 ? 0 : 3;
+                }),
+                "padded_whole_members")
         .get();
     REQUIRE(result == 0);
     CHECK(dstd::fs::file_size(path).value() == (members.size() + 1) * STRIPE);

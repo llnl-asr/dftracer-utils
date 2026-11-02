@@ -193,10 +193,12 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
     namespace detail = dftracer::utils::trace::views::detail;
     static Runtime rt;
     df::DataFrame out;
-    rt.run_blocking("scan-only", [&](CoroScope&) -> coro::CoroTask<void> {
-        auto st = co_await detail::build_engine_agg_state(*p);
-        out = detail::finalize_engine_result(*st, *p);
-    });
+    rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = co_await detail::build_engine_agg_state(*p);
+                        out = detail::finalize_engine_result(*st, *p);
+                    })));
     return detail::apply_agg_post_ops(std::move(out), *p);
 }
 
@@ -754,36 +756,40 @@ TEST_SUITE("ViewIndexParity") {
         ExportStats stats;
         auto alone = [&](const Query& q) {
             df::DataFrame out;
-            rt.run_blocking("alone", [&](CoroScope&) -> coro::CoroTask<void> {
-                df::LazyFrame plan =
-                    View::from_files(files).branch([&](ViewSession& s) {
-                        auto c = s.collect(q, by_name, aggs());
-                        return std::function<void(const ExportStats&)>(
-                            [&, c](const ExportStats&) {
-                                out = std::move(c.get());
-                            });
-                    });
-                co_await plan.collect();
-            });
+            rt.block_on(coro::named(
+                "alone",
+                coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                    df::LazyFrame plan =
+                        View::from_files(files).branch([&](ViewSession& s) {
+                            auto c = s.collect(q, by_name, aggs());
+                            return std::function<void(const ExportStats&)>(
+                                [&, c](const ExportStats&) {
+                                    out = std::move(c.get());
+                                });
+                        });
+                    co_await plan.collect();
+                })));
             return out;
         };
 
         df::DataFrame fused_stdio;
         df::DataFrame fused_posix;
-        rt.run_blocking("fused", [&](CoroScope&) -> coro::CoroTask<void> {
-            df::LazyFrame plan =
-                View::from_files(files).branch([&](ViewSession& s) {
-                    auto a = s.collect(stdio, by_name, aggs());
-                    auto b = s.collect(posix, by_name, aggs());
-                    return std::function<void(const ExportStats&)>(
-                        [&, a, b](const ExportStats& st) {
-                            stats = st;
-                            fused_stdio = std::move(a.get());
-                            fused_posix = std::move(b.get());
-                        });
-                });
-            co_await plan.collect();
-        });
+        rt.block_on(coro::named(
+            "fused",
+            coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                df::LazyFrame plan =
+                    View::from_files(files).branch([&](ViewSession& s) {
+                        auto a = s.collect(stdio, by_name, aggs());
+                        auto b = s.collect(posix, by_name, aggs());
+                        return std::function<void(const ExportStats&)>(
+                            [&, a, b](const ExportStats& st) {
+                                stats = st;
+                                fused_stdio = std::move(a.get());
+                                fused_posix = std::move(b.get());
+                            });
+                    });
+                co_await plan.collect();
+            })));
 
         // Both branches scanned the traces: no rollup or tier answered them.
         CHECK(stats.events_scanned > 0);

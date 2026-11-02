@@ -32,6 +32,7 @@ class Scheduler;
 namespace dftracer::utils::coro {
 
 class Executor;
+class Scope;
 
 namespace detail {
 /// True when a task that finished may resume the awaiter on this thread,
@@ -74,13 +75,17 @@ struct PromiseBase : FrameAllocation {
     /// The executor the awaiter runs on. A task that ends elsewhere posts the
     /// awaiter back to it instead of resuming it on this thread.
     Executor* continuation_executor_{nullptr};
-    std::atomic<bool>* cancellation_token_{nullptr};
+    /// The @ref Scope that spawned this task, so the task cannot join it.
+    const Scope* scope_{nullptr};
+    /// A flag outside the frame that cancels this task and those it awaits,
+    /// set through the future of a @ref Scope spawn.
+    const std::atomic<bool>* cancel_source_{nullptr};
     std::atomic<bool> cancel_requested_{false};
     /// Written before the awaiter is released and read after.
     bool cancelled_{false};
     bool started_{false};
-    /// A cancelled child does not end a frame that holds a CoroScope, which
-    /// must reach its join.
+    /// A cancelled child does not end a frame that holds a scope, which must
+    /// reach its join.
     bool owns_scope_{false};
     /// Ends the awaiter on this task's done path when it ended cancelled;
     /// false means the awaiter resumes instead.
@@ -102,9 +107,11 @@ struct PromiseBase : FrameAllocation {
     }
 
     bool cancel_requested() const noexcept {
+        const PromiseBase* root = root_promise_ ? root_promise_ : this;
         return cancel_requested_.load(std::memory_order_acquire) ||
-               (root_promise_ && root_promise_->cancel_requested_.load(
-                                     std::memory_order_acquire));
+               root->cancel_requested_.load(std::memory_order_acquire) ||
+               (root->cancel_source_ &&
+                root->cancel_source_->load(std::memory_order_acquire));
     }
 
     /// Releases the awaiter of a task that ended. The frame must not be read

@@ -14,9 +14,9 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils {
-class CoroScope;
-}
+namespace dftracer::utils::coro {
+class Scope;
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::utilities::fileio::parallel {
 
@@ -31,7 +31,8 @@ class ParallelWriter {
     /// don't spawn internal coroutines; padded-striped requires a non-null
     /// scope that outlives close().
     virtual coro::CoroTask<int> open(std::string path, std::size_t num_workers,
-                                     bool gzip_extension, CoroScope* scope) = 0;
+                                     bool gzip_extension,
+                                     coro::Scope* scope) = 0;
 
     /// Prologue, written before any worker chunk.
     virtual coro::CoroTask<int> write_header(dstd::ByteView data) = 0;
@@ -109,7 +110,7 @@ struct ConfiguredWriter {
 /// Detect the target filesystem's layout, apply the padded-vs-atomic gate and
 /// sizing policy, and build the matching writer - the whole detect_layout +
 /// compute_writer_sizing + make_writer dance in one call. The caller still
-/// opens the writer (it owns the CoroScope and gzip-extension choice).
+/// opens the writer (it owns the scope and gzip-extension choice).
 ConfiguredWriter make_writer_for_path(const WriterRequest& req);
 
 }  // namespace dftracer::utils::utilities::fileio::parallel

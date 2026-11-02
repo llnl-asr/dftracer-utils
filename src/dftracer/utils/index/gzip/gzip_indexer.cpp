@@ -6,6 +6,7 @@
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -20,7 +21,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_stream_inflater.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <fcntl.h>
@@ -678,7 +678,7 @@ static dftracer::utils::coro::CoroTask<void> range_worker(InflatePlan* plan) {
 }
 
 static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
-    CoroScope* scope, InflatePlan* plan, std::uint64_t member_idx_base,
+    coro::Scope* scope, InflatePlan* plan, std::uint64_t member_idx_base,
     std::uint64_t& total_lines, std::uint64_t& total_uc_size,
     std::vector<GzipMemberRecord>& members,
     std::vector<std::pair<std::uint64_t, std::string>>& restart_windows,
@@ -828,9 +828,9 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
                 co_await discard(*chan);
                 if (member_c_start < range.c_end) {
                     redo = plan->channel(r);
-                    scope->spawn(
+                    scope->spawn_future(
                         [plan, r, start = member_c_start,
-                         producer = redo->producer()](CoroScope&) mutable {
+                         producer = redo->producer()]() mutable {
                             const InflateRange& rg = plan->ranges[r];
                             return parallel_worker(
                                 plan->fd, plan->file_size, start, rg.c_end,
@@ -883,8 +883,8 @@ static dftracer::utils::coro::CoroTask<bool> parallel_dispatcher(
 }
 
 static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
-    CoroScope* scope, int fd, std::uint64_t slice_c_end,
-    std::uint64_t file_size, std::uint64_t ckpt_size, std::size_t ways,
+    int fd, std::uint64_t slice_c_end, std::uint64_t file_size,
+    std::uint64_t ckpt_size, std::size_t ways,
     std::vector<GzipMember> scanned_members, std::uint64_t member_idx_base,
     bool strip_slice_leading_partial, std::uint64_t& total_lines,
     std::uint64_t& total_uc_size, std::vector<GzipMemberRecord>& members,
@@ -922,11 +922,10 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
 
     bool dispatcher_ok = true;
     InflatePlan* plan_ptr = &plan;
-    co_await scope->scope(
-        [&](CoroScope& child) -> dftracer::utils::coro::CoroTask<void> {
+    co_await coro::with_scope(
+        [&](coro::Scope& child) -> dftracer::utils::coro::CoroTask<void> {
             for (std::size_t w = 0; w < num_workers; ++w)
-                child.spawn(
-                    [plan_ptr](CoroScope&) { return range_worker(plan_ptr); });
+                child.spawn([plan_ptr]() { return range_worker(plan_ptr); });
             // In the body, not spawned, so its error leaves the scope after the
             // workers are joined.
             dispatcher_ok = co_await parallel_dispatcher(
@@ -938,9 +937,9 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks_parallel(
 }
 
 static dftracer::utils::coro::CoroTask<bool> process_chunks(
-    CoroScope* scope, int fd, const GzipMemberSlice* slice,
-    std::uint64_t ckpt_size, std::size_t ways, std::uint64_t& total_lines,
-    std::uint64_t& total_uc_size, std::vector<GzipMemberRecord>& members,
+    int fd, const GzipMemberSlice* slice, std::uint64_t ckpt_size,
+    std::size_t ways, std::uint64_t& total_lines, std::uint64_t& total_uc_size,
+    std::vector<GzipMemberRecord>& members,
     std::vector<std::pair<std::uint64_t, std::string>>& restart_windows,
     const CheckpointIndexer::VisitorList& visitors, bool& truncated,
     std::uint64_t& recovered_bytes) {
@@ -965,8 +964,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
             (me < all.size()) ? all[me].c_offset : file_size;
         std::vector<GzipMember> sliced(all.begin() + mb, all.begin() + me);
         co_return co_await process_chunks_parallel(
-            scope, fd, slice_c_end, file_size, ckpt_size, ways,
-            std::move(sliced),
+            fd, slice_c_end, file_size, ckpt_size, ways, std::move(sliced),
             /*member_idx_base=*/mb, /*strip_slice_leading_partial=*/mb > 0,
             total_lines, total_uc_size, members, restart_windows, visitors,
             truncated, recovered_bytes);
@@ -983,7 +981,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
     if (scanned.empty()) scanned.push_back(GzipMember{0, file_size});
 
     co_return co_await process_chunks_parallel(
-        scope, fd, file_size, file_size, ckpt_size, ways, std::move(scanned),
+        fd, file_size, file_size, ckpt_size, ways, std::move(scanned),
         /*member_idx_base=*/0, /*strip_slice_leading_partial=*/false,
         total_lines, total_uc_size, members, restart_windows, visitors,
         truncated, recovered_bytes);
@@ -994,7 +992,7 @@ static dftracer::utils::coro::CoroTask<bool> process_chunks(
 dftracer::utils::coro::CoroTask<std::optional<GzipBuildArtifacts>>
 build_gzip_index_artifacts(const std::string& gz_path, std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
-                           CoroScope* scope, const GzipMemberSlice* slice,
+                           coro::Scope* scope, const GzipMemberSlice* slice,
                            std::size_t ways) {
     int fd = ::open(gz_path.c_str(), O_RDONLY);
     if (fd < 0) {
@@ -1009,7 +1007,7 @@ dftracer::utils::coro::CoroTask<std::optional<GzipBuildArtifacts>>
 build_gzip_index_artifacts(int fd, const std::string& gz_path,
                            std::uint64_t ckpt_size,
                            const CheckpointIndexer::VisitorList& visitors,
-                           CoroScope* scope, const GzipMemberSlice* slice,
+                           coro::Scope* scope, const GzipMemberSlice* slice,
                            std::size_t ways) {
     struct stat fst{};
     const std::uint64_t compressed_bytes =
@@ -1031,7 +1029,7 @@ build_gzip_index_artifacts(int fd, const std::string& gz_path,
     bool truncated = false;
     std::uint64_t recovered_bytes = 0;
     const bool success = co_await process_chunks(
-        scope, fd, slice, ckpt_size, ways, total_lines, total_uc_size, members,
+        fd, slice, ckpt_size, ways, total_lines, total_uc_size, members,
         restart_windows, visitors, truncated, recovered_bytes);
 
     if (!success) {
@@ -1186,8 +1184,8 @@ dftracer::utils::coro::CoroTask<void> GzipIndexer::build_async() const {
     const std::string logical = gz_path_logical_path;
 
     std::optional<GzipBuildArtifacts> artifacts;
-    co_await run_coro_scope(
-        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+    co_await coro::with_scope(
+        [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             artifacts = co_await build_gzip_index_artifacts(
                 gz_path, final_ckpt_size, visitors_, &scope);
         });

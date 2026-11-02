@@ -311,10 +311,10 @@ static coro::CoroTask<int> run_plugins(const RunArgParse* cli,
         "DFTracer Run", cli->pipeline, cli->watchdog);
     Pipeline pipeline(pipeline_config);
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope&) -> coro::CoroTask<void> {
             if (!no_auto_index)
                 co_await dftracer::utils::index::build::ensure_indexes_fresh(
-                    &ctx, "", files, index_dir);
+                    "", files, index_dir);
             View view = View::from_files(view_files);
             auto run = co_await plugins->run(view);
             if (!run) {

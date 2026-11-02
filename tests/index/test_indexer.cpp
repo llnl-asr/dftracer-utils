@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/indexer.h>
@@ -252,11 +254,12 @@ TEST_SUITE("Indexer") {
         auto async = Indexer::open({std::string(b.str())}, with_runtime(rt));
         IndexStatus by_async;
         std::vector<IndexedFile> files_async;
-        rt.run_blocking("indexer-test",
-                        [&](CoroScope& scope) -> coro::CoroTask<void> {
-                            by_async = co_await async.build(scope);
-                            files_async = co_await async.files(scope);
-                        });
+        rt.block_on(coro::named(
+            "indexer-test",
+            coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+                by_async = co_await async.build(scope);
+                files_async = co_await async.files(scope);
+            })));
 
         CHECK(by_async.total == by_block.total);
         CHECK(by_async.indexed == by_block.indexed);

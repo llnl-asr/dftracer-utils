@@ -100,7 +100,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     // Blocks shorter than this pay no handoff; longer ones the sysmon reclaims.
     static constexpr std::int64_t BLOCK_HANDOFF_NS = 100000;
     // Headroom above num_threads_ for blocking-handoff replacement threads. A
-    // burst of concurrent run_blocking calls parks that many workers at once
+    // burst of concurrent block_on calls parks that many workers at once
     // and each needs a replacement runner, so a small ceiling (e.g. one per
     // core) deadlocks when the inner scopes starve; the permit gate still
     // bounds actually-running threads.
@@ -109,7 +109,7 @@ class ThreadPoolExecutor final : public TaskExecutor {
     // Available run permits.
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT)
         std::atomic<std::ptrdiff_t> permits_{0};
-    // Workers currently parked inside run_blocking.
+    // Workers currently parked inside block_on.
     std::atomic<std::size_t> blocked_workers_{0};
     // Workers parked in acquire_permit waiting for a slot.
     std::atomic<std::size_t> permit_waiters_{0};

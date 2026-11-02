@@ -3,6 +3,8 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/io/ops.h>
@@ -149,22 +151,24 @@ TEST_SUITE("ExecutorWakeups") {
 
         Runtime rt(1);
         bool landed = false;
-        rt.run_blocking("io_flush", [&](CoroScope& s) -> coro::CoroTask<void> {
-            s.spawn([fd](CoroScope&) -> coro::CoroTask<void> {
-                co_await io::pwrite(fd, &BYTE, 1, 0);
-            });
-            co_await coro::yield();
-            const auto until = std::chrono::steady_clock::now() + DEADLINE;
-            struct stat st{};
-            while (std::chrono::steady_clock::now() < until) {
-                if (::stat(path.c_str(), &st) == 0 && st.st_size == 1) {
-                    landed = true;
-                    break;
+        rt.block_on(coro::named(
+            "io_flush",
+            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
+                s.spawn([fd]() -> coro::CoroTask<void> {
+                    co_await io::pwrite(fd, &BYTE, 1, 0);
+                });
+                co_await coro::yield();
+                const auto until = std::chrono::steady_clock::now() + DEADLINE;
+                struct stat st{};
+                while (std::chrono::steady_clock::now() < until) {
+                    if (::stat(path.c_str(), &st) == 0 && st.st_size == 1) {
+                        landed = true;
+                        break;
+                    }
+                    std::this_thread::sleep_for(1ms);
                 }
-                std::this_thread::sleep_for(1ms);
-            }
-            co_await s.join();
-        });
+                co_return;
+            })));
         rt.shutdown();
         ::close(fd);
         (void)dstd::fs::remove(path);

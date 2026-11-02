@@ -2,6 +2,8 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -22,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <exception>
 #include <string>
 #include <thread>
 
@@ -200,24 +203,37 @@ static coro::CoroTask<int> run_server(const ServerArgParse* cli) {
     }
 
     auto server_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto* router_ptr = &router;
+        [&](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope(
+                [&](coro::Scope& ctx) -> coro::CoroTask<void> {
+                    auto* router_ptr = &router;
 #ifndef DFTRACER_UTILS_VALGRIND_MODE
-            // Eager prewarm is a full pass over every file (gzip decompress +
-            // scan). Skip it under Valgrind - the summary still builds lazily
-            // on the first viz request, so the instrumented server test does
-            // not pay this cost up front and blow its time budget.
-            auto* index_ptr = &trace_index;
-            ctx.spawn([index_ptr](CoroScope&) -> coro::CoroTask<void> {
-                co_await prewarm_viz_summary(*index_ptr);
-            });
+                    // Eager prewarm is a full pass over every file (gzip
+                    // decompress + scan). Skip it under Valgrind - the summary
+                    // still builds lazily on the first viz request, so the
+                    // instrumented server test does not pay this cost up front
+                    // and blow its time budget.
+                    auto* index_ptr = &trace_index;
+                    // The summary also builds on the first viz request, so a
+                    // failed prewarm is logged and the server keeps running.
+                    ctx.spawn([index_ptr]() -> coro::CoroTask<void> {
+                        try {
+                            co_await prewarm_viz_summary(*index_ptr);
+                        } catch (const std::exception& e) {
+                            DFTRACER_UTILS_LOG_ERROR("viz prewarm failed: %s",
+                                                     e.what());
+                        }
+                    });
 #endif
-            auto on_connection =
-                [router_ptr](int client_fd,
-                             struct sockaddr_in addr) -> coro::CoroTask<void> {
-                co_await handle_connection(client_fd, addr, *router_ptr);
-            };
-            co_await listener.accept_loop(ctx, on_connection);
+                    auto on_connection =
+                        [router_ptr](
+                            int client_fd,
+                            struct sockaddr_in addr) -> coro::CoroTask<void> {
+                        co_await handle_connection(client_fd, addr,
+                                                   *router_ptr);
+                    };
+                    co_await listener.accept_loop(ctx, on_connection);
+                });
         },
         "Server");
 

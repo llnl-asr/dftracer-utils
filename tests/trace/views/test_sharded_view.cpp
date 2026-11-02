@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/store/shard_manifest.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/agg_query.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <doctest/doctest.h>
@@ -124,8 +124,7 @@ QueryOut run_query(const dftracer::utils::trace::AggQuery& q) {
     QueryOut out;
     std::string error;
     run_coro(
-        [&](dftracer::utils::CoroScope&)
-            -> dftracer::utils::coro::CoroTask<void> {
+        [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
             auto r = co_await dftracer::utils::trace::run_agg_query(q);
             if (!r) {
                 error = r.error().format();

@@ -52,7 +52,7 @@ void write_single_member(const std::string& path, const std::string& content) {
 
 std::int64_t read_line_count(const std::string& gz, const std::string& idx) {
     std::int64_t count = 0;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         TraceReader reader(TraceReaderConfig{gz, idx});
         auto gen = reader.read_lines(ReadConfig{});
         while (co_await gen.next()) ++count;
@@ -73,18 +73,17 @@ TEST_SUITE("member_cache_integration") {
         const std::string index_dir = std::string((dir / "idx").str());
 
         write_single_member(src, make_trace(n));
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await utilities::fileio::compress::gzip_rechunk_to_members(
                 src, gz, /*member_size=*/4096, /*level=*/6);
             co_return;
         });
         {
-            run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto config = std::make_shared<IndexBuildBatchConfig>();
                 config->file_paths = {gz};
                 config->index_dir = index_dir;
-                auto r =
-                    co_await BatchBuilder::process(&scope, std::move(config));
+                auto r = co_await BatchBuilder::process(std::move(config));
                 REQUIRE(r.indexed + r.skipped == 1);
                 co_return;
             });
@@ -103,7 +102,7 @@ TEST_SUITE("member_cache_integration") {
 
         const int readers = 16;
         std::vector<std::int64_t> counts(readers, 0);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<std::int64_t>> tasks;
             tasks.reserve(readers);
             for (int r = 0; r < readers; ++r) {

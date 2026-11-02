@@ -289,6 +289,7 @@ set(TEST_CPP_SOURCES
     coro/test_yield.cpp
     coro/test_user_executor.cpp
     coro/test_affinity.cpp
+    coro/test_scope.cpp
     coro/test_process_timers.cpp
     coro/test_when_all_heterogeneous.cpp
     coro/test_when_all_vector.cpp

@@ -2,13 +2,13 @@
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/duql/numbers.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/store/file.h>
 #include <dftracer/utils/json/canonical.h>
 #include <dftracer/utils/json/json_escape.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/parse_walks.h>
 #include <dftracer/utils/trace/views/event_source.h>
 #include <dftracer/utils/trace/views/fold.h>
@@ -1163,7 +1163,7 @@ std::vector<std::string> extra_capture_fields(const ViewPlan& plan) {
 namespace {
 
 // Shared, worker-agnostic state for one fuse() run. Reference members point at
-// fuse()'s locals, which outlive every worker (run_coro_scope joins before
+// fuse()'s locals, which outlive every worker (with_scope joins before
 // fuse returns). Passed by value into fuse_worker so the coroutine frame owns
 // its copy of the (trivially copyable) handles.
 struct FuseWorkerCtx {
@@ -1409,9 +1409,9 @@ coro::CoroTask<ExportStats> fuse(const ViewPlan& plan,
                       skip_never_indexed,
                       dyn_prune,
                       gate};
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < nworkers; ++w)
-            scope.spawn([&ctx, w](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&ctx, w]() -> coro::CoroTask<void> {
                 return fuse_worker(ctx, w);
             });
         co_return;

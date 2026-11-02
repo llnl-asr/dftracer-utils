@@ -6,8 +6,8 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/chunk_verifier_utility.h>
 #include <doctest/doctest.h>
 
@@ -39,7 +39,7 @@ struct TestMetadata {
 
 using TestEvent = int;
 
-// Helper: run a ChunkVerifierUtility via Runtime + run_coro_scope.
+// Helper: run a ChunkVerifierUtility via Runtime + coro::with_scope.
 template <typename ChunkType, typename MetadataType, typename EventType>
 static ChunkVerificationUtilityOutput run_verifier(
     std::shared_ptr<ChunkVerifierUtility<ChunkType, MetadataType, EventType>>
@@ -50,9 +50,8 @@ static ChunkVerificationUtilityOutput run_verifier(
     ChunkVerificationUtilityOutput output;
     auto* out_ptr = &output;
 
-    auto task = run_coro_scope(
-        rt.executor(),
-        [verifier, input, out_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task = coro::with_scope(
+        [verifier, input, out_ptr](coro::Scope& scope) -> coro::CoroTask<void> {
             *out_ptr = co_await (*verifier)(scope, input);
         });
 
@@ -79,7 +78,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](CoroScope&,
+                [](coro::Scope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
                 printf("Collecting events from chunk %zu\n", chunk.id);
                 return chunk.data;
@@ -123,7 +122,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 12345;
             };
 
-            auto event_collector = [](CoroScope&, const TestChunk& chunk)
+            auto event_collector = [](coro::Scope&, const TestChunk& chunk)
                 -> std::vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =
@@ -157,7 +156,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](CoroScope&,
+                [](coro::Scope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 return chunk.data;
@@ -206,7 +205,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](CoroScope&, const TestChunk&) -> std::vector<TestEvent> {
+                [](coro::Scope&, const TestChunk&) -> std::vector<TestEvent> {
                 return {};
             };
 
@@ -242,7 +241,7 @@ TEST_SUITE("ChunkVerifier") {
             };
 
             auto event_collector =
-                [](CoroScope&,
+                [](coro::Scope&,
                    const TestChunk& chunk) -> std::vector<TestEvent> {
                 printf("Collecting from chunk %zu\n", chunk.id);
                 return chunk.data;
@@ -285,7 +284,7 @@ TEST_SUITE("ChunkVerifier") {
                 return 100;
             };
 
-            auto event_collector = [](CoroScope&, const TestChunk& chunk)
+            auto event_collector = [](coro::Scope&, const TestChunk& chunk)
                 -> std::vector<TestEvent> { return chunk.data; };
 
             auto event_hasher =

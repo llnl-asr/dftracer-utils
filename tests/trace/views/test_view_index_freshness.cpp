@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
 #include <dftracer/utils/index/build/resolver.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <trace/views/test_view_common.h>
 
 #include <chrono>
@@ -63,22 +63,20 @@ coro::CoroTask<void> build_tier(std::string gz, std::string index_dir = "") {
     in.files.push_back(std::move(gz));
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
-    co_await dftracer::utils::run_coro_scope(
-        [&](dftracer::utils::CoroScope& scope) -> coro::CoroTask<void> {
-            co_await dftracer::utils::index::build::resolve_and_build_index(
-                &scope, std::move(in));
-        });
+    co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        co_await dftracer::utils::index::build::resolve_and_build_index(
+            std::move(in));
+    });
 }
 
 coro::CoroTask<void> build_files(std::vector<std::string> files) {
     dftracer::utils::index::build::ResolveAndBuildInput in;
     in.files = std::move(files);
     in.require_checkpoints = true;
-    co_await dftracer::utils::run_coro_scope(
-        [&](dftracer::utils::CoroScope& scope) -> coro::CoroTask<void> {
-            co_await dftracer::utils::index::build::resolve_and_build_index(
-                &scope, std::move(in));
-        });
+    co_await coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        co_await dftracer::utils::index::build::resolve_and_build_index(
+            std::move(in));
+    });
 }
 
 coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
@@ -87,11 +85,9 @@ coro::CoroTask<dftracer::utils::index::build::ResolverResult> resolve_files(
     in.files = std::move(files);
     in.require_checkpoints = true;
     dftracer::utils::index::build::ResolverResult result;
-    co_await dftracer::utils::run_coro_scope(
-        [&](dftracer::utils::CoroScope& scope) -> coro::CoroTask<void> {
-            result =
-                co_await dftracer::utils::index::build::Resolver{}(scope, in);
-        });
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+        result = co_await dftracer::utils::index::build::Resolver{}(scope, in);
+    });
     co_return result;
 }
 

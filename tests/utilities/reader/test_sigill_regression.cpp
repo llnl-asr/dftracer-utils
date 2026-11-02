@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/frame.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/memory/heap.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -76,7 +76,7 @@ TEST_SUITE("sigill_regression") {
         std::fclose(f);
         auto indexer = std::make_shared<GzipIndexer>(gz_path, dir.file("idx"),
                                                      1u << 20, true);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
 
@@ -93,7 +93,7 @@ TEST_SUITE("sigill_regression") {
                               .from(start)
                               .to(reader.get_max_bytes()));
         std::string out;
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<char> buf(1u << 20);
             while (true) {
                 const auto got =

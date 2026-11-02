@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/scratch.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -21,7 +22,6 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/sharded_view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
@@ -92,16 +92,13 @@ static PyObject *scan_files_fn(PyObject * /*self*/, PyObject *args,
                                               recursive != 0, true);
     std::vector<FileEntry> entries;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::run_coro_scope(
-                           rt->executor(),
-                           [](dftracer::utils::CoroScope &scope,
-                              PatternDirectoryScannerUtilityInput in,
-                              std::vector<FileEntry> *out)
+            rt->submit(dftracer::utils::coro::with_scope(
+                           [in = std::move(input),
+                            out = &entries](dftracer::utils::coro::Scope &scope)
                                -> dftracer::utils::coro::CoroTask<void> {
                                PatternDirectoryScannerUtility scanner;
                                *out = co_await scanner(scope, in);
-                           },
-                           std::move(input), &entries),
+                           }),
                        "scan-files")
                 .get();
         })) {
@@ -332,16 +329,12 @@ static PyObject *build_index_batch_fn(PyObject * /*self*/, PyObject *args,
 
     IndexBuildBatchResult result;
     if (!run_blocking([&] {
-            rt->submit(dftracer::utils::run_coro_scope(
-                           rt->executor(),
-                           [](dftracer::utils::CoroScope &scope,
-                              std::shared_ptr<IndexBuildBatchConfig> cfg,
-                              IndexBuildBatchResult *out)
+            rt->submit(dftracer::utils::coro::with_scope(
+                           [cfg = batch_config,
+                            out = &result](dftracer::utils::coro::Scope &)
                                -> dftracer::utils::coro::CoroTask<void> {
-                               *out = co_await BatchBuilder::process(
-                                   &scope, std::move(cfg));
-                           },
-                           batch_config, &result),
+                               *out = co_await BatchBuilder::process(cfg);
+                           }),
                        "build-index-batch")
                 .get();
         })) {

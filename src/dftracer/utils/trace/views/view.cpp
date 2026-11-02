@@ -9,7 +9,6 @@
 #include <dftracer/utils/json/json_escape.h>
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/comparator/compare_view.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>

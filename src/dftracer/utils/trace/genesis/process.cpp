@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/spill_file.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/sketch.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/io/io.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -1505,7 +1505,7 @@ constexpr std::size_t WALK_WAYS = 64;
 // are read back in parallel. Each part's merge gives the same order either
 // way, because the order is total.
 coro::CoroTask<GResult<void>> replay(
-    CoroScope& ctx, std::vector<FilePart>& parts,
+    coro::Scope& ctx, std::vector<FilePart>& parts,
     const std::vector<GroupReader::IdMap>& maps, const GroupReader& r,
     const std::deque<SetAcc>& sets, std::deque<CallSorter>& sorters,
     GroupMem& mem, GroupProgress* progress) {
@@ -1534,9 +1534,9 @@ coro::CoroTask<GResult<void>> replay(
     for (std::size_t t = 0; t + 1 < starts.size(); ++t) {
         const ChunkRef* first = refs.data() + starts[t];
         const std::size_t n = starts[t + 1] - starts[t];
-        runs.push_back(ctx.spawn(
+        runs.push_back(ctx.spawn_future(
             [&parts, &maps, &r, &sets, &sorters, &mem, first, n, cap, ways,
-             progress](CoroScope&) -> coro::CoroTask<GResult<void>> {
+             progress]() -> coro::CoroTask<GResult<void>> {
                 std::vector<std::vector<SortRec>> bufs(ways);
                 auto st =
                     replay_chunks(parts, maps, r, sets, mem, first, n, progress,
@@ -1589,7 +1589,7 @@ std::string RunOutput::lines() const {
     return out;
 }
 
-coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
+coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
                                           std::uint64_t memory_share,
                                           GroupProgress* progress,
                                           const BorrowFn* borrow) {
@@ -1616,10 +1616,10 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     std::vector<coro::SpawnFuture<FilePart>> reads;
     reads.reserve(g.files.size());
     for (const auto& f : g.files)
-        reads.push_back(ctx.spawn([f, mem_ptr = &mem, slots_ptr = &slots,
-                                   total_slots, progress](CoroScope&) {
-            return read_file(f, mem_ptr, slots_ptr, total_slots, progress);
-        }));
+        reads.push_back(ctx.spawn_future(
+            [f, mem_ptr = &mem, slots_ptr = &slots, total_slots, progress]() {
+                return read_file(f, mem_ptr, slots_ptr, total_slots, progress);
+            }));
     std::vector<FilePart> parts = co_await coro::when_all(std::move(reads));
     if (progress) progress->enter(GroupProgress::Phase::Sort);
 
@@ -1679,24 +1679,25 @@ coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
     std::vector<coro::SpawnFuture<common::Result<void>>> walks;
     walks.reserve(ways);
     for (std::size_t w = 0; w < ways; ++w)
-        walks.push_back(ctx.spawn([&sorters, &partials, &r, w,
-                                   progress](CoroScope&)
-                                      -> coro::CoroTask<common::Result<void>> {
-            std::deque<SetAcc>& part_sets = partials[w];
-            std::uint64_t fed = 0;
-            auto walked = sorters[w].drain([&](const SortRec& s) {
-                part_sets[static_cast<std::size_t>(r.procs_[s.proc].set)].feed(
-                    s);
-                if (progress && ++fed == CHUNK_CALLS) {
+        walks.push_back(ctx.spawn_future(
+            [&sorters, &partials, &r, w,
+             progress]() -> coro::CoroTask<common::Result<void>> {
+                std::deque<SetAcc>& part_sets = partials[w];
+                std::uint64_t fed = 0;
+                auto walked = sorters[w].drain([&](const SortRec& s) {
+                    part_sets[static_cast<std::size_t>(r.procs_[s.proc].set)]
+                        .feed(s);
+                    if (progress && ++fed == CHUNK_CALLS) {
+                        progress->walked.fetch_add(fed,
+                                                   std::memory_order_relaxed);
+                        progress->updated();
+                        fed = 0;
+                    }
+                });
+                if (progress)
                     progress->walked.fetch_add(fed, std::memory_order_relaxed);
-                    progress->updated();
-                    fed = 0;
-                }
-            });
-            if (progress)
-                progress->walked.fetch_add(fed, std::memory_order_relaxed);
-            co_return walked;
-        }));
+                co_return walked;
+            }));
     auto walked = co_await coro::when_all(std::move(walks));
     for (auto& st : walked) {
         if (!st) {

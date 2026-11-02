@@ -3,10 +3,10 @@
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/run_loop.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -24,9 +24,9 @@ namespace {
 
 coro::CoroTask<int> spawn_and_sum(int n) {
     std::vector<int> results(n, 0);
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (int i = 0; i < n; ++i) {
-            scope.spawn([&results, i](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&results, i]() -> coro::CoroTask<void> {
                 results[i] = i + 1;
                 co_return;
             });
@@ -43,10 +43,10 @@ coro::CoroTask<int> produce_consume(int producers, int per_producer) {
     auto channel = coro::make_channel<int>(2);
     int total = 0;
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (int p = 0; p < producers; ++p) {
-            scope.spawn([ch = channel->producer(), per_producer](
-                            CoroScope&) mutable -> coro::CoroTask<void> {
+            scope.spawn([ch = channel->producer(),
+                         per_producer]() mutable -> coro::CoroTask<void> {
                 auto guard = ch.guard();
                 for (int i = 0; i < per_producer; ++i) {
                     if (!co_await ch.send(1)) co_return;
@@ -54,7 +54,7 @@ coro::CoroTask<int> produce_consume(int producers, int per_producer) {
             });
         }
 
-        scope.spawn([&channel, &total](CoroScope&) -> coro::CoroTask<void> {
+        scope.spawn([&channel, &total]() -> coro::CoroTask<void> {
             while (auto item = co_await channel->receive()) {
                 total += *item;
             }

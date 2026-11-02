@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/versions.h>
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -289,8 +290,8 @@ std::size_t merge_shard_set(const std::string& root,
     std::size_t files = 0;
     std::optional<agg::tier::Config> config;
 
-    default_runtime().run_blocking(
-        "shard merge", [&](CoroScope&) -> coro::CoroTask<void> {
+    default_runtime().block_on(
+        coro::named("shard merge", [&]() -> coro::CoroTask<void> {
             idx::Index out = common::unwrap(idx::Index::open(out_idx));
 
             for (const auto& shard : manifest->shards) {
@@ -335,7 +336,7 @@ std::size_t merge_shard_set(const std::string& root,
                     ++files;
                 }
             }
-        });
+        }()));
 
     return files;
 }

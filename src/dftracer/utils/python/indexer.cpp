@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/index/index.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <structmember.h>
 
@@ -182,16 +182,11 @@ static PyObject *CheckpointIndexer_build(CheckpointIndexerObject *self,
         IndexBuildBatchResult batch_result;
 
         if (!run_blocking([&] {
-                rt->submit(run_coro_scope(
-                               rt->executor(),
-                               [](CoroScope &scope,
-                                  std::shared_ptr<IndexBuildBatchConfig> cfg,
-                                  IndexBuildBatchResult *out)
-                                   -> coro::CoroTask<void> {
-                                   *out = co_await BatchBuilder::process(
-                                       &scope, std::move(cfg));
-                               },
-                               batch_config, &batch_result),
+                rt->submit(coro::with_scope(
+                               [cfg = batch_config, out = &batch_result](
+                                   coro::Scope &) -> coro::CoroTask<void> {
+                                   *out = co_await BatchBuilder::process(cfg);
+                               }),
                            "indexer-build")
                     .get();
             })) {

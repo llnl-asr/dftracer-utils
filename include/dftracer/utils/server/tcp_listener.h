@@ -13,9 +13,9 @@
 #include <string>
 #include <unordered_set>
 
-namespace dftracer::utils {
-class CoroScope;
-}
+namespace dftracer::utils::coro {
+class Scope;
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::server {
 
@@ -37,11 +37,12 @@ class TcpListener {
     /// Spawns handler(client_fd, addr) for each accepted connection.
     using ConnectionHandler = std::function<coro::CoroTask<void>(
         int client_fd, struct sockaddr_in addr)>;
-    coro::CoroTask<void> accept_loop(CoroScope& scope,
+    coro::CoroTask<void> accept_loop(coro::Scope& scope,
                                      ConnectionHandler handler);
 
     /// Request graceful shutdown. The accept loop will break on the
-    /// next iteration. In-flight handlers drain via CoroScope.
+    /// next iteration. In-flight handlers drain via @ref
+    /// dftracer::utils::coro::Scope "Scope".
     void stop();
 
     int fd() const { return listen_fd_; }

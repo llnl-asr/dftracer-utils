@@ -162,7 +162,7 @@ TEST_SUITE("RawGzipFuse") {
 
         gzi::GzipBuildArtifacts arts;
         run_coro(
-            [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+            [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
                 dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
                 vl.emplace_back(driver);
                 auto a = co_await gzi::build_gzip_index_artifacts(
@@ -437,7 +437,7 @@ std::vector<std::string> record_index_pass(const std::string& gz,
     dftracer::utils::index::build::ParseGate gate(nullptr, workers);
     if (workers > 1) driver.set_parse_gate(gate);
     run_coro(
-        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+        [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
             vl.emplace_back(driver);
             auto a = co_await gzi::build_gzip_index_artifacts(
@@ -523,7 +523,7 @@ TEST_CASE("a fold that throws while parsing ahead ends the index pass") {
     driver.set_parse_gate(gate);
     bool threw = false;
     run_coro(
-        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+        [&](coro::Scope& scope) -> dftracer::utils::coro::CoroTask<void> {
             dftracer::utils::index::gzip::CheckpointIndexer::VisitorList vl;
             vl.emplace_back(driver);
             try {

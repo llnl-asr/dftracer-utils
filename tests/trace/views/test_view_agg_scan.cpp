@@ -40,12 +40,12 @@ TEST_SUITE("View") {
         auto collect_engine = [](const scan::ScanPlan& v) {
             static dftracer::utils::Runtime rt;
             dataframe::DataFrame result;
-            rt.run_blocking("occ-engine",
-                            [&](dftracer::utils::CoroScope&)
-                                -> dftracer::utils::coro::CoroTask<void> {
-                                result =
-                                    co_await detail::run_collect_via_engine(*v);
-                            });
+            rt.block_on(coro::named(
+                "occ-engine",
+                coro::with_scope(
+                    [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
+                        result = co_await detail::run_collect_via_engine(*v);
+                    })));
             return detail::apply_agg_post_ops(std::move(result), *v);
         };
         auto collect_groupmap = [](const scan::ScanPlan& v) {

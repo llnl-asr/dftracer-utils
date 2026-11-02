@@ -21,11 +21,12 @@ static stats::DetailedStatistics run_detail(const stats::DetailStatsView& sv,
                                             const stats::DetailNeeds& needs) {
     dftracer::utils::Runtime rt;
     stats::DetailedStatistics result;
-    rt.run_blocking("detail",
-                    [&](dftracer::utils::CoroScope&)
-                        -> dftracer::utils::coro::CoroTask<void> {
-                        result = co_await sv.collect(needs);
-                    });
+    rt.block_on(dftracer::utils::coro::named(
+        "detail", dftracer::utils::coro::with_scope(
+                      [&](dftracer::utils::coro::Scope&)
+                          -> dftracer::utils::coro::CoroTask<void> {
+                          result = co_await sv.collect(needs);
+                      })));
     return result;
 }
 

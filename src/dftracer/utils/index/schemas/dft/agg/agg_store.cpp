@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/dstd/big_endian.h>
 #include <dftracer/utils/index/schemas/dft/agg/agg_store.h>
 #include <dftracer/utils/index/store/layout.h>
@@ -29,19 +30,19 @@ constexpr std::array<std::string_view, 2> META_NAMES = {CONFIG_NAME,
 void publish_meta(const Index& index, std::string_view name,
                   std::string_view value) {
     dstd::Expected<void, dstd::Error> published;
-    default_runtime().run_blocking(
-        "aggregation meta", [&](CoroScope&) -> coro::CoroTask<void> {
+    default_runtime().block_on(
+        coro::named("aggregation meta", [&]() -> coro::CoroTask<void> {
             published = co_await put_agg_meta(index, name, value);
-        });
+        }()));
     common::unwrap(std::move(published));
 }
 
 void drop_meta(const Index& index, std::string_view name) {
     dstd::Expected<void, dstd::Error> dropped;
-    default_runtime().run_blocking(
-        "aggregation meta drop", [&](CoroScope&) -> coro::CoroTask<void> {
+    default_runtime().block_on(
+        coro::named("aggregation meta drop", [&]() -> coro::CoroTask<void> {
             dropped = co_await delete_agg_meta(index, name);
-        });
+        }()));
     common::unwrap(std::move(dropped));
 }
 
@@ -117,11 +118,11 @@ void clear(const Index& index) {
     const dstd::Span<const dstd::StringView> listed(paths.data(), paths.size());
 
     dstd::Expected<void, dstd::Error> dropped;
-    default_runtime().run_blocking(
-        "aggregation tier clear", [&](CoroScope&) -> coro::CoroTask<void> {
+    default_runtime().block_on(
+        coro::named("aggregation tier clear", [&]() -> coro::CoroTask<void> {
             dropped =
                 co_await remove_extension(index, layout::Ext::Agg, listed);
-        });
+        }()));
     common::unwrap(std::move(dropped));
     for (const std::string_view name : META_NAMES) drop_meta(index, name);
 }

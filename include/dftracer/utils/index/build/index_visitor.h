@@ -6,9 +6,9 @@
 
 #include <cstddef>
 
-namespace dftracer::utils {
-class CoroScope;
-}  // namespace dftracer::utils
+namespace dftracer::utils::coro {
+class Scope;
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::index::build {
 
@@ -21,7 +21,7 @@ class IndexVisitor {
     /// The scope the indexer runs this file in, called after begin(). A
     /// visitor may spawn work there that it awaits by flush(); the scope
     /// outlives the file's chunks. Default: ignored.
-    virtual void bind_scope(CoroScope* /*scope*/) {}
+    virtual void bind_scope(coro::Scope* /*scope*/) {}
 
     virtual coro::CoroTask<void> on_checkpoint(std::size_t checkpoint_idx) = 0;
 

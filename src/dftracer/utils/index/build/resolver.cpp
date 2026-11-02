@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -16,7 +17,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <cstdint>
@@ -390,7 +390,7 @@ std::vector<utilities::filesystem::FileEntry> scanned_entries(
 }
 
 coro::CoroTask<ResolverResult> Resolver::operator()(
-    CoroScope& ctx, const ResolverInput& input) const {
+    coro::Scope& ctx, const ResolverInput& input) const {
     DFTRACER_UTILS_TRACE_SCOPE("resolve index");
     ResolverResult result;
 
@@ -464,9 +464,9 @@ coro::CoroTask<ResolverResult> Resolver::operator()(
             group_input.schema = input.schema;
             group_input.aggregation_config = input.aggregation_config;
 
-            futures.push_back(ctx.spawn(
-                [gi = std::move(group_input)](
-                    CoroScope&) mutable -> coro::CoroTask<ResolveGroupOutput> {
+            futures.push_back(
+                ctx.spawn_future([gi = std::move(group_input)]() mutable
+                                     -> coro::CoroTask<ResolveGroupOutput> {
                     co_return resolve_group_sync(std::move(gi));
                 }));
         }

@@ -46,12 +46,13 @@ inline dftracer::utils::dataframe::DataFrame count_by_name(
             .group_by({dftracer::utils::trace::views::GroupKey::name()})
             .agg({{dftracer::utils::trace::views::AggOp::Count, "", "n"}});
     dftracer::utils::dataframe::DataFrame out;
-    dftracer::utils::default_runtime().run_blocking(
+    dftracer::utils::default_runtime().block_on(dftracer::utils::coro::named(
         "bootstrap-parallelism",
-        [&](dftracer::utils::CoroScope&)
-            -> dftracer::utils::coro::CoroTask<void> {
-            out = co_await view.collect();
-        });
+        dftracer::utils::coro::with_scope(
+            [&](dftracer::utils::coro::Scope&)
+                -> dftracer::utils::coro::CoroTask<void> {
+                out = co_await view.collect();
+            })));
     return out;
 }
 

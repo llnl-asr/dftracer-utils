@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
-// Permit-based blocking handoff: re-entrant run_blocking() must release the
+// Permit-based blocking handoff: re-entrant block_on() must release the
 // caller's run slot, keep the pool making progress, and conserve permits. Run
 // under asan/tsan for the real value: worker churn and permit park/unpark while
 // nested scopes drain. No deadlock, no stranded work, exact permit accounting.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 
 #include <atomic>
@@ -34,6 +35,19 @@ bool settle(ThreadPoolExecutor* exec, std::size_t cap) {
     return false;
 }
 
+// Synchronously waits, on a worker thread, on an inner scope.
+coro::CoroTask<void> outer_task(Runtime& rt, std::atomic<int>& inner_done) {
+    rt.block_on(coro::named(
+        "inner", coro::with_scope([&](coro::Scope& is) -> coro::CoroTask<void> {
+            is.spawn([&]() -> coro::CoroTask<void> {
+                inner_done.fetch_add(1, std::memory_order_relaxed);
+                co_return;
+            });
+            co_return;
+        })));
+    co_return;
+}
+
 }  // namespace
 
 TEST_SUITE("BlockingHandoff") {
@@ -49,20 +63,10 @@ TEST_SUITE("BlockingHandoff") {
         const int N = 300;
 
         // Each outer task, on a worker thread, synchronously waits on an inner
-        // scope via run_blocking. That parks the worker, so without a handoff a
+        // scope via block_on. That parks the worker, so without a handoff a
         // burst of these would starve the pool of runners.
         for (int i = 0; i < N; ++i) {
-            rt.scope("outer", [&](CoroScope&) -> coro::CoroTask<void> {
-                rt.run_blocking(
-                    "inner", [&](CoroScope& is) -> coro::CoroTask<void> {
-                        is.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                            inner_done.fetch_add(1, std::memory_order_relaxed);
-                            co_return;
-                        });
-                        co_await is.join();
-                    });
-                co_return;
-            });
+            rt.submit(outer_task(rt, inner_done), "outer");
         }
         rt.wait_all();
 
@@ -87,24 +91,27 @@ TEST_SUITE("BlockingHandoff") {
         std::atomic<int> reached{0};
         const int DEPTH = 8;
 
-        rt.scope("root", [&](CoroScope&) -> coro::CoroTask<void> {
-              std::function<void(int)> nest = [&](int d) {
-                  if (d == 0) {
-                      reached.fetch_add(1, std::memory_order_relaxed);
-                      return;
-                  }
-                  rt.run_blocking(
-                      "level", [&, d](CoroScope& s) -> coro::CoroTask<void> {
-                          s.spawn([&, d](CoroScope&) -> coro::CoroTask<void> {
-                              nest(d - 1);
-                              co_return;
-                          });
-                          co_await s.join();
-                      });
-              };
-              nest(DEPTH);
-              co_return;
-          }).get();
+        auto root = [&]() -> coro::CoroTask<void> {
+            std::function<void(int)> nest = [&](int d) {
+                if (d == 0) {
+                    reached.fetch_add(1, std::memory_order_relaxed);
+                    return;
+                }
+                rt.block_on(coro::named(
+                    "level",
+                    coro::with_scope(
+                        [&, d](coro::Scope& s) -> coro::CoroTask<void> {
+                            s.spawn([&, d]() -> coro::CoroTask<void> {
+                                nest(d - 1);
+                                co_return;
+                            });
+                            co_return;
+                        })));
+            };
+            nest(DEPTH);
+            co_return;
+        };
+        rt.block_on(coro::named("root", root()));
 
         CHECK(reached.load() == 1);
         CHECK(settle(exec, 2));

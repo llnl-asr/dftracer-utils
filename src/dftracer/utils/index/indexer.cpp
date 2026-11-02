@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
@@ -182,9 +184,10 @@ store::IndexExtension tier_extension(const std::string& name) {
 template <class T, class Fn>
 T block_on(Runtime& rt, const char* name, Fn fn) {
     T out;
-    rt.run_blocking(name, [&](CoroScope& scope) -> coro::CoroTask<void> {
-        out = co_await fn(scope);
-    });
+    rt.block_on(coro::named(
+        name, coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
+            out = co_await fn(scope);
+        })));
     return out;
 }
 
@@ -232,15 +235,16 @@ Indexer Indexer::open(std::vector<std::string> paths, IndexerOptions options) {
             continue;
         }
         std::vector<utilities::filesystem::FileEntry> matched;
-        impl->runtime().run_blocking(
-            "indexer-open", [&](CoroScope& scope) -> coro::CoroTask<void> {
+        impl->runtime().block_on(coro::named(
+            "indexer-open",
+            coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 utilities::filesystem::PatternDirectoryScannerUtility scanner;
                 matched = co_await scanner(
                     scope,
                     utilities::filesystem::PatternDirectoryScannerUtilityInput{
                         p, utilities::filesystem::trace_file_patterns(), false,
                         /*with_size=*/false});
-            });
+            })));
         for (auto& e : matched)
             impl->paths.push_back(std::string(e.path.str()));
     }
@@ -264,12 +268,12 @@ Indexer Indexer::open_scanned(
     return finish_open(std::move(impl));
 }
 
-coro::CoroTask<IndexStatus> Indexer::status(CoroScope& scope) const {
+coro::CoroTask<IndexStatus> Indexer::status(coro::Scope& scope) const {
     co_return co_await status_of(scope, impl_->take_entries());
 }
 
 coro::CoroTask<IndexStatus> Indexer::status_of(
-    CoroScope& scope,
+    coro::Scope& scope,
     std::vector<utilities::filesystem::FileEntry> entries) const {
     build::Resolver resolver;
     auto result =
@@ -296,7 +300,7 @@ coro::CoroTask<IndexStatus> Indexer::status_of(
     co_return status;
 }
 
-coro::CoroTask<IndexStatus> Indexer::build(CoroScope& scope) {
+coro::CoroTask<IndexStatus> Indexer::build(coro::Scope& scope) {
     auto entries = impl_->take_entries();
     auto before = co_await status_of(scope, entries);
     if (before.needs_work.empty() && !before.aggregation_needs_rebuild)
@@ -305,22 +309,22 @@ coro::CoroTask<IndexStatus> Indexer::build(CoroScope& scope) {
                                     ? before.total
                                     : before.needs_work.size();
     throw_on_failures(co_await build::resolve_and_build_index(
-        &scope, impl_->build_input(false, entries)));
+        impl_->build_input(false, entries)));
     auto after = co_await status_of(scope, std::move(entries));
     after.indexed = indexed;
     co_return after;
 }
 
-coro::CoroTask<IndexStatus> Indexer::rebuild(CoroScope& scope) {
+coro::CoroTask<IndexStatus> Indexer::rebuild(coro::Scope& scope) {
     auto entries = impl_->take_entries();
     throw_on_failures(co_await build::resolve_and_build_index(
-        &scope, impl_->build_input(true, entries)));
+        impl_->build_input(true, entries)));
     auto after = co_await status_of(scope, std::move(entries));
     after.indexed = impl_->paths.size();
     co_return after;
 }
 
-coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
+coro::CoroTask<std::vector<IndexedFile>> Indexer::files(coro::Scope&) const {
     std::vector<IndexedFile> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
         if (!common::unwrap(
@@ -346,7 +350,8 @@ coro::CoroTask<std::vector<IndexedFile>> Indexer::files(CoroScope&) const {
     co_return out;
 }
 
-coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
+coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(
+    coro::Scope&) const {
     const auto config = impl_->bloom_config();
     std::vector<FileManifest> out;
     for (const auto& [index_path, traces] : impl_->by_index()) {
@@ -399,7 +404,7 @@ coro::CoroTask<std::vector<FileManifest>> Indexer::manifest(CoroScope&) const {
 }
 
 coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
-    CoroScope&, std::string query) const {
+    coro::Scope&, std::string query) const {
     auto parsed = duql::Query::from_string(query);
     if (!parsed)
         throw common::DFTUtilsException::cat(
@@ -435,7 +440,7 @@ coro::CoroTask<std::vector<FileExplain>> Indexer::explain(
     co_return out;
 }
 
-coro::CoroTask<IndexStatus> Indexer::rebuild_extension(CoroScope& scope,
+coro::CoroTask<IndexStatus> Indexer::rebuild_extension(coro::Scope& scope,
                                                        std::string extension) {
     const auto ext = tier_extension(extension);
     auto entries = impl_->take_entries();
@@ -445,14 +450,13 @@ coro::CoroTask<IndexStatus> Indexer::rebuild_extension(CoroScope& scope,
     in.bloom_config = impl_->bloom_config();
     in.bloom_config.extensions.add(ext);
     in.rebuild_extensions.add(ext);
-    throw_on_failures(
-        co_await build::resolve_and_build_index(&scope, std::move(in)));
+    throw_on_failures(co_await build::resolve_and_build_index(std::move(in)));
     auto after = co_await status_of(scope, std::move(entries));
     after.indexed = impl_->paths.size();
     co_return after;
 }
 
-coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
+coro::CoroTask<IndexStatus> Indexer::drop_extension(coro::Scope& scope,
                                                     std::string extension) {
     const auto ext = tier_extension(extension);
     for (const auto& [index_path, traces] : impl_->by_index()) {
@@ -484,40 +488,40 @@ coro::CoroTask<IndexStatus> Indexer::drop_extension(CoroScope& scope,
 
 IndexStatus Indexer::status() const {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-status",
-                                 [this](CoroScope& s) { return status(s); });
+                                 [this](coro::Scope& s) { return status(s); });
 }
 
 IndexStatus Indexer::build() {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-build",
-                                 [this](CoroScope& s) { return build(s); });
+                                 [this](coro::Scope& s) { return build(s); });
 }
 
 IndexStatus Indexer::rebuild() {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-rebuild",
-                                 [this](CoroScope& s) { return rebuild(s); });
+                                 [this](coro::Scope& s) { return rebuild(s); });
 }
 
 std::vector<IndexedFile> Indexer::files() const {
     return block_on<std::vector<IndexedFile>>(
         impl_->runtime(), "indexer-files",
-        [this](CoroScope& s) { return files(s); });
+        [this](coro::Scope& s) { return files(s); });
 }
 
 std::vector<FileManifest> Indexer::manifest() const {
     return block_on<std::vector<FileManifest>>(
         impl_->runtime(), "indexer-manifest",
-        [this](CoroScope& s) { return manifest(s); });
+        [this](coro::Scope& s) { return manifest(s); });
 }
 
 std::vector<FileExplain> Indexer::explain(std::string query) const {
     return block_on<std::vector<FileExplain>>(
         impl_->runtime(), "indexer-explain",
-        [this, &query](CoroScope& s) { return explain(s, query); });
+        [this, &query](coro::Scope& s) { return explain(s, query); });
 }
 
 IndexStatus Indexer::rebuild_extension(std::string extension) {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-rebuild-extension",
-                                 [this, &extension](CoroScope& s) {
+                                 [this, &extension](coro::Scope& s) {
                                      return rebuild_extension(s, extension);
                                  });
 }
@@ -537,7 +541,7 @@ dataframe::DataFrame Indexer::rowset(std::string name) const {
 
 IndexStatus Indexer::drop_extension(std::string extension) {
     return block_on<IndexStatus>(impl_->runtime(), "indexer-drop-extension",
-                                 [this, &extension](CoroScope& s) {
+                                 [this, &extension](coro::Scope& s) {
                                      return drop_extension(s, extension);
                                  });
 }

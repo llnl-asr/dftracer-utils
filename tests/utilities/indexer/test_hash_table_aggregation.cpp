@@ -73,8 +73,8 @@ TEST_SUITE("hash_table_aggregation") {
         input.build_bloom = false;
 
         std::string index_path;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto res = co_await resolve_and_build_index(&scope, input);
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto res = co_await resolve_and_build_index(input);
             index_path = res.index_path;
             co_return;
         });

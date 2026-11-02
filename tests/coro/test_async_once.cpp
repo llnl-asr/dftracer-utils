@@ -2,10 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/async_once.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 
@@ -23,7 +23,7 @@ TEST_SUITE("AsyncOnce") {
         const int n = 32;
         std::vector<std::shared_ptr<int>> results(n);
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<std::shared_ptr<int>>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
@@ -48,7 +48,7 @@ TEST_SUITE("AsyncOnce") {
         coro::AsyncOnce<int> once;
         std::atomic<int> calls{0};
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             int a = co_await once.get([&]() -> coro::CoroTask<int> {
                 calls.fetch_add(1, std::memory_order_relaxed);
                 co_return 7;

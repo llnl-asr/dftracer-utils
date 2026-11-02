@@ -42,9 +42,9 @@ namespace {
 // the files' stale extensions; rewriting a current one is correct, only
 // slower.
 coro::CoroTask<std::vector<ResolverResult::Failure>> build_tier(
-    CoroScope* scope, std::vector<std::string> files,
-    const ResolveAndBuildInput& input, index::store::ExtensionMask tier,
-    const std::string& schema, std::size_t parallelism) {
+    std::vector<std::string> files, const ResolveAndBuildInput& input,
+    index::store::ExtensionMask tier, const std::string& schema,
+    std::size_t parallelism) {
     auto config = std::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
     config->index_dir = input.index_dir;
@@ -57,7 +57,7 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_tier(
     config->bloom_config.extensions = tier;
     DFTRACER_UTILS_LOG_INFO("Building the index tier for %zu files",
                             config->file_paths.size());
-    auto batch = co_await BatchBuilder::process(scope, std::move(config));
+    auto batch = co_await BatchBuilder::process(std::move(config));
     std::vector<ResolverResult::Failure> failures;
     for (const auto& r : batch.results)
         if (!r.success && !r.was_skipped)
@@ -69,9 +69,9 @@ namespace agg = index::schemas::dft::agg;
 
 // Aggregates files whose members are current, leaving every other extension.
 coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
-    CoroScope* scope, std::vector<std::string> files,
-    const ResolveAndBuildInput& input, const std::string& index_path,
-    const std::string& schema, std::size_t parallelism) {
+    std::vector<std::string> files, const ResolveAndBuildInput& input,
+    const std::string& index_path, const std::string& schema,
+    std::size_t parallelism) {
     AggRun run = start_aggregation(index_path, input.aggregation_config);
     auto config = std::make_shared<IndexBuildBatchConfig>();
     config->file_paths = std::move(files);
@@ -84,7 +84,7 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
     config->schema = schema;
     config->agg_fold_factory = run.factory;
     DFTRACER_UTILS_LOG_INFO("Aggregating %zu files", config->file_paths.size());
-    auto batch = co_await BatchBuilder::process(scope, std::move(config));
+    auto batch = co_await BatchBuilder::process(std::move(config));
     finish_aggregation(run, batch);
     std::vector<ResolverResult::Failure> failures;
     for (const auto& r : batch.results)
@@ -94,7 +94,7 @@ coro::CoroTask<std::vector<ResolverResult::Failure>> build_aggregation(
 }
 
 coro::CoroTask<ResolverResult> resolve_and_build_once(
-    CoroScope* scope, ResolveAndBuildInput input) {
+    ResolveAndBuildInput input) {
     std::size_t parallelism = input.parallelism;
     if (parallelism == 0) parallelism = default_runtime().threads();
 
@@ -160,8 +160,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
             }
         for (auto& [schema, group] : tier_by_schema) {
             auto failures =
-                co_await build_tier(scope, std::move(group.first), input,
-                                    group.second, schema, parallelism);
+                co_await build_tier(std::move(group.first), input, group.second,
+                                    schema, parallelism);
             for (auto& f : failures) result.failures.push_back(std::move(f));
         }
 
@@ -169,8 +169,8 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         for (const auto& item : result.needs_aggregation)
             agg_by_schema[item.schema].push_back(item.file_path);
         for (auto& [schema, files] : agg_by_schema) {
-            auto failures = co_await build_aggregation(scope, std::move(files),
-                                                       input, result.index_path,
+            auto failures = co_await build_aggregation(std::move(files), input,
+                                                       result.index_path,
                                                        schema, parallelism);
             for (auto& f : failures) result.failures.push_back(std::move(f));
         }
@@ -249,7 +249,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_once(
         batch_config->agg_fold_factory = agg_run->factory;
 
         auto batch_result = co_await index::build::BatchBuilder::process(
-            scope, std::move(batch_config));
+            std::move(batch_config));
         for (const auto& r : batch_result.results) {
             if (!r.success && !r.was_skipped)
                 result.failures.push_back({r.file_path, r.error_message});
@@ -314,8 +314,7 @@ coro::CoroTask<IndexWork> files_needing_index(ResolverInput input) {
     co_return work;
 }
 
-coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
-                                          std::string directory,
+coro::CoroTask<void> ensure_indexes_fresh(std::string directory,
                                           std::vector<std::string> files,
                                           std::string index_dir,
                                           bool force_rebuild) {
@@ -325,15 +324,15 @@ coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
     in.index_dir = std::move(index_dir);
     in.require_checkpoints = true;
     in.force_rebuild = force_rebuild;
-    co_await resolve_and_build_index(scope, std::move(in));
+    co_await resolve_and_build_index(std::move(in));
 }
 
-coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
-                                        std::string file, std::string index_dir,
+coro::CoroTask<void> ensure_index_fresh(std::string directory, std::string file,
+                                        std::string index_dir,
                                         bool force_rebuild) {
     std::vector<std::string> files;
     if (!file.empty()) files.push_back(std::move(file));
-    co_await ensure_indexes_fresh(scope, std::move(directory), std::move(files),
+    co_await ensure_indexes_fresh(std::move(directory), std::move(files),
                                   std::move(index_dir), force_rebuild);
 }
 
@@ -356,7 +355,7 @@ bool mentions_corruption(std::string_view text) {
 // build clears it and aggregates again, once. Corruption that persists reaches
 // the caller with the index directories named. Any other error is passed on.
 coro::CoroTask<ResolverResult> resolve_and_build_index(
-    CoroScope* scope, ResolveAndBuildInput input) {
+    ResolveAndBuildInput input) {
     std::set<std::string> roots;
     for (const auto& file : input.files)
         roots.insert(
@@ -366,7 +365,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
             trace::internal::determine_index_path(entry.path, input.index_dir));
     std::string failure;
     try {
-        co_return co_await resolve_and_build_once(scope, input);
+        co_return co_await resolve_and_build_once(input);
     } catch (const std::exception& e) {
         if (!mentions_corruption(e.what())) throw;
         failure = e.what();
@@ -385,7 +384,7 @@ coro::CoroTask<ResolverResult> resolve_and_build_index(
         }
     std::string retry_failure;
     try {
-        co_return co_await resolve_and_build_once(scope, std::move(input));
+        co_return co_await resolve_and_build_once(std::move(input));
     } catch (const std::exception& e) {
         if (!mentions_corruption(e.what())) throw;
         retry_failure = e.what();

@@ -21,10 +21,6 @@
 #include <string_view>
 #include <vector>
 
-namespace dftracer::utils {
-class CoroScope;
-}  // namespace dftracer::utils
-
 namespace dftracer::utils::dstd {
 class StringIntern;
 }  // namespace dftracer::utils::dstd
@@ -38,8 +34,6 @@ struct GzipMember;
 }  // namespace dftracer::utils::index::gzip
 
 namespace dftracer::utils::index::build {
-
-using dftracer::utils::CoroScope;
 
 /// Bytes of memory, reserved capacity included, a sink holds before its worker
 /// commits it. Every worker holds one, so a large value costs memory per
@@ -154,7 +148,7 @@ struct IndexBuildBatchResult {
 class BatchBuilder {
    public:
     static coro::CoroTask<IndexBuildBatchResult> process(
-        CoroScope* scope, std::shared_ptr<IndexBuildBatchConfig> config);
+        std::shared_ptr<IndexBuildBatchConfig> config);
 };
 
 }  // namespace dftracer::utils::index::build

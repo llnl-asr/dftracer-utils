@@ -33,12 +33,12 @@
 // allocated bytes and that both equal the bytes the size tables imply.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <memory_probe.h>
@@ -162,9 +162,8 @@ void group_by(const Sizes& s) {
 
 void genesis(const std::string& root) {
     default_runtime()
-        .submit(run_coro_scope(
-            default_runtime().executor(),
-            [&](CoroScope& ctx) { return genesis_run(ctx, root); }))
+        .submit(coro::with_scope(
+            [&](coro::Scope& ctx) { return genesis_run(ctx, root); }))
         .wait();
 }
 

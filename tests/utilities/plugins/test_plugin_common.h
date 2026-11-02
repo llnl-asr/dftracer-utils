@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #ifndef DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
 #define DFTRACER_UTILS_TESTS_PLUGIN_COMMON_H
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/plugins/plugins.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
@@ -37,14 +38,13 @@ inline dftracer::utils::plugins::PluginRun run_set(
     const dftracer::utils::plugins::Plugins& set,
     const dftracer::utils::trace::views::View& view,
     const char* tag = "plugin-run") {
-    using dftracer::utils::CoroScope;
     using dftracer::utils::Runtime;
     using dftracer::utils::coro::CoroTask;
 
     dftracer::utils::plugins::PluginRun out;
     Runtime rt(2);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> CoroTask<void> {
+    auto task = dftracer::utils::coro::with_scope(
+        [&](dftracer::utils::coro::Scope&) -> CoroTask<void> {
             auto run = co_await set.run(view);
             REQUIRE(run.has_value());
             out = std::move(*run);

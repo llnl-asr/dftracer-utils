@@ -12,6 +12,8 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -539,8 +541,8 @@ void run_on_pool(const PipelineArgs& pipeline, const char* name, Func&& func) {
     settings.threads = pipeline.executor_threads;
     settings.io_threads = pipeline.io_threads;
     if (pipeline.eager) settings.eager = true;
-    configure_default_runtime(settings).run_blocking(name,
-                                                     std::forward<Func>(func));
+    configure_default_runtime(settings).block_on(
+        coro::named(name, coro::with_scope(std::forward<Func>(func))));
 }
 
 inline PipelineConfig build_pipeline_config(const std::string& name,
@@ -630,7 +632,7 @@ inline std::vector<utilities::filesystem::FileEntry> scan_trace_files_on_pool(
 // ctx.spawn (context lets a recursive walk fan out per subdirectory); sizes
 // are not populated. Returns the matched paths.
 inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
-    CoroScope& ctx, const std::string& directory, bool recursive) {
+    coro::Scope& ctx, const std::string& directory, bool recursive) {
     utilities::filesystem::PatternDirectoryScannerUtility scanner;
     utilities::filesystem::PatternDirectoryScannerUtilityInput scan_input{
         directory, utilities::filesystem::trace_file_patterns(), recursive};
@@ -649,7 +651,7 @@ inline coro::CoroTask<std::vector<std::string>> scan_directory_trace_files(
 // neither a regular file nor a directory (template param so it inlines).
 template <class OnMissing>
 coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
-    CoroScope& ctx, const std::vector<std::string>& inputs, bool recursive,
+    coro::Scope& ctx, const std::vector<std::string>& inputs, bool recursive,
     OnMissing&& on_missing) {
     std::vector<std::string> out;
     for (const auto& in : inputs) {
@@ -669,7 +671,7 @@ coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
 }
 
 inline coro::CoroTask<std::vector<std::string>> collect_input_trace_files(
-    CoroScope& ctx, const std::vector<std::string>& inputs, bool recursive) {
+    coro::Scope& ctx, const std::vector<std::string>& inputs, bool recursive) {
     co_return co_await collect_input_trace_files(ctx, inputs, recursive,
                                                  [](const std::string&) {});
 }
@@ -680,10 +682,11 @@ template <class Body>
 int run_single_task(const std::string& name, const PipelineArgs& pipeline,
                     Body&& body) {
     Pipeline p(build_pipeline_config(name, pipeline));
-    auto task =
-        make_task([body = std::forward<Body>(body)](CoroScope& ctx)
-                      -> coro::CoroTask<int> { co_return co_await body(ctx); },
-                  name);
+    auto task = make_task(
+        [body = std::forward<Body>(body)](CoroScope&) -> coro::CoroTask<int> {
+            co_return co_await coro::with_scope(body);
+        },
+        name);
     p.set_source(task);
     p.set_destination(task);
     p.execute();
@@ -694,7 +697,7 @@ int run_single_task(const std::string& name, const PipelineArgs& pipeline,
 // which ICEs GCC 12/13. Leaves the scan in `entries` so the caller resolves
 // again without scanning.
 inline coro::CoroTask<int> ensure_indexes_fresh_task(
-    CoroScope& ctx, std::string directory, std::vector<std::string> files,
+    coro::Scope& ctx, std::string directory, std::vector<std::string> files,
     std::string index_dir, bool force_rebuild,
     std::vector<utilities::filesystem::FileEntry>* entries,
     dftracer::utils::index::schemas::dft::agg::AggregationConfig aggregation =
@@ -736,11 +739,12 @@ ensure_indexes_fresh_blocking(
     std::size_t checkpoint_size = 0) {
     std::vector<utilities::filesystem::FileEntry> entries;
     if (directory.empty() && files.empty()) return entries;
-    run_single_task(name, pipeline, [&](CoroScope& ctx) -> coro::CoroTask<int> {
-        co_return co_await ensure_indexes_fresh_task(
-            ctx, directory, std::move(files), index_dir, force_rebuild,
-            &entries, std::move(aggregation), checkpoint_size);
-    });
+    run_single_task(
+        name, pipeline, [&](coro::Scope& ctx) -> coro::CoroTask<int> {
+            co_return co_await ensure_indexes_fresh_task(
+                ctx, directory, std::move(files), index_dir, force_rebuild,
+                &entries, std::move(aggregation), checkpoint_size);
+        });
     return entries;
 }
 
@@ -749,12 +753,12 @@ ensure_indexes_fresh_blocking(
 // template param so it inlines on the work path (never std::function). Spawns
 // onto `scope`; the caller's enclosing scope waits for completion.
 template <class Range, class Worker>
-void parallel_for_each(CoroScope& scope, Range items, std::size_t threads,
+void parallel_for_each(coro::Scope& scope, Range items, std::size_t threads,
                        Worker worker) {
     using Item = std::decay_t<decltype(*std::begin(items))>;
     auto chan = coro::make_channel<Item>(threads * 2);
-    scope.spawn([ch = chan->producer(), items = std::move(items)](
-                    CoroScope&) mutable -> coro::CoroTask<void> {
+    scope.spawn([ch = chan->producer(),
+                 items = std::move(items)]() mutable -> coro::CoroTask<void> {
         auto guard = ch.guard();
         for (const auto& item : items) {
             const auto send_ok = co_await ch.send(item);
@@ -763,15 +767,15 @@ void parallel_for_each(CoroScope& scope, Range items, std::size_t threads,
         co_return;
     });
     for (std::size_t w = 0; w < threads; ++w) {
-        scope.spawn([ch = chan->consumer(),
-                     worker](CoroScope&) mutable -> coro::CoroTask<void> {
-            for (;;) {
-                auto item = co_await ch.receive();
-                if (!item) break;
-                co_await worker(*item);
-            }
-            co_return;
-        });
+        scope.spawn(
+            [ch = chan->consumer(), worker]() mutable -> coro::CoroTask<void> {
+                for (;;) {
+                    auto item = co_await ch.receive();
+                    if (!item) break;
+                    co_await worker(*item);
+                }
+                co_return;
+            });
     }
 }
 

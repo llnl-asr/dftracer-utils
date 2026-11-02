@@ -503,14 +503,16 @@ AggQueryResult run(const AggQuery& q) {
     Runtime& rt = runtime();
     AggQueryResult out;
     std::string error;
-    rt.run_blocking("agg-query", [&](CoroScope&) -> coro::CoroTask<void> {
-        auto r = co_await trace::run_agg_query(q);
-        if (r)
-            out = std::move(*r);
-        else
-            error = r.error().format();
-        co_return;
-    });
+    rt.block_on(
+        coro::named("agg-query",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto r = co_await trace::run_agg_query(q);
+                        if (r)
+                            out = std::move(*r);
+                        else
+                            error = r.error().format();
+                        co_return;
+                    })));
     REQUIRE_MESSAGE(error.empty(), error);
     return out;
 }
@@ -737,8 +739,9 @@ TEST_SUITE("AggQuery") {
         dstd::StringIntern strings;
         trace::comparator::SideAggregate side;
         std::string error;
-        runtime().run_blocking(
-            "comparator-side", [&](CoroScope&) -> coro::CoroTask<void> {
+        runtime().block_on(coro::named(
+            "comparator-side",
+            coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto r = co_await trace::comparator::aggregate_side(
                     files, index_dir, filters, FIVE_SECONDS_US, 0, strings);
                 if (r)
@@ -746,7 +749,7 @@ TEST_SUITE("AggQuery") {
                 else
                     error = r.error().format();
                 co_return;
-            });
+            })));
         REQUIRE_MESSAGE(error.empty(), error);
         CHECK(side.metadata_chunks_reread == 0);
         CHECK(side.group_chunks_reread == 0);

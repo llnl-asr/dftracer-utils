@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/io/io.h>
 #include <dftracer/utils/runtime/io/io_backend.h>
@@ -596,32 +597,36 @@ TEST_CASE("AsyncIO - multiple concurrent async reads") {
     std::vector<std::string> results(N);
 
     auto task = make_task(
-        [&](CoroScope& scope) -> coro::CoroTask<void> {
-            for (int i = 0; i < N; ++i) {
-                auto* path_ptr = &paths[i];
-                auto* expected_ptr = &expected[i];
-                auto* result_ptr = &results[i];
-                auto* completed_ptr = &completed;
+        [&](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                    for (int i = 0; i < N; ++i) {
+                        auto* path_ptr = &paths[i];
+                        auto* expected_ptr = &expected[i];
+                        auto* result_ptr = &results[i];
+                        auto* completed_ptr = &completed;
 
-                scope.spawn([path_ptr, expected_ptr, result_ptr, completed_ptr](
-                                CoroScope& /*s*/) -> coro::CoroTask<void> {
-                    int fd = ::open(path_ptr->c_str(), O_RDONLY);
-                    if (fd < 0) co_return;
+                        scope.spawn([path_ptr, expected_ptr, result_ptr,
+                                     completed_ptr]() -> coro::CoroTask<void> {
+                            int fd = ::open(path_ptr->c_str(), O_RDONLY);
+                            if (fd < 0) co_return;
 
-                    char buf[256] = {};
-                    ssize_t n =
-                        co_await aio::pread(fd, buf, expected_ptr->size(), 0);
-                    if (n > 0) {
-                        result_ptr->assign(buf, static_cast<std::size_t>(n));
+                            char buf[256] = {};
+                            ssize_t n = co_await aio::pread(
+                                fd, buf, expected_ptr->size(), 0);
+                            if (n > 0) {
+                                result_ptr->assign(buf,
+                                                   static_cast<std::size_t>(n));
+                            }
+
+                            ::close(fd);
+                            completed_ptr->fetch_add(1);
+                            co_return;
+                        });
                     }
 
-                    ::close(fd);
-                    completed_ptr->fetch_add(1);
                     co_return;
                 });
-            }
-
-            co_await scope.join();
             co_return;
         },
         "ConcurrentReads");

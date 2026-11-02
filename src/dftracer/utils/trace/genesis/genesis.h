@@ -3,8 +3,8 @@
 #define DFTRACER_UTILS_TRACE_GENESIS_GENESIS_H
 
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <atomic>
 #include <chrono>
@@ -149,7 +149,7 @@ struct GroupProgress {
 /// Walk `roots` for `nodes_<N>/ppn_<M>` run directories and describe their
 /// run groups, sorted by directory then set. Problems found without reading
 /// traces are reported as skips.
-coro::CoroTask<Discovery> discover(CoroScope& ctx,
+coro::CoroTask<Discovery> discover(coro::Scope& ctx,
                                    std::vector<std::string> roots);
 
 /// 16-digit lowercase hex FNV-1a of `app|system|unique_input|nodes|ppn|
@@ -181,7 +181,7 @@ using BorrowFn = std::function<std::uint64_t(std::uint64_t bytes)>;
 /// `borrow`, when given, is asked before a set is failed for its share, so a
 /// group whose state outgrows the share takes free memory of the budget
 /// instead of being run again with a larger share.
-coro::CoroTask<GroupResult> process_group(CoroScope& ctx, RunGroup group,
+coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
                                           std::uint64_t memory_share,
                                           GroupProgress* progress = nullptr,
                                           const BorrowFn* borrow = nullptr);

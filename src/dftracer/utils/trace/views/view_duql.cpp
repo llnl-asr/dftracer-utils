@@ -2,6 +2,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/batch_ops.h>
 #include <dftracer/utils/dataframe/expr.h>
@@ -1265,12 +1266,11 @@ class Sides {
     std::shared_ptr<const df::DataFrame> probe(std::size_t i) const {
         const df::LazyFrame plan = views[i]->head(TYPE_PROBE_ROWS).lazy();
         df::DataFrame f;
-        dftracer::utils::default_runtime().run_blocking(
-            "duql_side_types",
-            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+        dftracer::utils::default_runtime().block_on(
+            coro::named("duql_side_types", [&]() -> coro::CoroTask<void> {
                 f = co_await plan.collect();
                 co_return;
-            });
+            }()));
         return std::make_shared<const df::DataFrame>(std::move(f));
     }
 
@@ -1336,9 +1336,8 @@ class Sides {
         std::vector<df::DataFrame> parts;
         std::uint64_t bytes = 0;
         const df::LazyFrame plan = views[i]->lazy();
-        dftracer::utils::default_runtime().run_blocking(
-            "duql_key_set",
-            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+        dftracer::utils::default_runtime().block_on(
+            coro::named("duql_key_set", [&]() -> coro::CoroTask<void> {
                 auto gen = plan.stream();
                 dstd::String row_key;
                 for (;;) {
@@ -1371,7 +1370,7 @@ class Sides {
                     parts.push_back(std::move(kept));
                 }
                 co_return;
-            });
+            }()));
         if (parts.empty()) {
             df::DataFrame none;
             for (const auto& c : columns[i]) {
@@ -1420,12 +1419,11 @@ class Sides {
             }
         const df::LazyFrame plan = views[i]->head(limit + 1).lazy();
         df::DataFrame f;
-        dftracer::utils::default_runtime().run_blocking(
-            "duql_lookup_side",
-            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+        dftracer::utils::default_runtime().block_on(
+            coro::named("duql_lookup_side", [&]() -> coro::CoroTask<void> {
                 f = co_await plan.collect();
                 co_return;
-            });
+            }()));
         if (static_cast<std::uint64_t>(f.num_rows()) > max_rows)
             over_rows(name, static_cast<std::uint64_t>(f.num_rows()), max_rows);
         f = duql::flat_frame(std::move(f));

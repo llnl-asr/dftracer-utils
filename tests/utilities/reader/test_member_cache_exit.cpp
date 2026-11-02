@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <dftracer/utils/utilities/reader/trace_reader.h>
 #include <doctest/doctest.h>
@@ -63,7 +63,7 @@ TEST_CASE("member cache: fills from a read then returns" * doctest::skip()) {
     REQUIRE(cache != nullptr);
 
     std::int64_t lines = 0;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         TraceReader reader(TraceReaderConfig{gz, index_dir});
         auto gen = reader.read_lines(ReadConfig{});
         while (co_await gen.next()) ++lines;

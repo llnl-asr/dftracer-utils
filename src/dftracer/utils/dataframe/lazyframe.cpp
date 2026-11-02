@@ -2,6 +2,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task_abi.h>        // task_to_abi
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>        // streaming group-by state
@@ -39,7 +40,6 @@
 #include <dftracer/utils/dstd/transparent_string_hash.h>  // compute_memory_budget
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
 #if defined(__GLIBC__)
@@ -90,16 +90,16 @@ coro::CoroTask<void> each_column(std::size_t n,
         for (std::size_t c = 0; c < n; ++c) fn(c);
         co_return;
     }
-    auto columns_scope = [&fn, n](CoroScope& scope) -> coro::CoroTask<void> {
+    auto columns_scope = [&fn, n](coro::Scope& scope) -> coro::CoroTask<void> {
         std::vector<coro::SpawnFuture<void>> tasks;
         tasks.reserve(n);
         for (std::size_t c = 0; c < n; ++c)
-            tasks.push_back(scope.spawn(
-                [&fn, c](CoroScope&) { return column_task(&fn, c); }));
+            tasks.push_back(
+                scope.spawn_future([&fn, c]() { return column_task(&fn, c); }));
         for (auto& task : tasks) co_await task;
         co_return;
     };
-    co_await run_coro_scope(columns_scope);
+    co_await coro::with_scope(columns_scope);
 }
 
 // Collects parts of one result. Once the parts held in memory pass `budget`,

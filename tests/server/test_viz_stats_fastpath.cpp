@@ -70,13 +70,12 @@ std::string stats_body(Router& router, const std::string& target) {
     req.path = target;
     std::string body;
     Runtime rt(4);
-    auto task =
-        run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            HttpResponse resp = co_await router.handle(req);
-            CHECK(resp.status_code == 200);
-            body = resp.body;
-            co_return;
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        HttpResponse resp = co_await router.handle(req);
+        CHECK(resp.status_code == 200);
+        body = resp.body;
+        co_return;
+    });
     rt.submit(std::move(task), "stats").wait();
     rt.shutdown();
     return body;
@@ -106,8 +105,8 @@ TEST_SUITE("viz_stats_fastpath") {
             // decodes.
             namespace gzc = utilities::fileio::compress;
             Runtime rt(4);
-            auto task = run_coro_scope(
-                rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
+            auto task =
+                coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
                     co_await gzc::gzip_rechunk_to_members(
                         src, gz, /*member_size=*/4096, /*level=*/6);
                     co_await index.initialize();

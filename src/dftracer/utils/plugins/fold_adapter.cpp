@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/field_ref.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
@@ -670,8 +671,8 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
         arr::ArrowExportResult res(std::move(schema), std::move(array));
         int rc = -1;
         std::string p(path);
-        dftracer::utils::default_runtime().run_blocking(
-            "dft-plugin-ipc", [&](CoroScope&) -> coro::CoroTask<void> {
+        dftracer::utils::default_runtime().block_on(
+            coro::named("dft-plugin-ipc", [&]() -> coro::CoroTask<void> {
                 arr::IpcWriter writer;
                 const auto open_rc = co_await writer.open(p);
                 if (open_rc != 0) co_return;
@@ -680,7 +681,7 @@ int host_arrow_write_ipc(void*, [[maybe_unused]] ::ArrowArray* a,
                 const auto close_rc = co_await writer.close();
                 if (close_rc != 0) co_return;
                 rc = 0;
-            });
+            }()));
         ArrowSchemaMove(res.get_schema(), s);
         ArrowArrayMove(res.get_array(), a);
         return rc;
@@ -758,8 +759,8 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
     namespace views = trace::views;
     try {
         std::string p(path);
-        dftracer::utils::default_runtime().run_blocking(
-            "dft-plugin-trace-read", [&](CoroScope&) -> coro::CoroTask<void> {
+        dftracer::utils::default_runtime().block_on(
+            coro::named("dft-plugin-trace-read", [&]() -> coro::CoroTask<void> {
                 dftracer::utils::json::RecordParser parser;
                 views::detail::FoldEventBuffer batch_events;
                 namespace ix = dftracer::utils::index;
@@ -806,7 +807,7 @@ int host_trace_read(void* h, const char* path, dftu_stream_item_fn on_batch,
                         dftu_dataframe_free(cdf);
                     },
                     /*num_slots=*/1, /*limit=*/0);
-            });
+            }()));
         return 0;
     } catch (...) {
         return -1;

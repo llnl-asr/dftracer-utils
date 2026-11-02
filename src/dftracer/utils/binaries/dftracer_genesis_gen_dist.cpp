@@ -8,11 +8,11 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <fcntl.h>
@@ -502,7 +502,7 @@ struct Shares {
 // SLICE_BYTES of lines at a time, which the producer gathers into members, and
 // its group holds its share of `memory` until its runs are written.
 coro::CoroTask<void> group_worker(
-    CoroScope& ctx, coro::ChannelConsumer<std::size_t> in,
+    coro::Scope& ctx, coro::ChannelConsumer<std::size_t> in,
     fileio::GzipLineWriter* writer, fileio::GzipLineWriter* head_writer,
     const std::vector<genesis::RunGroup>* groups, coro::CoroSemaphore* memory,
     Shares shares, WorkerTotals* totals, Progress* progress, std::size_t w) {
@@ -617,7 +617,7 @@ bool copy_into(const std::string& from, int to, std::uint64_t offset) {
 
 // Writes this process's groups to `output`. Skips go to stderr; the summary
 // line is the caller's, after an MPI join.
-coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
+coro::CoroTask<int> run_gen_dist(coro::Scope& ctx, const GenDistArgParse* cli,
                                  Shard shard, std::string output,
                                  Report* report) {
     genesis::Discovery discovery = co_await genesis::discover(ctx, cli->roots);
@@ -712,23 +712,25 @@ coro::CoroTask<int> run_gen_dist(CoroScope& ctx, const GenDistArgParse* cli,
     auto* totals_ptr = totals.data();
     auto* progress_ptr = &progress;
     auto* memory_ptr = &memory;
-    auto run_scope = [&indices, groups, order_ptr, memory_ptr, shares,
-                      writer_ptr, head_writer_ptr, totals_ptr, threads,
-                      progress_ptr](CoroScope& scope) -> coro::CoroTask<void> {
-        scope.spawn([ch = indices->producer(), order_ptr](CoroScope&) mutable {
+    auto run_scope =
+        [&indices, groups, order_ptr, memory_ptr, shares, writer_ptr,
+         head_writer_ptr, totals_ptr, threads,
+         progress_ptr](coro::Scope& scope) -> coro::CoroTask<void> {
+        scope.spawn([ch = indices->producer(), order_ptr]() mutable {
             return group_feeder(std::move(ch), order_ptr);
         });
         for (std::size_t w = 0; w < threads; ++w) {
-            scope.spawn([in = indices->consumer(), writer_ptr, head_writer_ptr,
-                         groups, memory_ptr, shares, t = totals_ptr + w,
-                         progress_ptr, w](CoroScope& s) {
-                return group_worker(s, in, writer_ptr, head_writer_ptr, groups,
-                                    memory_ptr, shares, t, progress_ptr, w);
+            scope.spawn([&scope, in = indices->consumer(), writer_ptr,
+                         head_writer_ptr, groups, memory_ptr, shares,
+                         t = totals_ptr + w, progress_ptr, w]() {
+                return group_worker(scope, in, writer_ptr, head_writer_ptr,
+                                    groups, memory_ptr, shares, t, progress_ptr,
+                                    w);
             });
         }
         co_return;
     };
-    co_await ctx.scope(run_scope);
+    co_await coro::with_scope(run_scope);
 
     bool io_error = false;
     std::size_t runs = 0;
@@ -772,7 +774,7 @@ int run_local(GenDistArgParse& cli, Shard shard, const std::string& output,
               Report* report) {
     return binaries::run_single_task(
         "DFTracer Genesis Gen Dist", cli.pipeline,
-        [&cli, shard, output, report](CoroScope& ctx) {
+        [&cli, shard, output, report](coro::Scope& ctx) {
             return run_gen_dist(ctx, &cli, shard, output, report);
         });
 }

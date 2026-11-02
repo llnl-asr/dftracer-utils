@@ -3,9 +3,9 @@
 #define DFTRACER_UTILS_UTILITIES_REPLAY_REPLAY_H
 
 #include <dftracer/utils/coro/async_generator.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/json/parser.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/replay/trace.h>
 
 #include <atomic>
@@ -279,7 +279,7 @@ class ReplayEngine {
      * millisecond or more suspend on the timer. `result` gets the per-file
      * results merged in input order and must outlive the awaited coroutine.
      */
-    coro::CoroTask<void> run_pipelined(dftracer::utils::CoroScope& scope,
+    coro::CoroTask<void> run_pipelined(coro::Scope& scope,
                                        const std::vector<std::string>& files,
                                        ReplayResult& result,
                                        std::size_t channel_capacity = 4096);

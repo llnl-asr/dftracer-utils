@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
+#include <dftracer/utils/coro/named.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/plugins/plugin.h>
 #include <dftracer/utils/python/op_runner.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dlfcn.h>
 
 #include <cstddef>
@@ -16,7 +16,6 @@ using namespace dftracer::utils;
 namespace dftracer::utils::python {
 namespace {
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;
@@ -79,11 +78,11 @@ PyObject* jit_run_op(PyObject*, PyObject* args) {
                     compose->run(host.h, op, in_data, out_buf.data(), &rc);
                 if (task) {
                     Py_BEGIN_ALLOW_THREADS;
-                    default_runtime().run_blocking(
-                        "jit-op", [&](CoroScope&) -> coro::CoroTask<void> {
+                    default_runtime().block_on(
+                        coro::named("jit-op", [&]() -> coro::CoroTask<void> {
                             co_await *reinterpret_cast<coro::CoroTask<void>*>(
                                 task);
-                        });
+                        }()));
                     Py_END_ALLOW_THREADS;
                 }
                 ran = true;

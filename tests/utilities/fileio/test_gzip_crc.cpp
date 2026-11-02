@@ -163,7 +163,7 @@ PathResult read_with_inflater(const std::string& path, GzipRecordKind kind) {
     REQUIRE(fd >= 0);
     std::string out;
     bool ok = false;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         ReaderInflater inflater;
         CrcWindow window;
         off_t offset = 0;
@@ -194,7 +194,7 @@ PathResult reader_whole_member(const std::string& path) {
 
 PathResult indexer_stream(const std::string& path) {
     std::optional<index::gzip::GzipBuildArtifacts> art;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         CrcWindow window;
         art = co_await index::gzip::build_gzip_index_artifacts(
             path, CKPT, index::gzip::CheckpointIndexer::VisitorList{}, &scope);
@@ -226,7 +226,7 @@ PathResult truncated_decoder(const std::string& path) {
 PathResult rechunker(const std::string& path) {
     const std::string out_path = path + ".rechunked.gz";
     bool ok = true;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         CrcWindow window;
         try {
             co_await gz::gzip_rechunk_to_members(path, out_path, 1u << 20, 1);

@@ -104,9 +104,11 @@ dataframe::DataFrame engine_collect(const scan::ScanPlan& v) {
     namespace detail = dftracer::utils::trace::views::detail;
     Runtime rt;
     dataframe::DataFrame result;
-    rt.run_blocking("engine-collect", [&](CoroScope&) -> coro::CoroTask<void> {
-        result = co_await detail::run_collect_via_engine(*v);
-    });
+    rt.block_on(
+        coro::named("engine-collect",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        result = co_await detail::run_collect_via_engine(*v);
+                    })));
     return detail::apply_agg_post_ops(std::move(result), *v);
 }
 
@@ -117,10 +119,12 @@ dataframe::DataFrame scan_only(const scan::ScanPlan& v) {
     namespace detail = dftracer::utils::trace::views::detail;
     Runtime rt;
     dataframe::DataFrame result;
-    rt.run_blocking("scan-only", [&](CoroScope&) -> coro::CoroTask<void> {
-        auto st = co_await detail::build_engine_agg_state(*v);
-        result = detail::finalize_engine_result(*st, *v);
-    });
+    rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = co_await detail::build_engine_agg_state(*v);
+                        result = detail::finalize_engine_result(*st, *v);
+                    })));
     return detail::apply_agg_post_ops(std::move(result), *v);
 }
 

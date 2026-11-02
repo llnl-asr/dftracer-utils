@@ -11,6 +11,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - Move the coroutine headers from `dftracer/utils/runtime/coro/` and the executor headers from `dftracer/utils/runtime/executor/` to `dftracer/utils/coro/`, in a new `dftracer_utils_coro` library that the runtime library links.
   The types are now in namespace `dftracer::utils::coro` (for example `coro::Executor`, `coro::TimerService`), and the I/O backend accessors moved from `coro::Executor` to the runtime's `TaskExecutor`.
+- Replace `Runtime::run_blocking(name, fn)` and `Runtime::scope(name, fn)` with `Runtime::block_on(task)`, which returns the task's value.
+  Name a blocking task with `coro::named("name", task)`, and spawn children in `coro::Scope` (`include/dftracer/utils/coro/scope.h`) or `coro::with_scope(fn)` in place of `CoroScope`.
+  An error of a spawned child is now raised by the scope's join, where `CoroScope` dropped it.
 - Build each `distributed_index` worker's files as a shard on node-local disk, then merge the shards into the index root by moving their data files.
   Shard sets live in `.dftindex/shards/` with `.dftindex/shards.json`, where they lived in `.dftindex-shards`.
 - Make `consolidate_shard_set` merge the shards' data files instead of building the index again.
@@ -240,6 +243,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- Add `coro::sync_wait(executor, task)`, which runs a task on an executor and blocks the calling thread until it ends.
+- Add `coro::run_on(executor, task)`, which runs a task on another executor, and `co_await coro::this_coro::executor`.
+  A task now resumes its awaiter, and an I/O completion its waiter, on the awaiter's own executor.
 - Add a public C++ key-value store API in `dftracer/utils/store/store.h`: open a directory, register namespaces, commit batches, publish several building copies in one atomic step and read snapshots with `get`, `multi_get` and scans.
 - Store every number field of the records of each chunk as an exact column in the index, with the time, duration, pid, tid, phase, category, name and host of each record, so later queries read these values without parsing the trace.
   Indexes built before this change rebuild their aggregation data once.

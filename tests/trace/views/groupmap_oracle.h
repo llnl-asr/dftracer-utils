@@ -889,16 +889,18 @@ inline dataframe::DataFrame groupmap_oracle(const detail::scan::ScanPlan& v) {
     }
     static dftracer::utils::Runtime rt;
     dataframe::DataFrame result;
-    rt.run_blocking("groupmap-oracle",
-                    [&](dftracer::utils::CoroScope&)
-                        -> dftracer::utils::coro::CoroTask<void> {
-                        StringIntern intern;
-                        OracleAggFold agg(plan, intern);
-                        std::array<detail::Fold*, 1> folds{&agg};
-                        co_await detail::fuse(plan, vdef, folds, intern);
-                        resolve_group_keys(agg.map(), plan, agg.maps());
-                        result = to_batch(agg.map(), plan);
-                    });
+    rt.block_on(dftracer::utils::coro::named(
+        "groupmap-oracle",
+        dftracer::utils::coro::with_scope(
+            [&](dftracer::utils::coro::Scope&)
+                -> dftracer::utils::coro::CoroTask<void> {
+                StringIntern intern;
+                OracleAggFold agg(plan, intern);
+                std::array<detail::Fold*, 1> folds{&agg};
+                co_await detail::fuse(plan, vdef, folds, intern);
+                resolve_group_keys(agg.map(), plan, agg.maps());
+                result = to_batch(agg.map(), plan);
+            })));
     return detail::apply_agg_post_ops(std::move(result), plan);
 }
 

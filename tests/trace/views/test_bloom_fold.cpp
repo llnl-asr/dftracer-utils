@@ -631,11 +631,11 @@ TEST_SUITE("BloomFold - auto fields") {
         input.bloom_config.path_budget = 1024;
         input.bloom_config.auto_max_distinct = 8;
         std::string index_path;
-        dftu_utils_test::run_coro([&](dftracer::utils::CoroScope& scope)
+        dftu_utils_test::run_coro([&](dftracer::utils::coro::Scope&)
                                       -> dftracer::utils::coro::CoroTask<void> {
             auto res =
                 co_await dftracer::utils::index::build::resolve_and_build_index(
-                    &scope, input);
+                    input);
             index_path = res.index_path;
         });
         const auto snapshot = dftu_utils_test::index_snapshot(index_path);

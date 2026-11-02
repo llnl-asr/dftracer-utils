@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dataframe/series.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/file_compressor_utility.h>
 #include <dftracer/utils/utilities/fileio/file_decompressor_utility.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
@@ -34,7 +35,8 @@ std::string to_string(const char* p, std::int32_t n) {
 template <class Fn>
 bool run_sync(const char* name, Fn body) {
     try {
-        default_runtime().run_blocking(name, std::move(body));
+        default_runtime().block_on(
+            coro::named(name, coro::with_scope(std::move(body))));
         return true;
     } catch (const std::exception&) {
         return false;
@@ -57,7 +59,7 @@ dftu_series* scan_dir(const char* root, std::int32_t root_len) {
         dstd::StringView(root, static_cast<std::size_t>(root_len))};
     std::vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir",
-                  [&](CoroScope& scope) -> coro::CoroTask<void> {
+                  [&](coro::Scope& scope) -> coro::CoroTask<void> {
                       filesystem::DirectoryScannerUtility scanner;
                       entries = co_await scanner(scope, input);
                   })) {
@@ -72,7 +74,7 @@ dftu_series* scan_dir_pattern(const char* root, std::int32_t root_len,
         to_string(root, root_len), {to_string(pattern, pattern_len)});
     std::vector<filesystem::FileEntry> entries;
     if (!run_sync("dftu.fs.scan_dir_pattern",
-                  [&](CoroScope& scope) -> coro::CoroTask<void> {
+                  [&](coro::Scope& scope) -> coro::CoroTask<void> {
                       filesystem::PatternDirectoryScannerUtility scanner;
                       entries = co_await scanner(scope, input);
                   })) {
@@ -88,7 +90,7 @@ std::int32_t compress(const char* in, std::int32_t in_len, const char* out,
             .with_output(to_string(out, out_len));
     bool ok = false;
     if (!run_sync("dftu.file.compress",
-                  [&](CoroScope&) -> coro::CoroTask<void> {
+                  [&](coro::Scope&) -> coro::CoroTask<void> {
                       fileio::FileCompressorUtility compressor;
                       ok = (co_await compressor(input)).has_value();
                   })) {
@@ -104,7 +106,7 @@ std::int32_t decompress(const char* in, std::int32_t in_len, const char* out,
             .with_output(to_string(out, out_len));
     bool ok = false;
     if (!run_sync("dftu.file.decompress",
-                  [&](CoroScope&) -> coro::CoroTask<void> {
+                  [&](coro::Scope&) -> coro::CoroTask<void> {
                       fileio::FileDecompressorUtility decompressor;
                       ok = (co_await decompressor(input)).has_value();
                   })) {

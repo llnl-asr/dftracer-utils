@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/index.h>
 #include <dftracer/utils/index/indexer.h>
@@ -362,7 +363,7 @@ TEST_SUITE("AggPartialsStore") {
 
             bool marked = true;
             dftu_utils_test::run_coro(
-                [&](CoroScope&) -> coro::CoroTask<void> {
+                [&](coro::Scope&) -> coro::CoroTask<void> {
                     for (std::size_t i = 0; i < logical.size(); ++i) {
                         auto build = target.build(logical[i], stats[i]);
                         if (!build) {

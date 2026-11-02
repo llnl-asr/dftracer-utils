@@ -60,13 +60,12 @@ ViewFile make_trace(dftu_utils_test::TestEnvironment& env) {
 PluginRun run_single(const Plugins& set, const View& view) {
     PluginRun out;
     Runtime rt(1);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            auto run = co_await set.run(view);
-            REQUIRE(run.has_value());
-            out = std::move(*run);
-            co_return;
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto run = co_await set.run(view);
+        REQUIRE(run.has_value());
+        out = std::move(*run);
+        co_return;
+    });
     rt.submit(std::move(task), "reference-plugin").wait();
     rt.shutdown();
     return out;

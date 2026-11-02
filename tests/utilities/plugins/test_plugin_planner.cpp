@@ -120,12 +120,11 @@ ExportStats run_host(std::vector<dftu_plugin*> plugins,
     View view = View::from_files(std::move(files));
     ExportStats stats;
     Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            auto run = co_await set->run(view);
-            if (run) stats = run->stats;
-            co_return;
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto run = co_await set->run(view);
+        if (run) stats = run->stats;
+        co_return;
+    });
     rt.submit(std::move(task), "plugin-planner").wait();
     rt.shutdown();
     return stats;
@@ -330,11 +329,10 @@ TEST_SUITE("PluginAttachHandle") {
         dftracer::utils::dataframe::LazyFrame plan = base.branch(plugin_branch);
 
         Runtime rt(4);
-        auto task = dftracer::utils::run_coro_scope(
-            rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                co_await plan.collect();
-                co_return;
-            });
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            co_await plan.collect();
+            co_return;
+        });
         rt.submit(std::move(task), "plugin-attach-solo").wait();
         rt.shutdown();
 
@@ -385,13 +383,11 @@ TEST_SUITE("PluginAttachHandle") {
 
         dftracer::utils::dataframe::DataFrame all;
         Runtime rt(4);
-        auto task = dftracer::utils::run_coro_scope(
-            rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-                all = std::get<1>(
-                    co_await dftracer::utils::dataframe::collect_all(
-                        plugin_plan, all_plan));
-                co_return;
-            });
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            all = std::get<1>(co_await dftracer::utils::dataframe::collect_all(
+                plugin_plan, all_plan));
+            co_return;
+        });
         rt.submit(std::move(task), "plugin-attach-coscan").wait();
         rt.shutdown();
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/run_on.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -106,12 +108,14 @@ CoroTask<void> hop_then_allocate(Blocks* out, Hops* hops) {
 CoroTask<void> parent_with_children(Blocks* direct, Blocks* spawned, Hops* hops,
                                     coro::Executor* exec) {
     co_await hop_then_allocate(direct, hops);
-    co_await run_coro_scope(exec, [spawned, hops](CoroScope& s) {
-        s.spawn([spawned, hops](CoroScope&) -> CoroTask<void> {
-            co_await hop_then_allocate(spawned, hops);
-        });
-        return s.join();
-    });
+    co_await coro::run_on(
+        *exec,
+        coro::with_scope([spawned, hops](coro::Scope& s) -> CoroTask<void> {
+            s.spawn([spawned, hops]() -> CoroTask<void> {
+                co_await hop_then_allocate(spawned, hops);
+            });
+            co_return;
+        }));
 }
 
 memory::PoolHandle open_pool(const char* name) {

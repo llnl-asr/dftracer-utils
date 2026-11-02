@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
@@ -22,7 +23,6 @@
 #include <dftracer/utils/index/source.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/memory/budget.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -155,7 +155,7 @@ static coro::CoroTask<void> commit_group(BlockWriter* writer,
 }
 
 static coro::CoroTask<void> parse_and_write_worker(
-    CoroScope* scope, std::atomic<std::size_t>* next_block_ptr,
+    coro::Scope* scope, std::atomic<std::size_t>* next_block_ptr,
     const dstd::Vector<std::size_t>* block_starts,
     std::atomic<std::size_t>* done_ptr,
     std::vector<IndexBuildResult>* results_ptr,
@@ -455,8 +455,7 @@ dstd::Vector<std::size_t> cut_blocks(std::size_t files,
 
 // A file's state is freed as soon as it is written, so memory grows with the
 // workers, not the files.
-static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
-                                                   BatchWriteState* state) {
+static coro::CoroTask<void> run_streaming_pipeline(BatchWriteState* state) {
     std::size_t parse_workers = std::max<std::size_t>(1, state->parallelism);
     const auto block_starts = dstd::make_shared<dstd::Vector<std::size_t>>(
         cut_blocks(state->num_files, state->file_costs, parse_workers));
@@ -537,25 +536,25 @@ static coro::CoroTask<void> run_streaming_pipeline(CoroScope* scope,
          parse_ns_ptr, results_ptr, parsed_jobs_ptr, prepared_ptr,
          checkpoint_size, bloom_config_ptr, agg_fold_factory_ptr, build_bloom,
          tier_only, costs_ptr, admission_ptr, writer_ptr,
-         progress_ptr](CoroScope& child) -> coro::CoroTask<void> {
+         progress_ptr](coro::Scope& child) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < parse_workers; ++w) {
-            child.spawn(
-                [block_starts_ptr, next_block_ptr, done_ptr, parse_ns_ptr,
-                 results_ptr, parsed_jobs_ptr, prepared_ptr, checkpoint_size,
-                 bloom_config_ptr, agg_fold_factory_ptr, build_bloom, tier_only,
-                 costs_ptr, progress_ptr, admission_ptr,
-                 writer_ptr](CoroScope& own_scope) -> coro::CoroTask<void> {
-                    co_await parse_and_write_worker(
-                        &own_scope, next_block_ptr, block_starts_ptr, done_ptr,
-                        results_ptr, parsed_jobs_ptr, prepared_ptr,
-                        checkpoint_size, *bloom_config_ptr, parse_ns_ptr,
-                        agg_fold_factory_ptr, build_bloom, tier_only, costs_ptr,
-                        progress_ptr, admission_ptr, writer_ptr);
-                });
+            child.spawn([&child, block_starts_ptr, next_block_ptr, done_ptr,
+                         parse_ns_ptr, results_ptr, parsed_jobs_ptr,
+                         prepared_ptr, checkpoint_size, bloom_config_ptr,
+                         agg_fold_factory_ptr, build_bloom, tier_only,
+                         costs_ptr, progress_ptr, admission_ptr,
+                         writer_ptr]() -> coro::CoroTask<void> {
+                co_await parse_and_write_worker(
+                    &child, next_block_ptr, block_starts_ptr, done_ptr,
+                    results_ptr, parsed_jobs_ptr, prepared_ptr, checkpoint_size,
+                    *bloom_config_ptr, parse_ns_ptr, agg_fold_factory_ptr,
+                    build_bloom, tier_only, costs_ptr, progress_ptr,
+                    admission_ptr, writer_ptr);
+            });
         }
         co_return;
     };
-    co_await scope->scope(pipeline_scope);
+    co_await coro::with_scope(std::move(pipeline_scope));
 
     state->metrics.parse_ns = parse_ns->load(std::memory_order_relaxed);
 
@@ -644,24 +643,24 @@ static void finalize_batch_result(BatchWriteState* state,
 }
 
 static coro::CoroTask<IndexBuildBatchResult> run_single_batch(
-    CoroScope* scope, IndexBuildBatchConfig chunk_config) {
+    IndexBuildBatchConfig chunk_config) {
     auto state = init_batch_write_state(chunk_config);
-    co_await run_streaming_pipeline(scope, state.get());
+    co_await run_streaming_pipeline(state.get());
     IndexBuildBatchResult partial;
     finalize_batch_result(state.get(), &partial);
     co_return partial;
 }
 
 static coro::CoroTask<IndexBuildBatchResult> run_batch_write_pipeline(
-    CoroScope* scope, std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
+    std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
     IndexBuildBatchConfig config = std::move(*config_ptr);
     config_ptr.reset();
-    auto result = co_await run_single_batch(scope, std::move(config));
+    auto result = co_await run_single_batch(std::move(config));
     co_return result;
 }
 
 coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
-    CoroScope* scope, std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
+    std::shared_ptr<IndexBuildBatchConfig> config_ptr) {
     DFTRACER_UTILS_TRACE_SCOPE("build index batch");
     if (!config_ptr || config_ptr->file_paths.empty()) {
         co_return IndexBuildBatchResult{};
@@ -679,8 +678,7 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
         if (it == roots.end()) roots.push_back(root);
     }
     if (roots.size() <= 1)
-        co_return co_await run_batch_write_pipeline(scope,
-                                                    std::move(config_ptr));
+        co_return co_await run_batch_write_pipeline(std::move(config_ptr));
 
     IndexBuildBatchResult out;
     out.results.resize(config.file_paths.size());
@@ -699,7 +697,7 @@ coro::CoroTask<IndexBuildBatchResult> BatchBuilder::process(
             if (!config.file_costs.empty())
                 part->file_costs.push_back(config.file_costs[i]);
         }
-        auto got = co_await run_batch_write_pipeline(scope, std::move(part));
+        auto got = co_await run_batch_write_pipeline(std::move(part));
         for (std::size_t k = 0; k < at.size() && k < got.results.size(); ++k)
             out.results[at[k]] = std::move(got.results[k]);
         out.indexed += got.indexed;

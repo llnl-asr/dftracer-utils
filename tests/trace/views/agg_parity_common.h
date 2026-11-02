@@ -103,12 +103,13 @@ inline dftracer::utils::dataframe::DataFrame engine_collect(
     // fresh pool per call dominates the run under valgrind.
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.run_blocking("engine-collect",
-                    [&](dftracer::utils::CoroScope&)
-                        -> dftracer::utils::coro::CoroTask<void> {
-                        result = co_await dftracer::utils::trace::views::
-                            detail::run_collect_via_engine(*v);
-                    });
+    rt.block_on(dftracer::utils::coro::named(
+        "engine-collect", dftracer::utils::coro::with_scope(
+                              [&](dftracer::utils::coro::Scope&)
+                                  -> dftracer::utils::coro::CoroTask<void> {
+                                  result = co_await dftracer::utils::trace::
+                                      views::detail::run_collect_via_engine(*v);
+                              })));
     return dftracer::utils::trace::views::detail::apply_agg_post_ops(
         std::move(result), *v);
 }
@@ -186,12 +187,13 @@ inline dftracer::utils::dataframe::DataFrame collect_engine_plan(
     // run under Valgrind.
     static dftracer::utils::Runtime rt;
     dftracer::utils::dataframe::DataFrame result;
-    rt.run_blocking("agg-engine",
-                    [&](dftracer::utils::CoroScope&)
-                        -> dftracer::utils::coro::CoroTask<void> {
-                        result = co_await dftracer::utils::trace::views::
-                            detail::run_collect_via_engine(*v);
-                    });
+    rt.block_on(dftracer::utils::coro::named(
+        "agg-engine", dftracer::utils::coro::with_scope(
+                          [&](dftracer::utils::coro::Scope&)
+                              -> dftracer::utils::coro::CoroTask<void> {
+                              result = co_await dftracer::utils::trace::views::
+                                  detail::run_collect_via_engine(*v);
+                          })));
     return dftracer::utils::trace::views::detail::apply_agg_post_ops(
         std::move(result), *v);
 }

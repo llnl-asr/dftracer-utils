@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
@@ -46,9 +48,9 @@ TEST_CASE("a joined scope is destroyed without terminating") {
         Runtime rt(ExecutorConfig{.num_threads = 2}, false);
         auto scope = CoroScope::long_lived(rt.executor());
         scope->spawn([](CoroScope&) -> coro::CoroTask<void> { co_return; });
-        rt.run_blocking("join", [&](CoroScope&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("join", [&]() -> coro::CoroTask<void> {
             co_await scope->join();
-        });
+        }()));
         scope.reset();
     });
     REQUIRE(WIFEXITED(status));
@@ -59,15 +61,16 @@ TEST_CASE("run_coro_scope joins when its body throws") {
     Runtime rt(ExecutorConfig{.num_threads = 2}, false);
     std::atomic<int> done{0};
     CHECK_THROWS_AS(
-        rt.run_blocking("throws",
-                        [&](CoroScope& s) -> coro::CoroTask<void> {
-                            s.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                                ++done;
-                                co_return;
-                            });
-                            throw std::runtime_error("body failed");
-                            co_return;
-                        }),
+        rt.block_on(coro::named(
+            "throws",
+            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
+                s.spawn([&]() -> coro::CoroTask<void> {
+                    ++done;
+                    co_return;
+                });
+                throw std::runtime_error("body failed");
+                co_return;
+            }))),
         std::runtime_error);
     CHECK(done.load() == 1);
 }

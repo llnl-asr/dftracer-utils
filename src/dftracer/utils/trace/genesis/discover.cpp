@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
@@ -317,7 +318,7 @@ std::string run_id(const RunKeys& k) {
     return dstd::hash::format_hex64(dstd::hash::fnv1a_hash(key));
 }
 
-coro::CoroTask<Discovery> discover(CoroScope& ctx,
+coro::CoroTask<Discovery> discover(coro::Scope& ctx,
                                    std::vector<std::string> roots) {
     Discovery out;
     const utilities::filesystem::PatternDirectoryScannerUtility scan;

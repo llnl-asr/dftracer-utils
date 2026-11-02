@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/aggregation_run.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -11,7 +12,6 @@
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -64,17 +64,15 @@ build::IndexBuildBatchResult run_build(
     build::IndexBuildBatchConfig::AggFoldFactory agg_fold_factory = {}) {
     build::IndexBuildBatchResult out;
     Runtime rt(4);
-    auto task = run_coro_scope(
-        rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
-            config->file_paths = {file};
-            config->index_dir = index_dir;
-            config->parallelism = 2;
-            config->memory_budget = memory_budget;
-            config->agg_fold_factory = std::move(agg_fold_factory);
-            out = co_await build::BatchBuilder::process(&scope,
-                                                        std::move(config));
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto config = std::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths = {file};
+        config->index_dir = index_dir;
+        config->parallelism = 2;
+        config->memory_budget = memory_budget;
+        config->agg_fold_factory = std::move(agg_fold_factory);
+        out = co_await build::BatchBuilder::process(std::move(config));
+    });
     rt.submit(std::move(task), "test-spill-publish").wait();
     rt.shutdown();
     for (const auto& result : out.results)

@@ -96,10 +96,9 @@ std::unique_ptr<Served> serve(const std::string& name,
     write_gz(s->dir.path() / "trace.pfw.gz", content);
     s->index = std::make_unique<TraceIndex>(s->dir.str(), s->dir.file("idx"));
     Runtime rt(4);
-    auto task =
-        run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await s->index->initialize();
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        co_await s->index->initialize();
+    });
     rt.submit(std::move(task), "setup").wait();
     rt.shutdown();
     REQUIRE(s->index->file_count() == 1);
@@ -114,13 +113,12 @@ std::string get(Served& s, const std::string& target) {
     req.path = target;
     std::string body;
     Runtime rt(4);
-    auto task =
-        run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            HttpResponse resp = co_await s.router.handle(req);
-            CHECK_MESSAGE(resp.status_code == 200, target, ": ", resp.body);
-            body = resp.body;
-            co_return;
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        HttpResponse resp = co_await s.router.handle(req);
+        CHECK_MESSAGE(resp.status_code == 200, target, ": ", resp.body);
+        body = resp.body;
+        co_return;
+    });
     rt.submit(std::move(task), "get").wait();
     rt.shutdown();
     return body;

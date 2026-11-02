@@ -2,13 +2,13 @@
 #ifndef DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 #define DFTRACER_UTILS_BENCHMARKS_MEMORY_WORKLOADS_H
 
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
@@ -142,7 +142,7 @@ inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
 }
 
 inline dftracer::utils::coro::CoroTask<void> genesis_run(
-    dftracer::utils::CoroScope& ctx, std::string root) {
+    dftracer::utils::coro::Scope& ctx, std::string root) {
     std::vector<std::string> roots{std::move(root)};
     auto discovery = co_await dftracer::utils::trace::genesis::discover(
         ctx, std::move(roots));

@@ -2,6 +2,7 @@
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -17,7 +18,6 @@
 #include <dftracer/utils/index/store/root_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/json/record_parser.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/metadata_collector_utility.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/coverage.h>
@@ -314,11 +314,12 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
     // Every file's metadata first, then the planners: a planner holds the
     // index root open read-only, and a file that must still build its index
     // there cannot open it read-write while it does.
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
             if (uc_sizes[fi] != 0 && ckpt_counts[fi] != 0) continue;
-            scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
-                // The scope does not rethrow a spawned task's exception.
+            scope.spawn([&, fi]() -> coro::CoroTask<void> {
+                // Each file keeps its own error, so the first file's error is
+                // raised.
                 try {
                     if (is_cancelled(plan)) co_return;
                     const auto& f = plan.files[fi];
@@ -362,9 +363,9 @@ coro::CoroTask<std::vector<ScanUnit>> gather_units(const ViewPlan& plan,
             snapshots.emplace(dstd::String(f.index_path), std::move(*taken));
     }
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t fi = 0; fi < plan.files.size(); ++fi) {
-            scope.spawn([&, fi](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&, fi]() -> coro::CoroTask<void> {
                 try {
                     if (is_cancelled(plan)) co_return;
                     const auto& f = plan.files[fi];
@@ -539,11 +540,11 @@ coro::CoroTask<ExportStats> for_each_scanned_batch(
         for (std::size_t w = 0; w < nworkers; ++w)
             for (auto* f : folds) fslice[w].push_back(f->slice());
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < nworkers; ++w) {
             // Worker `w` hands batches to slot `w`; a coroutine never runs
             // concurrently with itself, so per-slot state needs no lock.
-            scope.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&, w]() -> coro::CoroTask<void> {
                 // Sealed per unit, so a cap or cancel cutting the current unit
                 // short drops only that one. Draining the batch loop is the
                 // sole path to a claim; every break leaves the unit pending.

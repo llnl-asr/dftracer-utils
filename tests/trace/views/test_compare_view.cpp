@@ -49,17 +49,17 @@ TEST_SUITE("CompareView") {
 
         dftracer::utils::Runtime rt;
         dataframe::DataFrame result;
-        rt.run_blocking("compare",
-                        [&](dftracer::utils::CoroScope&)
-                            -> dftracer::utils::coro::CoroTask<void> {
-                            auto view =
-                                comparator::CompareView::of(
+        rt.block_on(coro::named(
+            "compare",
+            coro::with_scope(
+                [&](coro::Scope&) -> dftracer::utils::coro::CoroTask<void> {
+                    auto view = comparator::CompareView::of(
                                     View::from_file(base_gz, base_idx),
                                     View::from_file(var_gz, var_idx))
                                     .group_by({GroupKey::cat()})
                                     .agg({AggSpec(AggOp::Count, "", "count")});
-                            result = co_await view.collect();
-                        });
+                    result = co_await view.collect();
+                })));
 
         REQUIRE(result.num_rows() == 2);  // posix, stdio
 

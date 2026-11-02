@@ -16,9 +16,9 @@
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/async_once.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
 #include <atomic>
@@ -140,22 +140,20 @@ double run_round(Runtime& rt, Strategy& strat, const Blob& blob, int members,
     const auto* blob_ptr = &blob;
     auto t0 = std::chrono::steady_clock::now();
 
-    auto task = run_coro_scope(
-        rt.executor(),
-        [&strat, blob_ptr, members,
-         readers](CoroScope&) -> coro::CoroTask<void> {
-            std::vector<coro::CoroTask<Bytes>> tasks;
-            tasks.reserve(static_cast<std::size_t>(readers) * members);
-            // Reader r requests every member -> R readers overlap on each.
-            for (int r = 0; r < readers; ++r) {
-                for (int m = 0; m < members; ++m) {
-                    tasks.push_back(
-                        strat.get(static_cast<std::uint64_t>(m), blob_ptr));
-                }
+    auto task = coro::with_scope([&strat, blob_ptr, members, readers](
+                                     coro::Scope&) -> coro::CoroTask<void> {
+        std::vector<coro::CoroTask<Bytes>> tasks;
+        tasks.reserve(static_cast<std::size_t>(readers) * members);
+        // Reader r requests every member -> R readers overlap on each.
+        for (int r = 0; r < readers; ++r) {
+            for (int m = 0; m < members; ++m) {
+                tasks.push_back(
+                    strat.get(static_cast<std::uint64_t>(m), blob_ptr));
             }
-            co_await coro::when_all(std::move(tasks));
-            co_return;
-        });
+        }
+        co_await coro::when_all(std::move(tasks));
+        co_return;
+    });
     rt.submit(std::move(task), "bench").wait();
 
     auto t1 = std::chrono::steady_clock::now();
@@ -174,8 +172,8 @@ coro::CoroTask<int> cheap_producer() {
 
 double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
     auto t0 = std::chrono::steady_clock::now();
-    auto task = run_coro_scope(
-        rt.executor(), [rounds, waiters](CoroScope&) -> coro::CoroTask<void> {
+    auto task = coro::with_scope(
+        [rounds, waiters](coro::Scope&) -> coro::CoroTask<void> {
             for (int r = 0; r < rounds; ++r) {
                 struct Entry {
                     coro::AsyncMutex mutex;
@@ -208,8 +206,8 @@ double bench_mutex_wake(Runtime& rt, int rounds, int waiters) {
 
 double bench_once_wake(Runtime& rt, int rounds, int waiters) {
     auto t0 = std::chrono::steady_clock::now();
-    auto task = run_coro_scope(
-        rt.executor(), [rounds, waiters](CoroScope&) -> coro::CoroTask<void> {
+    auto task = coro::with_scope(
+        [rounds, waiters](coro::Scope&) -> coro::CoroTask<void> {
             for (int r = 0; r < rounds; ++r) {
                 auto once = std::make_shared<coro::AsyncOnce<int>>();
                 std::vector<coro::CoroTask<int>> tasks;
@@ -241,8 +239,8 @@ int main(int argc, char** argv) {
 
     Blob blob = make_blob(member_mb * 1024 * 1024);
     std::printf("compressed %.1f MB -> %.1f MB uncompressed\n",
-                blob.compressed.size() / 1048576.0,
-                blob.uncompressed / 1048576.0);
+                static_cast<double>(blob.compressed.size()) / 1048576.0,
+                static_cast<double>(blob.uncompressed) / 1048576.0);
 
     Runtime rt(0);  // hardware_concurrency workers
 

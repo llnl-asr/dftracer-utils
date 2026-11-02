@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/trace/views/view_executor.h>
@@ -67,8 +68,8 @@ std::string write_small_trace(const std::string& dir, int n) {
 std::vector<scan::FileEntry> scan_dir(const std::string& dir) {
     std::vector<scan::FileEntry> entries;
     Runtime rt(4);
-    auto task = run_coro_scope(
-        rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task =
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             scan::PatternDirectoryScannerUtility scanner;
             const scan::PatternDirectoryScannerUtilityInput input(
                 dir, std::vector<std::string>{".pfw"}, true);
@@ -125,10 +126,9 @@ void cold_count(const std::vector<std::string>& files,
     const auto view = views::View::from_files(std::move(view_files))
                           .group_by({views::GroupKey::name()})
                           .agg({{views::AggOp::Count, "", "n"}});
-    default_runtime().run_blocking("serial-stages-view",
-                                   [&](CoroScope&) -> coro::CoroTask<void> {
-                                       (void)co_await view.collect();
-                                   });
+    default_runtime().block_on(coro::named(
+        "serial-stages-view",
+        [&]() -> coro::CoroTask<void> { (void)co_await view.collect(); }()));
 }
 
 // Written once and shared by the cases that read it.

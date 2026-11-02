@@ -4,6 +4,7 @@
 // AggCol / agg:: aggregate builders, and the owning Arrow helpers.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
@@ -34,7 +35,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::AggCol;
@@ -80,11 +80,14 @@ struct HostFixture {
 template <class MakeTask>
 void drive_task(dftu_plugin_host& host, int workers, MakeTask make) {
     Runtime rt(workers);
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          dftu_task* driver =
-              dftracer::utils::plugins::detail::drive_coro<int>(&host, make());
-          co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  dftu_task* driver =
+                      dftracer::utils::plugins::detail::drive_coro<int>(&host,
+                                                                        make());
+                  co_await *reinterpret_cast<coro::CoroTask<void>*>(driver);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
 }
 
@@ -485,9 +488,11 @@ TEST_CASE("plugin cxx: Host::agg merges a count and an argmax across slices") {
         master.merge(*pf);
     }
     Runtime rt(1);
-    rt.scope("fin", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await master.finalize(CoverageSet{});
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  co_await master.finalize(CoverageSet{});
+              }),
+              "fin")
+        .wait();
     rt.shutdown();
 
     auto it = named.results().find("by_pid");

@@ -15,7 +15,7 @@ class ShardedWriter final : public ParallelWriter {
    public:
     coro::CoroTask<int> open(std::string path, std::size_t num_workers,
                              bool gzip_extension,
-                             CoroScope* /*scope*/) override {
+                             coro::Scope* /*scope*/) override {
         base_path_ = std::move(path);
         const std::string ext = gzip_extension ? ".gz" : "";
         shard_paths_.resize(num_workers);

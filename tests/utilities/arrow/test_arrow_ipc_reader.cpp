@@ -423,10 +423,9 @@ TEST_CASE("read_arrow_files_streaming - completion order callback") {
     std::int64_t total_rows = 0;
     ParallelReadResult result;
 
-    auto task = run_coro_scope(
-        runtime.executor(),
+    auto task = coro::with_scope(
         [&result, &received_paths, &total_rows](
-            CoroScope& scope,
+            coro::Scope& scope,
             std::vector<std::string> file_paths) -> CoroTask<void> {
             result = co_await read_arrow_files_streaming(
                 scope, std::move(file_paths), [&](ArrowFileReadResult&& fr) {
@@ -468,10 +467,9 @@ TEST_CASE("read_arrow_files_streaming - early cancel") {
     int callback_count = 0;
     ParallelReadResult result;
 
-    auto task = run_coro_scope(
-        runtime.executor(),
+    auto task = coro::with_scope(
         [&result, &callback_count](
-            CoroScope& scope,
+            coro::Scope& scope,
             std::vector<std::string> file_paths) -> CoroTask<void> {
             result = co_await read_arrow_files_streaming(
                 scope, std::move(file_paths), [&](ArrowFileReadResult&&) {

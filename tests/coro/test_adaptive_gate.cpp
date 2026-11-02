@@ -2,9 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/adaptive_gate.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 
@@ -127,7 +127,7 @@ TEST_SUITE("AdaptiveGate") {
         Concurrency c;
         const int n = 64;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<int>> tasks;
             for (int i = 0; i < n; ++i)
                 tasks.push_back(
@@ -148,7 +148,7 @@ TEST_SUITE("AdaptiveGate") {
         const int phase = 24;
         std::size_t lowest = 8;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             for (const auto t : {std::chrono::microseconds(100),
                                  std::chrono::microseconds(5000),
                                  std::chrono::microseconds(100)}) {
@@ -174,7 +174,7 @@ TEST_SUITE("AdaptiveGate") {
         Concurrency c;
         int after = 0;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             bool threw = false;
             try {
                 co_await throwing_unit(gate);

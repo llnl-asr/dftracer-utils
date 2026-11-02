@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -181,7 +182,7 @@ TEST_CASE("line_format - writer output equals hand-built lines") {
                 "}\n";
 
     bool bad_count = false, null_arg = false;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 1024;
         auto w = co_await GzipLineWriter::open(p1, o);

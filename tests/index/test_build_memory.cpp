@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -12,7 +13,6 @@
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <index_test_helpers.h>
@@ -78,17 +78,15 @@ build::IndexBuildBatchResult run_build(const std::vector<std::string>& files,
                                        std::size_t parallelism = 4) {
     build::IndexBuildBatchResult out;
     Runtime rt(4);
-    auto task = run_coro_scope(
-        rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
-            config->file_paths = files;
-            config->index_dir = index_dir;
-            config->parallelism = parallelism;
-            config->memory_budget = memory_budget;
-            config->bloom_config.path_budget = path_budget;
-            out = co_await build::BatchBuilder::process(&scope,
-                                                        std::move(config));
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto config = std::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths = files;
+        config->index_dir = index_dir;
+        config->parallelism = parallelism;
+        config->memory_budget = memory_budget;
+        config->bloom_config.path_budget = path_budget;
+        out = co_await build::BatchBuilder::process(std::move(config));
+    });
     rt.submit(std::move(task), "test-build-memory").wait();
     rt.shutdown();
     for (const auto& file : out.results)

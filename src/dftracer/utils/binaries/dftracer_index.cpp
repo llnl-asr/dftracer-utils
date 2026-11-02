@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/memory.h>
@@ -290,7 +291,7 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
         resolve_input.schema = cli->record_schema;
         IndexWork stale;
         binaries::run_single_task(
-            "DFTracer Bloom Indexer", cli->pipeline, [&](CoroScope&) {
+            "DFTracer Bloom Indexer", cli->pipeline, [&](coro::Scope&) {
                 return select_stale_task(std::move(resolve_input), &stale);
             });
         skipped_fresh = matched_entries.size() - stale.files.size();
@@ -377,10 +378,9 @@ static coro::CoroTask<int> run_index(const IndexArgParse* cli) {
 
     IndexBuildBatchResult batch_result;
     auto streaming_task = make_task(
-        [&batch_result,
-         batch_config](CoroScope& scope) -> coro::CoroTask<void> {
+        [&batch_result, batch_config](CoroScope&) -> coro::CoroTask<void> {
             batch_result =
-                co_await BatchBuilder::process(&scope, std::move(batch_config));
+                co_await BatchBuilder::process(std::move(batch_config));
         },
         "StreamingIndex");
 

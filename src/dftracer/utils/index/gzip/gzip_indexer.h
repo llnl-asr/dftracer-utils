@@ -5,13 +5,13 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/index/build/index_visitor.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer.h>
 #include <dftracer/utils/index/gzip/gzip_member_scanner.h>
 #include <dftracer/utils/index/index.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <atomic>
 #include <cstddef>
@@ -67,15 +67,17 @@ struct GzipMemberSlice {
 
 coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     const std::string &gz_path, std::uint64_t ckpt_size,
-    const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
-    const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
+    const CheckpointIndexer::VisitorList &visitors,
+    coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
+    std::size_t ways = 0);
 
 /// The same over an open file. `fd` stays open and owned by the caller.
 /// `gz_path` only names the file in messages.
 coro::CoroTask<std::optional<GzipBuildArtifacts>> build_gzip_index_artifacts(
     int fd, const std::string &gz_path, std::uint64_t ckpt_size,
-    const CheckpointIndexer::VisitorList &visitors, CoroScope *scope = nullptr,
-    const GzipMemberSlice *slice = nullptr, std::size_t ways = 0);
+    const CheckpointIndexer::VisitorList &visitors,
+    coro::Scope *scope = nullptr, const GzipMemberSlice *slice = nullptr,
+    std::size_t ways = 0);
 
 /// Write the file's members, restart windows and metadata into `build` and
 /// finish its Members extension.

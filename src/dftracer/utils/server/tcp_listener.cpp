@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <arpa/inet.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/runtime/io/ops.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/server/signal_handler.h>
 #include <dftracer/utils/server/tcp_listener.h>
 #include <fcntl.h>
@@ -80,7 +80,7 @@ bool TcpListener::start(int backlog) {
     return true;
 }
 
-coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
+coro::CoroTask<void> TcpListener::accept_loop(coro::Scope& scope,
                                               ConnectionHandler handler) {
     // Connections run in the caller's scope and can outlive this frame, so
     // each one shares ownership of the handler.
@@ -110,18 +110,20 @@ coro::CoroTask<void> TcpListener::accept_loop(CoroScope& scope,
 
         struct sockaddr_in addr_copy = client_addr;
         track_active(fd);
-        scope.spawn([this, fd, addr_copy, handler = shared_handler](
-                        CoroScope& /*child*/) -> coro::CoroTask<void> {
-            // The close must be awaited, so this cannot be an RAII guard.
-            std::exception_ptr err;
+        scope.spawn([this, fd, addr_copy,
+                     handler = shared_handler]() -> coro::CoroTask<void> {
+            // One failed connection must not end the server, so its error is
+            // logged here instead of reaching the scope's join.
             try {
                 co_await (*handler)(fd, addr_copy);
+            } catch (const std::exception& e) {
+                DFTRACER_UTILS_LOG_ERROR("connection handler failed: %s",
+                                         e.what());
             } catch (...) {
-                err = std::current_exception();
+                DFTRACER_UTILS_LOG_ERROR("%s", "connection handler failed");
             }
             co_await io::close(fd);
             untrack_active(fd);
-            if (err) std::rethrow_exception(err);
         });
     }
 

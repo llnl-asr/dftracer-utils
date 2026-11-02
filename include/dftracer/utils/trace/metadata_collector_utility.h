@@ -5,7 +5,6 @@
 #include <dftracer/utils/common/archive_format.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/reader/internal/reader_factory.h>
 
 #include <string>

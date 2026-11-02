@@ -11,13 +11,13 @@
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/join_handle.h>
 #include <dftracer/utils/coro/reserve_async.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/spawn_future.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <unistd.h>
 
@@ -368,17 +368,16 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
     Runtime rt(ExecutorConfig{.num_threads = 4}, false);
 
     struct Source {
-        static coro::AsyncGenerator<int> numbers(CoroScope* ctx,
-                                                 std::atomic<int>* fanned) {
-            co_await ctx->coro_scope(
-                [fanned](CoroScope& scope) -> coro::CoroTask<void> {
-                    auto a = scope.spawn(
-                        [fanned](CoroScope&) -> coro::CoroTask<int> {
+        static coro::AsyncGenerator<int> numbers(std::atomic<int>* fanned) {
+            co_await coro::with_scope(
+                [fanned](coro::Scope& scope) -> coro::CoroTask<void> {
+                    auto a =
+                        scope.spawn_future([fanned]() -> coro::CoroTask<int> {
                             fanned->fetch_add(1);
                             co_return 1;
                         });
-                    auto b = scope.spawn(
-                        [fanned](CoroScope&) -> coro::CoroTask<int> {
+                    auto b =
+                        scope.spawn_future([fanned]() -> coro::CoroTask<int> {
                             fanned->fetch_add(1);
                             co_return 2;
                         });
@@ -393,14 +392,15 @@ TEST_CASE("a generator dropped after a scope fan-out does not terminate") {
     std::atomic<int> fanned{0};
     std::atomic<int> first{0};
     TaskHandle task =
-        rt.scope("DropGenerator", [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            {
-                auto gen = Source::numbers(&ctx, &fanned);
-                auto value = co_await gen.next();
-                first.store(value ? *value : -1);
-            }
-            co_return;
-        });
+        rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                      {
+                          auto gen = Source::numbers(&fanned);
+                          auto value = co_await gen.next();
+                          first.store(value ? *value : -1);
+                      }
+                      co_return;
+                  }),
+                  "DropGenerator");
     wait_or_fail(task, "generator task");
 
     CHECK(first.load() == 1);

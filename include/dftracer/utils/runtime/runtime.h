@@ -4,10 +4,11 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/task_handle.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
 #include <atomic>
@@ -95,36 +96,24 @@ class Runtime {
     template <typename T>
     TypedTaskHandle<T> submit(coro::CoroTask<T> task, std::string name = "");
 
-    /// Submit a scoped task (provides CoroScope to the lambda).
-    /// Returns immediately, task runs on executor.
-    ///
-    /// Usage:
-    /// @code
-    /// auto handle = rt->scope("my_task", [](CoroScope& scope) ->
-    /// CoroTask<void> {
-    ///     scope.spawn([](CoroScope& s) -> CoroTask<void> { co_return; });
-    ///     co_await scope.join();
-    /// });
-    /// handle.get();  // wait when needed
-    /// @endcode
-    template <typename Func>
-        requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
-    TaskHandle scope(std::string name, Func&& func) {
-        return submit(run_coro_scope(executor_.get(), std::forward<Func>(func)),
-                      std::move(name));
-    }
-
-    /// Run a void coroutine scope to completion, blocking the caller and
-    /// re-raising any exception. Called from one of this runtime's own workers
-    /// it hands off the worker's run slot for the wait (lazy: reclaimed with a
-    /// CAS on a short block, by the sysmon on a long one), so parking the
-    /// caller cannot starve the pool the work runs on.
-    template <typename Func>
-        requires std::is_invocable_r_v<coro::CoroTask<void>, Func, CoroScope&>
-    void run_blocking(std::string name, Func&& func) {
+    /// Runs `task` as a tracked task and blocks until it ends, raising its
+    /// error. Called from one of this runtime's own workers it hands off the
+    /// worker's run slot for the wait, so the pool keeps its capacity.
+    template <typename T>
+    T block_on(coro::Named<coro::CoroTask<T>> task) {
         const bool reentrant = coro::Executor::current() == executor_.get();
         coro::BlockingRegion block(reentrant ? executor_.get() : nullptr);
-        scope(std::move(name), std::forward<Func>(func)).wait();
+        std::string name(task.name.data(), task.name.size());
+        if constexpr (std::is_void_v<T>) {
+            submit(std::move(task.value), std::move(name)).wait();
+        } else {
+            return submit(std::move(task.value), std::move(name)).get();
+        }
+    }
+
+    template <typename T>
+    T block_on(coro::CoroTask<T> task) {
+        return block_on(coro::Named<coro::CoroTask<T>>{{}, std::move(task)});
     }
 
     /// Data-parallel fork-join over [0, n): split into `grain`-sized chunks and
@@ -133,7 +122,7 @@ class Runtime {
     /// counter, so scheduling is dynamic (load-balanced) and allocation is
     /// O(threads), not O(chunks). Runs inline serial for a single chunk or when
     /// already inside a parallel region (no nested fork-join). Safe to call
-    /// from a worker thread (the run_blocking handoff keeps the pool
+    /// from a worker thread (the block_on handoff keeps the pool
     /// saturated). `body` must be safe to run concurrently on disjoint
     /// sub-ranges.
     template <typename Body>
@@ -148,16 +137,18 @@ class Runtime {
         const std::int64_t workers = std::min<std::int64_t>(
             chunks, static_cast<std::int64_t>(threads()));
         std::atomic<std::int64_t> next{0};
-        run_blocking("parallel_for", [&](CoroScope& s) -> coro::CoroTask<void> {
-            for (std::int64_t w = 0; w < workers; ++w)
-                s.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                    detail::ParallelRegionGuard guard;
-                    for (std::int64_t i; (i = next.fetch_add(1)) < chunks;)
-                        body(i * grain, std::min(n, (i + 1) * grain));
-                    co_return;
-                });
-            co_await s.join();
-        });
+        block_on(coro::named(
+            "parallel_for",
+            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
+                for (std::int64_t w = 0; w < workers; ++w)
+                    s.spawn([&]() -> coro::CoroTask<void> {
+                        detail::ParallelRegionGuard guard;
+                        for (std::int64_t i; (i = next.fetch_add(1)) < chunks;)
+                            body(i * grain, std::min(n, (i + 1) * grain));
+                        co_return;
+                    });
+                co_return;
+            })));
     }
 
     /// Data-parallel reduction over [0, n): `map(begin, end)` produces a
@@ -176,10 +167,11 @@ class Runtime {
             chunks, static_cast<std::int64_t>(threads()));
         std::atomic<std::int64_t> next{0};
         std::vector<T> partials(static_cast<std::size_t>(workers), identity);
-        run_blocking(
-            "parallel_reduce", [&](CoroScope& s) -> coro::CoroTask<void> {
+        block_on(coro::named(
+            "parallel_reduce",
+            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
                 for (std::int64_t w = 0; w < workers; ++w)
-                    s.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
+                    s.spawn([&, w]() -> coro::CoroTask<void> {
                         detail::ParallelRegionGuard guard;
                         T acc = identity;
                         for (std::int64_t i; (i = next.fetch_add(1)) < chunks;)
@@ -189,8 +181,8 @@ class Runtime {
                         partials[static_cast<std::size_t>(w)] = std::move(acc);
                         co_return;
                     });
-                co_await s.join();
-            });
+                co_return;
+            })));
         T acc = std::move(identity);
         for (T& p : partials) acc = combine(std::move(acc), std::move(p));
         return acc;

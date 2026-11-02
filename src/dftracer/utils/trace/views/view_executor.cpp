@@ -5,6 +5,8 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dataframe/agg.h>
 #include <dftracer/utils/dstd/byte_view.h>
@@ -38,7 +40,6 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/index_root.h>
 #include <dftracer/utils/trace/schema.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -180,7 +181,7 @@ namespace {
 //
 // The descriptor is the one open_bootstrap_source hashed.
 coro::CoroTask<void> build_bootstrap_artifacts(
-    CoroScope& scope, std::string file,
+    coro::Scope& scope, std::string file,
     dftracer::utils::index::gzip::CheckpointIndexer::VisitorList visitors,
     dftracer::utils::index::gzip::GzipBuildArtifacts* arts, bool* ok,
     std::size_t ways, dstd::SharedPtr<dstd::ScopedFd> source) {
@@ -442,9 +443,11 @@ coro::CoroTask<bool> try_export_bootstrap(const ViewPlan& plan,
         gzi::CheckpointIndexer::VisitorList visitors;
         visitors.emplace_back(driver);
         visitors.emplace_back(writer);
-        co_await dftracer::utils::run_coro_scope(
-            build_bootstrap_artifacts, f.file_path, std::move(visitors), &arts,
-            &ok, std::size_t{0}, source.fd);
+        co_await coro::with_scope([&](coro::Scope& scope) {
+            return build_bootstrap_artifacts(scope, f.file_path,
+                                             std::move(visitors), &arts, &ok,
+                                             std::size_t{0}, source.fd);
+        });
         if (!ok) {
             for (auto& group : pending) co_await commit_bootstrap(group);
             co_return false;
@@ -586,9 +589,9 @@ coro::CoroTask<ExportStats> run_export_trace(const ViewPlan& plan,
     std::vector<ScanCounts> counts_v(num_workers);
     bool ok = true;
 
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         for (std::size_t w = 0; w < num_workers; ++w) {
-            scope.spawn([&, w](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&, w]() -> coro::CoroTask<void> {
                 auto prod = writer.producer();
                 if (!prod) {
                     ok = false;
@@ -783,9 +786,11 @@ coro::CoroTask<BootstrapFile> bootstrap_file(
     bool built = false;
     gzi::CheckpointIndexer::VisitorList visitors;
     visitors.emplace_back(driver);
-    co_await dftracer::utils::run_coro_scope(
-        build_bootstrap_artifacts, f.file_path, std::move(visitors), &arts,
-        &built, run->admission->inflate_ways(), source.fd);
+    co_await coro::with_scope([&](coro::Scope& scope) {
+        return build_bootstrap_artifacts(
+            scope, f.file_path, std::move(visitors), &arts, &built,
+            run->admission->inflate_ways(), source.fd);
+    });
     if (!built) co_return out;
     ExportStats read;
     read.chunks_scanned = arts.members.size();
@@ -868,13 +873,13 @@ coro::CoroTask<bool> bootstrap_worker(BootstrapRun* run) {
     co_return !run->failed.load(std::memory_order_relaxed);
 }
 
-coro::CoroTask<void> bootstrap_workers(CoroScope& scope, BootstrapRun* run,
+coro::CoroTask<void> bootstrap_workers(coro::Scope& scope, BootstrapRun* run,
                                        std::size_t workers) {
     std::vector<coro::SpawnFuture<bool>> done;
     done.reserve(workers);
     for (std::size_t w = 0; w < workers; ++w)
         done.push_back(
-            scope.spawn([run](CoroScope&) { return bootstrap_worker(run); }));
+            scope.spawn_future([run]() { return bootstrap_worker(run); }));
     co_await coro::when_all(std::move(done));
 }
 
@@ -935,7 +940,9 @@ coro::CoroTask<bool> try_collect_bootstrap(const ViewPlan& plan,
         budget == memory::NO_SPILL_BUDGET ? 0 : sinks.sink_bytes * active,
         plan.files.size());
     run.admission = &admission;
-    co_await dftracer::utils::run_coro_scope(bootstrap_workers, &run, active);
+    co_await coro::with_scope([&](coro::Scope& scope) {
+        return bootstrap_workers(scope, &run, active);
+    });
     if (run.failed.load(std::memory_order_relaxed)) co_return false;
     if (!resolved_transform) {
         // Blocks are runs of consecutive files, so their first files give
@@ -1812,12 +1819,11 @@ void add_materialize_branch(ViewSessionState& state,
         if (rdir.empty()) return;
         try {
             dataframe::AggStatePtr state_out;
-            dftracer::utils::default_runtime().run_blocking(
-                "session_materialize",
-                [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
+            dftracer::utils::default_runtime().block_on(coro::named(
+                "session_materialize", [&]() -> coro::CoroTask<void> {
                     state_out = co_await build_engine_agg_state(*plan);
                     co_return;
-                });
+                }()));
             if (!state_out) return;
             auto db = dftracer::utils::index::cache::open_rollup_db(
                 rdir,

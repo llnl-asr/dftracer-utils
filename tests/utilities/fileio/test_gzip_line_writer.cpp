@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
@@ -58,7 +59,7 @@ Written write_all(const std::string& path, GzipWriterOptions o,
     Written w;
     std::mutex mu;
     o.on_member = [&](const MemberInfo& m) { w.members.push_back(m); };
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(path, o);
         REQUIRE(wr.has_value());
         for (auto& p : pieces) {
@@ -78,7 +79,7 @@ Written write_all(const std::string& path, GzipWriterOptions o,
 
 std::vector<index::gzip::GzipMemberRecord> index_of(const std::string& path) {
     std::optional<index::gzip::GzipBuildArtifacts> arts;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         index::gzip::CheckpointIndexer::VisitorList none;
         arts = co_await index::gzip::build_gzip_index_artifacts(path, 32u << 20,
                                                                 none, &scope);
@@ -311,7 +312,7 @@ TEST_CASE("GzipLineWriter - errors") {
             if (idx == 3) throw std::runtime_error("boom");
         };
         bool saw_error = false;
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
             REQUIRE(wr.has_value());
             for (std::size_t i = 0; i < 2000 && !saw_error; ++i) {
@@ -335,7 +336,7 @@ TEST_CASE("GzipLineWriter - errors") {
         chmod(dir.c_str(), 0555);
         const std::string path((dir / "t.pfw.gz").str());
         bool failed = false;
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             // Named: GCC 12 destroys a temporary built inside co_await twice.
             GzipWriterOptions defaults;
             auto wr = co_await GzipLineWriter::open(std::string(path),
@@ -382,7 +383,7 @@ TEST_CASE("GzipLineWriter - destroying without close aborts") {
     o.member_size = 500;
     o.part_size = 2000;
     o.workers = 3;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         {
             auto wr = co_await GzipLineWriter::open(std::string(base), o);
             REQUIRE(wr.has_value());
@@ -407,7 +408,7 @@ TEST_CASE("GzipLineWriter - destroying without close aborts") {
 TEST_CASE("GzipLineWriter - a moved writer closes once") {
     auto path = dftu_utils_test::make_unique_test_path("glw_move.pfw.gz");
     std::string all;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         o.member_size = 300;
         auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
@@ -467,7 +468,7 @@ TEST_CASE("GzipLineWriter - close(tail) without a newline") {
     o.member_size = 1000;
     o.workers = 2;
     std::string all;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         for (std::size_t i = 0; i < 50; ++i) {
@@ -639,7 +640,7 @@ TEST_CASE("GzipLineWriter - append_with equals append") {
     std::vector<std::string> pieces;
     for (std::size_t i = 0; i < 150; ++i) pieces.push_back(line(i, i % 50));
     write_all(std::string(a.str()), o, pieces);
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(std::string(b.str()), o);
         REQUIRE(wr.has_value());
         for (auto& p : pieces) {
@@ -669,7 +670,7 @@ TEST_CASE("GzipLineWriter - unordered mode") {
     GzipWriterOptions bad;
     bad.ordered = false;
     bad.on_member = [](const MemberInfo&) {};
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto r = co_await GzipLineWriter::open(std::string(path.str()), bad);
         CHECK(!r.has_value());
         GzipWriterOptions b2;
@@ -690,14 +691,14 @@ TEST_CASE("GzipLineWriter - unordered mode") {
         for (std::size_t i = 0; i < PER; ++i)
             expect.insert(line(p * 1000 + i, i % 30));
     WriteSummary sum;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
         coro::CoroSemaphore done(PRODUCERS);
         co_await done.acquire(PRODUCERS);
         for (std::size_t p = 0; p < PRODUCERS; ++p) {
-            scope.spawn([&, p](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&, p]() -> coro::CoroTask<void> {
                 for (std::size_t i = 0; i < PER; ++i) {
                     auto l = line(p * 1000 + i, i % 30);
                     if (p % 2 == 0) {
@@ -758,7 +759,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
     std::multiset<std::string> expect;
     for (std::size_t p = 0; p < PRODUCERS; ++p)
         for (std::size_t i = 0; i < PER; ++i) expect.insert(mk(p, i));
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
@@ -771,7 +772,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
         coro::CoroSemaphore done(PRODUCERS);
         co_await done.acquire(PRODUCERS);
         for (std::size_t p = 0; p < PRODUCERS; ++p) {
-            scope.spawn([&, p](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&, p]() -> coro::CoroTask<void> {
                 for (std::size_t i = 0; i < PER; ++i) {
                     auto l = mk(p, i);
                     if (p % 2 == 0) {
@@ -811,7 +812,7 @@ TEST_CASE("GzipLineWriter - producers fill their own members") {
 
 TEST_CASE("GzipLineWriter - producer refused when ordered, close needs flush") {
     auto path = dftu_utils_test::make_unique_test_path("glw_prod2.pfw.gz");
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         GzipWriterOptions o;
         auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
@@ -835,17 +836,19 @@ TEST_CASE("GzipLineWriter - a drop without close on an executor joins") {
     o.workers = 2;
     std::atomic<bool> on_executor{false};
     Runtime rt(4);
-    rt.scope("glw_dropped", [&](CoroScope&) -> coro::CoroTask<void> {
-          {
-              auto wr =
-                  co_await GzipLineWriter::open(std::string(path.str()), o);
-              REQUIRE(wr.has_value());
-              for (std::size_t i = 0; i < 100; ++i)
-                  REQUIRE(co_await wr->append(line(i, 40)));
-              on_executor = coro::Executor::current() != nullptr;
-          }
-          co_return;
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  {
+                      auto wr = co_await GzipLineWriter::open(
+                          std::string(path.str()), o);
+                      REQUIRE(wr.has_value());
+                      for (std::size_t i = 0; i < 100; ++i)
+                          REQUIRE(co_await wr->append(line(i, 40)));
+                      on_executor = coro::Executor::current() != nullptr;
+                  }
+                  co_return;
+              }),
+              "glw_dropped")
+        .wait();
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (dstd::fs::exists(path).value() &&
@@ -868,7 +871,7 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
     o.memory_budget = 4 * 2 * (MEMBER + MEMBER / 8);
     std::uint64_t expect_lines = PRODUCERS * PER;
     WriteSummary sum;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
         auto wr = co_await GzipLineWriter::open(std::string(path.str()), o);
         REQUIRE(wr.has_value());
         GzipLineWriter& w = *wr;
@@ -881,7 +884,7 @@ TEST_CASE("GzipLineWriter - producers stay within the memory budget") {
         coro::CoroSemaphore done(PRODUCERS);
         co_await done.acquire(PRODUCERS);
         for (std::size_t p = 0; p < PRODUCERS; ++p) {
-            scope.spawn([&, p](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn([&, p]() -> coro::CoroTask<void> {
                 for (std::size_t i = 0; i < PER; ++i)
                     REQUIRE(co_await prods[p].append(line(p * PER + i, 40)));
                 REQUIRE(co_await prods[p].flush());

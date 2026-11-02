@@ -82,13 +82,14 @@ int child_main(const std::string& mode, const std::string& gz) {
         {{AggOp::Sum, "dur", "sum_dur"}});
     static dftracer::utils::Runtime rt;
     std::int64_t rows = 0;
-    rt.run_blocking("transform-memory",
-                    [&](dftracer::utils::CoroScope&)
-                        -> dftracer::utils::coro::CoroTask<void> {
-                        auto df =
-                            co_await scan_detail::run_collect_via_engine(*plan);
-                        rows = df.num_rows();
-                    });
+    rt.block_on(dftracer::utils::coro::named(
+        "transform-memory",
+        dftracer::utils::coro::with_scope(
+            [&](dftracer::utils::coro::Scope&)
+                -> dftracer::utils::coro::CoroTask<void> {
+                auto df = co_await scan_detail::run_collect_via_engine(*plan);
+                rows = df.num_rows();
+            })));
     std::printf("rows=%lld\n", static_cast<long long>(rows));
     return 0;
 }

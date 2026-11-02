@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
@@ -127,18 +128,17 @@ TEST_CASE("Yield - Multiple coroutines yielding concurrently") {
     std::atomic<int> total{0};
 
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.coro_scope(
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
+        [&](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<void> {
                     for (int t = 0; t < NUM_TASKS; ++t) {
-                        scope.spawn(
-                            [&total](CoroScope&) -> coro::CoroTask<void> {
-                                for (int i = 0; i < ITERS_PER_TASK; ++i) {
-                                    total.fetch_add(1);
-                                    co_await coro::maybe_yield();
-                                }
-                                co_return;
-                            });
+                        scope.spawn([&total]() -> coro::CoroTask<void> {
+                            for (int i = 0; i < ITERS_PER_TASK; ++i) {
+                                total.fetch_add(1);
+                                co_await coro::maybe_yield();
+                            }
+                            co_return;
+                        });
                     }
                     co_return;
                 });
@@ -163,17 +163,17 @@ TEST_CASE("Yield - Forced yield re-enqueues on executor") {
     std::atomic<int> b_count{0};
 
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            co_await ctx.coro_scope(
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    scope.spawn([&a_count](CoroScope&) -> coro::CoroTask<void> {
+        [&](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                    scope.spawn([&a_count]() -> coro::CoroTask<void> {
                         for (int i = 0; i < ITERS; ++i) {
                             a_count.fetch_add(1);
                             co_await coro::yield();
                         }
                         co_return;
                     });
-                    scope.spawn([&b_count](CoroScope&) -> coro::CoroTask<void> {
+                    scope.spawn([&b_count]() -> coro::CoroTask<void> {
                         for (int i = 0; i < ITERS; ++i) {
                             b_count.fetch_add(1);
                             co_await coro::yield();

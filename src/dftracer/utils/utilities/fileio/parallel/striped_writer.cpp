@@ -19,7 +19,7 @@ class StripedWriter final : public ParallelWriter {
    public:
     coro::CoroTask<int> open(std::string path, std::size_t num_workers,
                              bool /*gzip_extension*/,
-                             CoroScope* /*scope*/) override {
+                             coro::Scope* /*scope*/) override {
         path_ = std::move(path);
         ssize_t fd = co_await ::dftracer::utils::io::open(
             path_.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);

@@ -24,6 +24,7 @@
 // reads one file's own columns.
 
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/duql/query.h>
@@ -33,7 +34,6 @@
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -99,9 +99,7 @@ T run(coro::CoroTask<T> t) {
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime()
-        .submit(run_coro_scope(default_runtime().executor(), std::move(fn)))
-        .wait();
+    default_runtime().submit(coro::with_scope(std::move(fn))).wait();
 }
 
 double seconds(const std::function<void()>& f) {
@@ -404,7 +402,7 @@ Result measure(const Options& opt, const std::string& input,
                     opt.aggregation_interval_us;
             auto indexer =
                 dftracer::utils::index::Indexer::open(files, options);
-            run_scoped([&](CoroScope& scope) -> coro::CoroTask<void> {
+            run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 co_await indexer.rebuild(scope);
             });
         }));

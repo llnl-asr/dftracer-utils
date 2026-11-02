@@ -2,10 +2,10 @@
 #ifndef DFTRACER_UTILS_INDEX_BUILD_RESOLVER_H
 #define DFTRACER_UTILS_INDEX_BUILD_RESOLVER_H
 
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 
 #include <cstddef>
@@ -109,13 +109,14 @@ std::vector<utilities::filesystem::FileEntry> scanned_entries(
 
 class Resolver {
    public:
-    coro::CoroTask<ResolverResult> operator()(CoroScope& ctx,
+    coro::CoroTask<ResolverResult> operator()(coro::Scope& ctx,
                                               const ResolverInput& input) const;
 
-    /// Scope-less overload: opens its own CoroScope on the current executor.
+    /// Scope-less overload: opens its own scope on the current executor.
     coro::CoroTask<ResolverResult> operator()(
         const ResolverInput& input) const {
-        return with_scope(*this, input);
+        return coro::with_scope(
+            [this, input](coro::Scope& s) { return (*this)(s, input); });
     }
 
    private:

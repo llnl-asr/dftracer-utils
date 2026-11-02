@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/store/open_extent.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -60,15 +60,13 @@ std::size_t peak_live(const std::vector<std::string>& files,
     build::IndexBuildBatchResult result;
     {
         Runtime rt(1);
-        auto task = run_coro_scope(
-            rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto config = std::make_shared<build::IndexBuildBatchConfig>();
-                config->file_paths = files;
-                config->index_dir = index_dir;
-                config->parallelism = 1;
-                result = co_await build::BatchBuilder::process(
-                    &scope, std::move(config));
-            });
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            config->file_paths = files;
+            config->index_dir = index_dir;
+            config->parallelism = 1;
+            result = co_await build::BatchBuilder::process(std::move(config));
+        });
         rt.submit(std::move(task), "build-peak").wait();
         rt.shutdown();
     }

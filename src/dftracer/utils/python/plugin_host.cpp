@@ -2,6 +2,7 @@
 #define PY_SSIZE_T_CLEAN
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/resolve_and_build.h>
@@ -18,7 +19,6 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
@@ -52,7 +52,6 @@ using namespace dftracer::utils;
 
 namespace {
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::plugins::ConfigTree;
 using dftracer::utils::plugins::NamedResult;
@@ -105,7 +104,7 @@ const Plugins* built_set(PluginHostObject* self) {
 
 // Expand any directory in `inputs` to its trace files, index (unless
 // disabled), then drive every loaded plugin as a fold over one fused scan.
-coro::CoroTask<void> run_host_scan(CoroScope& scope,
+coro::CoroTask<void> run_host_scan(dftracer::utils::coro::Scope& scope,
                                    std::vector<std::string> inputs,
                                    std::string index_dir,
                                    const Plugins* plugins, bool auto_index,
@@ -132,8 +131,8 @@ coro::CoroTask<void> run_host_scan(CoroScope& scope,
             "no trace files found");
 
     if (auto_index) {
-        co_await dftracer::utils::index::build::ensure_indexes_fresh(
-            &scope, "", files, index_dir);
+        co_await dftracer::utils::index::build::ensure_indexes_fresh("", files,
+                                                                     index_dir);
     }
 
     std::vector<views::ViewFile> view_files;
@@ -354,11 +353,14 @@ PyObject* ph_run(PluginHostObject* self, PyObject* args, PyObject* kwds) {
     std::string index_dir_s = index_dir ? index_dir : "";
     PluginRun run;
     if (!run_blocking([&] {
-            rt->submit(
-                  dftracer::utils::run_coro_scope(
-                      rt->executor(), run_host_scan, std::move(inputs),
-                      std::move(index_dir_s), plugins, auto_index != 0, &run),
-                  "plugin-host-run")
+            rt->submit(dftracer::utils::coro::with_scope(
+                           [&](dftracer::utils::coro::Scope& scope) {
+                               return run_host_scan(scope, std::move(inputs),
+                                                    std::move(index_dir_s),
+                                                    plugins, auto_index != 0,
+                                                    &run);
+                           }),
+                       "plugin-host-run")
                 .get();
         }))
         return nullptr;

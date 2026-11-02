@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/string.h>
@@ -16,7 +18,6 @@
 #include <dftracer/utils/json/parser.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/time_metric.h>
 #include <dftracer/utils/trace/views/containment_fold.h>
@@ -290,13 +291,9 @@ void ensure_indexes_fresh(const std::vector<ViewFile>& files) {
         in.schema = group.schema;
         in.require_checkpoints = true;
         for (const auto& p : pending) in.files.push_back(p.file);
-        ib::ResolverResult result;
-        default_runtime().run_blocking(
-            "view_index_freshness",
-            [&](CoroScope& scope) -> coro::CoroTask<void> {
-                result =
-                    co_await ib::resolve_and_build_index(&scope, std::move(in));
-            });
+        ib::ResolverResult result = default_runtime().block_on(
+            coro::named("view_index_freshness",
+                        ib::resolve_and_build_index(std::move(in))));
         if (!result.failures.empty())
             throw common::DFTUtilsException::cat(
                 common::ErrorCode::Io, "index of ",
@@ -335,7 +332,7 @@ coro::CoroTask<ScanPlan> from_directory(std::string dir,
         /*populate_size=*/false);
 
     std::vector<utilities::filesystem::FileEntry> entries;
-    co_await run_coro_scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+    co_await coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
         entries = co_await scanner(scope, input);
     });
 
@@ -596,10 +593,10 @@ void ensure_catalog(const ScanPlan& plan_) {
     only->memory_budget = plan_->memory_budget;
     only->cancelled = plan_->cancelled;
     dftracer::utils::dstd::StringIntern intern;
-    default_runtime().run_blocking(
-        "view_ensure_catalog", [&](CoroScope&) -> coro::CoroTask<void> {
+    default_runtime().block_on(
+        coro::named("view_ensure_catalog", [&]() -> coro::CoroTask<void> {
             co_await detail::run_folds(*only, {}, intern, nullptr, nullptr);
-        });
+        }()));
 }
 
 std::vector<SchemaLeaf> schema_tree(const ScanPlan& plan_) {

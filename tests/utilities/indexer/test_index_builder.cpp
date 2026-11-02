@@ -40,11 +40,11 @@ struct BuildOutcome {
 
 BuildOutcome build_one(const std::string& gz, bool force = false) {
     BuildOutcome out;
-    run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto cfg = std::make_shared<IndexBuildBatchConfig>();
         cfg->file_paths = {gz};
         cfg->force_rebuild = force;
-        auto r = co_await BatchBuilder::process(&scope, std::move(cfg));
+        auto r = co_await BatchBuilder::process(std::move(cfg));
         out.success = r.indexed >= 1 && r.failed == 0;
         if (!r.results.empty()) {
             out.index_path = r.results[0].index_path;
@@ -128,7 +128,7 @@ TEST_SUITE("IndexBuilder") {
             no_visitors;
 
         std::uint64_t whole_lines = 0;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
             auto a = co_await gz::build_gzip_index_artifacts(
                 gz_file, 1u << 20, no_visitors, &scope);
             REQUIRE(a.has_value());
@@ -141,7 +141,7 @@ TEST_SUITE("IndexBuilder") {
             slice.members = &members;
             slice.member_begin = b;
             slice.member_end = b + 1;
-            run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+            run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 auto a = co_await gz::build_gzip_index_artifacts(
                     gz_file, 1u << 20, no_visitors, &scope, &slice);
                 REQUIRE(a.has_value());
@@ -181,10 +181,10 @@ TEST_SUITE("IndexBuilder") {
             files.push_back(path);
         }
         IndexBuildBatchResult r;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto cfg = std::make_shared<IndexBuildBatchConfig>();
             cfg->file_paths = files;
-            r = co_await BatchBuilder::process(&scope, std::move(cfg));
+            r = co_await BatchBuilder::process(std::move(cfg));
             co_return;
         });
         CHECK(r.indexed == 2);
@@ -276,7 +276,7 @@ TEST_SUITE("IndexBuilder") {
         bool ok = false;
         const int fd = ::open(gz_file.c_str(), O_RDONLY);
         REQUIRE(fd >= 0);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             ok = co_await dftracer::utils::index::gzip::
                 enumerate_gzip_member_candidates(fd, file_size, found);
         });

@@ -94,10 +94,12 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
     namespace detail = dftracer::utils::trace::views::detail;
     Runtime rt;
     df::DataFrame out;
-    rt.run_blocking("scan-only", [&](CoroScope&) -> coro::CoroTask<void> {
-        auto st = co_await detail::build_engine_agg_state(*p);
-        out = detail::finalize_engine_result(*st, *p);
-    });
+    rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = co_await detail::build_engine_agg_state(*p);
+                        out = detail::finalize_engine_result(*st, *p);
+                    })));
     return detail::apply_agg_post_ops(std::move(out), *p);
 }
 
@@ -107,9 +109,10 @@ bool partials_serve(const scan::ScanPlan& p, df::AggStatePtr& st) {
     detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
-    rt.run_blocking("partials", [&](CoroScope&) -> coro::CoroTask<void> {
-        served = co_await detail::partials_collect(*p, st);
-    });
+    rt.block_on(coro::named(
+        "partials", coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            served = co_await detail::partials_collect(*p, st);
+        })));
     return served;
 }
 
@@ -129,9 +132,12 @@ bool typed_serve(const scan::ScanPlan& p, df::DataFrame& regular,
     detail::ensure_schema(*p);
     Runtime rt;
     bool served = false;
-    rt.run_blocking("typed-partials", [&](CoroScope&) -> coro::CoroTask<void> {
-        served = co_await detail::partials_collect_typed(*p, regular, profiles);
-    });
+    rt.block_on(coro::named(
+        "typed-partials",
+        coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            served =
+                co_await detail::partials_collect_typed(*p, regular, profiles);
+        })));
     return served;
 }
 

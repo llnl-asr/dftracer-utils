@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/little_endian.h>
 #include <dftracer/utils/memory/manager.h>
@@ -47,7 +48,6 @@ namespace memory = dftracer::utils::memory;
 namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
 using dftracer::utils::dstd::ByteView;
@@ -366,10 +366,10 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
     }
 
     std::atomic<int> errors{0};
-    TaskHandle handle = store_runtime().scope(
-        "backpressure", [&](CoroScope& scope) -> coro::CoroTask<void> {
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (int t = 0; t < COROS; ++t) {
-                scope.spawn([&, t](CoroScope&) -> coro::CoroTask<void> {
+                scope.spawn([&, t]() -> coro::CoroTask<void> {
                     for (int r = 0; r < ROUNDS; ++r) {
                         const ScopeKey scope_key = file_scope(scope_of(t, r));
                         const auto key_of = [t, r](std::size_t k) {
@@ -402,8 +402,9 @@ TEST_CASE("back pressure: 64 coroutines commit over a two extent quota") {
                     }
                 });
             }
-            co_await scope.join();
-        });
+            co_return;
+        }),
+        "backpressure");
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
@@ -467,9 +468,10 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
     }
 
     std::atomic<int> errors{0};
-    TaskHandle handle = store_runtime().scope(
-        "quota", [&](CoroScope& scope_runner) -> coro::CoroTask<void> {
-            scope_runner.spawn([&](CoroScope&) -> coro::CoroTask<void> {
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope([&](coro::Scope& scope_runner)
+                             -> coro::CoroTask<void> {
+            scope_runner.spawn([&]() -> coro::CoroTask<void> {
                 for (int b = 0; b < BATCHES; ++b) {
                     auto done = co_await commit_retrying(
                         *writer,
@@ -481,8 +483,9 @@ TEST_CASE("back pressure: a one extent quota holds one extent at a time") {
                     if (!done.has_value()) errors.fetch_add(1);
                 }
             });
-            co_await scope_runner.join();
-        });
+            co_return;
+        }),
+        "quota");
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
@@ -620,20 +623,22 @@ TEST_CASE("back pressure: a batch larger than the quota is taken over it") {
     CHECK(counters.busy == 0);
 
     std::atomic<int> errors{0};
-    TaskHandle handle = store_runtime().scope(
-        "over", [&](CoroScope& scope_runner) -> coro::CoroTask<void> {
-            scope_runner.spawn([&](CoroScope&) -> coro::CoroTask<void> {
-                auto small = co_await commit_retrying(
-                    *writer,
-                    raw_batch(
-                        *writer, space, scope, 1, 64,
-                        [](std::size_t) { return std::string("after"); },
-                        [](std::size_t) { return std::string("after"); }),
-                    BATCH_ATTEMPTS);
-                if (!small.has_value()) errors.fetch_add(1);
-            });
-            co_await scope_runner.join();
-        });
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope(
+            [&](coro::Scope& scope_runner) -> coro::CoroTask<void> {
+                scope_runner.spawn([&]() -> coro::CoroTask<void> {
+                    auto small = co_await commit_retrying(
+                        *writer,
+                        raw_batch(
+                            *writer, space, scope, 1, 64,
+                            [](std::size_t) { return std::string("after"); },
+                            [](std::size_t) { return std::string("after"); }),
+                        BATCH_ATTEMPTS);
+                    if (!small.has_value()) errors.fetch_add(1);
+                });
+                co_return;
+            }),
+        "over");
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
@@ -702,37 +707,39 @@ TEST_CASE("back pressure: the held extent bytes are reserved in the pool") {
     std::atomic<int> errors{0};
     std::atomic<int> charged_while_held{0};
     std::atomic<int> uncharged_while_held{0};
-    TaskHandle handle = store_runtime().scope(
-        "budget", [&](CoroScope& scope_runner) -> coro::CoroTask<void> {
-            for (int t = 0; t < COROS; ++t) {
-                scope_runner.spawn([&, t](CoroScope&) -> coro::CoroTask<void> {
-                    for (int b = 0; b < BATCHES; ++b) {
-                        auto done = co_await commit_retrying(
-                            *writer,
-                            raw_batch(
-                                *writer, space, file_scope(scope_of(t)),
-                                RAW_KEYS, RAW_VALUE_BYTES,
-                                [&, t, b](std::size_t k) {
-                                    return key_of(t, b, k);
-                                },
-                                [&, t, b](std::size_t k) {
-                                    return value_of(t, b, k);
-                                }),
-                            RETRY_ATTEMPTS);
-                        if (!done.has_value()) errors.fetch_add(1);
-                        const WriterExtentsCounters counters =
-                            WriterTestHook::extents(*writer);
-                        if (counters.held == 0) continue;
-                        if (counters.reserved >= counters.held) {
-                            charged_while_held.fetch_add(1);
-                        } else {
-                            uncharged_while_held.fetch_add(1);
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope(
+            [&](coro::Scope& scope_runner) -> coro::CoroTask<void> {
+                for (int t = 0; t < COROS; ++t) {
+                    scope_runner.spawn([&, t]() -> coro::CoroTask<void> {
+                        for (int b = 0; b < BATCHES; ++b) {
+                            auto done = co_await commit_retrying(
+                                *writer,
+                                raw_batch(
+                                    *writer, space, file_scope(scope_of(t)),
+                                    RAW_KEYS, RAW_VALUE_BYTES,
+                                    [&, t, b](std::size_t k) {
+                                        return key_of(t, b, k);
+                                    },
+                                    [&, t, b](std::size_t k) {
+                                        return value_of(t, b, k);
+                                    }),
+                                RETRY_ATTEMPTS);
+                            if (!done.has_value()) errors.fetch_add(1);
+                            const WriterExtentsCounters counters =
+                                WriterTestHook::extents(*writer);
+                            if (counters.held == 0) continue;
+                            if (counters.reserved >= counters.held) {
+                                charged_while_held.fetch_add(1);
+                            } else {
+                                uncharged_while_held.fetch_add(1);
+                            }
                         }
-                    }
-                });
-            }
-            co_await scope_runner.join();
-        });
+                    });
+                }
+                co_return;
+            }),
+        "budget");
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
     CHECK(charged_while_held.load() > 0);
@@ -797,9 +804,10 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
     }
 
     std::atomic<int> errors{0};
-    TaskHandle handle = store_runtime().scope(
-        "refused", [&](CoroScope& scope_runner) -> coro::CoroTask<void> {
-            scope_runner.spawn([&](CoroScope&) -> coro::CoroTask<void> {
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope([&](coro::Scope& scope_runner)
+                             -> coro::CoroTask<void> {
+            scope_runner.spawn([&]() -> coro::CoroTask<void> {
                 for (int b = 0; b < BATCHES; ++b) {
                     auto done = co_await commit_retrying(
                         *writer,
@@ -811,8 +819,9 @@ TEST_CASE("back pressure: a pool that refuses every charge still completes") {
                     if (!done.has_value()) errors.fetch_add(1);
                 }
             });
-            co_await scope_runner.join();
-        });
+            co_return;
+        }),
+        "refused");
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
@@ -974,9 +983,9 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
     CHECK(at_refusal.reservation == at_refusal.held);
 
     std::atomic<int> errors{0};
-    TaskHandle handle = store_runtime().scope(
-        "limit", [&](CoroScope& runner) -> coro::CoroTask<void> {
-            runner.spawn([&](CoroScope&) -> coro::CoroTask<void> {
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope([&](coro::Scope& runner) -> coro::CoroTask<void> {
+            runner.spawn([&]() -> coro::CoroTask<void> {
                 int index = 0;
                 for (int s = 0; s < SEGMENTS_PER_NAMESPACE; ++s) {
                     for (int n = 0; n < NAMESPACES; ++n, ++index) {
@@ -987,8 +996,9 @@ TEST_CASE("back pressure: a pool limit below the quota refuses some charges") {
                     }
                 }
             });
-            co_await runner.join();
-        });
+            co_return;
+        }),
+        "limit");
     await_handle(handle, TASK_LIMIT);
     CHECK(errors.load() == 0);
 
@@ -1107,10 +1117,10 @@ TEST_CASE("back pressure keeps extents full under steady load") {
     namespace io_fault = store::engine::io_fault;
     io_fault::start_counting();
     std::atomic<int> errors{0};
-    TaskHandle handle = store_runtime().scope(
-        "full extents", [&](CoroScope& scope) -> coro::CoroTask<void> {
+    TaskHandle handle = store_runtime().submit(
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (int t = 0; t < COROS; ++t) {
-                scope.spawn([&, t](CoroScope&) -> coro::CoroTask<void> {
+                scope.spawn([&, t]() -> coro::CoroTask<void> {
                     for (int r = 0; r < ROUNDS; ++r) {
                         const ScopeKey scope_key = file_scope(scope_path(t));
                         Batch batch = raw_batch(
@@ -1126,8 +1136,9 @@ TEST_CASE("back pressure keeps extents full under steady load") {
                     }
                 });
             }
-            co_await scope.join();
-        });
+            co_return;
+        }),
+        "full extents");
     await_handle(handle, TASK_LIMIT);
     REQUIRE(close_writer(*writer).has_value());
     const io_fault::Counts counts = io_fault::stop_counting();

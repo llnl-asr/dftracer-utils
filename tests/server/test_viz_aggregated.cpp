@@ -72,13 +72,12 @@ std::string density_body(Router& router, const std::string& target) {
     req.path = target;
     std::string body;
     Runtime rt(4);
-    auto task =
-        run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            HttpResponse resp = co_await router.handle(req);
-            CHECK(resp.status_code == 200);
-            body = resp.body;
-            co_return;
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        HttpResponse resp = co_await router.handle(req);
+        CHECK(resp.status_code == 200);
+        body = resp.body;
+        co_return;
+    });
     rt.submit(std::move(task), "density").wait();
     rt.shutdown();
     return body;
@@ -91,10 +90,9 @@ std::unique_ptr<TraceIndex> build_index(const std::string& content,
     auto index = std::make_unique<TraceIndex>(std::string(dir.str()),
                                               std::string((dir / "idx").str()));
     Runtime rt(4);
-    auto task =
-        run_coro_scope(rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await index->initialize();
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        co_await index->initialize();
+    });
     rt.submit(std::move(task), "setup").wait();
     rt.shutdown();
     return index;

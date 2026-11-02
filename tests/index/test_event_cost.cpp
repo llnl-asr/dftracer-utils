@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // The cases count work, not time.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/event_cost.h>
 #include <dftracer/utils/index/extensions/scalable_bloom_filter.h>
 #include <dftracer/utils/index/schemas/dft/chunk_statistics.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <fcntl.h>
@@ -76,15 +76,13 @@ std::string write_trace(const std::string& dir) {
 void build_one(const std::string& file, const std::string& index_dir) {
     Runtime rt(4);
     build::IndexBuildBatchResult result;
-    auto task = run_coro_scope(
-        rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-            auto config = std::make_shared<build::IndexBuildBatchConfig>();
-            config->file_paths = {file};
-            config->index_dir = index_dir;
-            config->parallelism = 4;
-            result = co_await build::BatchBuilder::process(&scope,
-                                                           std::move(config));
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto config = std::make_shared<build::IndexBuildBatchConfig>();
+        config->file_paths = {file};
+        config->index_dir = index_dir;
+        config->parallelism = 4;
+        result = co_await build::BatchBuilder::process(std::move(config));
+    });
     rt.submit(std::move(task), "event-cost").wait();
     rt.shutdown();
     REQUIRE(result.indexed == 1);

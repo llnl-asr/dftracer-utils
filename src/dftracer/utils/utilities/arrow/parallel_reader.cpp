@@ -2,8 +2,8 @@
 #include <dftracer/utils/common/config.h>
 #ifdef DFTRACER_UTILS_ENABLE_ARROW_IPC
 
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/arrow/ipc_reader.h>
 #include <dftracer/utils/utilities/arrow/parallel_reader.h>
 
@@ -71,7 +71,7 @@ coro::CoroTask<ParallelReadResult> read_arrow_files_parallel(
 }
 
 coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
-    CoroScope& /*scope*/, std::vector<std::string> paths,
+    coro::Scope& /*scope*/, std::vector<std::string> paths,
     FileResultCallback callback) {
     if (paths.empty()) {
         co_return ParallelReadResult{};

@@ -338,8 +338,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
     // Indexes the traces under `path` with the aggregation config the queries
     // use and lists the trace files.
     auto resolve_and_build =
-        [&config](CoroScope& scope, const std::string& path,
-                  const std::string& index_dir,
+        [&config](const std::string& path, const std::string& index_dir,
                   std::vector<std::string>& out_files,
                   std::size_t parallelism) -> coro::CoroTask<void> {
         if (!common::input_exists(path)) {
@@ -359,8 +358,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
         input.force_rebuild = config.force_rebuild;
         input.build_bloom = false;
 
-        auto result =
-            co_await resolve_and_build_index(&scope, std::move(input));
+        auto result = co_await resolve_and_build_index(std::move(input));
         out_files = std::move(result.all_files);
 
         if (out_files.empty()) {
@@ -397,16 +395,16 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (shared_index) {
         auto enum_index_shared = make_task(
             [&config, &baseline_files, &variant_files,
-             &resolve_and_build](CoroScope& scope) -> coro::CoroTask<void> {
+             &resolve_and_build](CoroScope&) -> coro::CoroTask<void> {
                 co_await resolve_and_build(
-                    scope, config.baseline, config.baseline_index_dir,
-                    baseline_files, config.executor_threads);
+                    config.baseline, config.baseline_index_dir, baseline_files,
+                    config.executor_threads);
                 if (config.baseline == config.variant) {
                     variant_files = baseline_files;
                 } else {
                     co_await resolve_and_build(
-                        scope, config.variant, config.variant_index_dir,
-                        variant_files, config.executor_threads);
+                        config.variant, config.variant_index_dir, variant_files,
+                        config.executor_threads);
                 }
             },
             "EnumIndex");
@@ -419,8 +417,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
             std::max<std::size_t>(1, config.executor_threads / 2);
         enum_index_base = make_task(
             [&config, &baseline_files, &resolve_and_build,
-             build_threads](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await resolve_and_build(scope, config.baseline,
+             build_threads](CoroScope&) -> coro::CoroTask<void> {
+                co_await resolve_and_build(config.baseline,
                                            config.baseline_index_dir,
                                            baseline_files, build_threads);
             },
@@ -428,8 +426,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
 
         enum_index_var = make_task(
             [&config, &variant_files, &resolve_and_build,
-             build_threads](CoroScope& scope) -> coro::CoroTask<void> {
-                co_await resolve_and_build(scope, config.variant,
+             build_threads](CoroScope&) -> coro::CoroTask<void> {
+                co_await resolve_and_build(config.variant,
                                            config.variant_index_dir,
                                            variant_files, build_threads);
             },
@@ -443,8 +441,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
     if (same_files) {
         auto agg_shared = make_task(
             [&baseline_files, &baseline_side, &baseline_failed, &filters,
-             &strings,
-             &config]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+             &strings, &config](CoroScope&) -> coro::CoroTask<void> {
                 if (baseline_files.empty()) co_return;
                 co_await aggregate_all(baseline_files, filters,
                                        config.baseline_index_dir, config,
@@ -461,8 +458,8 @@ static int run_comparator(const ComparatorArgParse* cli) {
             std::max<std::size_t>(1, config.executor_threads / 2);
         agg_base = make_task(
             [&baseline_files, &baseline_side, &baseline_failed, &filters,
-             &strings, &config, agg_threads](
-                [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+             &strings, &config,
+             agg_threads](CoroScope&) -> coro::CoroTask<void> {
                 if (baseline_files.empty()) co_return;
                 co_await aggregate_all(
                     baseline_files, filters, config.baseline_index_dir, config,
@@ -473,8 +470,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
 
         agg_var = make_task(
             [&variant_files, &variant_side, &variant_failed, &filters, &strings,
-             &config, agg_threads](
-                [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+             &config, agg_threads](CoroScope&) -> coro::CoroTask<void> {
                 if (variant_files.empty()) co_return;
                 co_await aggregate_all(
                     variant_files, filters, config.variant_index_dir, config,
@@ -494,7 +490,7 @@ static int run_comparator(const ComparatorArgParse* cli) {
         [&config, &baseline_files, &variant_files, &baseline_side,
          &variant_side, &baseline_failed, &variant_failed, &strings, &agg_plans,
          &output, &result_code,
-         same_files]([[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+         same_files](CoroScope&) -> coro::CoroTask<void> {
             if (baseline_files.empty() || variant_files.empty() ||
                 baseline_failed || variant_failed) {
                 result_code = 1;

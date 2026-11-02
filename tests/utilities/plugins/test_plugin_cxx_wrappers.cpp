@@ -5,6 +5,7 @@
 // raw Host method it wraps.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
@@ -120,9 +121,11 @@ void run_wrappers(StringIntern& intern, NamedResultRegistry& named) {
         master.merge(*pf);
     }
     Runtime rt(1);
-    rt.scope("fin", [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
-          co_await master.finalize(CoverageSet{});
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  co_await master.finalize(CoverageSet{});
+              }),
+              "fin")
+        .wait();
     rt.shutdown();
 }
 

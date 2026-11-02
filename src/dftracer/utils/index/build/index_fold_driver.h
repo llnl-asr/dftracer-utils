@@ -4,6 +4,7 @@
 
 #include <dftracer/utils/common/test_probes.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/intern_cache.h>
 #include <dftracer/utils/dstd/string_intern.h>
@@ -17,7 +18,6 @@
 #include <dftracer/utils/json/record_parser.h>
 #include <dftracer/utils/memory/allocator.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/parse_inflated.h>
 #include <dftracer/utils/trace/views/fold.h>
 #include <dftracer/utils/trace/views/fold_event.h>
@@ -212,7 +212,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
         2 * trace::PARSE_BATCH_BYTES;
 
     void begin(std::size_t /*num_checkpoints*/) override {}
-    void bind_scope(CoroScope* scope) override { scope_ = scope; }
+    void bind_scope(coro::Scope* scope) override { scope_ = scope; }
     coro::CoroTask<void> on_checkpoint(std::size_t /*cp*/) override {
         co_return;
     }
@@ -268,8 +268,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             piece->local =
                 std::make_unique<dftracer::utils::dstd::StringIntern>();
             in_flight_.push_back(
-                scope_->spawn([cfg = config(), piece = std::move(piece),
-                               gate = gate_](CoroScope&) mutable {
+                scope_->spawn_future([cfg = config(), piece = std::move(piece),
+                                      gate = gate_]() mutable {
                     return parse_task(std::move(cfg), std::move(piece), gate);
                 }));
         }
@@ -587,10 +587,10 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             if (folds_[i] == bloom_) continue;
             std::optional<coro::SpawnFuture<void>> prev = std::move(tails_[i]);
             tails_[i].reset();
-            tails_[i].emplace(scope_->spawn(
+            tails_[i].emplace(scope_->spawn_future(
                 [fold = folds_[i], agg = folds_[i] == agg_ ? agg_ : nullptr,
                  piece, unit = unit_of(*piece),
-                 prev = std::move(prev)](CoroScope&) mutable {
+                 prev = std::move(prev)]() mutable {
                     return fold_task(fold, agg, std::move(piece),
                                      std::move(unit), std::move(prev));
                 }));
@@ -641,8 +641,8 @@ class IndexFoldDriver : public index::build::IndexVisitor {
             bloom_steps_.pop_back();
         }
         bloom_steps_.push_back(
-            {cp, scope_->spawn([bloom = bloom_, lane, c = std::move(c),
-                                prev = std::move(prev)](CoroScope&) mutable {
+            {cp, scope_->spawn_future([bloom = bloom_, lane, c = std::move(c),
+                                       prev = std::move(prev)]() mutable {
                  return observe_task(bloom, lane, std::move(c),
                                      std::move(prev));
              })});
@@ -813,7 +813,7 @@ class IndexFoldDriver : public index::build::IndexVisitor {
     }
 
     std::shared_ptr<const ParseConfig> config_;
-    CoroScope* scope_ = nullptr;
+    coro::Scope* scope_ = nullptr;
     ParseGate* gate_ = nullptr;
     // Once a piece goes to the fold chains every later piece follows it, so a
     // fold sees its pieces one at a time and in order.

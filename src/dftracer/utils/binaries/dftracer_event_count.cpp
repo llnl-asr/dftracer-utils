@@ -2,6 +2,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/error.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/index/build/resolver.h>
@@ -235,7 +236,7 @@ static int run_event_count(const EventCountArgParse* cli) {
 
     auto count_task = make_task(
         [&index_groups, &stream_items, &total_events, &files_processed, &failed,
-         executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
+         executor_threads](CoroScope&) -> coro::CoroTask<void> {
             for (const auto& [index_path, entries] : index_groups) {
                 auto counts = count_from_index(index_path, entries);
                 total_events.fetch_add(counts.total_events,
@@ -247,7 +248,8 @@ static int run_event_count(const EventCountArgParse* cli) {
             }
 
             if (stream_items.empty()) co_return;
-            co_await ctx.scope([&](CoroScope& scope) -> coro::CoroTask<void> {
+            co_await coro::with_scope([&](coro::Scope& scope)
+                                          -> coro::CoroTask<void> {
                 binaries::parallel_for_each(
                     scope, std::move(stream_items), executor_threads,
                     [total_events_ptr = &total_events,

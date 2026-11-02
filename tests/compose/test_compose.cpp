@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/compose.h>
@@ -37,15 +39,16 @@ struct Doubler {
 // A context-taking op offering both contracts: inject a scope (DI), or call
 // scope-less and let it provide one via with_scope. It fans two spawns out.
 struct ScopedSum {
-    coro::CoroTask<int> operator()(CoroScope& scope, int x) const {
-        auto a = scope.spawn(
-            [x](CoroScope&) -> coro::CoroTask<int> { co_return x; });
-        auto b = scope.spawn(
-            [x](CoroScope&) -> coro::CoroTask<int> { co_return x * 10; });
+    coro::CoroTask<int> operator()(coro::Scope& scope, int x) const {
+        auto a =
+            scope.spawn_future([x]() -> coro::CoroTask<int> { co_return x; });
+        auto b = scope.spawn_future(
+            [x]() -> coro::CoroTask<int> { co_return x * 10; });
         co_return (co_await a) + (co_await b);
     }
     coro::CoroTask<int> operator()(int x) const {
-        return dftracer::utils::with_scope(*this, x);
+        return coro::with_scope(
+            [this, x](coro::Scope& scope) { return (*this)(scope, x); });
     }
 };
 
@@ -60,9 +63,9 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto pipeline = u::op(Doubler{}) | u::op(stringify);
         std::string out;
-        rt.run_blocking("pipe", [&](auto&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("pipe", [&]() -> coro::CoroTask<void> {
             out = co_await pipeline(21);
-        });
+        }()));
         CHECK(out == "42");
     }
 
@@ -70,9 +73,9 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto fan = u::op(Doubler{}) && u::op(stringify);
         std::tuple<int, std::string> out;
-        rt.run_blocking("all", [&](auto&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await fan(21);
-        });
+        }()));
         CHECK(std::get<0>(out) == 42);
         CHECK(std::get<1>(out) == "21");
     }
@@ -92,9 +95,9 @@ TEST_SUITE("compose") {
         };
         auto both = u::op(first) && u::op(second);
         std::tuple<bool, int> out;
-        rt.run_blocking("all", [&](auto&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("all", [&]() -> coro::CoroTask<void> {
             out = co_await both(7);
-        });
+        }()));
         CHECK(std::get<0>(out));
         CHECK(std::get<1>(out) == 7);
     }
@@ -105,9 +108,9 @@ TEST_SUITE("compose") {
         auto slow = [](int x) -> coro::CoroTask<int> { co_return x + 1000; };
         auto race = u::op(fast) || u::op(slow);
         int out = -1;
-        rt.run_blocking("any", [&](auto&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("any", [&]() -> coro::CoroTask<void> {
             out = co_await race(41);
-        });
+        }()));
         CHECK((out == 42 || out == 1041));
     }
 
@@ -116,9 +119,11 @@ TEST_SUITE("compose") {
         ScopedSum sum;
         // Contract 1: caller injects its scope.
         int injected = -1;
-        rt.run_blocking("inject", [&](CoroScope& s) -> coro::CoroTask<void> {
-            injected = co_await sum(s, 3);
-        });
+        rt.block_on(coro::named(
+            "inject",
+            coro::with_scope([&](coro::Scope& s) -> coro::CoroTask<void> {
+                injected = co_await sum(s, 3);
+            })));
         CHECK(injected == 33);  // 3 + 30
         // Contract 2: scope-less call, op provides its own scope.
         int standalone = rt.submit(sum(4)).get();
@@ -136,11 +141,11 @@ TEST_SUITE("compose") {
         Runtime rt;
         auto doubled = u::map(Doubler{});
         std::vector<int> out;
-        rt.run_blocking("map", [&](auto&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("map", [&]() -> coro::CoroTask<void> {
             // GCC 12.1 rejects a braced list inside co_await.
             std::vector<int> in{1, 2, 3, 4};
             out = co_await doubled(std::move(in));
-        });
+        }()));
         CHECK(out == std::vector<int>{2, 4, 6, 8});
     }
 
@@ -150,10 +155,10 @@ TEST_SUITE("compose") {
             u::map(Doubler{}) |
             u::fold(0, [](int acc, int x) { return acc + x; });
         int out = -1;
-        rt.run_blocking("mapreduce", [&](auto&) -> coro::CoroTask<void> {
+        rt.block_on(coro::named("mapreduce", [&]() -> coro::CoroTask<void> {
             std::vector<int> in{1, 2, 3, 4};
             out = co_await sum_of_doubles(std::move(in));
-        });
+        }()));
         CHECK(out == 20);  // (2+4+6+8)
     }
 

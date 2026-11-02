@@ -216,12 +216,11 @@ void run_host(std::vector<dftu_plugin*> plugins, std::vector<ViewFile> files) {
     REQUIRE(set.has_value());
     View view = View::from_files(std::move(files));
     Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(), [&](CoroScope&) -> coro::CoroTask<void> {
-            auto run = co_await set->run(view);
-            REQUIRE(run.has_value());
-            co_return;
-        });
+    auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+        auto run = co_await set->run(view);
+        REQUIRE(run.has_value());
+        co_return;
+    });
     rt.submit(std::move(task), "plugin-transform").wait();
     rt.shutdown();
 }

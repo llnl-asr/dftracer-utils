@@ -3,6 +3,7 @@
 // defect here reads as a failure somewhere unrelated.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <doctest/doctest.h>
@@ -98,7 +99,7 @@ TEST_SUITE("testing utilities") {
 
     TEST_CASE("run_coro runs the body and shuts the runtime down") {
         int ran = 0;
-        run_coro([&ran](dftracer::utils::CoroScope&)
+        run_coro([&ran](dftracer::utils::coro::Scope&)
                      -> dftracer::utils::coro::CoroTask<void> {
             ran = 1;
             co_return;

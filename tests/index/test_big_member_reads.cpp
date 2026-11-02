@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
 #include <dftracer/utils/index/store/internal/helpers.h>
 #include <dftracer/utils/memory/manager.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/trace/views/view.h>
 #include <dftracer/utils/utilities/fileio/compress/gzip_member_reader.h>
@@ -190,7 +190,7 @@ std::size_t inflate_mismatches(
     REQUIRE(fd >= 0);
     std::size_t at = 0, bad = 0;
     bool ok = false;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         ReaderInflater inf;
         inf.set_member_bound(BOUND_BYTES);
         if (cache != nullptr) inf.set_cache(cache, 7);
@@ -220,7 +220,7 @@ std::size_t members_lines(const std::string& path) {
     REQUIRE(fd >= 0);
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
     std::size_t lines = 0;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = gz::decode_gzip_members(fd, size, BOUND_BYTES);
         while (auto part = co_await gen.next())
             lines += static_cast<std::size_t>(
@@ -235,14 +235,14 @@ struct Indexed {
     Indexed(const std::string& path, const std::string& index_path,
             std::uint64_t ckpt = CKPT) {
         indexer = std::make_shared<GzipIndexer>(path, index_path, ckpt, true);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
     }
     std::string read_lines(std::size_t first, std::size_t last) {
         GzipReader reader(indexer);
         std::string out;
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             out = co_await reader.read_lines_async(first, last);
         });
         return out;
@@ -271,7 +271,7 @@ std::string read_line_bytes(const std::shared_ptr<GzipIndexer>& indexer,
             .from(from)
             .to(reader.get_max_bytes()));
     std::string out;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         std::vector<char> buf(1u << 20);
         while (true) {
             const auto n = co_await stream->read_async(buf.data(), buf.size());
@@ -452,7 +452,7 @@ TEST_SUITE("BigMemberReads") {
         Files big(BIG_BYTES, 4, "g");
         auto count = [](const std::string& path) {
             std::size_t n = 0;
-            run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 auto lines =
                     utilities::fileio::lines::sources::async_streaming_gz_lines(
                         path);

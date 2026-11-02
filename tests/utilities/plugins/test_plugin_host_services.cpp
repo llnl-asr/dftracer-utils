@@ -43,7 +43,6 @@
 #include <string_view>
 #include <vector>
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::PluginFold;

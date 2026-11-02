@@ -13,13 +13,11 @@
 #include <string>
 #include <vector>
 
-namespace dftracer::utils {
-class CoroScope;
-}
+namespace dftracer::utils::coro {
+class Scope;
+}  // namespace dftracer::utils::coro
 
 namespace dftracer::utils::utilities::arrow {
-
-using dftracer::utils::CoroScope;
 
 /**
  * Result from reading a single Arrow IPC file.
@@ -79,15 +77,16 @@ using FileResultCallback = std::function<bool(ArrowFileReadResult&&)>;
  * Results are delivered in completion order (whichever file finishes first).
  * This is more memory-efficient for large numbers of files.
  *
- * Must be run within a CoroScope (via runtime.scope() or run_coro_scope).
+ * Must be run within a @ref dftracer::utils::coro::Scope "Scope" (via
+ * coro::with_scope).
  *
- * @param scope CoroScope for spawning parallel tasks.
+ * @param scope Scope for spawning parallel tasks.
  * @param paths List of file paths to read.
  * @param callback Called for each file result. Return false to cancel.
  * @return Summary stats (files_read, files_failed, total_rows, total_batches).
  */
 coro::CoroTask<ParallelReadResult> read_arrow_files_streaming(
-    CoroScope& scope, std::vector<std::string> paths,
+    coro::Scope& scope, std::vector<std::string> paths,
     FileResultCallback callback);
 
 }  // namespace dftracer::utils::utilities::arrow

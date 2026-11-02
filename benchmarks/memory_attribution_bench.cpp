@@ -20,6 +20,7 @@
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
@@ -27,7 +28,6 @@
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/lines/sources/async_streaming_gz_line_generator.h>
@@ -236,9 +236,7 @@ void run_plan(const df::LazyFrame& plan, std::uint64_t budget) {
 
 template <class Fn>
 void run_scoped(Fn fn) {
-    default_runtime()
-        .submit(run_coro_scope(default_runtime().executor(), std::move(fn)))
-        .wait();
+    default_runtime().submit(coro::with_scope(std::move(fn))).wait();
 }
 
 void group_by(const Sizes& s) {
@@ -269,7 +267,7 @@ void index_build(const Paths& p) {
     options.index_dir = p.index_dir;
     options.bloom->required = false;
     auto indexer = index::Indexer::open({p.trace}, options);
-    run_scoped([&](CoroScope& scope) -> coro::CoroTask<void> {
+    run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
         co_await indexer.rebuild(scope);
     });
 }
@@ -298,7 +296,7 @@ void json_read(const Paths& p) {
 
 void genesis(const Paths& p) {
     run_scoped(
-        [&](CoroScope& ctx) { return genesis_run(ctx, p.genesis_root); });
+        [&](coro::Scope& ctx) { return genesis_run(ctx, p.genesis_root); });
 }
 
 std::string trace_text(std::int64_t lines) {

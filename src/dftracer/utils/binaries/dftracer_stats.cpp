@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -25,7 +26,6 @@
 #include <dftracer/utils/json/json.h>
 #include <dftracer/utils/json/json_value.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/trace/event.h>
 #include <dftracer/utils/trace/internal/utils.h>
@@ -764,7 +764,7 @@ static coro::CoroTask<void> process_file_detailed(
 }
 
 static void run_detailed_query_workers(
-    CoroScope& scope, const std::vector<std::string>* files_ptr,
+    coro::Scope& scope, const std::vector<std::string>* files_ptr,
     std::size_t executor_threads, const std::string* index_dir_ptr,
     bool needs_hash_resolution, bool json_output, std::size_t top_n,
     const duql::Query* qp, const std::vector<std::string>* fn,
@@ -774,7 +774,7 @@ static void run_detailed_query_workers(
     auto file_chan = coro::make_channel<std::size_t>(executor_threads * 2);
 
     scope.spawn([ch = file_chan->producer(),
-                 files_ptr](CoroScope&) mutable -> coro::CoroTask<void> {
+                 files_ptr]() mutable -> coro::CoroTask<void> {
         auto guard = ch.guard();
         for (std::size_t fi = 0; fi < files_ptr->size(); ++fi) {
             const auto send_ok = co_await ch.send(fi);
@@ -788,7 +788,7 @@ static void run_detailed_query_workers(
     for (std::size_t w = 0; w < executor_threads; ++w) {
         scope.spawn([ch = file_chan->consumer(), files_ptr, index_dir_ptr,
                      needs_hash_resolution, json_output, top_n, qp, fn, fc, gb,
-                     ad, am, om, jr](CoroScope&) -> coro::CoroTask<void> {
+                     ad, am, om, jr]() -> coro::CoroTask<void> {
             for (;;) {
                 auto fi_opt = co_await ch.receive();
                 if (!fi_opt) break;
@@ -879,7 +879,7 @@ static void print_text_query_output(const TraceStatistics& stats,
 }
 
 static coro::CoroTask<std::vector<std::string>> collect_files(
-    CoroScope& ctx, const std::vector<std::string>& cli_files,
+    coro::Scope& ctx, const std::vector<std::string>& cli_files,
     std::string directory) {
     if (!directory.empty()) {
         if (!common::input_exists(directory)) {
@@ -973,15 +973,13 @@ static coro::CoroTask<IndexPartition> resolve_index_state(
 
 static coro::CoroTask<dftracer::utils::index::build::IndexBuildBatchResult>
 run_batch_build(
-    CoroScope* ctx,
     std::shared_ptr<dftracer::utils::index::build::IndexBuildBatchConfig>
         config) {
     co_return co_await dftracer::utils::index::build::BatchBuilder::process(
-        ctx, std::move(config));
+        std::move(config));
 }
 
-static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
-                                             IndexPartition& partition,
+static coro::CoroTask<void> auto_index_files(IndexPartition& partition,
                                              const std::string& index_dir,
                                              std::size_t checkpoint_size,
                                              std::size_t executor_threads) {
@@ -1003,8 +1001,7 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
         batch_config->checkpoint_size = checkpoint_size;
         batch_config->parallelism = executor_threads;
 
-        auto batch_result =
-            co_await run_batch_build(&ctx, std::move(batch_config));
+        auto batch_result = co_await run_batch_build(std::move(batch_config));
 
         DFTRACER_UTILS_LOG_INFO(
             "Shared root auto-index metrics: root=%s files=%zu "
@@ -1081,8 +1078,7 @@ static coro::CoroTask<void> auto_index_files(CoroScope& ctx,
 }
 
 static coro::CoroTask<int> run_detailed_stats(
-    CoroScope& ctx, const StatsConfig* config_ptr,
-    const std::vector<std::string>* files_ptr) {
+    const StatsConfig* config_ptr, const std::vector<std::string>* files_ptr) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
     bool needs_hash_resolution = false;
@@ -1119,7 +1115,7 @@ static coro::CoroTask<int> run_detailed_stats(
          top_n_for_detailed, query_ptr, filter_names_ptr, filter_cats_ptr,
          group_by_ptr, aggregate_detailed_ptr, aggregate_mutex_ptr,
          output_mutex_ptr,
-         json_results_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+         json_results_ptr](coro::Scope& scope) -> coro::CoroTask<void> {
         run_detailed_query_workers(
             scope, files_ptr, executor_threads_for_detailed,
             index_dir_for_detailed_ptr, needs_hash_resolution_for_detailed,
@@ -1129,7 +1125,7 @@ static coro::CoroTask<int> run_detailed_stats(
             json_results_ptr);
         co_return;
     };
-    co_await ctx.scope(detailed_scope);
+    co_await coro::with_scope(detailed_scope);
 
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double, std::milli> duration = end_time - start_time;
@@ -1354,7 +1350,7 @@ static coro::CoroTask<void> process_index_group(
 }
 
 static coro::CoroTask<AggregateStatsResult> run_aggregate_stats(
-    CoroScope& /*ctx*/, const StatsConfig* config_ptr,
+    coro::Scope& /*ctx*/, const StatsConfig* config_ptr,
     std::unique_ptr<IndexPartition> partition_ptr) {
     auto& partition = *partition_ptr;
     auto agg = std::make_unique<AggregateStatsResult>();
@@ -1486,7 +1482,7 @@ static coro::CoroTask<int> output_aggregate_stats(
     co_return 0;
 }
 
-static coro::CoroTask<int> run_stats(CoroScope& ctx,
+static coro::CoroTask<int> run_stats(coro::Scope& ctx,
                                      const StatsArgParse* args) {
     StatsConfig config;
     if (!args->to_config(config)) {
@@ -1507,10 +1503,10 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
         if (!config.no_auto_index) {
             common::ScopedTimer _ef(stages, "ensure_index_fresh");
             if (!config.directory.empty())
-                co_await ensure_index_fresh(&ctx, config.directory, "",
+                co_await ensure_index_fresh(config.directory, "",
                                             config.index_dir);
             else
-                co_await ensure_indexes_fresh(&ctx, "", args->files_args.value,
+                co_await ensure_indexes_fresh("", args->files_args.value,
                                               config.index_dir);
         }
         if (!config.directory.empty() &&
@@ -1566,14 +1562,14 @@ static coro::CoroTask<int> run_stats(CoroScope& ctx,
             co_return 1;
         }
         common::ScopedTimer _ai(stages, "auto_index_files");
-        co_await auto_index_files(ctx, partition, config.index_dir,
+        co_await auto_index_files(partition, config.index_dir,
                                   config.checkpoint_size,
                                   config.executor_threads);
     }
 
     if (config.report_type == StatisticsQueryType::Detailed) {
         if (stages) stages->print_stages();
-        co_return co_await run_detailed_stats(ctx, &config, &files);
+        co_return co_await run_detailed_stats(&config, &files);
     }
 
     std::unique_ptr<AggregateStatsResult> agg_ptr;
@@ -1599,7 +1595,7 @@ int main(int argc, char** argv) {
         [](StatsArgParse& args) {
             return dftracer::utils::binaries::run_single_task(
                 "DFTracer Stats Main", args.pipeline,
-                [&args](CoroScope& ctx) -> coro::CoroTask<int> {
+                [&args](coro::Scope& ctx) -> coro::CoroTask<int> {
                     co_return co_await run_stats(ctx, &args);
                 });
         });

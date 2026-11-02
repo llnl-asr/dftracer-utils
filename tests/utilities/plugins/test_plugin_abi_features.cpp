@@ -4,6 +4,7 @@
 // and the coroutine control ops (drive path).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/config.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
@@ -32,7 +33,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::ConfigTree;
@@ -501,12 +501,16 @@ TEST_CASE("plugin ABI: spawn fan-out joined by when_all runs every child") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host,
-              fanout_all(dftracer::utils::plugins::Host{&host}, &ran, 4));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host,
+                          fanout_all(dftracer::utils::plugins::Host{&host},
+                                     &ran, 4));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() == 4);
 }
@@ -517,11 +521,16 @@ TEST_CASE("plugin ABI: when_any returns after the first child") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, fanout_any(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      fanout_any(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() >= 1);
 }
@@ -532,11 +541,16 @@ TEST_CASE("plugin ABI: compose && joins both tasks (when_all)") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, compose_all(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      compose_all(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() == 2);
 }
@@ -547,11 +561,16 @@ TEST_CASE("plugin ABI: compose || races the tasks (when_any)") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, compose_any(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      compose_any(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() >= 1);
 }
@@ -562,11 +581,16 @@ TEST_CASE("plugin ABI: compose map joins one task per item (when_all)") {
 
     Runtime rt(1);
     std::atomic<int> ran{0};
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, compose_map(dftracer::utils::plugins::Host{&host}, &ran));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      compose_map(dftracer::utils::plugins::Host{&host}, &ran));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
     CHECK(ran.load() == 4);
 }
@@ -577,11 +601,15 @@ TEST_CASE("plugin ABI: compose dftu_op then threads a value through the pipe") {
 
     Runtime rt(1);
     std::int64_t result = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, op_pipe(dftracer::utils::plugins::Host{&host}, &result));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host, op_pipe(dftracer::utils::plugins::Host{&host},
+                                         &result));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(result == 20);  // (5*2)+10
 }
@@ -592,11 +620,15 @@ TEST_CASE("plugin ABI: compose dftu_op when_all concatenates outputs") {
 
     Runtime rt(1);
     std::int64_t a = 0, b = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, op_all(dftracer::utils::plugins::Host{&host}, &a, &b));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host, op_all(dftracer::utils::plugins::Host{&host},
+                                        &a, &b));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(a == 10);  // 5*2
     CHECK(b == 15);  // 5+10
@@ -608,11 +640,15 @@ TEST_CASE("plugin ABI: compose dftu_op when_any yields the winner's value") {
 
     Runtime rt(1);
     std::int64_t result = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, op_any(dftracer::utils::plugins::Host{&host}, &result));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host, op_any(dftracer::utils::plugins::Host{&host},
+                                        &result));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(result == 15);  // both racers compute 5+10
 }
@@ -623,12 +659,16 @@ TEST_CASE("plugin ABI: typed compose Op pipes real values") {
 
     Runtime rt(1);
     std::int64_t result = 0;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host,
-              typed_pipe(dftracer::utils::plugins::Host{&host}, &result));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host,
+                          typed_pipe(dftracer::utils::plugins::Host{&host},
+                                     &result));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     CHECK(result == 20);  // (5*2)+10, fully typed
 }
@@ -646,11 +686,16 @@ TEST_CASE(
 
     Runtime rt(1);
     dftu_series* out = nullptr;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, series_pipe(dftracer::utils::plugins::Host{&host}, &out));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(
+          coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+              ::dftu_task* d =
+                  dftracer::utils::plugins::detail::drive_coro<int>(
+                      &host,
+                      series_pipe(dftracer::utils::plugins::Host{&host}, &out));
+              co_await *as_coro(d);
+          }),
+          "caller")
+        .wait();
     rt.shutdown();
 
     REQUIRE(out != nullptr);
@@ -706,11 +751,15 @@ TEST_CASE("plugin ABI: then chains a continuation after its task") {
 
     Runtime rt(1);
     std::vector<int> order;
-    rt.scope("caller", [&](CoroScope&) -> coro::CoroTask<void> {
-          ::dftu_task* d = dftracer::utils::plugins::detail::drive_coro<int>(
-              &host, chain(dftracer::utils::plugins::Host{&host}, &order));
-          co_await *as_coro(d);
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  ::dftu_task* d =
+                      dftracer::utils::plugins::detail::drive_coro<int>(
+                          &host,
+                          chain(dftracer::utils::plugins::Host{&host}, &order));
+                  co_await *as_coro(d);
+              }),
+              "caller")
+        .wait();
     rt.shutdown();
     REQUIRE(order.size() == 2);
     CHECK(order[0] == 1);

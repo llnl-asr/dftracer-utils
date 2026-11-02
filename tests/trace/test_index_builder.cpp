@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -34,17 +34,16 @@ static BuildResult run_builder(const std::string& gz,
     out.file_path = gz;
     auto* out_ptr = &out;
 
-    auto task = run_coro_scope(
-        rt.executor(),
-        [gz, index_dir, force, checkpoint_size,
-         out_ptr](CoroScope& scope) -> coro::CoroTask<void> {
+    auto task =
+        coro::with_scope([gz, index_dir, force, checkpoint_size,
+                          out_ptr](coro::Scope&) -> coro::CoroTask<void> {
             auto cfg = std::make_shared<IndexBuildBatchConfig>();
             cfg->file_paths = {gz};
             cfg->index_dir = index_dir;
             cfg->force_rebuild = force;
             if (checkpoint_size > 0) cfg->checkpoint_size = checkpoint_size;
             try {
-                auto r = co_await BatchBuilder::process(&scope, std::move(cfg));
+                auto r = co_await BatchBuilder::process(std::move(cfg));
                 out_ptr->success = r.indexed >= 1 && r.failed == 0;
                 if (!r.results.empty()) {
                     out_ptr->index_path = r.results[0].index_path;

@@ -15,6 +15,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
@@ -121,8 +122,10 @@ void run_pipelined(ReplayEngine& engine, const std::vector<std::string>& files,
                    ReplayResult& result, std::size_t threads) {
     Pipeline pipeline(PipelineConfig::parallel(threads));
     auto root = make_task(
-        [&engine, &files, &result](CoroScope& scope) -> coro::CoroTask<void> {
-            co_await engine.run_pipelined(scope, files, result, /*cap=*/64);
+        [&engine, &files, &result](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope([&](coro::Scope& scope) {
+                return engine.run_pipelined(scope, files, result, /*cap=*/64);
+            });
         },
         "replay_pipelined");
     pipeline.set_source(root);
@@ -248,8 +251,10 @@ TEST_CASE("Replay fidelity - pipelined path") {
 
     Pipeline pipeline(PipelineConfig::parallel(4));
     auto root = make_task(
-        [&engine, &files, &result](CoroScope& scope) -> coro::CoroTask<void> {
-            co_await engine.run_pipelined(scope, files, result, /*cap=*/64);
+        [&engine, &files, &result](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope([&](coro::Scope& scope) {
+                return engine.run_pipelined(scope, files, result, /*cap=*/64);
+            });
         },
         "replay_pipelined");
     pipeline.set_source(root);

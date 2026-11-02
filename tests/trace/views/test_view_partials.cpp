@@ -144,10 +144,12 @@ df::DataFrame scan_only(const scan::ScanPlan& p) {
     namespace detail = dftracer::utils::trace::views::detail;
     Runtime rt;
     df::DataFrame out;
-    rt.run_blocking("scan-only", [&](CoroScope&) -> coro::CoroTask<void> {
-        auto st = co_await detail::build_engine_agg_state(*p);
-        out = detail::finalize_engine_result(*st, *p);
-    });
+    rt.block_on(
+        coro::named("scan-only",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        auto st = co_await detail::build_engine_agg_state(*p);
+                        out = detail::finalize_engine_result(*st, *p);
+                    })));
     return detail::apply_agg_post_ops(std::move(out), *p);
 }
 
@@ -282,9 +284,11 @@ TEST_SUITE("ViewPartials") {
         const View rollup =
             View::from_files(one).group_by(keys).agg(stats_specs);
         Runtime rt;
-        rt.run_blocking("materialize", [&](CoroScope&) -> coro::CoroTask<void> {
-            co_await rollup.materialize();
-        });
+        rt.block_on(coro::named(
+            "materialize",
+            coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                co_await rollup.materialize();
+            })));
         REQUIRE(rollup.reconstruct_if_cached().has_value());
         const Rows got =
             rows_of(*rollup.reconstruct_if_cached(), {"cat", "pid", "tid"});

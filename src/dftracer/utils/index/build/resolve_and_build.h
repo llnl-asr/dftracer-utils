@@ -8,7 +8,6 @@
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/index/build/chunk_indexer.h>
 #include <dftracer/utils/index/build/resolver.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -64,7 +63,7 @@ struct ResolveAndBuildInput {
 ///   - cached: fully resolved files ready for use
 ///   - needs_checkpoint: files that failed to index (for direct scan fallback)
 coro::CoroTask<ResolverResult> resolve_and_build_index(
-    CoroScope* scope, ResolveAndBuildInput input);
+    ResolveAndBuildInput input);
 
 /// The files of `input` that need a whole-file build: not indexed, changed
 /// since they were, or indexed with other settings than `input` names. Uses the
@@ -82,15 +81,14 @@ coro::CoroTask<IndexWork> files_needing_index(ResolverInput input);
 /// read-before-use entry points never see a changed source. Named coroutines
 /// with by-value params (CP.53) so callers, especially coroutine lambdas, hold
 /// no vector on their own frame (GCC 12/13 frame bug).
-coro::CoroTask<void> ensure_indexes_fresh(CoroScope* scope,
-                                          std::string directory,
+coro::CoroTask<void> ensure_indexes_fresh(std::string directory,
                                           std::vector<std::string> files,
                                           std::string index_dir,
                                           bool force_rebuild = false);
 
 /// Single directory-or-file convenience; builds the vector inside this frame.
-coro::CoroTask<void> ensure_index_fresh(CoroScope* scope, std::string directory,
-                                        std::string file, std::string index_dir,
+coro::CoroTask<void> ensure_index_fresh(std::string directory, std::string file,
+                                        std::string index_dir,
                                         bool force_rebuild = false);
 
 }  // namespace dftracer::utils::index::build

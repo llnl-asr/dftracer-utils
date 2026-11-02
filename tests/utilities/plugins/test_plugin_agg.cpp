@@ -4,6 +4,7 @@
 // and finalized to a native dataframe result (no Arrow hop).
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/fold_adapter.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -29,7 +30,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::StringIntern;
 using dftracer::utils::plugins::AggCol;
@@ -132,9 +132,11 @@ dftu_plugin make_agg_plugin() {
 
 void finalize_now(PluginFold& f) {
     Runtime rt(1);
-    rt.scope("fin", [&](CoroScope&) -> coro::CoroTask<void> {
-          co_await f.finalize(views::detail::CoverageSet{});
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  co_await f.finalize(views::detail::CoverageSet{});
+              }),
+              "fin")
+        .wait();
     rt.shutdown();
 }
 

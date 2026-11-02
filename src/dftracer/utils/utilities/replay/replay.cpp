@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/cancelled.h>
+#include <dftracer/utils/coro/channel.h>
 #include <dftracer/utils/coro/executor.h>
 #include <dftracer/utils/coro/resumption_helper.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/when_any.h>
 #include <dftracer/utils/dataframe/containment.h>
@@ -147,7 +149,7 @@ coro::CoroTask<void> ReplayEngine::replay_file(std::string file, Lane& lane,
 }
 
 coro::CoroTask<void> ReplayEngine::run_pipelined(
-    dftracer::utils::CoroScope& scope, const std::vector<std::string>& files,
+    coro::Scope& scope, const std::vector<std::string>& files,
     ReplayResult& result, std::size_t channel_capacity) {
     admitted_.store(0, std::memory_order_relaxed);
     std::vector<Lane> lanes(files.size());
@@ -162,8 +164,8 @@ coro::CoroTask<void> ReplayEngine::run_pipelined(
     runs.reserve(workers);
     for (std::size_t w = 0; w < workers; ++w) {
         runs.push_back(
-            scope.spawn([this, &files, &lanes, &next,
-                         channel_capacity](CoroScope&) -> coro::CoroTask<void> {
+            scope.spawn_future([this, &files, &lanes, &next,
+                                channel_capacity]() -> coro::CoroTask<void> {
                 for (std::size_t i = next.fetch_add(1); i < files.size();
                      i = next.fetch_add(1)) {
                     lanes[i] = make_lane();

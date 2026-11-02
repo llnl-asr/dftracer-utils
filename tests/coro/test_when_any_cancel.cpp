@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_any.h>
+#include <dftracer/utils/coro/yield.h>
+#include <dftracer/utils/dstd/scope_exit.h>
 #include <dftracer/utils/runtime/pipeline/scheduler.h>
 #include <dftracer/utils/runtime/scheduler/task_executor.h>
 #include <dftracer/utils/runtime/scheduler/thread_pool_executor.h>
@@ -210,37 +213,45 @@ TEST_CASE("when_any - a spawned loser stops when cancelled") {
     std::atomic<long long> elapsed_ms{0};
 
     auto task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
-            auto winner = ctx.spawn([](CoroScope&) -> coro::CoroTask<int> {
-                std::this_thread::sleep_for(WINNER_TIME);
-                co_return 1;
-            });
-            auto loser =
-                ctx.spawn([&](CoroScope& scope) -> coro::CoroTask<int> {
-                    const auto deadline = Clock::now() + LOSER_TIME;
-                    while (Clock::now() < deadline) {
-                        if (scope.is_cancellation_requested()) {
-                            loser_saw_cancel.store(true);
-                            break;
-                        }
-                        std::this_thread::sleep_for(
-                            std::chrono::milliseconds(5));
-                    }
-                    loser_finished.store(true);
-                    co_return 2;
-                });
-
-            std::vector<coro::SpawnFuture<int>> futures;
-            futures.push_back(std::move(winner));
-            futures.push_back(std::move(loser));
+        [&](CoroScope&) -> coro::CoroTask<void> {
             const auto start = Clock::now();
-            auto result = co_await coro::when_any(std::move(futures));
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<void> {
+                    auto winner =
+                        scope.spawn_future([]() -> coro::CoroTask<int> {
+                            std::this_thread::sleep_for(WINNER_TIME);
+                            co_return 1;
+                        });
+                    // The loser waits at each step, where the cancel that
+                    // when_any sends through its future ends it.
+                    auto loser =
+                        scope.spawn_future([&]() -> coro::CoroTask<int> {
+                            const auto deadline = Clock::now() + LOSER_TIME;
+                            auto mark = [&] {
+                                loser_saw_cancel.store(Clock::now() < deadline);
+                                loser_finished.store(true);
+                            };
+                            dstd::ScopeExit<decltype(mark)> finished(mark);
+                            while (Clock::now() < deadline) {
+                                std::this_thread::sleep_for(
+                                    std::chrono::milliseconds(5));
+                                co_await coro::yield();
+                            }
+                            co_return 2;
+                        });
+
+                    std::vector<coro::SpawnFuture<int>> futures;
+                    futures.push_back(std::move(winner));
+                    futures.push_back(std::move(loser));
+                    auto result = co_await coro::when_any(std::move(futures));
+                    loser_finished_before_return.store(loser_finished.load());
+                    CHECK(result.index == 0);
+                    co_return;
+                });
             elapsed_ms.store(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     Clock::now() - start)
                     .count());
-            loser_finished_before_return.store(loser_finished.load());
-            CHECK(result.index == 0);
             co_return;
         },
         "SpawnedLoserStops");

@@ -66,7 +66,7 @@ std::string read_all(const std::string& path) {
     REQUIRE(fd >= 0);
     std::string out;
     bool ok = false;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         ReaderInflater inf;
         off_t offset = 0;
         if (!co_await inf.initialize(fd, offset)) co_return;
@@ -90,7 +90,7 @@ std::string read_members(const std::string& path) {
     REQUIRE(fd >= 0);
     const auto size = static_cast<std::uint64_t>(::lseek(fd, 0, SEEK_END));
     std::string out;
-    run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+    run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
         auto gen = gz::decode_gzip_members(fd, size);
         while (auto part = co_await gen.next()) out.append(*part);
     });
@@ -177,7 +177,7 @@ TEST_SUITE("ReaderInflater") {
         const auto text = hex_lines(12u << 20, 7);
         TempFile f(gzip(text));
         std::optional<index::gzip::GzipBuildArtifacts> arts;
-        run_coro([&](CoroScope& scope) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope& scope) -> coro::CoroTask<void> {
             index::gzip::CheckpointIndexer::VisitorList none;
             arts = co_await index::gzip::build_gzip_index_artifacts(
                 f.path, 32u << 20, none, &scope);

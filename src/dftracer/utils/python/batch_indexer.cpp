@@ -29,7 +29,6 @@
 #include <dftracer/utils/python/py_type_helpers.h>
 #include <dftracer/utils/python/runtime.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 
 #include <algorithm>
@@ -43,7 +42,6 @@
 
 using namespace dftracer::utils;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using namespace dftracer::utils::index::build;
 using namespace dftracer::utils::index::schemas::dft::agg;

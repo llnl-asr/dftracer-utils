@@ -47,6 +47,8 @@
 #include <dftracer/utils/common/constants.h>
 #include <dftracer/utils/common/filesystem_info.h>
 #include <dftracer/utils/coro/executor.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
@@ -87,7 +89,6 @@ namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io_fault = dftracer::utils::store::engine::io_fault;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::dstd::ByteView;
 using store::Batch;
@@ -1162,21 +1163,21 @@ std::uint64_t Bench::count_keys(const std::string& dir) {
 void Bench::close_writers(Runtime& runtime,
                           std::vector<std::unique_ptr<Writer>>& writers,
                           std::atomic<int>& errors) {
-    runtime.run_blocking(
-        "store_bench close", [&](CoroScope& scope) -> coro::CoroTask<void> {
+    runtime.block_on(coro::named(
+        "store_bench close",
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::size_t at = 0; at < writers.size(); ++at) {
                 Writer* writer = writers[at].get();
-                scope.spawn(
-                    [writer, &errors](CoroScope&) -> coro::CoroTask<void> {
-                        auto closed = co_await writer->close();
-                        if (!closed) {
-                            errors.fetch_add(1, std::memory_order_relaxed);
-                        }
-                        co_return;
-                    });
+                scope.spawn([writer, &errors]() -> coro::CoroTask<void> {
+                    auto closed = co_await writer->close();
+                    if (!closed) {
+                        errors.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    co_return;
+                });
             }
-            co_await scope.join();
-        });
+            co_return;
+        })));
 }
 
 WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
@@ -1218,10 +1219,11 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
     std::atomic<int> errors{0};
     io_fault::start_counting();
     const auto started = std::chrono::steady_clock::now();
-    runtime.run_blocking(
-        "store_bench write", [&](CoroScope& scope) -> coro::CoroTask<void> {
+    runtime.block_on(coro::named(
+        "store_bench write",
+        coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
             for (std::uint64_t at = 0; at < workload.threads; ++at) {
-                scope.spawn([&, at](CoroScope&) -> coro::CoroTask<void> {
+                scope.spawn([&, at]() -> coro::CoroTask<void> {
                     const std::size_t slot =
                         per_thread ? static_cast<std::size_t>(at) : 0;
                     Writer& writer = *writers[slot];
@@ -1251,8 +1253,8 @@ WriteRow Bench::run_write_case(Runtime& runtime, const Workload& workload,
                     co_return;
                 });
             }
-            co_await scope.join();
-        });
+            co_return;
+        })));
     close_writers(runtime, writers, errors);
     const auto stopped = std::chrono::steady_clock::now();
     row.counts = io_fault::stop_counting();
@@ -1553,8 +1555,8 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
     std::atomic<bool> ok{true};
     std::uint64_t new_scope_nanos = 0;
     std::uint64_t commit_nanos = 0;
-    runtime.run_blocking(
-        "store_bench scopes", [&](CoroScope&) -> coro::CoroTask<void> {
+    runtime.block_on(
+        coro::named("store_bench scopes", [&]() -> coro::CoroTask<void> {
             std::uint32_t ordinal = 0;
             const auto new_started = std::chrono::steady_clock::now();
             for (std::uint64_t at = 0; at < scopes; ++at) {
@@ -1597,15 +1599,15 @@ ScopeRow Bench::run_scope_case(Runtime& runtime, std::uint64_t scopes) {
             }
             commit_nanos =
                 nanos_between(commit_started, std::chrono::steady_clock::now());
-        });
-    runtime.run_blocking(
-        "store_bench scopes close", [&](CoroScope&) -> coro::CoroTask<void> {
+        }()));
+    runtime.block_on(
+        coro::named("store_bench scopes close", [&]() -> coro::CoroTask<void> {
             auto closed = co_await writer->close();
             if (!closed) {
                 fail("close of " + dir + ": " + to_std(closed.error()));
                 ok.store(false, std::memory_order_relaxed);
             }
-        });
+        }()));
     if (!ok.load()) fail("scope case of " + std::to_string(scopes) + " scopes");
     row.ns_new_scope =
         static_cast<double>(new_scope_nanos) / static_cast<double>(scopes);
@@ -1653,8 +1655,8 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
     std::array<std::uint8_t, FOLD_VALUE_BYTES> one{};
     dftracer::utils::dstd::write_u64_le(one.data(), 1);
     std::atomic<bool> ok{true};
-    runtime.run_blocking(
-        "store_bench fold write", [&](CoroScope&) -> coro::CoroTask<void> {
+    runtime.block_on(
+        coro::named("store_bench fold write", [&]() -> coro::CoroTask<void> {
             for (std::uint64_t scope = 0; scope < scopes; ++scope) {
                 const ScopeKey scope_key = ScopeKey::file(scope_name(0, scope));
                 for (std::size_t segment = 0; segment < 2; ++segment) {
@@ -1682,15 +1684,15 @@ bool Bench::write_fold(Runtime& runtime, const std::string& dir,
                     }
                 }
             }
-        });
-    runtime.run_blocking(
-        "store_bench fold close", [&](CoroScope&) -> coro::CoroTask<void> {
+        }()));
+    runtime.block_on(
+        coro::named("store_bench fold close", [&]() -> coro::CoroTask<void> {
             auto closed = co_await writer->close();
             if (!closed) {
                 fail("close of " + dir + ": " + to_std(closed.error()));
                 ok.store(false, std::memory_order_relaxed);
             }
-        });
+        }()));
     if (!ok.load()) {
         fail("fold write of " + dir + " failed");
         return false;

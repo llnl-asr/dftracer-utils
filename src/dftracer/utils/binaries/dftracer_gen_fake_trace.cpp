@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/byte_view.h>
 #include <dftracer/utils/index/build/batch_builder.h>
@@ -53,7 +54,7 @@ struct QuerySpec {
 };
 
 static coro::CoroTask<int> run_verify(
-    CoroScope& scope, const std::vector<std::string>& file_paths,
+    const std::vector<std::string>& file_paths,
     const std::vector<QuerySpec>& queries, std::size_t ckpt_size) {
     // Extra dimensions: arbitrary dot-paths into args
     std::vector<std::string> extra_dims = {"ret", "count", "offset", "epoch",
@@ -90,7 +91,7 @@ static coro::CoroTask<int> run_verify(
         batch_config->checkpoint_size = ckpt_size;
         batch_config->parallelism = file_paths.size();
 
-        co_await BatchBuilder::process(&scope, std::move(batch_config));
+        co_await BatchBuilder::process(std::move(batch_config));
     }
 
     for (const auto& file_path : file_paths) {
@@ -525,8 +526,8 @@ int main(int argc, char** argv) {
                      train_file_names_ptr, train_file_hashes_ptr,
                      val_file_names_ptr, val_file_hashes_ptr,
                      ckpt_file_name_ptr, ckref_ptr, script_name_ptr, sref_ptr,
-                     rank_event_counts_ptr]([[maybe_unused]] CoroScope& ctx)
-                        -> coro::CoroTask<void> {
+                     rank_event_counts_ptr](
+                        CoroScope&) -> coro::CoroTask<void> {
                         const std::string& path = (*generated_files_ptr)[rank];
                         TraceWriter writer(path);
                         writer.write("[\n");
@@ -1006,8 +1007,8 @@ int main(int argc, char** argv) {
             auto summary_task = make_task(
                 [num_ranks, checkpoint_every, validation_every,
                  rank_event_counts_for_summary, generated_files_for_summary,
-                 val_file_hashes, train_file_hashes, host_hashes, host_names](
-                    [[maybe_unused]] CoroScope& ctx) -> coro::CoroTask<void> {
+                 val_file_hashes, train_file_hashes, host_hashes,
+                 host_names](CoroScope&) -> coro::CoroTask<void> {
                     std::size_t total_events = 0;
                     for (int rank = 0; rank < num_ranks; ++rank) {
                         std::printf(
@@ -1142,9 +1143,9 @@ int main(int argc, char** argv) {
                 auto* gf_ptr = &generated_files;
                 verify_task = make_task(
                     [gf_ptr, test_queries = std::move(test_queries),
-                     checkpoint_size](CoroScope& ctx) -> coro::CoroTask<int> {
-                        co_return co_await run_verify(
-                            ctx, *gf_ptr, test_queries, checkpoint_size);
+                     checkpoint_size](CoroScope&) -> coro::CoroTask<int> {
+                        co_return co_await run_verify(*gf_ptr, test_queries,
+                                                      checkpoint_size);
                     },
                     "Verify");
 

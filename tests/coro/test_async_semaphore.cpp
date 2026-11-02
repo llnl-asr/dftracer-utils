@@ -2,10 +2,10 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/async_semaphore.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
 
@@ -24,7 +24,7 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<std::int64_t> peak{0};
         const int n = 64;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 // Sizes 10..40 so several fit at once but not all.
@@ -59,7 +59,7 @@ TEST_SUITE("CoroSemaphore") {
         coro::CoroSemaphore sem(50);
         std::atomic<bool> done{false};
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             // 200 > capacity 50: clamps to capacity and runs once idle.
             co_await sem.acquire(200);
             done.store(true);
@@ -75,7 +75,7 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<int> completed{0};
         const int n = 100;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<void>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(
@@ -105,7 +105,7 @@ TEST_SUITE("CoroSemaphore") {
         std::atomic<bool> finished{false};
 
         std::thread worker([&] {
-            run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 co_await sem.acquire(10);  // take all capacity
                 std::thread releaser([&sem] {
                     // No Executor::current() here.

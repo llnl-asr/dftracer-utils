@@ -14,6 +14,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -308,7 +309,7 @@ struct RunCtx {
     double execute_ms = 0;
 };
 
-coro::CoroTask<void> task_scan(RunCtx* ctx, CoroScope& scope) {
+coro::CoroTask<void> task_scan(RunCtx* ctx, coro::Scope& scope) {
     const auto t0 = std::chrono::steady_clock::now();
 
     ctx->trace_files = co_await binaries::collect_input_trace_files(
@@ -415,7 +416,7 @@ void print_filters(const RunCtx& ctx) {
     if (c.max_events > 0) std::printf("  Max events: %zu\n", c.max_events);
 }
 
-coro::CoroTask<void> task_execute(RunCtx* ctx, CoroScope* scope) {
+coro::CoroTask<void> task_execute(RunCtx* ctx, coro::Scope* scope) {
     if (ctx->failed) co_return;
 
     const auto t0 = std::chrono::steady_clock::now();
@@ -541,13 +542,16 @@ int run(int argc, char** argv) {
 
     RunCtx* ctx_ptr = &ctx;
     auto scan = make_task(
-        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
-            co_await task_scan(ctx_ptr, scope);
+        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope(
+                [&](coro::Scope& scope) { return task_scan(ctx_ptr, scope); });
         },
         "scan");
     auto execute = make_task(
-        [ctx_ptr](CoroScope& scope) -> coro::CoroTask<void> {
-            co_await task_execute(ctx_ptr, &scope);
+        [ctx_ptr](CoroScope&) -> coro::CoroTask<void> {
+            co_await coro::with_scope([&](coro::Scope& scope) {
+                return task_execute(ctx_ptr, &scope);
+            });
         },
         "execute");
     execute->depends_on(scan);

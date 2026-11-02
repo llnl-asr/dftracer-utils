@@ -2,9 +2,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 
 #include <algorithm>
@@ -61,7 +61,7 @@ TEST_SUITE("AsyncMutex") {
         std::size_t acquired = 0;
 
         Runtime rt(1);
-        auto body = [&](CoroScope&) -> coro::CoroTask<void> {
+        auto body = [&](coro::Scope&) -> coro::CoroTask<void> {
             co_await mutex.lock();
             // Every waiter queues before the releaser, which starts last.
             std::vector<coro::CoroTask<void>> tasks;
@@ -72,7 +72,7 @@ TEST_SUITE("AsyncMutex") {
             tasks.push_back(releaser(mutex));
             co_await coro::when_all(std::move(tasks));
         };
-        rt.submit(run_coro_scope(rt.executor(), body), "MutexChain").wait();
+        rt.submit(coro::with_scope(body), "MutexChain").wait();
         rt.shutdown();
 
         CHECK(acquired == WAITERS);

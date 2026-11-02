@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
@@ -17,11 +18,12 @@ template <typename Scanner, typename Input>
 static std::vector<FileEntry> run_scan(Scanner& scanner, const Input& input) {
     dftracer::utils::Runtime rt;
     std::vector<FileEntry> result;
-    rt.run_blocking("scan",
-                    [&](dftracer::utils::CoroScope& s)
+    rt.block_on(dftracer::utils::coro::named(
+        "scan", dftracer::utils::coro::with_scope(
+                    [&](dftracer::utils::coro::Scope& s)
                         -> dftracer::utils::coro::CoroTask<void> {
                         result = co_await scanner(s, input);
-                    });
+                    })));
     return result;
 }
 

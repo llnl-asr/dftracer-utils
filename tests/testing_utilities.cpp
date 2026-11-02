@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <testing_utilities.h>
@@ -29,13 +29,12 @@ size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }
 namespace dftu_utils_test {
 bool build_index(const std::string& gz, const std::string& index_dir,
                  std::size_t checkpoint_size) {
-    using dftracer::utils::CoroScope;
     using dftracer::utils::Runtime;
     bool ok = false;
     Runtime rt(4);
-    auto task = dftracer::utils::run_coro_scope(
-        rt.executor(),
-        [&](CoroScope& scope) -> dftracer::utils::coro::CoroTask<void> {
+    auto task = dftracer::utils::coro::with_scope(
+        [&](dftracer::utils::coro::Scope&)
+            -> dftracer::utils::coro::CoroTask<void> {
             auto config = std::make_shared<
                 dftracer::utils::index::build::IndexBuildBatchConfig>();
             config->file_paths = {gz};
@@ -43,7 +42,7 @@ bool build_index(const std::string& gz, const std::string& index_dir,
             if (checkpoint_size > 0) config->checkpoint_size = checkpoint_size;
             auto r =
                 co_await dftracer::utils::index::build::BatchBuilder::process(
-                    &scope, std::move(config));
+                    std::move(config));
             ok = (r.indexed + r.skipped) >= 1 && r.failed == 0;
             co_return;
         });

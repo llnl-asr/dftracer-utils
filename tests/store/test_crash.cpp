@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/hash/splitmix64.h>
@@ -39,7 +40,6 @@ namespace dstd = dftracer::utils::dstd;
 namespace store = dftracer::utils::store;
 namespace io_fault = store::engine::io_fault;
 
-using dftracer::utils::CoroScope;
 using dftracer::utils::Runtime;
 using dftracer::utils::TaskHandle;
 using dftracer::utils::dstd::ByteView;
@@ -813,16 +813,17 @@ TEST_CASE("crash: a kill point leaves only whole commits") {
 
     std::atomic<int> errors{0};
     const auto run_round = [&](int round) {
-        auto work = store_runtime().scope(
-            "crash-writers", [&](CoroScope& scope) -> coro::CoroTask<void> {
+        auto work = store_runtime().submit(
+            coro::with_scope([&](coro::Scope& scope) -> coro::CoroTask<void> {
                 for (int index = 0; index < COROUTINES; ++index) {
-                    scope.spawn([&, index](CoroScope&) -> coro::CoroTask<void> {
+                    scope.spawn([&, index]() -> coro::CoroTask<void> {
                         co_await write_coroutine(*writer, ids, errors, index,
                                                  round, round + 1);
                     });
                 }
-                co_await scope.join();
-            });
+                co_return;
+            }),
+            "crash-writers");
         await_handle(work, TASK_LIMIT);
         REQUIRE(errors.load() == 0);
         // A flush after every round: it waits for the extent writes of the

@@ -89,13 +89,13 @@ dstd::Path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
 
 constexpr std::uint64_t TEST_SHARE = 256ULL * 1024 * 1024;
 
-coro::CoroTask<void> process_into(CoroScope& ctx, RunGroup g,
+coro::CoroTask<void> process_into(coro::Scope& ctx, RunGroup g,
                                   std::uint64_t share, GroupResult* out,
                                   const BorrowFn* borrow) {
     *out = co_await process_group(ctx, std::move(g), share, nullptr, borrow);
 }
 
-coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
+coro::CoroTask<void> discover_into(coro::Scope& ctx, std::string root,
                                    Discovery* out) {
     std::vector<std::string> roots{std::move(root)};
     *out = co_await discover(ctx, std::move(roots));
@@ -104,7 +104,7 @@ coro::CoroTask<void> discover_into(CoroScope& ctx, std::string root,
 GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE,
                     const BorrowFn* borrow = nullptr) {
     GroupResult out;
-    dftu_utils_test::run_coro([&](CoroScope& ctx) {
+    dftu_utils_test::run_coro([&](coro::Scope& ctx) {
         return process_into(ctx, std::move(g), share, &out, borrow);
     });
     return out;
@@ -113,7 +113,7 @@ GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE,
 Discovery discover_dir(const ScopedTestDir& d) {
     Discovery out;
     dftu_utils_test::run_coro(
-        [&](CoroScope& ctx) { return discover_into(ctx, d.str(), &out); });
+        [&](coro::Scope& ctx) { return discover_into(ctx, d.str(), &out); });
     return out;
 }
 

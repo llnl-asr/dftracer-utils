@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/runtime/pipeline/pipeline.h>
 #include <dftracer/utils/runtime/tasks/task.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
@@ -189,17 +190,18 @@ static int run_pgzip(const PgzipArgParse& cli) {
 
     auto compress_task = make_task(
         [files_ptr, results_ptr, mutex_ptr, compression_level, executor_threads,
-         chunk_size](CoroScope& ctx) -> coro::CoroTask<void> {
+         chunk_size](CoroScope&) -> coro::CoroTask<void> {
             auto file_chan =
                 coro::make_channel<std::size_t>(executor_threads * 2);
 
             auto compress_scope =
                 [&file_chan, files_ptr, results_ptr, mutex_ptr,
                  compression_level, executor_threads,
-                 chunk_size](CoroScope& scope) -> coro::CoroTask<void> {
+                 chunk_size](coro::Scope& scope) -> coro::CoroTask<void> {
                 scope.spawn(
-                    [ch = file_chan->producer(), num_files = files_ptr->size()](
-                        CoroScope&) mutable -> coro::CoroTask<void> {
+                    [ch = file_chan->producer(),
+                     num_files =
+                         files_ptr->size()]() mutable -> coro::CoroTask<void> {
                         auto guard = ch.guard();
                         for (std::size_t i = 0; i < num_files; ++i) {
                             const auto send_ok = co_await ch.send(i);
@@ -211,8 +213,8 @@ static int run_pgzip(const PgzipArgParse& cli) {
                 for (std::size_t w = 0; w < executor_threads; ++w) {
                     scope.spawn([ch = file_chan->consumer(), files_ptr,
                                  results_ptr, mutex_ptr, compression_level,
-                                 executor_threads, chunk_size](
-                                    CoroScope&) -> coro::CoroTask<void> {
+                                 executor_threads,
+                                 chunk_size]() -> coro::CoroTask<void> {
                         for (;;) {
                             auto fi_opt = co_await ch.receive();
                             if (!fi_opt) break;
@@ -263,7 +265,7 @@ static int run_pgzip(const PgzipArgParse& cli) {
 
                 co_return;
             };
-            co_await ctx.scope(compress_scope);
+            co_await coro::with_scope(compress_scope);
 
             co_return;
         },

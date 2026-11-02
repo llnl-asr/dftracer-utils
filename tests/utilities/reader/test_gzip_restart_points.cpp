@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/index/gzip/gzip_indexer.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/reader/internal/gzip_reader.h>
 #include <dftracer/utils/utilities/reader/internal/stream_config.h>
@@ -73,7 +73,7 @@ struct Fixture {
         std::fclose(f);
         indexer =
             std::make_shared<GzipIndexer>(gz_path, index_path, CKPT, true);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             co_await indexer->build_async();
         });
     }
@@ -87,7 +87,7 @@ struct Fixture {
                                         .from(start)
                                         .to(reader.get_max_bytes()));
         std::string out;
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<char> buf(1u << 20);
             while (true) {
                 const auto n =
@@ -102,7 +102,7 @@ struct Fixture {
     std::string read_lines(std::size_t first, std::size_t last) {
         GzipReader reader(indexer);
         std::string out;
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             out = co_await reader.read_lines_async(first, last);
         });
         return out;

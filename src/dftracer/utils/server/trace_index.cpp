@@ -3,6 +3,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/constants.h>
 #include <dftracer/utils/dstd/path.h>
@@ -622,7 +623,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
         auto init_task = make_task(
             [files_ptr, needs_build_ptr, large_files_ptr, global_min_ts_ptr,
              global_max_ts_ptr, schemas_ptr, index_dir, max_concurrent,
-             checkpoint_size](CoroScope& ctx) -> coro::CoroTask<void> {
+             checkpoint_size](CoroScope&) -> coro::CoroTask<void> {
                 if (!needs_build_ptr->empty()) {
                     DFTRACER_UTILS_LOG_INFO(
                         "TraceIndex: building index for %zu file(s) ...",
@@ -647,7 +648,9 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         try {
                             auto ix = dftracer::utils::index::Indexer::open(
                                 std::move(paths), std::move(opts));
-                            co_await ix.build(ctx);
+                            co_await coro::with_scope([&](coro::Scope& scope) {
+                                return ix.build(scope);
+                            });
                         } catch (const std::exception& e) {
                             DFTRACER_UTILS_LOG_WARN("TraceIndex: %s", e.what());
                         }
@@ -695,21 +698,21 @@ coro::CoroTask<void> TraceIndex::initialize() {
                     auto meta_scope =
                         [&meta_chan, files_ptr, large_files_ptr, schemas_ptr,
                          max_concurrent](
-                            CoroScope& scope) -> coro::CoroTask<void> {
-                        scope.spawn(
-                            [ch = meta_chan->producer(), large_files_ptr](
-                                CoroScope&) mutable -> coro::CoroTask<void> {
-                                auto guard = ch.guard();
-                                for (auto idx : *large_files_ptr) {
-                                    const auto send_ok = co_await ch.send(idx);
-                                    if (!send_ok) co_return;
-                                }
-                                co_return;
-                            });
+                            coro::Scope& scope) -> coro::CoroTask<void> {
+                        scope.spawn([ch = meta_chan->producer(),
+                                     large_files_ptr]() mutable
+                                        -> coro::CoroTask<void> {
+                            auto guard = ch.guard();
+                            for (auto idx : *large_files_ptr) {
+                                const auto send_ok = co_await ch.send(idx);
+                                if (!send_ok) co_return;
+                            }
+                            co_return;
+                        });
 
                         for (std::size_t w = 0; w < max_concurrent; ++w) {
                             scope.spawn([ch = meta_chan->consumer(), files_ptr,
-                                         schemas_ptr](CoroScope&)
+                                         schemas_ptr]()
                                             -> coro::CoroTask<void> {
                                 for (;;) {
                                     auto fi_opt = co_await ch.receive();
@@ -784,7 +787,7 @@ coro::CoroTask<void> TraceIndex::initialize() {
                         }
                         co_return;
                     };
-                    co_await ctx.scope(meta_scope);
+                    co_await coro::with_scope(meta_scope);
 
                     for (auto fi : *large_files_ptr) {
                         const auto& info = (*files_ptr)[fi];

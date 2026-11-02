@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/heap.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -47,15 +47,13 @@ TEST_SUITE("IndexParseAllocations") {
         Runtime rt(4);
         build::IndexBuildBatchResult result;
         const auto pool_before = memory::debug_allocation_count();
-        auto task = run_coro_scope(
-            rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto config = std::make_shared<build::IndexBuildBatchConfig>();
-                config->file_paths = files;
-                config->index_dir = env.get_dir() + "/idx";
-                config->parallelism = 4;
-                result = co_await build::BatchBuilder::process(
-                    &scope, std::move(config));
-            });
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            config->file_paths = files;
+            config->index_dir = env.get_dir() + "/idx";
+            config->parallelism = 4;
+            result = co_await build::BatchBuilder::process(std::move(config));
+        });
         rt.submit(std::move(task), "parse-allocations").wait();
         const auto pool = memory::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);
@@ -82,15 +80,13 @@ TEST_SUITE("IndexParseAllocations") {
         Runtime rt(4);
         build::IndexBuildBatchResult result;
         const auto pool_before = memory::debug_allocation_count();
-        auto task = run_coro_scope(
-            rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto config = std::make_shared<build::IndexBuildBatchConfig>();
-                config->file_paths = files;
-                config->index_dir = env.get_dir() + "/idx";
-                config->parallelism = 4;
-                result = co_await build::BatchBuilder::process(
-                    &scope, std::move(config));
-            });
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            config->file_paths = files;
+            config->index_dir = env.get_dir() + "/idx";
+            config->parallelism = 4;
+            result = co_await build::BatchBuilder::process(std::move(config));
+        });
         rt.submit(std::move(task), "parse-allocations-small").wait();
         const auto pool = memory::debug_allocation_count() - pool_before;
         REQUIRE(pool > 0);

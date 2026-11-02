@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_TRACE_CHUNK_VERIFIER_UTILITY_H
 #define DFTRACER_UTILS_TRACE_CHUNK_VERIFIER_UTILITY_H
 
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -98,7 +98,7 @@ class ChunkVerifierUtility {
     using InputHashFn =
         std::function<std::uint64_t(const std::vector<MetadataType>&)>;
     using EventCollectorFn =
-        std::function<std::vector<EventType>(CoroScope&, const ChunkType&)>;
+        std::function<std::vector<EventType>(coro::Scope&, const ChunkType&)>;
     using EventHashFn =
         std::function<std::uint64_t(const std::vector<EventType>&)>;
 
@@ -130,7 +130,7 @@ class ChunkVerifierUtility {
      * @return Verification result with pass/fail and hashes
      */
     coro::CoroTask<ChunkVerificationUtilityOutput> operator()(
-        CoroScope& ctx,
+        coro::Scope& ctx,
         const ChunkVerificationUtilityInput<ChunkType, MetadataType>& input) {
         // Step 1: Compute input hash
         std::uint64_t input_hash = input_hasher_(input.metadata);
@@ -141,10 +141,10 @@ class ChunkVerifierUtility {
 
         for (const auto& chunk : input.chunks) {
             auto* collector = &event_collector_;
-            futures.push_back(ctx.spawn(
-                [collector, chunk](
-                    CoroScope& s) -> coro::CoroTask<std::vector<EventType>> {
-                    co_return (*collector)(s, chunk);
+            futures.push_back(ctx.spawn_future(
+                [collector, chunk,
+                 &ctx]() -> coro::CoroTask<std::vector<EventType>> {
+                    co_return (*collector)(ctx, chunk);
                 }));
         }
 

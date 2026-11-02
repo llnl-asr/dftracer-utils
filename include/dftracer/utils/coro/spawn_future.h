@@ -53,6 +53,8 @@ struct SharedState {
     std::exception_ptr exception;
     Executor* executor{nullptr};
     std::shared_ptr<std::atomic<bool>> cancel_token;
+    /// Cancels a task spawned by a @ref Scope, which reads it at its waits.
+    std::atomic<bool> cancel_flag{false};
 
     /// Called by the spawned coroutine on completion (non-void result).
     template <typename U = T>
@@ -188,10 +190,13 @@ class SpawnFuture {
     /// Check if the spawned coroutine has completed.
     bool is_done() const { return state_->is_done(); }
 
-    /// Asks the spawned coroutine to stop. The child sees it through
+    /// Asks the spawned coroutine to stop. A @ref Scope child ends cancelled
+    /// at its next wait, and a CoroScope child sees it through
     /// CoroScope::is_cancellation_requested(). Thread-safe, idempotent.
     void cancel() noexcept {
-        if (state_ && state_->cancel_token) {
+        if (!state_) return;
+        state_->cancel_flag.store(true, std::memory_order_release);
+        if (state_->cancel_token) {
             state_->cancel_token->store(true, std::memory_order_release);
         }
     }

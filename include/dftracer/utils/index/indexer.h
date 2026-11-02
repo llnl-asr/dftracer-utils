@@ -3,11 +3,11 @@
 #define DFTRACER_UTILS_INDEX_INDEXER_H
 
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/index/schemas/dft/agg/aggregation_config.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 
 #include <cstddef>
@@ -166,32 +166,33 @@ class Indexer {
         IndexerOptions options = {});
 
     /// Which files are ready for the requested tiers. Writes nothing.
-    coro::CoroTask<IndexStatus> status(CoroScope& scope) const;
+    coro::CoroTask<IndexStatus> status(coro::Scope& scope) const;
     /// Builds the requested tiers for files that lack them or changed since
     /// they were indexed; fresh files are left alone.
-    coro::CoroTask<IndexStatus> build(CoroScope& scope);
+    coro::CoroTask<IndexStatus> build(coro::Scope& scope);
     /// Rebuilds the requested tiers for every file.
-    coro::CoroTask<IndexStatus> rebuild(CoroScope& scope);
+    coro::CoroTask<IndexStatus> rebuild(coro::Scope& scope);
     /// The indexed files; files not yet indexed are omitted.
-    coro::CoroTask<std::vector<IndexedFile>> files(CoroScope& scope) const;
+    coro::CoroTask<std::vector<IndexedFile>> files(coro::Scope& scope) const;
     /// The manifest of every indexed file. Writes nothing.
-    coro::CoroTask<std::vector<FileManifest>> manifest(CoroScope& scope) const;
+    coro::CoroTask<std::vector<FileManifest>> manifest(
+        coro::Scope& scope) const;
     /// Per file, the chunks `query` reads and what each pruning extension
     /// rules out alone. Writes nothing. Throws INVALID_ARGUMENT when the
     /// query does not parse.
-    coro::CoroTask<std::vector<FileExplain>> explain(CoroScope& scope,
+    coro::CoroTask<std::vector<FileExplain>> explain(coro::Scope& scope,
                                                      std::string query) const;
     /// Rewrites one tier extension ("zonemap", "bloom", "counts", "postings",
     /// "dft.stats", "dft.metadata" or a registered plugin extension's name)
     /// of every file, and builds files not yet indexed. Other extensions are
     /// left as they are. Throws INVALID_ARGUMENT for another name.
-    coro::CoroTask<IndexStatus> rebuild_extension(CoroScope& scope,
+    coro::CoroTask<IndexStatus> rebuild_extension(coro::Scope& scope,
                                                   std::string extension);
     /// Removes one tier extension's data and manifest entries from every
     /// indexed file; the next build makes it again only when
     /// IndexerOptions::extensions names it, or for a plugin extension while
     /// it is registered. Throws INVALID_ARGUMENT as rebuild_extension does.
-    coro::CoroTask<IndexStatus> drop_extension(CoroScope& scope,
+    coro::CoroTask<IndexStatus> drop_extension(coro::Scope& scope,
                                                std::string extension);
 
     /// Blocking forms, run on IndexerOptions::runtime.
@@ -221,7 +222,7 @@ class Indexer {
     static void validate_options(Impl& impl);
     static Indexer finish_open(std::shared_ptr<Impl> impl);
     coro::CoroTask<IndexStatus> status_of(
-        CoroScope& scope,
+        coro::Scope& scope,
         std::vector<utilities::filesystem::FileEntry> entries) const;
     std::shared_ptr<Impl> impl_;
 };

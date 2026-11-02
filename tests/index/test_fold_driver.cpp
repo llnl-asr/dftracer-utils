@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -43,15 +43,13 @@ TEST_SUITE("IndexFoldDriver") {
 
         build::IndexBuildBatchResult result;
         Runtime rt(8);
-        auto task = run_coro_scope(
-            rt.executor(), [&](CoroScope& scope) -> coro::CoroTask<void> {
-                auto config = std::make_shared<build::IndexBuildBatchConfig>();
-                config->file_paths = files;
-                config->index_dir = env.get_dir() + "/idx";
-                config->parallelism = 8;
-                result = co_await build::BatchBuilder::process(
-                    &scope, std::move(config));
-            });
+        auto task = coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+            auto config = std::make_shared<build::IndexBuildBatchConfig>();
+            config->file_paths = files;
+            config->index_dir = env.get_dir() + "/idx";
+            config->parallelism = 8;
+            result = co_await build::BatchBuilder::process(std::move(config));
+        });
         rt.submit(std::move(task), "fold-buffer-pools").wait();
         rt.shutdown();
 

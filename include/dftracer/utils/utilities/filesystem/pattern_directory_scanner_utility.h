@@ -2,9 +2,9 @@
 #ifndef DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 #define DFTRACER_UTILS_UTILITIES_FILESYSTEM_PATTERN_DIRECTORY_SCANNER_H
 
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/path.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/directory_scanner_utility.h>
 
 #include <algorithm>
@@ -94,7 +94,7 @@ class PatternDirectoryScannerUtility {
      * @return Vector of file entries matching patterns
      */
     coro::CoroTask<std::vector<FileEntry>> operator()(
-        CoroScope& ctx,
+        coro::Scope& ctx,
         const PatternDirectoryScannerUtilityInput& input) const {
         DirectoryScannerUtilityInput dir_input{
             input.path.str(), input.recursive, input.populate_size};
@@ -117,10 +117,11 @@ class PatternDirectoryScannerUtility {
         co_return matched_entries;
     }
 
-    /// Scope-less overload: opens its own CoroScope on the current executor.
+    /// Scope-less overload: opens its own scope on the current executor.
     coro::CoroTask<std::vector<FileEntry>> operator()(
         const PatternDirectoryScannerUtilityInput& input) const {
-        return with_scope(*this, input);
+        return coro::with_scope(
+            [this, input](coro::Scope& s) { return (*this)(s, input); });
     }
 
    private:

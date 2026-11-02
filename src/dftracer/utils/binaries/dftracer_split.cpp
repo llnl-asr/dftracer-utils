@@ -2,6 +2,7 @@
 #include <dftracer/utils/binaries/common_cli.h>
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 #include <dftracer/utils/memory/budget.h>
@@ -24,6 +25,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <ctime>
+#include <exception>
 #include <mutex>
 
 using namespace dftracer::utils;
@@ -406,72 +408,86 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
     auto task_extract_chunks = make_task(
         [app_name_ptr, output_dir_ptr, split_results_ptr, compress, verify,
          executor_threads, member_size_bytes, chunk_size_bytes,
-         memory_budget](CoroScope& scope, std::vector<FileGroup> groups)
+         memory_budget](CoroScope&, std::vector<FileGroup> groups)
             -> coro::CoroTask<ExtractChunksOutput> {
-            DFTRACER_UTILS_LOG_INFO("Splitting %zu groups in parallel...",
-                                    groups.size());
+            co_return co_await coro::with_scope(
+                [&](coro::Scope& scope) -> coro::CoroTask<ExtractChunksOutput> {
+                    DFTRACER_UTILS_LOG_INFO(
+                        "Splitting %zu groups in parallel...", groups.size());
 
-            // A running group holds its writer's buffers and its compress
-            // workers use every core, so few groups run at once, within the
-            // memory budget.
-            const std::size_t max_parallel =
-                std::max<std::size_t>(2, executor_threads / 4);
-            const auto extraction = trace::plan_extraction_budget(
-                memory_budget, max_parallel, executor_threads,
-                member_size_bytes);
-            trace::ExtractionAdmission admission(
-                memory_budget, extraction.reserve_bytes, max_parallel);
-            auto* admission_ptr = &admission;
+                    // A running group holds its writer's buffers and its
+                    // compress workers use every core, so few groups run at
+                    // once, within the memory budget.
+                    const std::size_t max_parallel =
+                        std::max<std::size_t>(2, executor_threads / 4);
+                    const auto extraction = trace::plan_extraction_budget(
+                        memory_budget, max_parallel, executor_threads,
+                        member_size_bytes);
+                    trace::ExtractionAdmission admission(
+                        memory_budget, extraction.reserve_bytes, max_parallel);
+                    auto* admission_ptr = &admission;
 
-            std::vector<coro::SpawnFuture<ExtractResult>> futures;
-            futures.reserve(groups.size());
+                    std::vector<coro::SpawnFuture<ExtractResult>> futures;
+                    futures.reserve(groups.size());
 
-            for (std::size_t i = 0; i < groups.size(); ++i) {
-                // Chunk files are sized by compressed bytes and the writer
-                // counts uncompressed ones.
-                const double ratio = compress ? groups[i].ratio : 1.0;
-                auto input =
-                    ExtractInput::from_files(static_cast<int>(i + 1),
-                                             std::move(groups[i].files))
-                        .with_output_dir(*output_dir_ptr)
-                        .with_open_files(std::move(groups[i].open_files))
-                        .with_app_name(*app_name_ptr)
-                        .with_compression(compress)
-                        .with_compute_hash(verify)
-                        .with_member_size(member_size_bytes)
-                        .with_memory_budget(extraction.writer_bytes)
-                        .with_chunk_size(chunk_uncompressed_bytes(
-                            chunk_size_bytes, ratio, member_size_bytes));
+                    for (std::size_t i = 0; i < groups.size(); ++i) {
+                        // Chunk files are sized by compressed bytes and the
+                        // writer counts uncompressed ones.
+                        const double ratio = compress ? groups[i].ratio : 1.0;
+                        auto input =
+                            ExtractInput::from_files(static_cast<int>(i + 1),
+                                                     std::move(groups[i].files))
+                                .with_output_dir(*output_dir_ptr)
+                                .with_open_files(
+                                    std::move(groups[i].open_files))
+                                .with_app_name(*app_name_ptr)
+                                .with_compression(compress)
+                                .with_compute_hash(verify)
+                                .with_member_size(member_size_bytes)
+                                .with_memory_budget(extraction.writer_bytes)
+                                .with_chunk_size(chunk_uncompressed_bytes(
+                                    chunk_size_bytes, ratio,
+                                    member_size_bytes));
 
-                futures.push_back(scope.spawn(
-                    [input = std::move(input), admission_ptr](
-                        CoroScope&) -> coro::CoroTask<ExtractResult> {
-                        co_await admission_ptr->enter();
+                        futures.push_back(scope.spawn_future(
+                            [input = std::move(input),
+                             admission_ptr]() -> coro::CoroTask<ExtractResult> {
+                                co_await admission_ptr->enter();
+                                try {
+                                    trace::ChunkExtractorUtility extractor;
+                                    auto result = co_await extractor(input);
+                                    admission_ptr->leave();
+                                    co_return result;
+                                } catch (...) {
+                                    admission_ptr->leave();
+                                    throw;
+                                }
+                            }));
+                    }
+
+                    // Every future is awaited before a raise, since the
+                    // children use `admission`, which dies with this frame.
+                    ExtractChunksOutput results;
+                    results.reserve(futures.size());
+                    std::exception_ptr error;
+                    for (auto& future : futures) {
                         try {
-                            trace::ChunkExtractorUtility extractor;
-                            auto result = co_await extractor(input);
-                            admission_ptr->leave();
-                            co_return result;
+                            results.push_back(co_await future);
                         } catch (...) {
-                            admission_ptr->leave();
-                            throw;
+                            if (!error) error = std::current_exception();
                         }
-                    }));
-            }
+                    }
+                    if (error) std::rethrow_exception(error);
 
-            ExtractChunksOutput results;
-            results.reserve(futures.size());
-            for (auto& future : futures) {
-                results.push_back(co_await future);
-            }
+                    std::sort(
+                        results.begin(), results.end(),
+                        [](const ExtractResult& a, const ExtractResult& b) {
+                            return a.chunk_index < b.chunk_index;
+                        });
 
-            std::sort(results.begin(), results.end(),
-                      [](const ExtractResult& a, const ExtractResult& b) {
-                          return a.chunk_index < b.chunk_index;
-                      });
-
-            *split_results_ptr = results;
-            co_return results;
+                    *split_results_ptr = results;
+                    co_return results;
+                });
         },
         "ExtractChunks");
 
@@ -486,43 +502,56 @@ static coro::CoroTask<int> run_split(const SplitArgParse* cli) {
 
         task_verify_chunks = make_task(
             [split_files_ptr, executor_threads](
-                CoroScope& scope, const ExtractChunksOutput& chunks)
+                CoroScope&, const ExtractChunksOutput& chunks)
                 -> coro::CoroTask<trace::ChunkVerificationUtilityOutput> {
-                std::size_t output_hash = 0;
-                for (const auto& chunk : chunks) {
-                    output_hash += chunk.event_hash;
-                }
+                co_return co_await coro::with_scope(
+                    [&](coro::Scope& scope)
+                        -> coro::CoroTask<
+                            trace::ChunkVerificationUtilityOutput> {
+                        std::size_t output_hash = 0;
+                        for (const auto& chunk : chunks) {
+                            output_hash += chunk.event_hash;
+                        }
 
-                coro::CoroSemaphore running(executor_threads);
-                auto* running_ptr = &running;
-                std::vector<coro::SpawnFuture<std::size_t>> futures;
-                futures.reserve(split_files_ptr->size());
-                for (const auto& file : *split_files_ptr) {
-                    const std::string* path = &file;
-                    futures.push_back(scope.spawn(
-                        [path, running_ptr](
-                            CoroScope&) -> coro::CoroTask<std::size_t> {
-                            co_await running_ptr->acquire(1);
+                        coro::CoroSemaphore running(executor_threads);
+                        auto* running_ptr = &running;
+                        std::vector<coro::SpawnFuture<std::size_t>> futures;
+                        futures.reserve(split_files_ptr->size());
+                        for (const auto& file : *split_files_ptr) {
+                            const std::string* path = &file;
+                            futures.push_back(scope.spawn_future(
+                                [path,
+                                 running_ptr]() -> coro::CoroTask<std::size_t> {
+                                    co_await running_ptr->acquire(1);
+                                    try {
+                                        const std::size_t file_hash =
+                                            co_await hash_events(*path);
+                                        running_ptr->release(1);
+                                        co_return file_hash;
+                                    } catch (...) {
+                                        running_ptr->release(1);
+                                        throw;
+                                    }
+                                }));
+                        }
+
+                        // Every future is awaited before a raise, since the
+                        // children use `running`, which dies with this frame.
+                        std::size_t input_hash = 0;
+                        std::exception_ptr error;
+                        for (auto& future : futures) {
                             try {
-                                const std::size_t file_hash =
-                                    co_await hash_events(*path);
-                                running_ptr->release(1);
-                                co_return file_hash;
+                                input_hash += co_await future;
                             } catch (...) {
-                                running_ptr->release(1);
-                                throw;
+                                if (!error) error = std::current_exception();
                             }
-                        }));
-                }
+                        }
+                        if (error) std::rethrow_exception(error);
 
-                std::size_t input_hash = 0;
-                for (auto& future : futures) {
-                    input_hash += co_await future;
-                }
-
-                co_return trace::ChunkVerificationUtilityOutput::success(
-                    static_cast<std::uint64_t>(input_hash),
-                    static_cast<std::uint64_t>(output_hash));
+                        co_return trace::ChunkVerificationUtilityOutput::
+                            success(static_cast<std::uint64_t>(input_hash),
+                                    static_cast<std::uint64_t>(output_hash));
+                    });
             },
             "VerifyChunks");
 

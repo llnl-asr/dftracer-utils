@@ -4,6 +4,7 @@
 // checks the registry moves and releases an emitted Arrow array.
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dataframe/abi.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/plugins/abi.h>
@@ -83,9 +84,11 @@ std::vector<FoldEvent> make_events(std::uint64_t count) {
 
 void finalize_now(PluginFold& f) {
     Runtime rt(1);
-    rt.scope("fin", [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
-          co_await f.finalize(CoverageSet{});
-      }).wait();
+    rt.submit(coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                  co_await f.finalize(CoverageSet{});
+              }),
+              "fin")
+        .wait();
     rt.shutdown();
 }
 

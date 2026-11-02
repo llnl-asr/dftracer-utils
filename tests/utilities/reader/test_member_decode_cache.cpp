@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/coro/coro.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/reader/internal/member_decode_cache.h>
 #include <doctest/doctest.h>
 #include <testing_runtime.h>
@@ -46,7 +46,7 @@ TEST_SUITE("MemberDecodeCache") {
         const int n = 32;
 
         std::vector<Bytes> results(n);
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<Bytes>> tasks;
             tasks.reserve(n);
             for (int i = 0; i < n; ++i) {
@@ -76,7 +76,7 @@ TEST_SUITE("MemberDecodeCache") {
         std::atomic<int> calls{0};
         const int n = 8;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             std::vector<coro::CoroTask<Bytes>> tasks;
             for (int i = 0; i < n; ++i) {
                 tasks.push_back(cache.get_or_decode(
@@ -96,7 +96,7 @@ TEST_SUITE("MemberDecodeCache") {
         MemberDecodeCache cache(64 * 1024 * 1024);
         std::atomic<int> calls{0};
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             auto a = co_await cache.get_or_decode(
                 2, 3, counting_producer(calls, 0x11, 512));
             auto b = co_await cache.get_or_decode(
@@ -115,7 +115,7 @@ TEST_SUITE("MemberDecodeCache") {
         MemberDecodeCache cache(/*capacity_bytes=*/1600);
         std::atomic<int> calls{0};
         auto pass = [&](std::uint64_t first, std::uint64_t last) {
-            run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+            run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
                 for (std::uint64_t m = first; m < last; ++m)
                     co_await cache.get_or_decode(
                         5, m, counting_producer(calls, 0x22, 60));
@@ -140,7 +140,7 @@ TEST_SUITE("MemberDecodeCache") {
         std::atomic<int> calls{0};
         const int members = 400;
 
-        run_coro([&](CoroScope&) -> coro::CoroTask<void> {
+        run_coro([&](coro::Scope&) -> coro::CoroTask<void> {
             for (int m = 0; m < members; ++m) {
                 co_await cache.get_or_decode(
                     9, static_cast<std::uint64_t>(m),

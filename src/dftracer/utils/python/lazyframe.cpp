@@ -26,7 +26,6 @@
 #include <dftracer/utils/python/series.h>
 #include <dftracer/utils/python/streaming_iterator.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 
 #include <cstdint>
 #include <new>
@@ -818,7 +817,6 @@ PyObject* LazyFrame_collect(PyObject* self, PyObject* args, PyObject* kwds) {
 // Drains the plan's chunk generator into `state`, which the Python iterator
 // pulls from with the GIL released.
 dftracer::utils::coro::CoroTask<void> drain_stream(
-    dftracer::utils::CoroScope&,
     std::shared_ptr<
         dftracer::utils::python::StreamingState<dataframe::DataFrame>>
         state,
@@ -865,9 +863,8 @@ PyObject* LazyFrame_stream(PyObject* self, PyObject* args, PyObject* kwds) {
     it->cpp_state->cancel = [state]() { state->cancel(); };
     LazyFrame lf = b->lf;
     Py_BEGIN_ALLOW_THREADS rt->submit(
-        dftracer::utils::run_coro_scope(rt->executor(), drain_stream, state,
-                                        std::move(lf),
-                                        static_cast<std::int64_t>(morsel_rows)),
+        drain_stream(state, std::move(lf),
+                     static_cast<std::int64_t>(morsel_rows)),
         "lazyframe_stream");
     Py_END_ALLOW_THREADS return reinterpret_cast<PyObject*>(it);
 }

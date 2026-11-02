@@ -42,9 +42,9 @@ std::string strip_templates(std::string_view s) {
 }
 
 // Reduce a demangled coroutine symbol to a readable name. Spawned coroutines
-// resolve to a CoroScope::spawn<...> instantiation whose useful name lives
-// inside the template args, so the plain pass (which keeps "::" inside the
-// args) recovers it. Direct coroutines with function-type template params
+// resolve to a coro::Scope::run_fn_child<...> instantiation whose useful name
+// lives inside the template args, so the plain pass (which keeps "::" inside
+// the args) recovers it. Direct coroutines with function-type template params
 // (e.g. std::function<T ()>) collapse the plain pass to empty; retry with the
 // template arguments removed.
 std::string short_function(std::string_view full) {

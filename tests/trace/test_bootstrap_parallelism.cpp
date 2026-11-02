@@ -75,10 +75,11 @@ std::vector<std::string> export_lines(const std::vector<std::string>& files,
                                       const std::string& index_dir) {
     const auto view = View::from_files(view_files_of(files, index_dir));
     LineSink sink;
-    default_runtime().run_blocking("bootstrap-export",
-                                   [&](CoroScope&) -> coro::CoroTask<void> {
-                                       co_await view.sink_json(sink);
-                                   });
+    default_runtime().block_on(
+        coro::named("bootstrap-export",
+                    coro::with_scope([&](coro::Scope&) -> coro::CoroTask<void> {
+                        co_await view.sink_json(sink);
+                    })));
     return sink.lines();
 }
 

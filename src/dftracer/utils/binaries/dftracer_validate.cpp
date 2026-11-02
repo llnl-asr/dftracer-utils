@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/coro/channel.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/index/gzip/checkpoint_indexer_factory.h>
 #include <dftracer/utils/json/line.h>
@@ -55,7 +56,8 @@ struct FileValResult {
 // scanner is spawned on the scope so its recursive walk fans out per
 // subdirectory (parallel readdir); sizes are not needed here.
 coro::CoroTask<std::vector<std::string>> collect_files(
-    CoroScope& ctx, std::string directory, std::vector<std::string> cli_files) {
+    coro::Scope& ctx, std::string directory,
+    std::vector<std::string> cli_files) {
     std::vector<std::string> files;
     for (auto& f : cli_files) {
         if (binaries::is_trace_file(f)) files.push_back(std::move(f));
@@ -131,9 +133,11 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     // Task 1: discover files (parallel per-subdirectory scan + explicit
     // --files).
     auto collect_task = make_task(
-        [cli, files](CoroScope& ctx) -> coro::CoroTask<void> {
-            *files = co_await collect_files(ctx, cli->directory.value,
-                                            cli->files_args.value);
+        [cli, files](CoroScope&) -> coro::CoroTask<void> {
+            *files = co_await coro::with_scope([&](coro::Scope& ctx) {
+                return collect_files(ctx, cli->directory.value,
+                                     cli->files_args.value);
+            });
             co_return;
         },
         "Collect");
@@ -142,12 +146,12 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
     // so files are validated in parallel.
     auto validate_task = make_task(
         [files, &results,
-         executor_threads](CoroScope& ctx) -> coro::CoroTask<void> {
+         executor_threads](CoroScope&) -> coro::CoroTask<void> {
             if (files->empty()) co_return;
             results.resize(files->size());
             auto validate_scope =
                 [files, &results,
-                 executor_threads](CoroScope& scope) -> coro::CoroTask<void> {
+                 executor_threads](coro::Scope& scope) -> coro::CoroTask<void> {
                 binaries::parallel_for_each(
                     scope, std::views::iota(std::size_t{0}, files->size()),
                     executor_threads,
@@ -156,7 +160,7 @@ static coro::CoroTask<int> run_validate(const ValidateArgParse* cli) {
                     });
                 co_return;
             };
-            co_await ctx.scope(validate_scope);
+            co_await coro::with_scope(validate_scope);
             co_return;
         },
         "Validate");

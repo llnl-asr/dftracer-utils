@@ -4,6 +4,7 @@
 #include <dftracer/utils/common/config.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/common/logging.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
@@ -380,12 +381,14 @@ class NullSink : public ExportSink {
 
 // Re-scan a freshly written trace and confirm the event count round-trips.
 template <class Configure>
-static coro::CoroTask<void> verify_output(
-    CoroScope& ctx, const std::string& final_output,
-    const std::string& index_dir, std::size_t checkpoint_size,
-    Configure&& configure, std::uint64_t expected_events, bool& verify_failed) {
-    co_await dftracer::utils::index::build::ensure_index_fresh(
-        &ctx, "", final_output, index_dir);
+static coro::CoroTask<void> verify_output(const std::string& final_output,
+                                          const std::string& index_dir,
+                                          std::size_t checkpoint_size,
+                                          Configure&& configure,
+                                          std::uint64_t expected_events,
+                                          bool& verify_failed) {
+    co_await dftracer::utils::index::build::ensure_index_fresh("", final_output,
+                                                               index_dir);
     ViewFile ovf;
     ovf.file_path = final_output;
     ovf.index_path = internal::determine_index_path(final_output, index_dir);
@@ -807,12 +810,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         // built before the query compiles. A distributed aggregation builds
         // its shards' indexes itself.
         if (!no_auto_index && !aggregate && !counters && !fg_mode)
-            binaries::run_on_pool(
-                cli->pipeline, "dftracer_view index",
-                [&](CoroScope& scope) -> coro::CoroTask<void> {
-                    co_await dftracer::utils::index::build::
-                        ensure_indexes_fresh(&scope, "", files, index_dir);
-                });
+            binaries::run_on_pool(cli->pipeline, "dftracer_view index",
+                                  [&](coro::Scope&) -> coro::CoroTask<void> {
+                                      co_await dftracer::utils::index::build::
+                                          ensure_indexes_fresh("", files,
+                                                               index_dir);
+                                  });
         std::string plan;
         try {
             View probe = View::from_files(view_files);
@@ -960,22 +963,22 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
         co_return co_await rows.collect();
     };
     auto combined_task = make_task(
-        [&](CoroScope& ctx) -> coro::CoroTask<void> {
+        [&](CoroScope&) -> coro::CoroTask<void> {
 #ifdef DFTRACER_UTILS_ENABLE_MPI
             distributed::MpiTransport transport;
-            // Distributed aggregation: each rank aggregates its shard into a
-            // serialized partial, the partials are gathered, and rank 0 merges
-            // and emits (counters -> ph="C" events; aggregate -> collect
-            // table). Only these reductions distribute; other modes fall
-            // through to rank 0 (single-node) below.
+            // Distributed aggregation: each rank aggregates its shard into
+            // a serialized partial, the partials are gathered, and rank 0
+            // merges and emits (counters -> ph="C" events; aggregate ->
+            // collect table). Only these reductions distribute; other modes
+            // fall through to rank 0 (single-node) below.
             if ((counters || aggregate || fg_mode) && transport.size() > 1 &&
                 shard_set_root.empty()) {
                 auto shard =
                     shard_files(files, transport.rank(), transport.size());
                 // Each rank builds its own shard of the root, on node-local
-                // scratch when the destination warrants it, and publishes it as
-                // <root>/shards/<rank>. Rank 0 merges the shards once every
-                // rank published its own.
+                // scratch when the destination warrants it, and publishes
+                // it as <root>/shards/<rank>. Rank 0 merges the shards once
+                // every rank published its own.
                 const std::string idx_root =
                     internal::determine_index_path(files.front(), index_dir);
                 const std::string rank_idx = dftracer::utils::index::shard_root(
@@ -988,7 +991,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     bin.checkpoint_size = checkpoint_size;
                     bin.require_checkpoints = true;
                     co_await dftracer::utils::index::build::
-                        resolve_and_build_index(&ctx, std::move(bin));
+                        resolve_and_build_index(std::move(bin));
                 }
                 std::vector<ViewFile> shard_files_vf;
                 for (const auto& f : shard) {
@@ -1006,11 +1009,12 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 std::string partial = co_await partial_plan.collect();
                 auto partials = transport.all_gather(partial);
                 if (transport.rank() == 0) {
-                    // Every rank published its shard before the gather, so the
-                    // set is complete: catalog it and merge the shards into the
-                    // root's own store, leaving one index for a later query. A
-                    // failed merge keeps the manifest and the shards, so a
-                    // later call retries it without a rebuild.
+                    // Every rank published its shard before the gather, so
+                    // the set is complete: catalog it and merge the shards
+                    // into the root's own store, leaving one index for a
+                    // later query. A failed merge keeps the manifest and
+                    // the shards, so a later call retries it without a
+                    // rebuild.
                     if (!no_auto_index) {
                         std::vector<std::string> shard_dirs;
                         for (int r = 0; r < transport.size(); ++r) {
@@ -1065,7 +1069,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                     idx_base + "/rank_" + std::to_string(transport.rank());
                 if (!no_auto_index) {
                     co_await dftracer::utils::index::build::
-                        ensure_indexes_fresh(&ctx, "", shard, rank_idx);
+                        ensure_indexes_fresh("", shard, rank_idx);
                 }
                 std::vector<ViewFile> shard_vf;
                 for (const auto& f : shard) {
@@ -1097,17 +1101,18 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                                                  final_output.c_str());
                     } else if (!no_index) {
                         co_await dftracer::utils::index::build::
-                            ensure_index_fresh(&ctx, "", final_output,
-                                               index_dir);
+                            ensure_index_fresh("", final_output, index_dir);
                     }
                 }
                 co_return;
             }
-            // Non-distributed modes run on rank 0 only (correct, not sharded).
+            // Non-distributed modes run on rank 0 only (correct, not
+            // sharded).
             if (transport.rank() != 0) co_return;
 #endif
-            // Shard set: merge the query across the immutable shards read-only,
-            // no trace-file scan when each shard's aggregation tier covers it.
+            // Shard set: merge the query across the immutable shards
+            // read-only, no trace-file scan when each shard's aggregation
+            // tier covers it.
             if (!shard_set_root.empty()) {
                 ShardedView sv = ShardedView::from_manifest(shard_set_root);
                 if (counters) {
@@ -1129,17 +1134,18 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
             View base = configure(View::from_files(view_files));
             View v = windowed(base);
 
-            // Skip the eager pre-build when the query would take the raw-gzip
-            // bootstrap (answer the query and build the index in one pass);
-            // pre-building first would make the index exist so the bootstrap
-            // never fires. Only the plain export / collect paths bootstrap.
+            // Skip the eager pre-build when the query would take the
+            // raw-gzip bootstrap (answer the query and build the index in
+            // one pass); pre-building first would make the index exist so
+            // the bootstrap never fires. Only the plain export / collect
+            // paths bootstrap.
             const bool will_bootstrap =
                 (aggregate && base.collect_would_bootstrap()) ||
                 (!counters && !aggregate && !write_trace && !duql_rows &&
                  v.export_would_bootstrap());
             if (!no_auto_index && !will_bootstrap) {
                 co_await dftracer::utils::index::build::ensure_indexes_fresh(
-                    &ctx, "", files, index_dir);
+                    "", files, index_dir);
             }
 
             if (ct_mode || fg_mode) {
@@ -1149,8 +1155,9 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
                 print_table(out_target, table);
                 stats.events_matched = table.num_rows();
             } else if (mv_mode) {
-                // Build-only terminal: compute the aggregation and persist it
-                // as a rollup so a later matching query hits the fast path.
+                // Build-only terminal: compute the aggregation and persist
+                // it as a rollup so a later matching query hits the fast
+                // path.
                 stats = co_await base.materialize();
                 std::fprintf(stderr, "Materialized rollup (%llu events).\n",
                              (unsigned long long)stats.events_matched);
@@ -1188,7 +1195,7 @@ static coro::CoroTask<int> run_view(const ViewArgParse* cli) {
 
             if (verify && write_trace) {
                 co_await verify_output(
-                    ctx, final_output, index_dir, checkpoint_size,
+                    final_output, index_dir, checkpoint_size,
                     [&](View b) { return windowed(configure(b)); },
                     stats.events_matched, verify_failed);
             }

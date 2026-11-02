@@ -5,6 +5,8 @@
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/input_stat.h>
 #include <dftracer/utils/coro/adaptive_gate.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
@@ -15,7 +17,6 @@
 #include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/filesystem/types.h>
 #include <dftracer/utils/utilities/hash/hasher_utility.h>
 
@@ -130,7 +131,7 @@ class DirectoryScannerUtility {
      * directory, or cannot be read
      */
     coro::CoroTask<std::vector<FileEntry>> operator()(
-        CoroScope& ctx, const DirectoryScannerUtilityInput& input) const {
+        coro::Scope& ctx, const DirectoryScannerUtilityInput& input) const {
         dftracer::utils::common::InputFileStat root_stat;
         if (!dftracer::utils::common::stat_input(input.path, root_stat)) {
             const int root_errno = errno;
@@ -149,7 +150,7 @@ class DirectoryScannerUtility {
         }
 
         if (input.recursive) {
-            coro::Executor* exec = ctx.get_executor();
+            coro::Executor* exec = ctx.executor();
             auto gate = std::make_shared<coro::AdaptiveGate>(
                 exec ? exec->concurrency() : 1);
             co_return co_await scan_parallel(ctx, std::move(gate), input.path,
@@ -162,9 +163,9 @@ class DirectoryScannerUtility {
         tasks.reserve(raw_entries.size());
         for (auto& entry : raw_entries) {
             tasks.push_back(
-                ctx.spawn([entry_copy = std::move(entry),
-                           populate_size = input.populate_size](
-                              CoroScope&) mutable -> coro::CoroTask<FileEntry> {
+                ctx.spawn_future([entry_copy = std::move(entry),
+                                  populate_size = input.populate_size]() mutable
+                                     -> coro::CoroTask<FileEntry> {
                     co_return FileEntry(std::move(entry_copy.path),
                                         entry_copy.kind, populate_size);
                 }));
@@ -175,10 +176,11 @@ class DirectoryScannerUtility {
         co_return entries;
     }
 
-    /// Scope-less overload: opens its own CoroScope on the current executor.
+    /// Scope-less overload: opens its own scope on the current executor.
     coro::CoroTask<std::vector<FileEntry>> operator()(
         const DirectoryScannerUtilityInput& input) const {
-        return with_scope(*this, input);
+        return coro::with_scope(
+            [this, input](coro::Scope& s) { return (*this)(s, input); });
     }
 
    private:
@@ -252,7 +254,7 @@ class DirectoryScannerUtility {
     /// @p ctx, as many at once as @p gate admits. An unreadable directory is
     /// skipped rather than aborting the scan.
     static coro::CoroTask<std::vector<FileEntry>> scan_parallel(
-        CoroScope& ctx, std::shared_ptr<coro::AdaptiveGate> gate,
+        coro::Scope& ctx, std::shared_ptr<coro::AdaptiveGate> gate,
         dstd::Path dir, bool populate_size) {
         dstd::Vector<Listed> listing = list_dir(dir.view(), false);
 
@@ -264,9 +266,9 @@ class DirectoryScannerUtility {
              begin += STAT_BATCH) {
             const std::size_t stop =
                 std::min(begin + STAT_BATCH, shared_listing->size());
-            batches.push_back(
-                ctx.spawn([gate, shared_listing, begin, stop, populate_size](
-                              CoroScope&) -> coro::CoroTask<StatBatch> {
+            batches.push_back(ctx.spawn_future(
+                [gate, shared_listing, begin, stop,
+                 populate_size]() -> coro::CoroTask<StatBatch> {
                     auto admitted = co_await gate->enter(stop - begin);
                     co_return stat_batch(*shared_listing, begin, stop,
                                          populate_size);
@@ -281,10 +283,10 @@ class DirectoryScannerUtility {
                          std::make_move_iterator(batch.entries.begin()),
                          std::make_move_iterator(batch.entries.end()));
             for (auto& sub : batch.subdirs) {
-                subdirs.push_back(ctx.spawn(
-                    [gate, p = std::move(sub), populate_size](CoroScope& child)
+                subdirs.push_back(ctx.spawn_future(
+                    [gate, &ctx, p = std::move(sub), populate_size]()
                         -> coro::CoroTask<std::vector<FileEntry>> {
-                        co_return co_await scan_parallel(child, gate, p,
+                        co_return co_await scan_parallel(ctx, gate, p,
                                                          populate_size);
                     }));
             }
@@ -301,12 +303,13 @@ class DirectoryScannerUtility {
     }
 };
 
-/// Scans `input` with a `Scanner` (a scanner utility that takes a CoroScope)
-/// on a pool of its own with `executor_threads` workers and `io_threads` I/O
-/// threads, and blocks until done. Stat batches fan out over the pool, which a
-/// scan awaited on a CLI's one-thread main run loop cannot do.
+/// Scans `input` with a `Scanner` (a scanner utility that takes a @ref
+/// dftracer::utils::coro::Scope "Scope") on a pool of its own with
+/// `executor_threads` workers and `io_threads` I/O threads, and blocks until
+/// done. Stat batches fan out over the pool, which a scan awaited on a CLI's
+/// one-thread main run loop cannot do.
 template <class Scanner, class Input>
-coro::CoroTask<void> scan_on_pool_task(CoroScope& scope, Input input,
+coro::CoroTask<void> scan_on_pool_task(coro::Scope& scope, Input input,
                                        std::vector<FileEntry>* entries) {
     Scanner scanner;
     *entries = co_await scanner(scope, input);
@@ -319,11 +322,11 @@ std::vector<FileEntry> scan_on_pool(std::size_t executor_threads,
     RuntimeSettings settings;
     settings.threads = executor_threads;
     settings.io_threads = io_threads;
-    configure_default_runtime(settings).run_blocking(
-        "scan trace files", [&](CoroScope& scope) {
+    configure_default_runtime(settings).block_on(coro::named(
+        "scan trace files", coro::with_scope([&](coro::Scope& scope) {
             return scan_on_pool_task<Scanner, Input>(scope, std::move(input),
                                                      &entries);
-        });
+        })));
     return entries;
 }
 

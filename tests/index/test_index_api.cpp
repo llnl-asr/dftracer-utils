@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <dftracer/utils/common/input_stat.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
@@ -14,7 +16,6 @@
 #include <dftracer/utils/index/store/store_layout.h>
 #include <dftracer/utils/index/tables.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <doctest/doctest.h>
 #include <testing_utilities.h>
 
@@ -1422,15 +1423,15 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
     SUBCASE("the only worker of the runtime") {
         dftracer::utils::configure_default_runtime({.threads = 1});
         bool committed = false;
-        dftracer::utils::default_runtime().run_blocking(
-            "index-worker-commit",
-            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
-                auto build = opened->build("/traces/worker", stat_of(1, 2));
-                if (!build) co_return;
-                put_members(*build, 1);
-                auto done = co_await build->commit();
-                committed = done.has_value();
-            });
+        dftracer::utils::default_runtime().block_on(
+            dftracer::utils::coro::named(
+                "index-worker-commit", [&]() -> coro::CoroTask<void> {
+                    auto build = opened->build("/traces/worker", stat_of(1, 2));
+                    if (!build) co_return;
+                    put_members(*build, 1);
+                    auto done = co_await build->commit();
+                    committed = done.has_value();
+                }()));
         dftracer::utils::configure_default_runtime({.threads = previous});
         CHECK(committed);
         CHECK(take(opened->snapshot()).file("/traces/worker").has_value());
@@ -1438,15 +1439,15 @@ TEST_CASE("a commit lands from a worker, a process worker and a plain thread") {
 
     SUBCASE("a worker of the process runtime") {
         bool committed = false;
-        dftracer::utils::default_runtime().run_blocking(
-            "index-async-commit",
-            [&](dftracer::utils::CoroScope&) -> coro::CoroTask<void> {
-                auto build = opened->build("/traces/async", stat_of(1, 2));
-                if (!build) co_return;
-                put_members(*build, 1);
-                auto done = co_await build->commit();
-                committed = done.has_value();
-            });
+        dftracer::utils::default_runtime().block_on(
+            dftracer::utils::coro::named(
+                "index-async-commit", [&]() -> coro::CoroTask<void> {
+                    auto build = opened->build("/traces/async", stat_of(1, 2));
+                    if (!build) co_return;
+                    put_members(*build, 1);
+                    auto done = co_await build->commit();
+                    committed = done.has_value();
+                }()));
         CHECK(committed);
         CHECK(take(opened->snapshot()).file("/traces/async").has_value());
     }

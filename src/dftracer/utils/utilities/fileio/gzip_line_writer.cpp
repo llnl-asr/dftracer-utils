@@ -2,11 +2,12 @@
 #include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/coro/async_mutex.h>
 #include <dftracer/utils/coro/async_semaphore.h>
+#include <dftracer/utils/coro/named.h>
+#include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/memory/budget.h>
 #include <dftracer/utils/runtime/runtime.h>
-#include <dftracer/utils/runtime/tasks/coro_scope.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <dftracer/utils/utilities/fileio/gzip_line_writer.h>
 #include <dftracer/utils/utilities/fileio/long_lived_release.h>
@@ -144,8 +145,7 @@ struct GzipLineWriter::Impl {
     std::string base;
     GzipWriterOptions opts;
     std::size_t workers;
-    std::unique_ptr<CoroScope> scope_owner{CoroScope::long_lived()};
-    CoroScope& scope{*scope_owner};
+    coro::Scope scope;
     std::unique_ptr<coro::CoroSemaphore> slots;
     coro::CoroSemaphore compute;
     coro::AsyncMutex drain_mu;
@@ -479,16 +479,22 @@ struct GzipLineWriter::Impl {
                 sub_index = sub_uc = 0;
             }
         }
-        scope.spawn([this, job](CoroScope&) -> coro::CoroTask<void> {
-            co_await run_job(job);
-        });
+        scope.spawn(
+            [this, job]() -> coro::CoroTask<void> { co_await run_job(job); });
     }
 
     std::unique_ptr<char[]> scratch;  ///< ordered append_with, reused
     std::size_t scratch_cap = 0;
 
     coro::CoroTask<dstd::Error> fail() {
-        co_await scope.join();
+        // A job a shutdown cancelled raises at the join, and the files of the
+        // failed write are removed all the same.
+        std::exception_ptr job_error;
+        try {
+            co_await scope.join();
+        } catch (...) {
+            job_error = std::current_exception();
+        }
         if (!cleaned) {
             cleaned = true;
             if (writer) co_await writer->close();
@@ -496,6 +502,7 @@ struct GzipLineWriter::Impl {
             // Cleanup of a failed write, so a file already gone is fine.
             for (auto& p : created) (void)dstd::fs::remove(dstd::PathView(p));
         }
+        if (job_error) std::rethrow_exception(job_error);
         co_return get_error();
     }
 };
@@ -814,11 +821,10 @@ namespace {
 template <typename T, typename F>
 common::Result<T> run_on_default(const char* name, F&& f) {
     std::optional<common::Result<T>> out;
-    default_runtime().run_blocking(name,
-                                   [&](CoroScope&) -> coro::CoroTask<void> {
-                                       out.emplace(co_await f());
-                                       co_return;
-                                   });
+    default_runtime().block_on(coro::named(name, [&]() -> coro::CoroTask<void> {
+        out.emplace(co_await f());
+        co_return;
+    }()));
     return std::move(*out);
 }
 }  // namespace

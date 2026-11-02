@@ -2,15 +2,15 @@
 #ifndef DFTRACER_UTILS_COMMON_ERROR_H
 #define DFTRACER_UTILS_COMMON_ERROR_H
 
+#include <dftracer/utils/common/platform_compat.h>
 #include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dstd/error.h>
 #include <dftracer/utils/dstd/expected.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdarg>
 #include <cstdint>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -123,7 +123,7 @@ using Result = dstd::Expected<T, dstd::Error>;
 
 /// dstd::Unexpected converts to any Result<T>, so no type argument is needed.
 inline dstd::Unexpected<dstd::Error> make_error(ErrorCode code,
-                                                std::string_view message) {
+                                                dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
 
@@ -131,7 +131,7 @@ inline dstd::Unexpected<dstd::Error> make_error(ErrorCode code,
 /// ADL, so a code cannot be paired with the wrong domain. The result converts
 /// to any Result<T>.
 template <dstd::ErrorEnum E>
-dstd::Unexpected<dstd::Error> make_error(E code, std::string_view message) {
+dstd::Unexpected<dstd::Error> make_error(E code, dstd::StringView message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
 
@@ -158,17 +158,17 @@ class DFTUtilsException : public std::exception {
     ///                                "Cannot open %s: errno=%d", path.c_str(),
     ///                                e);
     /// For a literal '%' in the message, escape as "%%" or use cat().
-    __attribute__((__format__(__printf__, 2, 3))) static DFTUtilsException fmt(
-        ErrorCode code, const char* format, ...) {
+    DFTRACER_UTILS_PRINTF_FORMAT(2, 3)
+    static DFTUtilsException fmt(ErrorCode code, const char* format, ...) {
         va_list ap;
         va_start(ap, format);
-        std::string msg = vstring_format(format, ap);
+        dstd::String msg = vstring_format(format, ap);
         va_end(ap);
         return DFTUtilsException(code, std::move(msg));
     }
 
     std::uint64_t domain() const noexcept { return error_.domain().id; }
-    std::string_view domain_name() const noexcept {
+    dstd::StringView domain_name() const noexcept {
         return error_.domain().name;
     }
     std::int32_t code_int() const noexcept { return error_.code(); }

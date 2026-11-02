@@ -76,7 +76,7 @@ class InfoArgParse : public binaries::ArgParse {
     }
 };
 
-static std::string format_size(std::uint64_t bytes) {
+static dstd::String format_size(std::uint64_t bytes) {
     return common::human_bytes(static_cast<double>(bytes), "", 2);
 }
 

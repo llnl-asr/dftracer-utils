@@ -33,11 +33,15 @@
 // allocated bytes and that both equal the bytes the size tables imply.
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/runtime/runtime.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
@@ -52,14 +56,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace df = dftracer::utils::dataframe;
@@ -153,6 +151,7 @@ std::uint64_t next_random(std::uint64_t& s) {
 void group_by(const Sizes& s) {
     const df::LazyFrame plan =
         gen(s.frame_rows, s.frame_rows, 1)
+            // keep std: group_by takes std::vector<std::string>
             .group_by(std::vector<std::string>{"k", "v"},
                       {df::GroupAgg{df::Agg::Sum, "t", "t_sum"}});
     default_runtime()
@@ -160,21 +159,25 @@ void group_by(const Sizes& s) {
         .get();
 }
 
-void genesis(const std::string& root) {
+void genesis(const dstd::String& root) {
     default_runtime()
         .submit(coro::with_scope(
             [&](coro::Scope& ctx) { return genesis_run(ctx, root); }))
         .wait();
 }
 
-std::string prepare_genesis(const std::string& dir, const Sizes& s) {
+dstd::String prepare_genesis(const dstd::String& dir, const Sizes& s) {
     (void)dstd::fs::remove_all(dir);
-    const std::string run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
+    const dstd::String run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
     require_ok(dstd::fs::create_directories(run), "create_directories");
-    std::ofstream((run + "/summary.json").c_str())
-        << R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
-           R"("nodes":1,"ppn":)"
-        << RANKS << R"(,"sets":["set1"]})";
+    require_ok(
+        dstd::fs::write_file(
+            run + "/summary.json",
+            common::str_cat(
+                R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
+                R"("nodes":1,"ppn":)",
+                RANKS, R"(,"sets":["set1"]})")),
+        "write summary.json");
     write_gz(run + "/compacted/set1.pfw.gz", genesis_text(s.genesis_calls));
     return dir + "/genesis";
 }
@@ -191,9 +194,9 @@ std::uint64_t calls_up_to(const SizeMix& m, std::size_t max_bucket) {
 }
 
 SizeMix collect_mix(const Sizes& s) {
-    const std::string dir(
+    const dstd::String dir(
         (dstd::fs::temp_directory() / "counter_contention_bench").str());
-    const std::string root = prepare_genesis(dir, s);
+    const dstd::String root = prepare_genesis(dir, s);
     SizeMix mix_out;
     std::array<std::uint64_t, mp::HISTOGRAM_BUCKETS> before{};
     for (std::size_t b = 0; b < before.size(); ++b)
@@ -231,7 +234,7 @@ void print_mix(const SizeMix& m) {
 }
 
 struct SizeTables {
-    std::vector<std::vector<std::size_t>> table;
+    dstd::Vector<dstd::Vector<std::size_t>> table;
     std::uint64_t bytes_per_pass = 0;
 };
 
@@ -314,7 +317,7 @@ class BatchedCounter {
 };
 
 template <class Counter>
-void counter_worker(Counter counter, const std::vector<std::size_t>& table,
+void counter_worker(Counter counter, const dstd::Vector<std::size_t>& table,
                     std::size_t pairs, ThreadStats& st) {
     struct Slot {
         void* p = nullptr;
@@ -361,17 +364,17 @@ void push_chain(std::atomic<Node*>& head, Node* first, Node* last) {
 struct RemoteShared {
     RemoteShared(std::size_t threads, std::size_t batch)
         : chains(threads),
-          outbox(threads, std::vector<Node*>(batch)),
+          outbox(threads, dstd::Vector<Node*>(batch)),
           barrier(static_cast<std::ptrdiff_t>(threads)) {}
 
-    std::vector<PaddedHead> chains;
-    std::vector<std::vector<Node*>> outbox;
+    dstd::Vector<PaddedHead> chains;
+    dstd::Vector<dstd::Vector<Node*>> outbox;
     std::barrier<> barrier;
 };
 
 template <bool BUFFERED>
 void remote_worker(RemoteShared& sh, std::size_t t, std::size_t threads,
-                   std::size_t groups, const std::vector<std::size_t>& table,
+                   std::size_t groups, const dstd::Vector<std::size_t>& table,
                    std::size_t rounds, ThreadStats& st) {
     const std::size_t batch = SLICE * groups;
     std::size_t at = 0;
@@ -431,7 +434,7 @@ struct RunResult {
 template <class Body>
 double time_threads(std::size_t threads, Body body) {
     std::barrier<> gate(static_cast<std::ptrdiff_t>(threads + 1));
-    std::vector<std::thread> pool;
+    dstd::Vector<dstd::Thread> pool;
     pool.reserve(threads);
     for (std::size_t t = 0; t < threads; ++t)
         pool.emplace_back([&gate, &body, t] {
@@ -440,14 +443,14 @@ double time_threads(std::size_t threads, Body body) {
         });
     gate.arrive_and_wait();
     const auto t0 = std::chrono::steady_clock::now();
-    for (std::thread& th : pool) th.join();
+    for (dstd::Thread& th : pool) th.join();
     const auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::nano>(t1 - t0).count();
 }
 
 RunResult run_once(Variant v, std::size_t threads, const SizeTables& tables,
                    std::size_t pairs) {
-    std::vector<ThreadStats> stats(threads);
+    dstd::Vector<ThreadStats> stats(threads);
     PaddedCounter shared;
     RunResult r;
     double ns = 0;
@@ -497,7 +500,7 @@ RunResult run_once(Variant v, std::size_t threads, const SizeTables& tables,
     return r;
 }
 
-double median(std::vector<double> v) {
+double median(dstd::Vector<double> v) {
     std::sort(v.begin(), v.end());
     return v[v.size() / 2];
 }
@@ -505,17 +508,17 @@ double median(std::vector<double> v) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke = argc == 2 && dstd::StringView(argv[1]) == "--smoke";
     if (argc > 2 || (argc == 2 && !smoke)) {
         std::fprintf(stderr, "usage: counter_contention_bench [--smoke]\n");
         return 2;
     }
     const Sizes sizes = smoke ? SMOKE_SIZES : FULL_SIZES;
-    const std::vector<std::size_t> thread_counts =
-        smoke ? std::vector<std::size_t>(SMOKE_THREADS.begin(),
-                                         SMOKE_THREADS.end())
-              : std::vector<std::size_t>(FULL_THREADS.begin(),
-                                         FULL_THREADS.end());
+    const dstd::Vector<std::size_t> thread_counts =
+        smoke ? dstd::Vector<std::size_t>(SMOKE_THREADS.begin(),
+                                          SMOKE_THREADS.end())
+              : dstd::Vector<std::size_t>(FULL_THREADS.begin(),
+                                          FULL_THREADS.end());
 
     const SizeMix mixture = collect_mix(sizes);
     print_mix(mixture);
@@ -527,8 +530,8 @@ int main(int argc, char** argv) {
     const std::size_t pairs = TABLE_SIZE * sizes.tables_per_thread;
     int failures = 0;
     for (const std::size_t cut : {MAX_BUCKET, SMALL_BUCKET}) {
-        std::vector<std::vector<double>> medians(std::size(VARIANTS));
-        std::vector<std::vector<double>> with_barriers(std::size(VARIANTS));
+        dstd::Vector<dstd::Vector<double>> medians(std::size(VARIANTS));
+        dstd::Vector<dstd::Vector<double>> with_barriers(std::size(VARIANTS));
         for (const std::size_t threads : thread_counts) {
             const SizeTables tables = make_tables(mixture, cut, threads);
             const std::uint64_t expected =
@@ -537,8 +540,8 @@ int main(int argc, char** argv) {
                 const bool remote =
                     VARIANTS[vi].id == Variant::REMOTE_CAS_PER_FREE ||
                     VARIANTS[vi].id == Variant::REMOTE_BUFFERED;
-                std::vector<double> ns;
-                std::vector<double> ns_round;
+                dstd::Vector<double> ns;
+                dstd::Vector<double> ns_round;
                 for (std::size_t run = 0; run < sizes.runs; ++run) {
                     const RunResult r =
                         run_once(VARIANTS[vi].id, threads, tables, pairs);

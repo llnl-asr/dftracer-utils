@@ -4,16 +4,16 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/spill_file.h>
+#include <dftracer/utils/dstd/queue.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -49,7 +49,7 @@ class ExternalSorter {
     /// Sorts `run` and writes it as a run of its own, then clears it, for a
     /// caller that fills buffers on several threads. Calls of add_run() may
     /// overlap each other, not add() or drain().
-    Result<void> add_run(std::vector<Rec>& run) {
+    Result<void> add_run(dstd::Vector<Rec>& run) {
         std::sort(run.begin(), run.end(), less_);
         SpillFile* file = nullptr;
         {
@@ -79,14 +79,14 @@ class ExternalSorter {
         if (runs_.empty()) {
             std::sort(buf_.begin(), buf_.end(), less_);
             for (const Rec& r : buf_) f(r);
-            std::vector<Rec>().swap(buf_);
+            dstd::Vector<Rec>().swap(buf_);
             return {};
         }
         if (!buf_.empty()) {
             auto flushed = flush();
             if (!flushed) return flushed;
         }
-        std::vector<Rec>().swap(buf_);
+        dstd::Vector<Rec>().swap(buf_);
         return merge(f);
     }
 
@@ -97,7 +97,7 @@ class ExternalSorter {
     };
 
     struct Reader {
-        std::vector<Rec> buf;
+        dstd::Vector<Rec> buf;
         std::size_t pos = 0;
         std::uint64_t next = 0;
     };
@@ -135,7 +135,7 @@ class ExternalSorter {
     Result<void> merge(F& f) {
         const std::size_t chunk =
             std::max<std::size_t>(64, cap_ / runs_.size());
-        std::vector<Reader> readers(runs_.size());
+        dstd::Vector<Reader> readers(runs_.size());
         auto after = [&](std::size_t a, std::size_t b) {
             const Rec& x = readers[a].buf[readers[a].pos];
             const Rec& y = readers[b].buf[readers[b].pos];
@@ -143,9 +143,7 @@ class ExternalSorter {
             if (less_(y, x)) return true;
             return a > b;
         };
-        std::priority_queue<std::size_t, std::vector<std::size_t>,
-                            decltype(after)>
-            heap(after);
+        dstd::PriorityQueue<std::size_t, decltype(after)> heap(after);
         for (std::size_t i = 0; i < runs_.size(); ++i) {
             auto more = refill(i, readers[i], chunk);
             if (!more) return dstd::Unexpected(more.error());
@@ -169,9 +167,9 @@ class ExternalSorter {
 
     Less less_;
     std::size_t cap_;
-    std::vector<Rec> buf_;
-    std::vector<Run> runs_;
-    std::unique_ptr<SpillFile> file_;
+    dstd::Vector<Rec> buf_;
+    dstd::Vector<Run> runs_;
+    dstd::UniquePtr<SpillFile> file_;
     std::mutex mu_;
 };
 

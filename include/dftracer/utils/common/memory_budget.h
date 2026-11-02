@@ -2,10 +2,11 @@
 #ifndef DFTRACER_UTILS_COMMON_MEMORY_BUDGET_H
 #define DFTRACER_UTILS_COMMON_MEMORY_BUDGET_H
 
+#include <dftracer/utils/dstd/span.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstddef>
 #include <cstdint>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -36,7 +37,7 @@ static constexpr std::size_t MAX_PER_FILE_PEAK_BYTES =
 static constexpr std::size_t PER_FILE_SAMPLE_LIMIT = 1024;
 
 std::size_t compute_memory_budget(std::size_t user_override_bytes = 0);
-std::size_t estimate_per_file_bytes(const std::vector<std::size_t>& file_sizes,
+std::size_t estimate_per_file_bytes(dstd::Span<const std::size_t> file_sizes,
                                     std::size_t user_override_bytes = 0);
 
 /// Whether an aggregated workload fits in memory, and what to do if not.
@@ -58,7 +59,7 @@ MemoryBudgetAdvice memory_budget_advice(std::size_t required_bytes,
 
 /// One-line warning for advice that does not fit (empty when it fits). Shared
 /// so the CLI binaries and the Python/dfanalyzer path surface the same message.
-std::string format_memory_budget_warning(const MemoryBudgetAdvice& advice);
+dstd::String format_memory_budget_warning(const MemoryBudgetAdvice& advice);
 
 }  // namespace dftracer::utils::common
 

@@ -8,8 +8,17 @@
 #include <dftracer/utils/coro/when_all.h>
 #include <dftracer/utils/coro/yield.h>
 #include <dftracer/utils/dataframe/sketch.h>
+#include <dftracer/utils/dstd/algorithm.h>
 #include <dftracer/utils/dstd/base64.h>
+#include <dftracer/utils/dstd/deque.h>
+#include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/dstd/transparent_string_hash.h>
 #include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
@@ -24,19 +33,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <deque>
-#include <fstream>
 #include <limits>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <optional>
-#include <set>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::trace::genesis {
 
@@ -50,18 +50,18 @@ enum class Scope { Pid, Host };
 
 struct Series {
     Kind kind = Kind::Delta;
-    std::vector<std::pair<std::int64_t, double>> samples;
+    dstd::Vector<dstd::Pair<std::int64_t, double>> samples;
 };
 
 struct Proc {
-    std::string hhash;
+    dstd::String hhash;
     std::int64_t pid = 0;
     std::int64_t start = -1;
     std::int64_t end = -1;
     bool active = false;
     int set = -1;
-    std::vector<std::string> papi_names;
-    std::map<std::string, Series> papi;
+    dstd::Vector<dstd::String> papi_names;
+    dstd::Map<dstd::String, Series> papi;
 };
 
 // One call as read from a file; names are ids into the reader's own strings.
@@ -151,13 +151,13 @@ struct CounterAcc {
 };
 
 struct PathRec {
-    std::string path;
+    dstd::String path;
     std::uint32_t name;
     std::uint32_t cat;
     std::int64_t depth;
     std::int64_t first_ts = std::numeric_limits<std::int64_t>::max();
     Stats dur;
-    std::vector<std::unique_ptr<CounterAcc>> counters;
+    dstd::Vector<dstd::UniquePtr<CounterAcc>> counters;
 };
 
 // Calls per chunk, and the bytes one open reader holds besides its chunk and
@@ -167,12 +167,12 @@ constexpr std::uint64_t READER_BYTES = 8ULL * 1024 * 1024;
 constexpr std::uint64_t CHARGE_STEP = 64ULL * 1024;
 constexpr std::uint64_t BORROW_STEP = 256ULL * 1024 * 1024;
 constexpr std::uint64_t SERIES_SAMPLE_BYTES =
-    sizeof(std::pair<std::int64_t, double>);
+    sizeof(dstd::Pair<std::int64_t, double>);
 
 struct GroupError {
     common::ErrorCode code = common::ErrorCode::Parse;
-    std::string file;
-    std::string reason;
+    dstd::String file;
+    dstd::String reason;
     bool over_budget = false;
 };
 
@@ -180,14 +180,14 @@ template <class T>
 using GResult = dstd::Expected<T, GroupError>;
 
 dstd::Unexpected<GroupError> fail(
-    std::string file, std::string reason,
+    dstd::String file, dstd::String reason,
     common::ErrorCode code = common::ErrorCode::Parse) {
     return dstd::Unexpected<GroupError>(
         GroupError{code, std::move(file), std::move(reason)});
 }
 
 dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
-    return fail("", std::string(e.message()), common::errorcode_of(e));
+    return fail("", dstd::String(e.message()), common::errorcode_of(e));
 }
 
 // A group's memory is its share of the budget in four equal parts: the calls,
@@ -195,7 +195,7 @@ dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
 // since its children reach it in quanta of 1 MiB and a share of a few MiB
 // would refuse them.
 struct GroupMem {
-    GroupMem(std::uint64_t share_bytes, std::string_view name)
+    GroupMem(std::uint64_t share_bytes, dstd::StringView name)
         : share(share_bytes),
           pool(memory::current_pool().child(name)),
           calls(part(pool, "calls", share_bytes / 4)),
@@ -238,7 +238,7 @@ struct GroupMem {
         return file_.get();
     }
 
-    GroupError budget_error(std::string_view what) const {
+    GroupError budget_error(dstd::StringView what) const {
         return GroupError{
             common::ErrorCode::InvalidArgument, "",
             common::str_cat("memory budget exceeded by ", what,
@@ -247,21 +247,21 @@ struct GroupMem {
             true};
     }
 
-    dstd::Unexpected<GroupError> over_budget(std::string_view what) const {
+    dstd::Unexpected<GroupError> over_budget(dstd::StringView what) const {
         return dstd::Unexpected<GroupError>(budget_error(what));
     }
 
    private:
     // A limit of zero means none, so a zero part still gets one byte.
     static memory::PoolHandle part(const memory::PoolHandle& group,
-                                   std::string_view name, std::uint64_t bytes) {
+                                   dstd::StringView name, std::uint64_t bytes) {
         if (!group) return {};
         return group->child(name, memory::PoolKind::Scratch,
                             memory::Limits{std::max<std::uint64_t>(bytes, 1)});
     }
 
     std::mutex mu_;
-    std::unique_ptr<common::SpillFile> file_;
+    dstd::UniquePtr<common::SpillFile> file_;
 };
 
 // Charges a pool in steps, so a hot loop does not touch the shared counter for
@@ -273,7 +273,7 @@ class Charge {
 
     // The budget error naming `what` when the state pool cannot take `n` more
     // bytes.
-    GResult<void> take(std::uint64_t n, std::string_view what) noexcept {
+    GResult<void> take(std::uint64_t n, dstd::StringView what) noexcept {
         used_ += n;
         if (used_ <= res_.bytes()) return {};
         const std::uint64_t need = used_ - res_.bytes();
@@ -310,16 +310,16 @@ std::int64_t get_i64(simdjson::dom::element e) {
     return 0;
 }
 
-std::optional<double> get_number(simdjson::dom::element e) {
+dstd::Optional<double> get_number(simdjson::dom::element e) {
     double d = 0;
     if (e.is_number() && e.get(d) == simdjson::SUCCESS) return d;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 // The fields handle_line reads, each from the first key of its name.
 struct Fields {
-    std::optional<simdjson::dom::element> ph, pid, ts, tid, dur, arg_tid;
-    std::string_view cat, name, hhash;
+    dstd::Optional<simdjson::dom::element> ph, pid, ts, tid, dur, arg_tid;
+    dstd::StringView cat, name, hhash;
     simdjson::dom::object args;
     bool has_args = false;
     bool correlation_id = false;
@@ -331,12 +331,12 @@ struct Fields {
         seen = static_cast<std::uint16_t>(seen | bit);
         return true;
     }
-    static std::string_view str(simdjson::dom::element v) {
-        std::string_view s;
-        return v.get(s) == simdjson::SUCCESS ? s : std::string_view{};
+    static dstd::StringView str(simdjson::dom::element v) {
+        dstd::StringView s;
+        return v.get(s) == simdjson::SUCCESS ? s : dstd::StringView{};
     }
 
-    void top(std::string_view k, simdjson::dom::element v) {
+    void top(dstd::StringView k, simdjson::dom::element v) {
         if (k == "ph") {
             if (first(1)) ph = v;
         } else if (k == "ts") {
@@ -355,7 +355,7 @@ struct Fields {
             if (first(128)) has_args = v.get(args) == simdjson::SUCCESS;
         }
     }
-    void arg(std::string_view k, simdjson::dom::element v) {
+    void arg(dstd::StringView k, simdjson::dom::element v) {
         if (k == "hhash") {
             if (first(256)) hhash = str(v);
         } else if (k == "tid") {
@@ -366,18 +366,18 @@ struct Fields {
     }
 };
 
-std::string_view get_sv(simdjson::dom::object o, std::string_view key) {
-    std::string_view v;
+dstd::StringView get_sv(simdjson::dom::object o, dstd::StringView key) {
+    dstd::StringView v;
     if (o[key].get(v) != simdjson::SUCCESS) return {};
     return v;
 }
 
-bool is_per_core_cpu(std::string_view name) {
+bool is_per_core_cpu(dstd::StringView name) {
     return name.size() > 4 && name.substr(0, 4) == "cpu-";
 }
 
-std::string strip_spaces(std::string_view s) {
-    std::string out;
+dstd::String strip_spaces(dstd::StringView s) {
+    dstd::String out;
     out.reserve(s.size());
     for (char c : s)
         if (c != ' ') out.push_back(c);
@@ -385,7 +385,7 @@ std::string strip_spaces(std::string_view s) {
 }
 
 // Sample i carries the value for (t_{i-1}, t_i]; sample 0 has no known start.
-using Sample = std::pair<std::int64_t, double>;
+using Sample = dstd::Pair<std::int64_t, double>;
 
 // A series' samples and bounds, copied next to the walk's other per-counter
 // state when a lane opens: the walk checks every counter of every call, and
@@ -441,9 +441,9 @@ struct Cursor {
     }
 };
 
-std::optional<double> prorate(const SeriesView& s, std::int64_t a,
-                              std::int64_t b, Cursor& cur) {
-    if (s.n < 2 || b < s.first || a > s.last) return std::nullopt;
+dstd::Optional<double> prorate(const SeriesView& s, std::int64_t a,
+                               std::int64_t b, Cursor& cur) {
+    if (s.n < 2 || b < s.first || a > s.last) return dstd::nullopt;
     const Sample* x = s.x;
     std::size_t i = std::max<std::size_t>(1, cur.seek<false>(x, s.n, a));
     double sum = 0.0;
@@ -458,9 +458,9 @@ std::optional<double> prorate(const SeriesView& s, std::int64_t a,
     return sum;
 }
 
-std::optional<double> weighted_mean(const SeriesView& s, std::int64_t a,
-                                    std::int64_t b, Cursor& cur) {
-    if (s.n < 2 || b <= s.first || a > s.last) return std::nullopt;
+dstd::Optional<double> weighted_mean(const SeriesView& s, std::int64_t a,
+                                     std::int64_t b, Cursor& cur) {
+    if (s.n < 2 || b <= s.first || a > s.last) return dstd::nullopt;
     const Sample* x = s.x;
     std::size_t i = std::max<std::size_t>(1, cur.seek<true>(x, s.n, a));
     if (b == a) return x[i].second;
@@ -474,14 +474,14 @@ std::optional<double> weighted_mean(const SeriesView& s, std::int64_t a,
             den += static_cast<double>(hi - lo);
         }
     }
-    if (den == 0.0) return std::nullopt;
+    if (den == 0.0) return dstd::nullopt;
     return num / den;
 }
 
 using simdjson::builder::string_builder;
 
 void append_stats(string_builder& sb, const Stats& s, bool with_n,
-                  bool with_sum, std::vector<std::uint8_t>& buf) {
+                  bool with_sum, dstd::Vector<std::uint8_t>& buf) {
     sb.start_object();
     if (with_n) {
         sb.append_key_value("n", s.n);
@@ -496,18 +496,19 @@ void append_stats(string_builder& sb, const Stats& s, bool with_n,
     }
     sb.append_comma();
     sb.append_key_value("avg", s.sum / static_cast<double>(s.n));
-    static constexpr std::pair<std::string_view, double> QS[] = {{"p25", 0.25},
-                                                                 {"p50", 0.5},
-                                                                 {"p75", 0.75},
-                                                                 {"p90", 0.9},
-                                                                 {"p99", 0.99}};
+    static constexpr dstd::Pair<dstd::StringView, double> QS[] = {
+        {"p25", 0.25},
+        {"p50", 0.5},
+        {"p75", 0.75},
+        {"p90", 0.9},
+        {"p99", 0.99}};
     for (const auto& [k, q] : QS) {
         sb.append_comma();
         sb.append_key_value(k, std::clamp(s.sketch.quantile(q), s.min, s.max));
     }
     s.sketch.serialize_into(buf);
     sb.append_comma();
-    sb.append_key_value("sketch", std::string_view(dstd::base64_encode(
+    sb.append_key_value("sketch", dstd::StringView(dstd::base64_encode(
                                       buf.data(), buf.size())));
     sb.end_object();
 }
@@ -515,7 +516,7 @@ void append_stats(string_builder& sb, const Stats& s, bool with_n,
 class GroupReader {
    public:
     struct Chunk {
-        std::vector<Call> mem;
+        dstd::Vector<Call> mem;
         memory::Reservation res;
         std::uint64_t offset = 0;
         std::uint64_t count = 0;
@@ -524,17 +525,18 @@ class GroupReader {
 
     // Ids of one file's strings and processes in the group's tables.
     struct IdMap {
-        std::vector<std::uint32_t> sid;
-        std::vector<std::uint32_t> pid;
+        dstd::Vector<std::uint32_t> sid;
+        dstd::Vector<std::uint32_t> pid;
     };
 
     explicit GroupReader(GroupMem& mem) : mem_(&mem), charge_(mem) {}
 
-    coro::CoroTask<GResult<void>> read(std::string file) {
-        std::optional<std::string> error;
+    coro::CoroTask<GResult<void>> read(dstd::String file) {
+        dstd::Optional<dstd::String> error;
         try {
             // An unfinished run is skipped, not counted from a recovered tail.
-            auto gen = async_streaming_gz_lines(file, 0, 0,
+            // keep std: the line generator takes a std::string path
+            auto gen = async_streaming_gz_lines(std::string(file), 0, 0,
                                                 /*recover_truncated=*/false);
             std::size_t n = 0;
             for (;;) {
@@ -567,7 +569,7 @@ class GroupReader {
             if (src.start >= 0) dst.start = src.start;
             if (src.end >= 0) dst.end = src.end;
             dst.active = dst.active || src.active;
-            for (const std::string& name : src.papi_names)
+            for (const dstd::String& name : src.papi_names)
                 add_papi_name(dst, name);
             for (auto& [k, series] : src.papi) append(dst.papi[k], series);
         }
@@ -591,48 +593,48 @@ class GroupReader {
         }
     }
 
-    GResult<void> load_gpu_csv(const std::vector<std::string>& files) {
+    GResult<void> load_gpu_csv(const dstd::Vector<dstd::String>& files) {
         static constexpr const char* FIELDS[] = {
             "gpu.power.GPU_", "gpu.utilization.GPU_", "gpu.memory_used.GPU_"};
         for (const auto& f : files) {
-            std::ifstream in(f);
-            std::string line;
-            try {
-                while (std::getline(in, line)) {
-                    std::vector<std::string_view> cols;
-                    std::string_view rest(line);
-                    while (true) {
-                        const auto c = rest.find(',');
-                        std::string_view col = rest.substr(0, c);
-                        while (!col.empty() && col.front() == ' ')
-                            col.remove_prefix(1);
-                        while (!col.empty() && col.back() == ' ')
-                            col.remove_suffix(1);
-                        cols.push_back(col);
-                        if (c == std::string_view::npos) break;
-                        rest.remove_prefix(c + 1);
-                    }
-                    if (cols.size() != 6)
-                        return fail(f, "GPU CSV row without 6 columns");
-                    const auto hh = host_hash_.find(std::string(cols[1]));
-                    if (hh == host_hash_.end())
-                        return fail(f, "no HH metadata for host " +
-                                           std::string(cols[1]));
-                    const double seconds = std::stod(std::string(cols[0]));
-                    const auto ts =
-                        static_cast<std::int64_t>(std::llround(seconds * 1e6));
-                    auto& h = host_series(hh->second);
-                    for (std::size_t k = 0; k < 3; ++k) {
-                        auto& s = h[FIELDS[k] + std::string(cols[2])];
-                        s.kind = Kind::Gauge;
-                        if (auto st = add_sample(
-                                s, ts, std::stod(std::string(cols[3 + k])));
-                            !st)
-                            return st;
-                    }
+            auto text = dstd::fs::read_file(f);
+            if (!text) continue;
+            dstd::StringView all(*text);
+            std::size_t pos = 0;
+            while (pos < all.size()) {
+                const auto nl = all.find('\n', pos);
+                dstd::StringView rest = all.substr(pos, nl - pos);
+                pos = nl == dstd::StringView::npos ? all.size() : nl + 1;
+                dstd::Vector<dstd::StringView> cols;
+                while (true) {
+                    const auto c = rest.find(',');
+                    dstd::StringView col = rest.substr(0, c);
+                    while (!col.empty() && col.front() == ' ')
+                        col.remove_prefix(1);
+                    while (!col.empty() && col.back() == ' ')
+                        col.remove_suffix(1);
+                    cols.push_back(col);
+                    if (c == dstd::StringView::npos) break;
+                    rest.remove_prefix(c + 1);
                 }
-            } catch (const std::exception& e) {
-                return fail(f, e.what());
+                if (cols.size() != 6)
+                    return fail(f, "GPU CSV row without 6 columns");
+                const auto hh = host_hash_.find(dstd::String(cols[1]));
+                if (hh == host_hash_.end())
+                    return fail(
+                        f, "no HH metadata for host " + dstd::String(cols[1]));
+                const auto parsed = dstd::from_chars<double>(cols[0]);
+                if (!parsed) return fail(f, "stod: no conversion");
+                const auto ts =
+                    static_cast<std::int64_t>(std::llround(*parsed * 1e6));
+                auto& h = host_series(hh->second);
+                for (std::size_t k = 0; k < 3; ++k) {
+                    auto& s = h[FIELDS[k] + dstd::String(cols[2])];
+                    s.kind = Kind::Gauge;
+                    const auto value = dstd::from_chars<double>(cols[3 + k]);
+                    if (!value) return fail(f, "stod: no conversion");
+                    if (auto st = add_sample(s, ts, *value); !st) return st;
+                }
             }
         }
         for (auto& [_, h] : hosts_)
@@ -640,12 +642,12 @@ class GroupReader {
         return {};
     }
 
-    std::vector<Proc> procs_;
-    std::vector<std::string> strings_;
-    dstd::StringViewMap<std::map<std::string, Series>> hosts_;
-    std::map<std::string, std::string> host_hash_;
-    std::vector<Chunk> chunks_;
-    std::set<std::pair<std::uint32_t, std::int64_t>> gpu_threads_;
+    dstd::Vector<Proc> procs_;
+    dstd::Vector<dstd::String> strings_;
+    dstd::StringViewMap<dstd::Map<dstd::String, Series>> hosts_;
+    dstd::Map<dstd::String, dstd::String> host_hash_;
+    dstd::Vector<Chunk> chunks_;
+    dstd::Set<dstd::Pair<std::uint32_t, std::int64_t>> gpu_threads_;
 
    private:
     // The samples stay charged to the reader they were read by, which lives
@@ -658,40 +660,40 @@ class GroupReader {
         }
         dst.samples.insert(dst.samples.end(), src.samples.begin(),
                            src.samples.end());
-        std::vector<std::pair<std::int64_t, double>>().swap(src.samples);
+        dstd::Vector<dstd::Pair<std::int64_t, double>>().swap(src.samples);
     }
 
     static void sort_series(Series& s) {
-        std::stable_sort(
+        dstd::stable_sort(
             s.samples.begin(), s.samples.end(),
             [](const auto& a, const auto& b) { return a.first < b.first; });
     }
 
-    std::map<std::string, Series>& host_series(std::string_view hhash) {
+    dstd::Map<dstd::String, Series>& host_series(dstd::StringView hhash) {
         auto it = hosts_.find(hhash);
         if (it == hosts_.end())
-            it = hosts_.try_emplace(std::string(hhash)).first;
+            it = hosts_.try_emplace(dstd::String(hhash)).first;
         return it->second;
     }
 
-    std::uint32_t intern(std::string_view s) {
+    std::uint32_t intern(dstd::StringView s) {
         auto it = string_ids_.find(s);
         if (it != string_ids_.end()) return it->second;
         const auto id = static_cast<std::uint32_t>(strings_.size());
         strings_.emplace_back(s);
-        string_ids_.emplace(std::string(s), id);
+        string_ids_.emplace(dstd::String(s), id);
         return id;
     }
 
-    std::uint32_t proc_index(std::string_view hhash, std::int64_t pid) {
+    std::uint32_t proc_index(dstd::StringView hhash, std::int64_t pid) {
         auto host = proc_ids_.find(hhash);
         if (host == proc_ids_.end())
-            host = proc_ids_.try_emplace(std::string(hhash)).first;
+            host = proc_ids_.try_emplace(dstd::String(hhash)).first;
         auto [it, fresh] = host->second.try_emplace(
             pid, static_cast<std::uint32_t>(procs_.size()));
         if (fresh) {
             Proc p;
-            p.hhash = std::string(hhash);
+            p.hhash = dstd::String(hhash);
             p.pid = pid;
             procs_.push_back(std::move(p));
         }
@@ -707,7 +709,7 @@ class GroupReader {
     }
 
     // A counter name once; a process has a few dozen, one record names each.
-    static void add_papi_name(Proc& p, std::string_view name) {
+    static void add_papi_name(Proc& p, dstd::StringView name) {
         if (std::find(p.papi_names.begin(), p.papi_names.end(), name) ==
             p.papi_names.end())
             p.papi_names.emplace_back(name);
@@ -740,7 +742,7 @@ class GroupReader {
         return {};
     }
 
-    GResult<void> handle_line(const std::string& file, std::string_view line) {
+    GResult<void> handle_line(const dstd::String& file, dstd::StringView line) {
         while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
             line.remove_prefix(1);
         while (!line.empty() && (line.back() == ',' || line.back() == ' ' ||
@@ -757,13 +759,13 @@ class GroupReader {
         for (auto [k, v] : o) f.top(k, v);
         if (!f.ph) return {};
         const RecordPhase ph = read_phase(*f.ph);
-        const std::string_view cat = f.cat;
-        const std::string_view name = f.name;
+        const dstd::StringView cat = f.cat;
+        const dstd::StringView name = f.name;
         const bool has_args = f.has_args;
         simdjson::dom::object args = f.args;
         if (has_args)
             for (auto [k, v] : args) f.arg(k, v);
-        const std::string_view hhash = f.hhash;
+        const dstd::StringView hhash = f.hhash;
         const std::int64_t pid = f.pid ? get_i64(*f.pid) : 0;
         const std::int64_t ts = f.ts ? get_i64(*f.ts) : 0;
 
@@ -798,10 +800,10 @@ class GroupReader {
                     for (auto [k, v] : args) {
                         const auto num = get_number(v);
                         if (!num) continue;
-                        static constexpr std::string_view SUFFIX = "_delta";
+                        static constexpr dstd::StringView SUFFIX = "_delta";
                         if (k.size() > SUFFIX.size() &&
                             k.substr(k.size() - SUFFIX.size()) == SUFFIX) {
-                            auto& s = p.papi[std::string(
+                            auto& s = p.papi[dstd::String(
                                 k.substr(0, k.size() - SUFFIX.size()))];
                             if (auto st = add_sample(s, ts, *num); !st)
                                 return st;
@@ -812,19 +814,19 @@ class GroupReader {
                     return {};
                 }
                 return fail(file, "unknown per-process counter category " +
-                                      std::string(cat));
+                                      dstd::String(cat));
             case RecordPhase::Metadata:
                 if (name == "HH" && has_args)
-                    host_hash_[std::string(get_sv(args, "name"))] =
-                        std::string(get_sv(args, "value"));
+                    host_hash_[dstd::String(get_sv(args, "name"))] =
+                        dstd::String(get_sv(args, "value"));
                 return {};
             default:
                 return {};
         }
     }
 
-    GResult<void> handle_host(const std::string& file, std::string_view cat,
-                              std::string_view name, std::string_view hhash,
+    GResult<void> handle_host(const dstd::String& file, dstd::StringView cat,
+                              dstd::StringView name, dstd::StringView hhash,
                               std::int64_t ts, simdjson::dom::object args) {
         const bool sys = cat == "sys";
         const bool net = cat == "net";
@@ -832,15 +834,15 @@ class GroupReader {
         const bool gpu = cat == "gpu";
         if (!sys && !net && !io && !gpu)
             return fail(file,
-                        "unknown host counter category " + std::string(cat));
-        const std::string series_name = strip_spaces(name);
+                        "unknown host counter category " + dstd::String(cat));
+        const dstd::String series_name = strip_spaces(name);
         if (sys && is_per_core_cpu(series_name)) return {};
         auto& host = host_series(hhash);
         for (auto [k, v] : args) {
             if (k == "hhash" || k == "num_gpus_per_socket") continue;
             const auto num = get_number(v);
             if (!num) continue;
-            std::string key = gpu ? "gpu." : "";
+            dstd::String key = gpu ? "gpu." : "";
             key += series_name;
             key += '.';
             key += k;
@@ -854,7 +856,7 @@ class GroupReader {
 
     GroupMem* mem_;
     Charge charge_;
-    std::vector<Call> cur_;
+    dstd::Vector<Call> cur_;
     simdjson::dom::parser parser_;
     dstd::StringViewMap<std::uint32_t> string_ids_;
     dstd::StringViewMap<
@@ -862,21 +864,21 @@ class GroupReader {
         proc_ids_;
 };
 
-void append_run_keys(string_builder& sb, std::string_view id,
+void append_run_keys(string_builder& sb, dstd::StringView id,
                      const RunKeys& k) {
     sb.append_key_value("run", id);
     sb.append_comma();
-    sb.append_key_value("app", std::string_view(k.app));
+    sb.append_key_value("app", dstd::StringView(k.app));
     sb.append_comma();
-    sb.append_key_value("system", std::string_view(k.system));
+    sb.append_key_value("system", dstd::StringView(k.system));
     sb.append_comma();
-    sb.append_key_value("unique_input", std::string_view(k.unique_input));
+    sb.append_key_value("unique_input", dstd::StringView(k.unique_input));
     sb.append_comma();
     sb.append_key_value("nodes", k.nodes);
     sb.append_comma();
     sb.append_key_value("ppn", k.ppn);
     sb.append_comma();
-    sb.append_key_value("papi_set", std::string_view(k.papi_set));
+    sb.append_key_value("papi_set", dstd::StringView(k.papi_set));
 }
 
 // One PAPI set's accumulator, fed the group's calls in sorted order. A set
@@ -895,7 +897,7 @@ class SetAcc {
     }
 
     bool ok() const { return !failed_; }
-    const std::optional<GroupError>& error() const { return failed_; }
+    const dstd::Optional<GroupError>& error() const { return failed_; }
 
     void feed(const SortRec& s) {
         if (failed_) return;
@@ -919,7 +921,7 @@ class SetAcc {
         for (std::uint32_t i = 0; i < recs_.size(); ++i)
             by_path.emplace(recs_[i]->path, i);
         for (auto& orec : o.recs_) {
-            std::vector<std::unique_ptr<CounterAcc>> theirs =
+            dstd::Vector<dstd::UniquePtr<CounterAcc>> theirs =
                 std::move(orec->counters);
             orec->counters.clear();
             const auto found = by_path.find(orec->path);
@@ -977,27 +979,27 @@ class SetAcc {
 
     // The run and func records go to `sb`, the counter records to `cb`.
     void append_item(std::size_t item, string_builder& sb, string_builder& cb,
-                     std::vector<std::uint8_t>& buf) const {
+                     dstd::Vector<std::uint8_t>& buf) const {
         if (item == 0) {
             append_run(sb);
             return;
         }
         const PathRec& rec = *recs_[item - 1];
-        const std::string_view name = r_->strings_[rec.name];
+        const dstd::StringView name = r_->strings_[rec.name];
         sb.append_raw(R"({"gtype":"func",)");
-        sb.append_key_value("run", std::string_view(id_));
+        sb.append_key_value("run", dstd::StringView(id_));
         sb.append_comma();
-        sb.append_key_value("path", std::string_view(rec.path));
+        sb.append_key_value("path", dstd::StringView(rec.path));
         const auto semi = rec.path.rfind(';');
-        if (semi != std::string::npos) {
+        if (semi != dstd::String::npos) {
             sb.append_comma();
             sb.append_key_value("parent",
-                                std::string_view(rec.path).substr(0, semi));
+                                dstd::StringView(rec.path).substr(0, semi));
         }
         sb.append_comma();
         sb.append_key_value("name", name);
         sb.append_comma();
-        sb.append_key_value("cat", std::string_view(r_->strings_[rec.cat]));
+        sb.append_key_value("cat", dstd::StringView(r_->strings_[rec.cat]));
         sb.append_comma();
         sb.append_key_value("depth", rec.depth);
         sb.append_comma();
@@ -1013,13 +1015,13 @@ class SetAcc {
             if (cid >= rec.counters.size() || !rec.counters[cid]) continue;
             const CounterAcc& acc = *rec.counters[cid];
             cb.append_raw(R"({"gtype":"counter",)");
-            cb.append_key_value("run", std::string_view(id_));
+            cb.append_key_value("run", dstd::StringView(id_));
             cb.append_comma();
-            cb.append_key_value("path", std::string_view(rec.path));
+            cb.append_key_value("path", dstd::StringView(rec.path));
             cb.append_comma();
             cb.append_key_value("name", name);
             cb.append_comma();
-            cb.append_key_value("metric", std::string_view(counter_keys_[cid]));
+            cb.append_key_value("metric", dstd::StringView(counter_keys_[cid]));
             cb.append_raw(acc.scope == Scope::Pid ? R"(,"scope":"pid")"
                                                   : R"(,"scope":"host")");
             cb.append_raw(acc.kind == Kind::Delta ? R"(,"kind":"delta","v":)"
@@ -1035,11 +1037,11 @@ class SetAcc {
         sb.append_raw(R"({"gtype":"run","version":0,)");
         append_run_keys(sb, id_, keys);
         sb.append_comma();
-        sb.append_key_value("method", std::string_view("prorate"));
+        sb.append_key_value("method", dstd::StringView("prorate"));
         sb.append_comma();
         sb.append_key_value("sketch_accuracy", SKETCH_ACCURACY);
         sb.append_comma();
-        sb.append_key_value("leaf", std::string_view(g_->rel_dir));
+        sb.append_key_value("leaf", dstd::StringView(g_->rel_dir));
         if (!g_->summary_json.empty()) {
             sb.append_comma();
             sb.escape_and_append_with_quotes("summary");
@@ -1086,7 +1088,7 @@ class SetAcc {
     }
 
     GResult<void> check() const {
-        std::vector<std::uint32_t> procs;
+        dstd::Vector<std::uint32_t> procs;
         for (std::uint32_t i = 0; i < r_->procs_.size(); ++i)
             if (r_->procs_[i].active && r_->procs_[i].set == set_)
                 procs.push_back(i);
@@ -1114,7 +1116,7 @@ class SetAcc {
         while (!stack_.empty() && stack_.back().first <= ts) stack_.pop_back();
     }
 
-    std::uint32_t counter_id(const std::string& k) {
+    std::uint32_t counter_id(const dstd::String& k) {
         auto [it, fresh] = counter_ids_.try_emplace(
             k, static_cast<std::uint32_t>(counter_keys_.size()));
         if (fresh) counter_keys_.push_back(k);
@@ -1138,13 +1140,14 @@ class SetAcc {
     }
 
     // Parent index + 1 (0 at the root) and the name id identify a path.
-    std::optional<std::uint32_t> record(std::uint32_t parent_plus_one,
-                                        std::uint32_t name, std::uint32_t cat) {
+    dstd::Optional<std::uint32_t> record(std::uint32_t parent_plus_one,
+                                         std::uint32_t name,
+                                         std::uint32_t cat) {
         const std::uint64_t key =
             (static_cast<std::uint64_t>(parent_plus_one) << 32) | name;
         const auto found = children_.find(key);
         if (found != children_.end()) return found->second;
-        auto rec = std::make_unique<PathRec>();
+        auto rec = dstd::make_unique<PathRec>();
         if (parent_plus_one) {
             rec->path = recs_[parent_plus_one - 1]->path + ";";
             rec->depth = recs_[parent_plus_one - 1]->depth + 1;
@@ -1159,7 +1162,7 @@ class SetAcc {
                 "path records");
             !st) {
             fail_with(st.error());
-            return std::nullopt;
+            return dstd::nullopt;
         }
         const auto id = static_cast<std::uint32_t>(recs_.size());
         recs_.push_back(std::move(rec));
@@ -1167,17 +1170,17 @@ class SetAcc {
         return id;
     }
 
-    std::optional<std::uint32_t> add(const SortRec& s) {
+    dstd::Optional<std::uint32_t> add(const SortRec& s) {
         const std::int64_t end = s.ts + s.dur;
         pop(s.ts);
         const auto id = record(stack_.empty() ? 0 : stack_.back().second + 1,
                                s.name, s.cat);
-        if (!id) return std::nullopt;
+        if (!id) return dstd::nullopt;
         PathRec& rec = *recs_[*id];
         rec.first_ts = std::min(rec.first_ts, s.ts);
         if (!charge_growth(rec.dur.add(static_cast<double>(s.dur)),
                            "duration statistics"))
-            return std::nullopt;
+            return dstd::nullopt;
         for (Source& src : sources_) {
             const SeriesView& series = src.series;
             const auto v = series.kind == Kind::Delta
@@ -1191,9 +1194,9 @@ class SetAcc {
                                            "counter statistics");
                     !st) {
                     fail_with(st.error());
-                    return std::nullopt;
+                    return dstd::nullopt;
                 }
-                acc = std::make_unique<CounterAcc>(
+                acc = dstd::make_unique<CounterAcc>(
                     CounterAcc{src.scope, series.kind, {}});
             }
             if (!charge_growth(acc->stats.add(src.scope == Scope::Host &&
@@ -1201,7 +1204,7 @@ class SetAcc {
                                                   ? *v / ppn_
                                                   : *v),
                                "counter statistics"))
-                return std::nullopt;
+                return dstd::nullopt;
         }
         return id;
     }
@@ -1209,7 +1212,7 @@ class SetAcc {
     static constexpr std::uint64_t PATH_NODE_BYTES = 64;
 
     // Charges the bytes a sketch store grew by; false once over the share.
-    bool charge_growth(std::uint64_t grew, std::string_view what) {
+    bool charge_growth(std::uint64_t grew, dstd::StringView what) {
         if (grew == 0) return true;
         if (auto st = charge_.take(grew, what); !st) {
             fail_with(st.error());
@@ -1224,26 +1227,26 @@ class SetAcc {
     Charge charge_;
     const SetSpec* spec_;
     double ppn_;
-    std::optional<GroupError> failed_;
-    std::optional<SortRec> fail_at_;
+    dstd::Optional<GroupError> failed_;
+    dstd::Optional<SortRec> fail_at_;
 
-    std::vector<std::unique_ptr<PathRec>> recs_;
+    dstd::Vector<dstd::UniquePtr<PathRec>> recs_;
     ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> children_;
-    std::vector<std::string> counter_keys_;
-    std::vector<std::uint32_t> counter_order_;
-    std::string id_;
+    dstd::Vector<dstd::String> counter_keys_;
+    dstd::Vector<std::uint32_t> counter_order_;
+    dstd::String id_;
     dstd::StringViewMap<std::uint32_t> counter_ids_;
 
     bool lane_open_ = false;
     std::uint32_t lane_proc_ = 0;
     std::int64_t lane_id_ = 0;
-    std::vector<std::pair<std::int64_t, std::uint32_t>> stack_;
-    std::vector<Source> sources_;
+    dstd::Vector<dstd::Pair<std::int64_t, std::uint32_t>> stack_;
+    dstd::Vector<Source> sources_;
 };
 
 struct FilePart {
-    std::unique_ptr<GroupReader> reader;
-    std::optional<GroupError> error;
+    dstd::UniquePtr<GroupReader> reader;
+    dstd::Optional<GroupError> error;
 };
 
 // Holds one of a group's reader slots until it goes out of scope.
@@ -1279,7 +1282,7 @@ struct ReaderSize {
 // The READER_BYTES slots a reader of `file` takes: one for its buffers and as
 // many as its decoded gzip member needs, the size the decoder takes from the
 // file's last trailer. A file whose size cannot be read takes UNKNOWN_SLOTS.
-coro::CoroTask<ReaderSize> reader_size(const std::string& file) {
+coro::CoroTask<ReaderSize> reader_size(const dstd::String& file) {
     ReaderSize out;
     co_await probe_slots().acquire(1);
     SlotGuard probe(probe_slots(), 1);
@@ -1306,7 +1309,7 @@ coro::CoroTask<ReaderSize> reader_size(const std::string& file) {
     co_return out;
 }
 
-coro::CoroTask<FilePart> read_file(std::string file, GroupMem* mem,
+coro::CoroTask<FilePart> read_file(dstd::String file, GroupMem* mem,
                                    coro::CoroSemaphore* slots,
                                    std::uint64_t total_slots,
                                    GroupProgress* progress) {
@@ -1315,7 +1318,7 @@ coro::CoroTask<FilePart> read_file(std::string file, GroupMem* mem,
     co_await slots->acquire(want);
     SlotGuard guard(*slots, want);
     FilePart part;
-    part.reader = std::make_unique<GroupReader>(*mem);
+    part.reader = dstd::make_unique<GroupReader>(*mem);
     auto st = co_await part.reader->read(std::move(file));
     if (!st) part.error = std::move(st.error());
     if (progress) {
@@ -1328,7 +1331,7 @@ coro::CoroTask<FilePart> read_file(std::string file, GroupMem* mem,
 
 void derive_sets(const GroupReader& r, RunGroup& g) {
     const SetSpec tmpl = g.sets.at(0);
-    std::set<std::vector<std::string>> lists;
+    dstd::Set<dstd::Vector<dstd::String>> lists;
     for (const auto& p : r.procs_)
         if (p.active) lists.insert(p.papi_names);
     g.sets.clear();
@@ -1371,9 +1374,9 @@ using CallSorter = common::ExternalSorter<SortRec, SortLess>;
 // and processes the records name, and the sets' records.
 // "genesis/" and the end of the group's directory, which tells groups apart
 // within the 47 bytes a pool name keeps.
-std::string group_pool_name(const RunGroup& g) {
+dstd::String group_pool_name(const RunGroup& g) {
     constexpr std::size_t KEEP = 39;
-    const std::string_view dir = g.dir;
+    const dstd::StringView dir = g.dir;
     return common::str_cat(
         "genesis/", dir.size() > KEEP ? dir.substr(dir.size() - KEEP) : dir);
 }
@@ -1385,31 +1388,31 @@ struct GroupState {
     RunGroup g;
     GroupMem mem;
     GroupReader r;
-    std::deque<SetAcc> sets;
+    dstd::Deque<SetAcc> sets;
 };
 
 class SetSource final : public RunOutput::Source {
    public:
-    SetSource(std::shared_ptr<GroupState> group, const SetAcc* set)
+    SetSource(dstd::SharedPtr<GroupState> group, const SetAcc* set)
         : group_(std::move(group)), set_(set) {}
 
     std::size_t items() const override { return set_->output_items(); }
 
-    void append(std::size_t item, std::string& head,
-                std::string& body) const override {
+    void append(std::size_t item, dstd::String& head,
+                dstd::String& body) const override {
         head_.clear();
         body_.clear();
         set_->append_item(item, head_, body_, buf_);
-        head.append(std::string_view(head_));
-        body.append(std::string_view(body_));
+        head.append(dstd::StringView(head_));
+        body.append(dstd::StringView(body_));
     }
 
    private:
-    std::shared_ptr<GroupState> group_;
+    dstd::SharedPtr<GroupState> group_;
     const SetAcc* set_;
     mutable string_builder head_;
     mutable string_builder body_;
-    mutable std::vector<std::uint8_t> buf_;
+    mutable dstd::Vector<std::uint8_t> buf_;
 };
 
 // One call chunk of one file, with the sequence number of its first call.
@@ -1421,9 +1424,9 @@ struct ChunkRef {
 
 // The group's chunks in file order. Sequence numbers count every call, so they
 // do not depend on how the chunks are split between tasks.
-std::vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
-                                 std::uint64_t* calls) {
-    std::vector<ChunkRef> out;
+dstd::Vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
+                                  std::uint64_t* calls) {
+    dstd::Vector<ChunkRef> out;
     std::uint64_t seq = 0;
     for (std::size_t i = 0; i < parts.size(); ++i) {
         const auto& chunks = parts[i].reader->chunks_;
@@ -1441,12 +1444,12 @@ std::vector<ChunkRef> chunk_refs(const dstd::Vector<FilePart>& parts,
 // are dropped. Each chunk's memory is freed once replayed.
 template <class Emit>
 GResult<void> replay_chunks(dstd::Vector<FilePart>& parts,
-                            const std::vector<GroupReader::IdMap>& maps,
+                            const dstd::Vector<GroupReader::IdMap>& maps,
                             const GroupReader& r,
-                            const std::deque<SetAcc>& sets, GroupMem& mem,
+                            const dstd::Deque<SetAcc>& sets, GroupMem& mem,
                             const ChunkRef* refs, std::size_t n,
                             GroupProgress* progress, Emit&& emit) {
-    std::vector<Call> scratch;
+    dstd::Vector<Call> scratch;
     for (std::size_t j = 0; j < n; ++j) {
         const ChunkRef& ref = refs[j];
         const GroupReader::IdMap& m = maps[ref.part];
@@ -1507,12 +1510,12 @@ constexpr std::size_t WALK_WAYS = 64;
 // way, because the order is total.
 coro::CoroTask<GResult<void>> replay(
     coro::Scope& ctx, dstd::Vector<FilePart>& parts,
-    const std::vector<GroupReader::IdMap>& maps, const GroupReader& r,
-    const std::deque<SetAcc>& sets, std::deque<CallSorter>& sorters,
+    const dstd::Vector<GroupReader::IdMap>& maps, const GroupReader& r,
+    const dstd::Deque<SetAcc>& sets, dstd::Deque<CallSorter>& sorters,
     GroupMem& mem, GroupProgress* progress) {
     const std::size_t ways = sorters.size();
     std::uint64_t calls = 0;
-    const std::vector<ChunkRef> refs = chunk_refs(parts, &calls);
+    const dstd::Vector<ChunkRef> refs = chunk_refs(parts, &calls);
     if (progress) progress->calls.store(calls, std::memory_order_relaxed);
     if (calls * sizeof(SortRec) <= mem.sort_budget || refs.size() < 2) {
         co_return replay_chunks(parts, maps, r, sets, mem, refs.data(),
@@ -1527,7 +1530,7 @@ coro::CoroTask<GResult<void>> replay(
     const std::size_t cap = std::max<std::size_t>(
         1024, mem.sort_budget / tasks / ways / sizeof(SortRec));
     // Contiguous ranges of about calls / tasks calls each.
-    std::vector<std::size_t> starts{0};
+    dstd::Vector<std::size_t> starts{0};
     for (std::size_t j = 1; j < refs.size() && starts.size() < tasks; ++j)
         if (refs[j].seq >= calls / tasks * starts.size()) starts.push_back(j);
     starts.push_back(refs.size());
@@ -1538,7 +1541,7 @@ coro::CoroTask<GResult<void>> replay(
         runs.push_back(ctx.spawn_future(
             [&parts, &maps, &r, &sets, &sorters, &mem, first, n, cap, ways,
              progress]() -> coro::CoroTask<GResult<void>> {
-                std::vector<std::vector<SortRec>> bufs(ways);
+                dstd::Vector<dstd::Vector<SortRec>> bufs(ways);
                 auto st =
                     replay_chunks(parts, maps, r, sets, mem, first, n, progress,
                                   [&](const SortRec& s) -> GResult<void> {
@@ -1568,13 +1571,14 @@ coro::CoroTask<GResult<void>> replay(
 
 }  // namespace
 
-RunOutput::RunOutput(std::unique_ptr<Source> source)
+RunOutput::RunOutput(dstd::UniquePtr<Source> source)
     : source_(std::move(source)) {}
 RunOutput::RunOutput(RunOutput&&) noexcept = default;
 RunOutput& RunOutput::operator=(RunOutput&&) noexcept = default;
 RunOutput::~RunOutput() = default;
 
-bool RunOutput::next(std::string& head, std::string& body, std::size_t bytes) {
+bool RunOutput::next(dstd::String& head, dstd::String& body,
+                     std::size_t bytes) {
     const std::size_t start = head.size() + body.size();
     const std::size_t items = source_->items();
     while (next_item_ < items &&
@@ -1583,8 +1587,8 @@ bool RunOutput::next(std::string& head, std::string& body, std::size_t bytes) {
     return head.size() + body.size() > start;
 }
 
-std::string RunOutput::lines() const {
-    std::string out;
+dstd::String RunOutput::lines() const {
+    dstd::String out;
     for (std::size_t i = 0; i < source_->items(); ++i)
         source_->append(i, out, out);
     return out;
@@ -1596,12 +1600,12 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
                                           const BorrowFn* borrow) {
     GroupResult result;
     if (progress) progress->enter(GroupProgress::Phase::Read);
-    auto state = std::make_shared<GroupState>(std::move(group), memory_share);
+    auto state = dstd::make_shared<GroupState>(std::move(group), memory_share);
     RunGroup& g = state->g;
     GroupMem& mem = state->mem;
     mem.borrow = borrow;
     GroupReader& r = state->r;
-    auto skip_all = [&](const std::string& file, const std::string& reason) {
+    auto skip_all = [&](const dstd::String& file, const dstd::String& reason) {
         for (const auto& s : g.sets)
             result.skips.push_back(
                 {g.dir, file, s.keys.papi_set + ": " + reason});
@@ -1624,7 +1628,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     auto parts = co_await coro::when_all(std::move(reads));
     if (progress) progress->enter(GroupProgress::Phase::Sort);
 
-    std::vector<GroupReader::IdMap> maps;
+    dstd::Vector<GroupReader::IdMap> maps;
     maps.reserve(parts.size());
     for (auto& part : parts) {
         if (part.error) {
@@ -1657,11 +1661,11 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     // the partials are merged in part order.
     const std::size_t ways = std::min<std::size_t>(
         WALK_WAYS, std::max<std::size_t>(1, r.procs_.size()));
-    std::vector<std::deque<SetAcc>> partials(ways);
+    dstd::Vector<dstd::Deque<SetAcc>> partials(ways);
     for (auto& part_sets : partials)
         for (std::size_t i = 0; i < g.sets.size(); ++i)
             part_sets.emplace_back(r, g, static_cast<int>(i), mem);
-    std::deque<CallSorter> sorters;
+    dstd::Deque<CallSorter> sorters;
     for (std::size_t w = 0; w < ways; ++w)
         sorters.emplace_back(
             SortLess{}, std::max<std::uint64_t>(1, mem.sort_budget / ways));
@@ -1683,7 +1687,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
         walks.push_back(ctx.spawn_future(
             [&sorters, &partials, &r, w,
              progress]() -> coro::CoroTask<common::Result<void>> {
-                std::deque<SetAcc>& part_sets = partials[w];
+                dstd::Deque<SetAcc>& part_sets = partials[w];
                 std::uint64_t fed = 0;
                 auto walked = sorters[w].drain([&](const SortRec& s) {
                     part_sets[static_cast<std::size_t>(r.procs_[s.proc].set)]
@@ -1702,11 +1706,11 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     auto walked = co_await coro::when_all(std::move(walks));
     for (auto& st : walked) {
         if (!st) {
-            skip_all("", std::string(st.error().message()));
+            skip_all("", dstd::String(st.error().message()));
             co_return result;
         }
     }
-    std::deque<SetAcc>& sets = state->sets;
+    dstd::Deque<SetAcc>& sets = state->sets;
     sets = std::move(partials[0]);
     for (std::size_t w = 1; w < ways; ++w) {
         for (std::size_t i = 0; i < sets.size(); ++i)
@@ -1720,7 +1724,7 @@ coro::CoroTask<GroupResult> process_group(coro::Scope& ctx, RunGroup group,
     for (auto& set : sets) {
         if (set.ok()) {
             set.prepare_output();
-            result.runs.emplace_back(std::make_unique<SetSource>(state, &set));
+            result.runs.emplace_back(dstd::make_unique<SetSource>(state, &set));
         } else {
             result.over_budget = result.over_budget || set.error()->over_budget;
             result.skips.push_back(

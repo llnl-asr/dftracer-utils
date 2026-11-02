@@ -3,12 +3,11 @@
 #define DFTRACER_UTILS_COMMON_CALENDAR_H
 
 #include <dftracer/utils/dstd/int128.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
 
-#include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <string>
-#include <string_view>
 
 // UTC calendar arithmetic shared by the dataframe kernels and the duql
 // evaluator. A time is a count of units of `ns_per_unit` nanoseconds since
@@ -153,9 +152,9 @@ constexpr bool is_date_part_code(std::int32_t code) {
 }
 
 // The part named `name`, or false.
-constexpr bool parse_date_part(std::string_view name, DatePart* out) {
+constexpr bool parse_date_part(dstd::StringView name, DatePart* out) {
     struct Entry {
-        std::string_view name;
+        dstd::StringView name;
         DatePart part;
     };
     constexpr Entry TABLE[] = {
@@ -220,7 +219,7 @@ constexpr std::int64_t date_part(const CivilTime& t, DatePart part) {
 // Empty when `fmt` holds only the supported directives (%Y %y %m %d %H %I %M
 // %S %f %j %a %A %b %B %p %F %T %s %z %Z %%); otherwise the first offending
 // directive, or "%" for a trailing percent sign.
-inline std::string_view invalid_time_format(std::string_view fmt) {
+inline dstd::StringView invalid_time_format(dstd::StringView fmt) {
     for (std::size_t i = 0; i < fmt.size(); ++i) {
         if (fmt[i] != '%') continue;
         if (i + 1 == fmt.size()) return fmt.substr(i, 1);
@@ -259,7 +258,7 @@ namespace calendar_detail {
 template <class String>
 inline void append_padded(String& out, std::int64_t v, int width) {
     char buf[24];
-    const auto r = std::to_chars(buf, buf + sizeof buf, v);
+    const auto r = dstd::to_chars(buf, buf + sizeof buf, v);
     for (std::ptrdiff_t n = r.ptr - buf; n < width; ++n) out.push_back('0');
     out.append(buf, r.ptr);
 }
@@ -288,10 +287,10 @@ inline void append_wide(String& out, CalendarWide v) {
     out.append(p, buf + sizeof buf);
 }
 
-constexpr std::string_view WEEKDAYS[7] = {"Monday",   "Tuesday", "Wednesday",
+constexpr dstd::StringView WEEKDAYS[7] = {"Monday",   "Tuesday", "Wednesday",
                                           "Thursday", "Friday",  "Saturday",
                                           "Sunday"};
-constexpr std::string_view MONTHS[12] = {
+constexpr dstd::StringView MONTHS[12] = {
     "January", "February", "March",     "April",   "May",      "June",
     "July",    "August",   "September", "October", "November", "December"};
 
@@ -302,7 +301,7 @@ constexpr std::string_view MONTHS[12] = {
 // microseconds, %s the epoch seconds rounded toward minus infinity, %z is
 // +0000 and %Z is UTC.
 template <class String>
-inline void format_time(String& out, const CivilTime& t, std::string_view fmt) {
+inline void format_time(String& out, const CivilTime& t, dstd::StringView fmt) {
     for (std::size_t i = 0; i < fmt.size(); ++i) {
         if (fmt[i] != '%') {
             out.push_back(fmt[i]);

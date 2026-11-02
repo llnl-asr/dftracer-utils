@@ -4,12 +4,12 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/common/spill_dir.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/scoped_fd.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 
 namespace dftracer::utils::common {
 
@@ -21,7 +21,7 @@ class SpillFile {
    public:
     /// IO error naming the directory and the variable when the file cannot be
     /// created.
-    static Result<std::unique_ptr<SpillFile>> create();
+    static Result<dstd::UniquePtr<SpillFile>> create();
 
     SpillFile(const SpillFile&) = delete;
     SpillFile& operator=(const SpillFile&) = delete;
@@ -50,8 +50,12 @@ class SpillFile {
     }
 
    private:
-    explicit SpillFile(bool in_memory) : charge_(in_memory) {}
+    struct Key {};
 
+   public:
+    SpillFile(Key, bool in_memory) : charge_(in_memory) {}
+
+   private:
     dstd::ScopedFd fd_;
     std::atomic<std::uint64_t> end_{0};
     SpillCharge charge_;

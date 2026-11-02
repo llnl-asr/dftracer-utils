@@ -2,16 +2,16 @@
 #ifndef DFTRACER_UTILS_COMMON_STR_FORMAT_H
 #define DFTRACER_UTILS_COMMON_STR_FORMAT_H
 
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/to_chars.h>
 
-#include <charconv>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -19,37 +19,37 @@ namespace dftracer::utils::common {
 
 namespace detail {
 
-inline void str_append(std::string& out, std::string_view s) { out.append(s); }
-inline void str_append(std::string& out, const char* s) {
+inline void str_append(dstd::String& out, dstd::StringView s) { out.append(s); }
+inline void str_append(dstd::String& out, const char* s) {
     if (s) out.append(s);
 }
-inline void str_append(std::string& out, const std::string& s) {
+inline void str_append(dstd::String& out, const dstd::String& s) {
     out.append(s);
 }
-inline void str_append(std::string& out, char c) { out.push_back(c); }
-inline void str_append(std::string& out, bool b) {
+inline void str_append(dstd::String& out, char c) { out.push_back(c); }
+inline void str_append(dstd::String& out, bool b) {
     out.append(b ? "true" : "false");
 }
 
-/// Integral types (excluding bool/char, handled above) via std::to_chars - the
+/// Integral types (excluding bool/char, handled above) via dstd::to_chars - the
 /// integer overload is available on every supported platform (only the
 /// floating-point one is availability-gated, see to_chars.h).
 template <typename T,
           std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, bool> &&
                                !std::is_same_v<T, char>,
                            int> = 0>
-void str_append(std::string& out, T v) {
+void str_append(dstd::String& out, T v) {
     char buf[24];
-    auto [p, ec] = std::to_chars(buf, buf + sizeof(buf), v);
+    auto [p, ec] = dstd::to_chars(buf, buf + sizeof(buf), v);
     if (ec == std::errc{}) out.append(buf, p);
 }
 
-inline void str_append(std::string& out, double v) {
+inline void str_append(dstd::String& out, double v) {
     char buf[32];
     char* end = dstd::to_chars_double(buf, buf + sizeof(buf), v);
     if (end) out.append(buf, end);
 }
-inline void str_append(std::string& out, float v) {
+inline void str_append(dstd::String& out, float v) {
     str_append(out, static_cast<double>(v));
 }
 
@@ -61,43 +61,43 @@ inline void str_append(std::string& out, float v) {
 /// convert via to_chars; bool -> "true"/"false". No format string to parse.
 ///   str_cat("Cannot open ", path, ": errno=", errno)
 template <typename... Args>
-std::string str_cat(const Args&... args) {
-    std::string out;
+dstd::String str_cat(const Args&... args) {
+    dstd::String out;
     (detail::str_append(out, args), ...);
     return out;
 }
 
-/// printf-style formatting into a std::string. Portable (plain vsnprintf, no
+/// printf-style formatting into a dstd::String. Portable (plain vsnprintf, no
 /// std::format / availability gates); use for cold, mixed-content messages. For
 /// literal '%' in the text, escape as "%%" (or use str_cat, which has no format
 /// string). vstring_format is the va_list core; string_format is the variadic
 /// front-end.
-__attribute__((__format__(__printf__, 1, 0))) inline std::string vstring_format(
-    const char* fmt, va_list ap) {
+DFTRACER_UTILS_PRINTF_FORMAT(1, 0)
+inline dstd::String vstring_format(const char* fmt, va_list ap) {
     va_list ap2;
     va_copy(ap2, ap);
     int n = std::vsnprintf(nullptr, 0, fmt, ap2);
     va_end(ap2);
     if (n <= 0) return {};
-    std::string s(static_cast<std::size_t>(n) + 1, '\0');
+    dstd::String s(static_cast<std::size_t>(n) + 1, '\0');
     std::vsnprintf(s.data(), s.size(), fmt, ap);
     s.resize(static_cast<std::size_t>(n));
     return s;
 }
 
-__attribute__((__format__(__printf__, 1, 2))) inline std::string string_format(
-    const char* fmt, ...) {
+DFTRACER_UTILS_PRINTF_FORMAT(1, 2)
+inline dstd::String string_format(const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    std::string s = vstring_format(fmt, ap);
+    dstd::String s = vstring_format(fmt, ap);
     va_end(ap);
     return s;
 }
 
 /// Human-readable byte count, e.g. "1.5 MB" or "3.0 MB/s". `per_suffix` appends
 /// a rate unit (e.g. "/s"); `precision` sets the fractional digits.
-inline std::string human_bytes(double value, const char* per_suffix = "",
-                               int precision = 1) {
+inline dstd::String human_bytes(double value, const char* per_suffix = "",
+                                int precision = 1) {
     static const char* const UNITS[] = {"B", "KB", "MB", "GB", "TB", "PB"};
     int i = 0;
     while (value >= 1024.0 && i < 5) {
@@ -127,13 +127,13 @@ inline void lower_ascii(String& s, std::size_t from = 0) {
     for (std::size_t i = from; i < s.size(); ++i) s[i] = to_lower_ascii(s[i]);
 }
 
-constexpr std::string_view trim_ws(std::string_view s) {
+constexpr dstd::StringView trim_ws(dstd::StringView s) {
     while (!s.empty() && is_ascii_space(s.front())) s.remove_prefix(1);
     while (!s.empty() && is_ascii_space(s.back())) s.remove_suffix(1);
     return s;
 }
 
-constexpr bool iequals(std::string_view a, std::string_view b) {
+constexpr bool iequals(dstd::StringView a, dstd::StringView b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
         if (to_lower_ascii(a[i]) != to_lower_ascii(b[i])) return false;
@@ -146,8 +146,8 @@ constexpr bool iequals(std::string_view a, std::string_view b) {
 // the from_chars float overload); the constexpr branch is hand-rolled since
 // strtod is not constexpr. strtod is unbounded, so the numeric prefix is copied
 // into a NUL-terminated buffer first.
-constexpr std::optional<std::pair<double, std::size_t>> parse_leading_number(
-    std::string_view s) {
+constexpr dstd::Optional<dstd::Pair<double, std::size_t>> parse_leading_number(
+    dstd::StringView s) {
     if (!std::is_constant_evaluated()) {
         std::size_t n = 0;
         if (n < s.size() && (s[n] == '+' || s[n] == '-')) ++n;
@@ -165,15 +165,16 @@ constexpr std::optional<std::pair<double, std::size_t>> parse_leading_number(
                 ++e, ++exp_digits;
             if (exp_digits > 0) n = e;
         }
-        if (digits == 0) return std::nullopt;
+        if (digits == 0) return dstd::nullopt;
         char buf[64];
-        if (n >= sizeof(buf)) return std::nullopt;
+        if (n >= sizeof(buf)) return dstd::nullopt;
         for (std::size_t i = 0; i < n; ++i) buf[i] = s[i];
         buf[n] = '\0';
         char* end = nullptr;
         const double value = std::strtod(buf, &end);
-        if (end == buf) return std::nullopt;
-        return std::make_pair(value, static_cast<std::size_t>(end - buf));
+        if (end == buf) return dstd::nullopt;
+        return dstd::Pair<double, std::size_t>{
+            value, static_cast<std::size_t>(end - buf)};
     }
     std::size_t i = 0;
     bool neg = false;
@@ -196,18 +197,19 @@ constexpr std::optional<std::pair<double, std::size_t>> parse_leading_number(
             any_digit = true;
         }
     }
-    if (!any_digit) return std::nullopt;
+    if (!any_digit) return dstd::nullopt;
     if (neg) value = -value;
-    return std::make_pair(value, i);
+    return dstd::Pair<double, std::size_t>{value, i};
 }
 
 // Returns {value, trimmed unit token} or nullopt when there is no number.
-constexpr std::optional<std::pair<double, std::string_view>> split_value_unit(
-    std::string_view s) {
+constexpr dstd::Optional<dstd::Pair<double, dstd::StringView>> split_value_unit(
+    dstd::StringView s) {
     s = trim_ws(s);
     auto num = parse_leading_number(s);
-    if (!num) return std::nullopt;
-    return std::make_pair(num->first, trim_ws(s.substr(num->second)));
+    if (!num) return dstd::nullopt;
+    return dstd::Pair<double, dstd::StringView>{num->first,
+                                                trim_ws(s.substr(num->second))};
 }
 
 }  // namespace detail
@@ -218,12 +220,12 @@ constexpr std::optional<std::pair<double, std::string_view>> split_value_unit(
 /// (result divided by 8); an 'i' before it is accepted and ignored. The
 /// magnitude prefix (k/m/g/t/p) is case-insensitive. A bare number is bytes.
 /// Returns nullopt on malformed input or an unknown unit.
-constexpr std::optional<std::uint64_t> parse_bytes(std::string_view s) {
+constexpr dstd::Optional<std::uint64_t> parse_bytes(dstd::StringView s) {
     auto parsed = detail::split_value_unit(s);
-    if (!parsed) return std::nullopt;
+    if (!parsed) return dstd::nullopt;
     double value = parsed->first;
-    std::string_view unit = parsed->second;
-    if (value < 0.0) return std::nullopt;
+    dstd::StringView unit = parsed->second;
+    if (value < 0.0) return dstd::nullopt;
 
     bool bits = false;
     if (!unit.empty() && unit.back() == 'B') {
@@ -256,10 +258,10 @@ constexpr std::optional<std::uint64_t> parse_bytes(std::string_view s) {
                 power = 5;
                 break;
             default:
-                return std::nullopt;
+                return dstd::nullopt;
         }
     } else {
-        return std::nullopt;
+        return dstd::nullopt;
     }
 
     double mult = 1.0;
@@ -272,26 +274,28 @@ constexpr std::optional<std::uint64_t> parse_bytes(std::string_view s) {
 /// Parse a human-readable duration such as "30", "500ms", "1.5h", "2m" into
 /// seconds. A bare number is seconds. Recognized units: ns, us, ms, s/sec,
 /// m/min, h/hr, d/day. Returns nullopt on malformed input or an unknown unit.
-constexpr std::optional<double> parse_duration_seconds(std::string_view s) {
+constexpr dstd::Optional<double> parse_duration_seconds(dstd::StringView s) {
     auto parsed = detail::split_value_unit(s);
-    if (!parsed) return std::nullopt;
+    if (!parsed) return dstd::nullopt;
     double value = parsed->first;
-    std::string_view unit = parsed->second;
-    if (value < 0.0) return std::nullopt;
-    using detail::iequals;
-    if (unit.empty() || iequals(unit, "s") || iequals(unit, "sec") ||
-        iequals(unit, "secs"))
+    dstd::StringView unit = parsed->second;
+    if (value < 0.0) return dstd::nullopt;
+    if (unit.empty() || detail::iequals(unit, "s") ||
+        detail::iequals(unit, "sec") || detail::iequals(unit, "secs"))
         return value;
-    if (iequals(unit, "ns")) return value / 1e9;
-    if (iequals(unit, "us")) return value / 1e6;
-    if (iequals(unit, "ms")) return value / 1e3;
-    if (iequals(unit, "m") || iequals(unit, "min") || iequals(unit, "mins"))
+    if (detail::iequals(unit, "ns")) return value / 1e9;
+    if (detail::iequals(unit, "us")) return value / 1e6;
+    if (detail::iequals(unit, "ms")) return value / 1e3;
+    if (detail::iequals(unit, "m") || detail::iequals(unit, "min") ||
+        detail::iequals(unit, "mins"))
         return value * 60.0;
-    if (iequals(unit, "h") || iequals(unit, "hr") || iequals(unit, "hrs"))
+    if (detail::iequals(unit, "h") || detail::iequals(unit, "hr") ||
+        detail::iequals(unit, "hrs"))
         return value * 3600.0;
-    if (iequals(unit, "d") || iequals(unit, "day") || iequals(unit, "days"))
+    if (detail::iequals(unit, "d") || detail::iequals(unit, "day") ||
+        detail::iequals(unit, "days"))
         return value * 86400.0;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 /// Parse a duration where a bare number is measured in the caller's native unit
@@ -299,16 +303,16 @@ constexpr std::optional<double> parse_duration_seconds(std::string_view s) {
 /// unit-suffixed value ("5m", "500ns") is converted into that same native unit.
 /// Lets a legacy ms/us argument accept human-readable strings without changing
 /// what its bare numbers mean. Returns nullopt on malformed input.
-constexpr std::optional<double> parse_duration_as(std::string_view s,
-                                                  double native_per_second) {
+constexpr dstd::Optional<double> parse_duration_as(dstd::StringView s,
+                                                   double native_per_second) {
     auto parsed = detail::split_value_unit(s);
-    if (!parsed) return std::nullopt;
+    if (!parsed) return dstd::nullopt;
     if (parsed->second.empty()) {
-        if (parsed->first < 0.0) return std::nullopt;
+        if (parsed->first < 0.0) return dstd::nullopt;
         return parsed->first;
     }
     auto seconds = parse_duration_seconds(s);
-    if (!seconds) return std::nullopt;
+    if (!seconds) return dstd::nullopt;
     return *seconds * native_per_second;
 }
 

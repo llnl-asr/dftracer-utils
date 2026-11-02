@@ -5,6 +5,7 @@
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/memory_config.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/index/schemas/dft/agg/system_metrics.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/plugins/abi_version.h>
@@ -58,7 +59,7 @@ PyObject* py_get_log_level(PyObject*, PyObject*) {
 PyObject* py_set_log_color(PyObject*, PyObject* args) {
     const char* mode = nullptr;
     if (!PyArg_ParseTuple(args, "s", &mode)) return nullptr;
-    const std::string_view m(mode);
+    const dftracer::utils::dstd::StringView m(mode);
     dftracer::utils::common::logger::ColorMode cm;
     if (m == "auto") {
         cm = dftracer::utils::common::logger::ColorMode::Auto;
@@ -86,7 +87,7 @@ PyObject* py_memory_budget_advice(PyObject*, PyObject* args, PyObject* kwds) {
     const auto a = dftracer::utils::common::memory_budget_advice(
         static_cast<std::size_t>(required),
         static_cast<std::size_t>(available));
-    const std::string warning =
+    const dftracer::utils::dstd::String warning =
         dftracer::utils::common::format_memory_budget_warning(a);
     return Py_BuildValue(
         "{s:O,s:K,s:K,s:K,s:K,s:s}", "fits", a.fits ? Py_True : Py_False,

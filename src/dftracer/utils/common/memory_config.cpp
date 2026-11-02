@@ -3,10 +3,9 @@
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/memory_config.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <mutex>
-#include <optional>
-#include <string>
 
 namespace dftracer::utils::common {
 
@@ -15,7 +14,7 @@ namespace {
 // Unset or empty leaves the field at zero. A value that does not parse is an
 // error that names the variable.
 Result<std::size_t> read_bytes(const char* name) {
-    auto raw = Env::get<std::string_view>(name);
+    auto raw = Env::get<dstd::StringView>(name);
     if (!raw) return std::size_t{0};
     auto parsed = parse_bytes(*raw);
     if (!parsed) {

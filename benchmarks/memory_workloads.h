@@ -8,7 +8,12 @@
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/hash/fnv1a.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 
@@ -16,12 +21,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
-#include <memory>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 /**
  * Workloads that the memory benches share: a synthetic frame source for
@@ -60,13 +60,16 @@ class GenCursor : public dftracer::utils::dataframe::Cursor {
         : rows_(rows), keys_(keys), seed_(seed) {}
 
     dftracer::utils::coro::CoroTask<
-        std::optional<dftracer::utils::dataframe::Morsel>>
+        dftracer::utils::dstd::Optional<dftracer::utils::dataframe::Morsel>>
     next(std::int64_t) override {
-        if (at_ >= rows_) co_return std::nullopt;
+        if (at_ >= rows_) co_return dftracer::utils::dstd::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
-        std::vector<std::int64_t> k(static_cast<std::size_t>(n));
-        std::vector<std::int64_t> t(static_cast<std::size_t>(n));
-        std::vector<std::int64_t> v(static_cast<std::size_t>(n));
+        dftracer::utils::dstd::Vector<std::int64_t> k(
+            static_cast<std::size_t>(n));
+        dftracer::utils::dstd::Vector<std::int64_t> t(
+            static_cast<std::size_t>(n));
+        dftracer::utils::dstd::Vector<std::int64_t> v(
+            static_cast<std::size_t>(n));
         for (std::int64_t i = 0; i < n; ++i) {
             const std::uint64_t h =
                 mix(seed_ + static_cast<std::uint64_t>(at_ + i));
@@ -114,6 +117,7 @@ class GenSource : public dftracer::utils::dataframe::Source {
     dftracer::utils::dataframe::ScanResult scan(
         const dftracer::utils::dataframe::ScanRequest& req) const override {
         dftracer::utils::dataframe::ScanResult r;
+        // keep std: ScanResult::cursor is a std::unique_ptr
         r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_);
         r.filters.assign(req.filters.size(),
                          dftracer::utils::dataframe::Pushed::No);
@@ -130,7 +134,7 @@ inline dftracer::utils::dataframe::LazyFrame gen(std::int64_t rows,
                                                  std::int64_t keys,
                                                  std::uint64_t seed) {
     return dftracer::utils::dataframe::LazyFrame::scan(
-        std::make_shared<GenSource>(rows, keys, seed));
+        dftracer::utils::dstd::make_shared<GenSource>(rows, keys, seed));
 }
 
 inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
@@ -142,8 +146,9 @@ inline dftracer::utils::coro::CoroTask<std::int64_t> drain_count(
 }
 
 inline dftracer::utils::coro::CoroTask<void> genesis_run(
-    dftracer::utils::coro::Scope& ctx, std::string root) {
-    std::vector<std::string> roots{std::move(root)};
+    dftracer::utils::coro::Scope& ctx, dftracer::utils::dstd::String root) {
+    dftracer::utils::dstd::Vector<dftracer::utils::dstd::String> roots{
+        std::move(root)};
     auto discovery = co_await dftracer::utils::trace::genesis::discover(
         ctx, std::move(roots));
     if (discovery.groups.empty()) {
@@ -162,7 +167,8 @@ inline dftracer::utils::coro::CoroTask<void> genesis_run(
     }
 }
 
-inline void write_gz(const std::string& path, const std::string& content) {
+inline void write_gz(const dftracer::utils::dstd::String& path,
+                     const dftracer::utils::dstd::String& content) {
     require_ok(dftracer::utils::dstd::fs::create_directories(
                    dftracer::utils::dstd::PathView(path).parent()),
                "create_directories");
@@ -173,25 +179,31 @@ inline void write_gz(const std::string& path, const std::string& content) {
         std::fprintf(stderr, "compress failed\n");
         std::exit(1);
     }
-    std::ofstream(path.c_str(), std::ios::binary)
-        .write(reinterpret_cast<const char*>(member->data()),
-               static_cast<std::streamsize>(member->size()));
+    if (!dftracer::utils::dstd::fs::write_file(
+            path, dftracer::utils::dstd::StringView(
+                      reinterpret_cast<const char*>(member->data()),
+                      member->size()))) {
+        std::fprintf(stderr, "write failed\n");
+        std::exit(1);
+    }
 }
 
-inline std::string genesis_line(std::int64_t pid, const std::string& name,
-                                std::int64_t ts, std::int64_t dur,
-                                const char* cat = "CPP_APP") {
+inline dftracer::utils::dstd::String genesis_line(
+    std::int64_t pid, const dftracer::utils::dstd::String& name,
+    std::int64_t ts, std::int64_t dur, const char* cat = "CPP_APP") {
     return R"({"name":")" + name + R"(","cat":")" + cat + R"(","pid":)" +
-           std::to_string(pid) + R"(,"tid":)" + std::to_string(pid) +
-           R"(,"ts":)" + std::to_string(ts) + R"(,"dur":)" +
-           std::to_string(dur) + R"(,"ph":1,"args":{"hhash":"h1"}})" + "\n";
+           dftracer::utils::dstd::to_string(pid) + R"(,"tid":)" +
+           dftracer::utils::dstd::to_string(pid) + R"(,"ts":)" +
+           dftracer::utils::dstd::to_string(ts) + R"(,"dur":)" +
+           dftracer::utils::dstd::to_string(dur) +
+           R"(,"ph":1,"args":{"hhash":"h1"}})" + "\n";
 }
 
-inline std::string genesis_text(std::int64_t calls) {
+inline dftracer::utils::dstd::String genesis_text(std::int64_t calls) {
     static const char* const FUNCS[] = {"SolveVelocity", "ForceMult",
                                         "SolveEnergy", "cudaMemcpy"};
     const std::int64_t span = calls * 10 + 1000;
-    std::string out = "[\n";
+    dftracer::utils::dstd::String out = "[\n";
     for (std::int64_t pid = 1; pid <= RANKS; ++pid) {
         out += genesis_line(pid, "start", 0, 0, "dftracer");
         out += genesis_line(pid, "end", span, 0, "dftracer");

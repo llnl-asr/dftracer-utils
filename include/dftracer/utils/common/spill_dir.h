@@ -4,11 +4,11 @@
 
 #include <dftracer/utils/common/error.h>
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/memory.h>
 #include <dftracer/utils/dstd/path.h>
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
 #include <utility>
 
 namespace dftracer::utils::common {
@@ -74,15 +74,15 @@ class ScopedSpillSubdir {
     /// The charge of the live @ref ScopedSpillSubdir that holds `file`, for a
     /// writer that knows only the path. Null when no such directory is open.
     /// Takes a lock, so call it once per file, not per write.
-    static std::shared_ptr<SpillCharge> charge_for(dstd::PathView file);
+    static dstd::SharedPtr<SpillCharge> charge_for(dstd::PathView file);
 
    private:
-    ScopedSpillSubdir(dstd::Path path, std::shared_ptr<SpillCharge> charge)
+    ScopedSpillSubdir(dstd::Path path, dstd::SharedPtr<SpillCharge> charge)
         : path_(std::move(path)), charge_(std::move(charge)) {}
     void remove() noexcept;
 
     dstd::Path path_;
-    std::shared_ptr<SpillCharge> charge_;
+    dstd::SharedPtr<SpillCharge> charge_;
 };
 
 }  // namespace dftracer::utils::common

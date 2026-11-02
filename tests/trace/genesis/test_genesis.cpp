@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: MIT
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/dataframe/sketch.h>
 #include <dftracer/utils/dstd/base64.h>
 #include <dftracer/utils/dstd/fs.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <doctest/doctest.h>
@@ -15,11 +19,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <random>
-#include <sstream>
-#include <string>
-#include <vector>
 
 using namespace dftracer::utils;
 using namespace dftracer::utils::trace::genesis;
@@ -27,61 +27,60 @@ using dftu_utils_test::ScopedTestDir;
 
 namespace {
 
-std::string call(std::int64_t pid, std::int64_t tid, const std::string& name,
-                 std::int64_t ts, std::int64_t dur,
-                 const std::string& cat = "CPP_APP",
-                 const std::string& extra = "") {
-    std::ostringstream o;
-    o << R"({"name":")" << name << R"(","cat":")" << cat << R"(","pid":)" << pid
-      << R"(,"tid":)" << tid << R"(,"ts":)" << ts << R"(,"dur":)" << dur
-      << R"(,"ph":1,"args":{"hhash":"h1")" << extra << "}}\n";
-    return o.str();
+dstd::String call(std::int64_t pid, std::int64_t tid, const dstd::String& name,
+                  std::int64_t ts, std::int64_t dur,
+                  const dstd::String& cat = "CPP_APP",
+                  const dstd::String& extra = "") {
+    return common::str_cat(R"({"name":")", name, R"(","cat":")", cat,
+                           R"(","pid":)", pid, R"(,"tid":)", tid, R"(,"ts":)",
+                           ts, R"(,"dur":)", dur,
+                           R"(,"ph":1,"args":{"hhash":"h1")", extra, "}}\n");
 }
 
-std::string marker(std::int64_t pid, const std::string& name, std::int64_t ts) {
+dstd::String marker(std::int64_t pid, const dstd::String& name,
+                    std::int64_t ts) {
     return call(pid, pid, name, ts, 0, "dftracer");
 }
 
-std::string papi(std::int64_t pid, std::int64_t ts, const std::string& counter,
-                 double delta) {
-    std::ostringstream o;
-    o << R"({"name":"PAPI","cat":"papi","pid":)" << pid << R"(,"tid":)" << pid
-      << R"(,"ts":)" << ts << R"(,"ph":2,"args":{"hhash":"h1","multiplex":0,")"
-      << counter << R"(":1,")" << counter << R"(_delta":)" << delta << "}}\n";
-    return o.str();
+dstd::String papi(std::int64_t pid, std::int64_t ts,
+                  const dstd::String& counter, double delta) {
+    return common::str_cat(
+        R"({"name":"PAPI","cat":"papi","pid":)", pid, R"(,"tid":)", pid,
+        R"(,"ts":)", ts, R"(,"ph":2,"args":{"hhash":"h1","multiplex":0,")",
+        counter, R"(":1,")", counter, R"(_delta":)", delta, "}}\n");
 }
 
-std::string host(const std::string& cat, const std::string& name,
-                 std::int64_t ts, const std::string& fields) {
-    std::ostringstream o;
-    o << R"({"name":")" << name << R"(","cat":")" << cat
-      << R"(","pid":0,"tid":0,"ts":)" << ts
-      << R"(,"ph":2,"args":{"hhash":"h1",)" << fields << "}}\n";
-    return o.str();
+dstd::String host(const dstd::String& cat, const dstd::String& name,
+                  std::int64_t ts, const dstd::String& fields) {
+    return common::str_cat(R"({"name":")", name, R"(","cat":")", cat,
+                           R"(","pid":0,"tid":0,"ts":)", ts,
+                           R"(,"ph":2,"args":{"hhash":"h1",)", fields, "}}\n");
 }
 
-std::string rank(std::int64_t pid, std::int64_t start, std::int64_t end) {
+dstd::String rank(std::int64_t pid, std::int64_t start, std::int64_t end) {
     return marker(pid, "start", start) + marker(pid, "end", end);
 }
 
-void write_gz(const dstd::Path& p, const std::string& content) {
+void write_gz(const dstd::Path& p, const dstd::String& content) {
     REQUIRE(dstd::fs::create_directories(p.view().parent()).has_value());
-    dftu_utils_test::write_gz_trace(std::string(p.str()), content);
+    // keep std: write_gz_trace takes std::string
+    dftu_utils_test::write_gz_trace(
+        std::string(p.str()), std::string(content.data(), content.size()));
 }
 
-void write_text(const dstd::Path& p, const std::string& content) {
+void write_text(const dstd::Path& p, const dstd::String& content) {
     REQUIRE(dstd::fs::create_directories(p.view().parent()).has_value());
-    std::ofstream(p.c_str()) << content;
+    REQUIRE(dstd::fs::write_file(p.view(), content).has_value());
 }
 
 dstd::Path matrix_run(const ScopedTestDir& d, std::int64_t ppn,
-                      const std::string& trace,
-                      const std::string& input = "in1") {
+                      const dstd::String& trace,
+                      const dstd::String& input = "in1") {
     const dstd::Path dir = d.path() / "app1" / "sys1" / input / "nodes_1" /
-                           ("ppn_" + std::to_string(ppn));
+                           ("ppn_" + dstd::to_string(ppn));
     write_text(dir / "summary.json",
                R"({"ok":true,"app":"app1","system":"sys1","input":")" + input +
-                   R"(","nodes":1,"ppn":)" + std::to_string(ppn) +
+                   R"(","nodes":1,"ppn":)" + dstd::to_string(ppn) +
                    R"(,"sets":["set1"]})");
     write_gz(dir / "compacted" / "set1.pfw.gz", "[\n" + trace);
     return dir;
@@ -95,9 +94,9 @@ coro::CoroTask<void> process_into(coro::Scope& ctx, RunGroup g,
     *out = co_await process_group(ctx, std::move(g), share, nullptr, borrow);
 }
 
-coro::CoroTask<void> discover_into(coro::Scope& ctx, std::string root,
+coro::CoroTask<void> discover_into(coro::Scope& ctx, dstd::String root,
                                    Discovery* out) {
-    std::vector<std::string> roots{std::move(root)};
+    dstd::Vector<dstd::String> roots{std::move(root)};
     *out = co_await discover(ctx, std::move(roots));
 }
 
@@ -112,8 +111,10 @@ GroupResult process(RunGroup g, std::uint64_t share = TEST_SHARE,
 
 Discovery discover_dir(const ScopedTestDir& d) {
     Discovery out;
-    dftu_utils_test::run_coro(
-        [&](coro::Scope& ctx) { return discover_into(ctx, d.str(), &out); });
+    dftu_utils_test::run_coro([&](coro::Scope& ctx) {
+        return discover_into(ctx, dstd::String(d.str().data(), d.str().size()),
+                             &out);
+    });
     return out;
 }
 
@@ -124,24 +125,27 @@ GroupResult process_only(const ScopedTestDir& d) {
     return process(disc.groups[0]);
 }
 
-std::vector<std::string> lines_of(const std::string& text) {
-    std::vector<std::string> out;
-    std::istringstream in(text);
-    std::string l;
-    while (std::getline(in, l))
-        if (!l.empty()) out.push_back(l);
+dstd::Vector<dstd::String> lines_of(const dstd::String& text) {
+    dstd::Vector<dstd::String> out;
+    dstd::StringView rest(text);
+    while (!rest.empty()) {
+        const auto nl = rest.find('\n');
+        const dstd::StringView l = rest.substr(0, nl);
+        if (!l.empty()) out.push_back(dstd::String(l));
+        rest.remove_prefix(nl == dstd::StringView::npos ? rest.size() : nl + 1);
+    }
     return out;
 }
 
 // The first line of `gtype` holding every needle, or "" when absent.
-std::string find_line(const GroupResult& r, const std::string& type,
-                      const std::vector<std::string>& needles) {
+dstd::String find_line(const GroupResult& r, const dstd::String& type,
+                       const dstd::Vector<dstd::String>& needles) {
     REQUIRE(r.runs.size() == 1);
-    const std::string prefix = R"({"gtype":")" + type + R"(",)";
+    const dstd::String prefix = R"({"gtype":")" + type + R"(",)";
     for (const auto& l : lines_of(r.runs[0].lines())) {
         if (l.rfind(prefix, 0) != 0) continue;
         if (std::all_of(needles.begin(), needles.end(), [&](const auto& n) {
-                return l.find(n) != std::string::npos;
+                return l.find(n) != dstd::String::npos;
             }))
             return l;
     }
@@ -149,57 +153,59 @@ std::string find_line(const GroupResult& r, const std::string& type,
 }
 
 // The func record of `path`, or "" when absent.
-std::string record(const GroupResult& r, const std::string& path) {
+dstd::String record(const GroupResult& r, const dstd::String& path) {
     return find_line(r, "func", {R"("path":")" + path + R"(",)"});
 }
 
 // The counter record of `path` and `metric`, or "" when absent.
-std::string counter(const GroupResult& r, const std::string& path,
-                    const std::string& metric) {
+dstd::String counter(const GroupResult& r, const dstd::String& path,
+                     const dstd::String& metric) {
     return find_line(
         r, "counter",
         {R"("path":")" + path + R"(",)", R"("metric":")" + metric + R"(",)"});
 }
 
-simdjson::dom::element at(simdjson::dom::parser& p, const std::string& line,
-                          const std::string& pointer) {
+simdjson::dom::element at(simdjson::dom::parser& p, const dstd::String& line,
+                          const dstd::String& pointer) {
     simdjson::dom::element e;
-    REQUIRE(p.parse(line).at_pointer(pointer).get(e) == simdjson::SUCCESS);
+    REQUIRE(p.parse(line.data(), line.size()).at_pointer(pointer).get(e) ==
+            simdjson::SUCCESS);
     return e;
 }
 
-double num(const std::string& line, const std::string& pointer) {
+double num(const dstd::String& line, const dstd::String& pointer) {
     simdjson::dom::parser p;
     double d = 0;
     REQUIRE(at(p, line, pointer).get(d) == simdjson::SUCCESS);
     return d;
 }
 
-bool has(const std::string& line, const std::string& pointer) {
+bool has(const dstd::String& line, const dstd::String& pointer) {
     simdjson::dom::parser p;
-    return p.parse(line).at_pointer(pointer).error() == simdjson::SUCCESS;
+    return p.parse(line.data(), line.size()).at_pointer(pointer).error() ==
+           simdjson::SUCCESS;
 }
 
-std::string str(const std::string& line, const std::string& pointer) {
+dstd::String str(const dstd::String& line, const dstd::String& pointer) {
     simdjson::dom::parser p;
-    std::string_view v;
+    dstd::StringView v;
     REQUIRE(at(p, line, pointer).get(v) == simdjson::SUCCESS);
-    return std::string(v);
+    return dstd::String(v);
 }
 
 using Sketch = dataframe::BasicDDSketch<2048>;
 
-Sketch sketch_at(const std::string& line, const std::string& pointer) {
+Sketch sketch_at(const dstd::String& line, const dstd::String& pointer) {
     const auto raw = dstd::base64_decode(str(line, pointer));
     REQUIRE(raw.has_value());
     return Sketch::deserialize(
         reinterpret_cast<const std::uint8_t*>(raw->data()), raw->size());
 }
 
-bool skipped_with(const GroupResult& r, const std::string& text) {
+bool skipped_with(const GroupResult& r, const dstd::String& text) {
     for (const auto& s : r.skips)
-        if (s.reason.find(text) != std::string::npos ||
-            s.file.find(text) != std::string::npos)
+        if (s.reason.find(text) != dstd::String::npos ||
+            s.file.find(text) != dstd::String::npos)
             return true;
     return false;
 }
@@ -232,8 +238,8 @@ TEST_CASE("discover reads the matrix layout, one group per set") {
     CHECK(k.ppn == 4);
     CHECK(k.papi_set == "s2");
     CHECK(disc.groups[1].files ==
-          std::vector<std::string>{
-              std::string((dir / "compacted" / "s2.pfw.gz").str())});
+          dstd::Vector<dstd::String>{
+              dstd::String((dir / "compacted" / "s2.pfw.gz").str())});
 }
 
 TEST_CASE("discover reads the tioga v2 layout as one group of several sets") {
@@ -257,7 +263,7 @@ TEST_CASE("discover reads the tioga v2 layout as one group of several sets") {
     CHECK(g.sets[0].keys.system == "tioga");
     CHECK(g.sets[0].keys.unique_input == "caseA");
     CHECK(g.sets[0].papi_counters ==
-          std::vector<std::string>{"PAPI_A1", "PAPI_A2"});
+          dstd::Vector<dstd::String>{"PAPI_A1", "PAPI_A2"});
 }
 
 TEST_CASE("discover skips a tioga v2 directory with missing slices") {
@@ -269,7 +275,7 @@ TEST_CASE("discover skips a tioga v2 directory with missing slices") {
                R"("runs":{"s":{"papi_counters":["PAPI_A"]}}})");
     for (int i : {1, 3, 4, 7})
         write_gz(dir / "compacted" /
-                     ("c_N1_ppn1-" + std::to_string(i) + "_chunk0.pfw.gz"),
+                     ("c_N1_ppn1-" + dstd::to_string(i) + "_chunk0.pfw.gz"),
                  "[\n");
     auto disc = discover_dir(d);
     CHECK(disc.groups.empty());
@@ -308,9 +314,9 @@ TEST_CASE("discover reads path-only slices kept in the run directory") {
     REQUIRE(disc.groups.size() == 1);
     CHECK(disc.groups[0].sets_from_counters);
     CHECK(disc.groups[0].files ==
-          std::vector<std::string>{
-              std::string((run / "app-1_chunk0.pfw.gz").str()),
-              std::string((run / "app-2_chunk0.pfw.gz").str())});
+          dstd::Vector<dstd::String>{
+              dstd::String((run / "app-1_chunk0.pfw.gz").str()),
+              dstd::String((run / "app-2_chunk0.pfw.gz").str())});
 }
 
 TEST_CASE("compacted slices win over traces beside them in the run directory") {
@@ -323,8 +329,8 @@ TEST_CASE("compacted slices win over traces beside them in the run directory") {
     REQUIRE(disc.skips.empty());
     REQUIRE(disc.groups.size() == 1);
     CHECK(disc.groups[0].files ==
-          std::vector<std::string>{
-              std::string((run / "compacted" / "nx-1_chunk0.pfw.gz").str())});
+          dstd::Vector<dstd::String>{
+              dstd::String((run / "compacted" / "nx-1_chunk0.pfw.gz").str())});
 }
 
 TEST_CASE("a matrix set without its compacted file reads its raw traces") {
@@ -342,13 +348,13 @@ TEST_CASE("a matrix set without its compacted file reads its raw traces") {
     auto disc = discover_dir(d);
     REQUIRE(disc.groups.size() == 2);
     CHECK(disc.groups[0].files ==
-          std::vector<std::string>{
-              std::string((dir / "compacted" / "s1.pfw.gz").str())});
+          dstd::Vector<dstd::String>{
+              dstd::String((dir / "compacted" / "s1.pfw.gz").str())});
     CHECK(disc.groups[1].sets.at(0).keys.papi_set == "s2");
     CHECK(disc.groups[1].files ==
-          std::vector<std::string>{
-              std::string((dir / "raw" / "s2" / "b-app.pfw.gz").str()),
-              std::string((dir / "raw" / "s2" / "service_h1.pfw.gz").str())});
+          dstd::Vector<dstd::String>{
+              dstd::String((dir / "raw" / "s2" / "b-app.pfw.gz").str()),
+              dstd::String((dir / "raw" / "s2" / "service_h1.pfw.gz").str())});
     REQUIRE(disc.skips.size() == 1);
     CHECK(disc.skips[0].reason == "set listed but file missing");
     CHECK(disc.skips[0].file == (dir / "compacted" / "s3.pfw.gz").str());
@@ -366,10 +372,10 @@ TEST_CASE("path-only sets come from each process's PAPI counters") {
     REQUIRE(r.skips.empty());
     REQUIRE(r.runs.size() == 2);
     CHECK(r.runs[0].lines().find(R"("papi_set":"PAPI_A")") !=
-          std::string::npos);
-    CHECK(r.runs[0].lines().find(R"("path":"b")") != std::string::npos);
+          dstd::String::npos);
+    CHECK(r.runs[0].lines().find(R"("path":"b")") != dstd::String::npos);
     CHECK(r.runs[1].lines().find(R"("papi_set":"PAPI_B")") !=
-          std::string::npos);
+          dstd::String::npos);
 }
 
 TEST_CASE("a matrix summary without app and system takes them from the path") {
@@ -423,7 +429,7 @@ TEST_CASE("the same function under two parents gives two records") {
     CHECK(str(a, "/name") == "cudaMemcpy");
     CHECK(str(b, "/name") == "cudaMemcpy");
     CHECK(a.find(R"("parent":"main;SolveVelocity;ForceMult")") !=
-          std::string::npos);
+          dstd::String::npos);
     CHECK_FALSE(has(record(r, "main"), "/parent"));
     CHECK(num(record(r, "main"), "/count") == 2);
 }
@@ -465,7 +471,7 @@ TEST_CASE("per-process counters are pro-rated by overlap") {
 
 TEST_CASE("host count-like counters are split across the ranks of a host") {
     ScopedTestDir d("genesis_net");
-    std::string t =
+    dstd::String t =
         host("net", "net-  hsi0", 0, R"("bytes_sent":0)") +
         host("net", "net-  hsi0", 1000, R"("bytes_sent":100000000)");
     for (int pid = 1; pid <= 4; ++pid)
@@ -577,7 +583,7 @@ TEST_CASE("events outside the process window are depth-0 duration records") {
 
 TEST_CASE("a truncated trace file skips the run and names the file") {
     ScopedTestDir d("genesis_trunc");
-    std::string t = rank(1, 0, 1000);
+    dstd::String t = rank(1, 0, 1000);
     for (int i = 0; i < 2000; ++i) t += call(1, 1, "w", i * 10, 5);
     const dstd::Path dir = matrix_run(d, 1, t);
     const dstd::Path f = dir / "compacted" / "set1.pfw.gz";
@@ -585,7 +591,7 @@ TEST_CASE("a truncated trace file skips the run and names the file") {
                 .has_value());
     auto r = process_only(d);
     CHECK(r.runs.empty());
-    CHECK(skipped_with(r, std::string(f.str())));
+    CHECK(skipped_with(r, dstd::String(f.str())));
     CHECK_FALSE(r.over_budget);
 }
 
@@ -631,7 +637,7 @@ TEST_CASE("an overlap in any process skips the run, naming the first") {
 }
 
 TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
-    auto make = [](const ScopedTestDir& d, const std::string& extra) {
+    auto make = [](const ScopedTestDir& d, const dstd::String& extra) {
         const dstd::Path dir =
             d.path() / "l" / "tioga" / "tioga" / "c" / "nodes_1" / "ppn_1";
         write_text(dir / "summary.json",
@@ -651,9 +657,9 @@ TEST_CASE("tioga v2 processes are assigned to sets by PAPI counters") {
     auto r = process(disc.groups[0]);
     REQUIRE(r.skips.empty());
     REQUIRE(r.runs.size() == 2);
-    CHECK(r.runs[0].lines().find(R"("papi_set":"sA")") != std::string::npos);
-    CHECK(r.runs[0].lines().find(R"("path":"a")") != std::string::npos);
-    CHECK(r.runs[1].lines().find(R"("path":"b")") != std::string::npos);
+    CHECK(r.runs[0].lines().find(R"("papi_set":"sA")") != dstd::String::npos);
+    CHECK(r.runs[0].lines().find(R"("path":"a")") != dstd::String::npos);
+    CHECK(r.runs[1].lines().find(R"("path":"b")") != dstd::String::npos);
 
     ScopedTestDir bad("genesis_sets_bad");
     make(bad, rank(3, 0, 10) + papi(3, 0, "PAPI_C", 0));
@@ -667,8 +673,8 @@ TEST_CASE("percentiles are within the sketch accuracy") {
     ScopedTestDir d("genesis_sketch");
     std::mt19937 rng(7);
     std::uniform_int_distribution<int> dist(1, 10000);
-    std::vector<int> durs;
-    std::string t = rank(1, 0, 400000000);
+    dstd::Vector<int> durs;
+    dstd::String t = rank(1, 0, 400000000);
     for (int i = 0; i < 10000; ++i) {
         durs.push_back(dist(rng));
         t += call(1, 1, "w", static_cast<std::int64_t>(i) * 20000, durs.back());
@@ -696,7 +702,7 @@ TEST_CASE("the run record carries keys, settings and the summary") {
     CHECK(has(first, "/summary/sets"));
     CHECK(first.find(R"("run":")" +
                      run_id({"app1", "sys1", "in1", 1, 1, "set1"}) + "\"") !=
-          std::string::npos);
+          dstd::String::npos);
 }
 
 TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
@@ -710,15 +716,16 @@ TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
     auto r = process_only(d);
     REQUIRE(r.runs.size() == 1);
     const auto lines = lines_of(r.runs[0].lines());
-    std::vector<std::string> types;
+    dstd::Vector<dstd::String> types;
     for (const auto& l : lines) {
         types.push_back(str(l, "/gtype"));
         for (const char* k : {"/ph", "/pid", "/tid", "/args", "/counters",
                               "/PAPI_TOT_CYC", "/cpu.user_pct"})
             CHECK_FALSE(has(l, k));
     }
-    CHECK(types == std::vector<std::string>{"run", "func", "counter", "counter",
-                                            "func", "counter", "counter"});
+    CHECK(types == dstd::Vector<dstd::String>{"run", "func", "counter",
+                                              "counter", "func", "counter",
+                                              "counter"});
     CHECK(str(lines[2], "/metric") == "PAPI_TOT_CYC");
     CHECK(str(lines[3], "/metric") == "cpu.user_pct");
     CHECK(has(lines[2], "/v/sum"));
@@ -727,8 +734,8 @@ TEST_CASE("records have a gtype and no dftracer envelope or metric keys") {
 
 TEST_CASE("stored sketches decode and merge exactly") {
     ScopedTestDir d("genesis_merge");
-    std::string t = rank(1, 0, 100000) + call(1, 1, "main", 0, 100000) +
-                    call(1, 1, "solve", 50000, 40000);
+    dstd::String t = rank(1, 0, 100000) + call(1, 1, "main", 0, 100000) +
+                     call(1, 1, "solve", 50000, 40000);
     for (int i = 0; i < 30; ++i) t += call(1, 1, "fgets", 100 + i * 100, 1 + i);
     for (int i = 0; i < 20; ++i)
         t += call(1, 1, "fgets", 50100 + i * 100, 5 + 3 * i);
@@ -795,8 +802,8 @@ constexpr std::uint64_t TINY_SHARE = 4ULL * 1024 * 1024;
 
 // Two ranks, nested calls and per-rank counters: enough calls that a tiny
 // share keeps no chunk in memory and the sort writes several runs.
-std::string busy_trace() {
-    std::string t =
+dstd::String busy_trace() {
+    dstd::String t =
         rank(1, 0, 4000000) + rank(2, 0, 4000000) +
         papi(1, 0, "PAPI_TOT_CYC", 0) + papi(1, 2000000, "PAPI_TOT_CYC", 7) +
         host("io", "nvme0n1", 0, R"("bytes_read":0)") +
@@ -804,7 +811,7 @@ std::string busy_trace() {
         call(1, 1, "main", 0, 3900000) + call(2, 2, "main", 0, 3900000);
     for (int i = 0; i < 30000; ++i)
         for (int pid = 1; pid <= 2; ++pid)
-            t += call(pid, pid, "w" + std::to_string(i % 7), 100 + i * 100,
+            t += call(pid, pid, "w" + dstd::to_string(i % 7), 100 + i * 100,
                       50 + i % 13);
     return t;
 }
@@ -842,10 +849,10 @@ TEST_CASE("a share that keeps nothing in memory gives the same output") {
 namespace {
 
 // The open pools of genesis groups and their parts.
-std::vector<memory::PoolStats> genesis_pools() {
-    std::vector<memory::PoolStats> out;
+dstd::Vector<memory::PoolStats> genesis_pools() {
+    dstd::Vector<memory::PoolStats> out;
     for (memory::PoolStats& p : memory::pool_stats())
-        if (p.path.find("/genesis/") != std::string::npos)
+        if (p.path.find("/genesis/") != dstd::String::npos)
             out.push_back(std::move(p));
     return out;
 }
@@ -860,7 +867,7 @@ TEST_CASE("a tiny share spills on its group pools and closes them clean") {
     auto disc = discover_dir(d);
     REQUIRE(disc.groups.size() == 1);
     REQUIRE(genesis_pools().empty());
-    std::string big_lines;
+    dstd::String big_lines;
     {
         auto big = process(disc.groups[0], TEST_SHARE);
         REQUIRE(big.runs.size() == 1);
@@ -872,7 +879,7 @@ TEST_CASE("a tiny share spills on its group pools and closes them clean") {
         CHECK(tiny.spilled_bytes > 0);
         // The runs hold the group until they are written: its pool, the
         // calls and the state stay open, with nothing allocated in them.
-        const std::vector<memory::PoolStats> open = genesis_pools();
+        const dstd::Vector<memory::PoolStats> open = genesis_pools();
         CHECK(open.size() == 3);
         for (const memory::PoolStats& p : open) {
             CAPTURE(p.path);
@@ -888,7 +895,8 @@ TEST_CASE("a group that must spill names the spill directory when it fails") {
     ScopedTestDir d("genesis_nospill");
     matrix_run(d, 2, busy_trace());
     const dstd::Path blocked = d.path() / "blocked";
-    std::ofstream(blocked.c_str()) << "not a directory";
+    REQUIRE(
+        dstd::fs::write_file(blocked.view(), "not a directory").has_value());
     SpillDirGuard guard(blocked);
     auto disc = discover_dir(d);
     REQUIRE(disc.groups.size() == 1);
@@ -896,7 +904,7 @@ TEST_CASE("a group that must spill names the spill directory when it fails") {
     CHECK(r.runs.empty());
     REQUIRE(r.skips.size() == 1);
     CHECK(r.skips[0].reason.find("DFTRACER_UTILS_SPILL_DIR") !=
-          std::string::npos);
+          dstd::String::npos);
 }
 
 TEST_CASE(
@@ -905,9 +913,9 @@ TEST_CASE(
     // About 200 bytes per path record, so 20000 paths pass the state quarter
     // of the tiny share and fit that of the test share.
     constexpr int PATHS = 20000;
-    std::string t = rank(1, 0, PATHS * 100);
+    dstd::String t = rank(1, 0, PATHS * 100);
     for (int i = 0; i < PATHS; ++i)
-        t += call(1, 1, "f" + std::to_string(i), i * 100, 50);
+        t += call(1, 1, "f" + dstd::to_string(i), i * 100, 50);
     matrix_run(d, 1, t);
     auto disc = discover_dir(d);
     REQUIRE(disc.groups.size() == 1);
@@ -915,9 +923,9 @@ TEST_CASE(
     CHECK(tiny.runs.empty());
     REQUIRE(tiny.skips.size() == 1);
     CHECK(tiny.skips[0].reason.find("memory budget exceeded") !=
-          std::string::npos);
-    CHECK(tiny.skips[0].reason.find(std::to_string(TINY_SHARE)) !=
-          std::string::npos);
+          dstd::String::npos);
+    CHECK(tiny.skips[0].reason.find(dstd::to_string(TINY_SHARE)) !=
+          dstd::String::npos);
     CHECK(tiny.over_budget);
     auto big = process(disc.groups[0], TEST_SHARE);
     CHECK(big.skips.empty());

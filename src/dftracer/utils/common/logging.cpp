@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
-#include <ankerl/unordered_dense.h>
 #include <dftracer/utils/common/env.h>
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/symbolize.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/hash_map.h>
 #include <dftracer/utils/dstd/ptr_hash.h>
 #include <unistd.h>
 
@@ -11,9 +11,6 @@
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
-#include <optional>
-#include <string>
-#include <string_view>
 
 namespace dftracer::utils::common::logger {
 
@@ -50,16 +47,16 @@ LevelStyle level_style(Level lvl) {
     return {"?????", ""};
 }
 
-Level parse_level(std::optional<std::string_view> env, Level fallback) {
+Level parse_level(dstd::Optional<dstd::StringView> env, Level fallback) {
     if (!env) return fallback;
     if (auto lvl = level_from_name(*env)) return *lvl;
     return fallback;
 }
 
-ColorMode parse_color_mode(std::optional<std::string_view> env,
+ColorMode parse_color_mode(dstd::Optional<dstd::StringView> env,
                            ColorMode fallback) {
     if (!env) return fallback;
-    const std::string_view s = *env;
+    const dstd::StringView s = *env;
     if (s == "always" || s == "1" || s == "on") return ColorMode::Always;
     if (s == "never" || s == "0" || s == "off") return ColorMode::Never;
     if (s == "auto") return ColorMode::Auto;
@@ -70,12 +67,12 @@ bool resolve_color(ColorMode mode, std::FILE* sink) {
     if (mode == ColorMode::Always) return true;
     if (mode == ColorMode::Never) return false;
     // Auto: honor the common conventions, then fall back to TTY detection.
-    if (Env::get<std::string_view>("NO_COLOR")) return false;
-    if (Env::get<std::string_view>("FORCE_COLOR") ||
-        Env::get<std::string_view>("CLICOLOR_FORCE"))
+    if (Env::get<dstd::StringView>("NO_COLOR")) return false;
+    if (Env::get<dstd::StringView>("FORCE_COLOR") ||
+        Env::get<dstd::StringView>("CLICOLOR_FORCE"))
         return true;
     if (!isatty(fileno(sink))) return false;
-    const auto term = Env::get<std::string_view>("TERM");
+    const auto term = Env::get<dstd::StringView>("TERM");
     if (term && *term == "dumb") return false;
     return true;
 }
@@ -101,7 +98,7 @@ void make_timestamp(char* out, std::size_t n) {
 
 // Per-scope state, heap-allocated so it follows a coroutine across threads.
 struct ScopeFrame {
-    std::string label;
+    dstd::String label;
     const char* file;
     int line;
     long long start_ns;
@@ -112,14 +109,14 @@ struct ScopeFrame {
 void init(Config cfg) {
     // Environment overrides the programmatic config.
     cfg.level = parse_level(
-        Env::get<std::string_view>("DFTRACER_UTILS_LOG_LEVEL"), cfg.level);
+        Env::get<dstd::StringView>("DFTRACER_UTILS_LOG_LEVEL"), cfg.level);
     cfg.color = parse_color_mode(
-        Env::get<std::string_view>("DFTRACER_UTILS_LOG_COLOR"), cfg.color);
+        Env::get<dstd::StringView>("DFTRACER_UTILS_LOG_COLOR"), cfg.color);
 
     std::FILE* sink = cfg.sink ? cfg.sink : stderr;
-    if (const auto path = Env::get<std::string_view>("DFTRACER_UTILS_LOG_FILE");
+    if (const auto path = Env::get<dstd::StringView>("DFTRACER_UTILS_LOG_FILE");
         path && !path->empty()) {
-        const std::string p(*path);
+        const dstd::String p(*path);
         if (std::FILE* fp = std::fopen(p.c_str(), "a")) sink = fp;
     }
 
@@ -143,14 +140,14 @@ void set_color(ColorMode mode) {
     g_use_color.store(resolve_color(mode, g_sink), std::memory_order_relaxed);
 }
 
-std::optional<Level> level_from_name(std::string_view name) {
+dstd::Optional<Level> level_from_name(dstd::StringView name) {
     if (name == "trace") return Level::Trace;
     if (name == "debug") return Level::Debug;
     if (name == "info") return Level::Info;
     if (name == "warn" || name == "warning") return Level::Warn;
     if (name == "error") return Level::Error;
     if (name == "off" || name == "none") return Level::Off;
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 const char* level_name(Level level) {
@@ -221,7 +218,7 @@ void write(Level lvl, const char* file, int line, const char* fmt, ...) {
 
 void* scope_open(const char* file, int line, const char* label) {
     write(Level::Trace, file, line, "-> %s", label);
-    return new ScopeFrame{std::string(label), file, line, steady_now_ns()};
+    return new ScopeFrame{dstd::String(label), file, line, steady_now_ns()};
 }
 
 void scope_close(void* handle) {
@@ -237,9 +234,8 @@ namespace {
 
 // Per-thread cache: many coroutine instances share one resume function, so the
 // dladdr + demangle runs once per function per thread.
-const std::string& ct_name(const void* fn) {
-    static thread_local ankerl::unordered_dense::map<const void*, std::string,
-                                                     dstd::PtrHash>
+const dstd::String& ct_name(const void* fn) {
+    static thread_local dstd::HashMap<const void*, dstd::String, dstd::PtrHash>
         cache;
     auto it = cache.find(fn);
     if (it != cache.end()) return it->second;

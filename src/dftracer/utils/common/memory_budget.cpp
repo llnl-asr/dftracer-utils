@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/memory_budget.h>
 #include <dftracer/utils/common/str_format.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/memory/budget.h>
 
 #include <algorithm>
 #include <cstddef>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -32,7 +32,7 @@ std::size_t concurrent_spill_ways(std::uint64_t configured, std::size_t n) {
     return fit < n ? static_cast<std::size_t>(fit) : n;
 }
 
-std::size_t estimate_per_file_bytes(const std::vector<std::size_t> &file_sizes,
+std::size_t estimate_per_file_bytes(dstd::Span<const std::size_t> file_sizes,
                                     std::size_t user_override_bytes) {
     if (user_override_bytes > 0) return user_override_bytes;
     if (file_sizes.empty()) return MIN_PER_FILE_PEAK_BYTES;
@@ -41,7 +41,7 @@ std::size_t estimate_per_file_bytes(const std::vector<std::size_t> &file_sizes,
     const std::size_t sample_count = std::min(total, PER_FILE_SAMPLE_LIMIT);
     const std::size_t stride = std::max(total / sample_count, std::size_t(1));
 
-    std::vector<std::size_t> sizes;
+    dstd::Vector<std::size_t> sizes;
     sizes.reserve(sample_count);
     for (std::size_t i = 0; i < total && sizes.size() < sample_count;
          i += stride) {
@@ -75,15 +75,15 @@ MemoryBudgetAdvice memory_budget_advice(std::size_t required_bytes,
     return a;
 }
 
-std::string format_memory_budget_warning(const MemoryBudgetAdvice &advice) {
-    if (advice.fits) return std::string();
+dstd::String format_memory_budget_warning(const MemoryBudgetAdvice &advice) {
+    if (advice.fits) return dstd::String();
     auto hb = [](std::size_t b) { return human_bytes(static_cast<double>(b)); };
     return "workload needs ~" + hb(advice.peak_bytes) + " at peak (" +
-           std::to_string(PEAK_MEMORY_FACTOR) + "x the ~" +
+           dstd::to_string(PEAK_MEMORY_FACTOR) + "x the ~" +
            hb(advice.required_bytes) + " aggregated size); ~" +
            hb(advice.available_bytes) + " available. Increase memory to ~" +
            hb(advice.peak_bytes) +
-           ", or split across >=" + std::to_string(advice.suggested_nodes) +
+           ", or split across >=" + dstd::to_string(advice.suggested_nodes) +
            " nodes.";
 }
 

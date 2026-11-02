@@ -3,10 +3,10 @@
 #define DFTRACER_UTILS_COMMON_SHARDED_MUTEX_H
 
 #include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/hash_map.h>
 
 #include <array>
 #include <cstddef>
-#include <functional>
 #include <mutex>
 
 namespace dftracer::utils::common {
@@ -21,7 +21,7 @@ namespace dftracer::utils::common {
 
  * Usage:
  * @code
- * ShardedMutex<std::unordered_map<int, Callback>> callbacks;
+ * ShardedMutex<dstd::HashMap<int, Callback>> callbacks;
  *
  * // Write to shard
  * callbacks.with_shard(task_id, [&](auto& map) {

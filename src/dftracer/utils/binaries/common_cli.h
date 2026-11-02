@@ -178,8 +178,9 @@ inline std::size_t get_bytes_arg(const argparse::ArgumentParser& p,
     auto parsed = dftracer::utils::common::parse_bytes(raw);
     if (!parsed) {
         throw std::runtime_error(dftracer::utils::common::str_cat(
-            "Invalid byte size for ", name, ": '", raw,
-            "' (use e.g. 65536, 64KB, 1.5GB)"));
+                                     "Invalid byte size for ", name, ": '", raw,
+                                     "' (use e.g. 65536, 64KB, 1.5GB)")
+                                     .c_str());
     }
     return static_cast<std::size_t>(*parsed);
 }
@@ -193,9 +194,11 @@ inline std::size_t get_bytes_arg_with_unit(const argparse::ArgumentParser& p,
     auto parsed = dftracer::utils::common::parse_bytes(raw);
     const auto parts = dftracer::utils::common::detail::split_value_unit(raw);
     if (!parsed || !parts || parts->second.empty()) {
-        throw std::runtime_error(dftracer::utils::common::str_cat(
-            "Invalid byte size for ", name, ": '", raw,
-            "' (a unit is required, use e.g. 4MB or 512KB)"));
+        throw std::runtime_error(
+            dftracer::utils::common::str_cat(
+                "Invalid byte size for ", name, ": '", raw,
+                "' (a unit is required, use e.g. 4MB or 512KB)")
+                .c_str());
     }
     return static_cast<std::size_t>(*parsed);
 }
@@ -222,8 +225,9 @@ inline double get_seconds_arg(const argparse::ArgumentParser& p,
     auto parsed = dftracer::utils::common::parse_duration_seconds(raw);
     if (!parsed) {
         throw std::runtime_error(dftracer::utils::common::str_cat(
-            "Invalid duration for ", name, ": '", raw,
-            "' (use e.g. 30, 30s, 5m, 1.5h)"));
+                                     "Invalid duration for ", name, ": '", raw,
+                                     "' (use e.g. 30, 30s, 5m, 1.5h)")
+                                     .c_str());
     }
     return *parsed;
 }
@@ -239,8 +243,9 @@ inline double get_duration_arg(const argparse::ArgumentParser& p,
         dftracer::utils::common::parse_duration_as(raw, native_per_second);
     if (!parsed) {
         throw std::runtime_error(dftracer::utils::common::str_cat(
-            "Invalid duration for ", name, ": '", raw,
-            "' (use e.g. 5000, 5s, 500ms, 1.5h)"));
+                                     "Invalid duration for ", name, ": '", raw,
+                                     "' (use e.g. 5000, 5s, 500ms, 1.5h)")
+                                     .c_str());
     }
     return *parsed;
 }

@@ -6,7 +6,7 @@
 
 namespace dftracer::utils::common {
 
-ArchiveFormat FormatDetector::detect(const std::string& file_path) {
+ArchiveFormat FormatDetector::detect(dstd::StringView file_path) {
     if (file_path.size() >= 3 &&
         file_path.substr(file_path.size() - 3) == ".gz") {
         return ArchiveFormat::Gzip;
@@ -15,10 +15,11 @@ ArchiveFormat FormatDetector::detect(const std::string& file_path) {
         return ArchiveFormat::Gzip;
     }
 
-    dstd::ScopedFile file(std::fopen(file_path.c_str(), "rb"));
+    const dstd::String path(file_path);
+    dstd::ScopedFile file(std::fopen(path.c_str(), "rb"));
     if (!file) {
         DFTRACER_UTILS_LOG_ERROR("Failed to open file for format detection: %s",
-                                 file_path.c_str());
+                                 path.c_str());
         return ArchiveFormat::Unknown;
     }
 

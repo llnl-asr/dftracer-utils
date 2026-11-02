@@ -5,34 +5,34 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/function.h>
+#include <dftracer/utils/dstd/memory.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <functional>
-#include <memory>
-#include <string>
-#include <vector>
 
 namespace dftracer::utils::trace::genesis {
 
 inline constexpr double SKETCH_ACCURACY = 0.01;
 
 struct RunKeys {
-    std::string app;
-    std::string system;
-    std::string unique_input;
+    dstd::String app;
+    dstd::String system;
+    dstd::String unique_input;
     std::int64_t nodes = 0;
     std::int64_t ppn = 0;
-    std::string papi_set;
+    dstd::String papi_set;
 };
 
 /// One PAPI set of a run group. `papi_counters` (sorted) identifies the set's
 /// processes when a group holds several sets; empty for single-set groups.
 struct SetSpec {
     RunKeys keys;
-    std::vector<std::string> papi_counters;
-    std::vector<std::string> gpu_csvs;
+    dstd::Vector<dstd::String> papi_counters;
+    dstd::Vector<dstd::String> gpu_csvs;
 };
 
 /// Files read together: one set (matrix) or all sets of a tioga run
@@ -40,24 +40,24 @@ struct SetSpec {
 /// holds one template whose keys lack `papi_set`, and each distinct PAPI
 /// counter list found in the traces becomes a set.
 struct RunGroup {
-    std::string dir;
-    std::string rel_dir;
-    std::vector<std::string> files;
+    dstd::String dir;
+    dstd::String rel_dir;
+    dstd::Vector<dstd::String> files;
     std::uint64_t compressed_bytes = 0;
-    std::string summary_json;
-    std::vector<SetSpec> sets;
+    dstd::String summary_json;
+    dstd::Vector<SetSpec> sets;
     bool sets_from_counters = false;
 };
 
 struct Skip {
-    std::string dir;
-    std::string file;
-    std::string reason;
+    dstd::String dir;
+    dstd::String file;
+    dstd::String reason;
 };
 
 struct Discovery {
-    std::vector<RunGroup> groups;
-    std::vector<Skip> skips;
+    dstd::Vector<RunGroup> groups;
+    dstd::Vector<Skip> skips;
 };
 
 /// One finished run. Its JSON lines (run record first) are made on demand from
@@ -71,11 +71,11 @@ class RunOutput {
         virtual std::size_t items() const = 0;
         /// The run and func lines of `item` go to `head`, its counter lines
         /// to `body`; both may be the same string.
-        virtual void append(std::size_t item, std::string& head,
-                            std::string& body) const = 0;
+        virtual void append(std::size_t item, dstd::String& head,
+                            dstd::String& body) const = 0;
     };
 
-    explicit RunOutput(std::unique_ptr<Source> source);
+    explicit RunOutput(dstd::UniquePtr<Source> source);
     RunOutput(RunOutput&&) noexcept;
     RunOutput& operator=(RunOutput&&) noexcept;
     ~RunOutput();
@@ -83,20 +83,20 @@ class RunOutput {
     /// Appends the next run and func lines to `head` and counter lines to
     /// `body`, whole lines of at least `bytes` in all unless the run ends
     /// first; false once no lines are left.
-    bool next(std::string& head, std::string& body, std::size_t bytes);
+    bool next(dstd::String& head, dstd::String& body, std::size_t bytes);
 
     /// Every line of the run, from the start, each func line followed by its
     /// counter lines; does not move next().
-    std::string lines() const;
+    dstd::String lines() const;
 
    private:
-    std::unique_ptr<Source> source_;
+    dstd::UniquePtr<Source> source_;
     std::size_t next_item_ = 0;
 };
 
 struct GroupResult {
-    std::vector<RunOutput> runs;
-    std::vector<Skip> skips;
+    dstd::Vector<RunOutput> runs;
+    dstd::Vector<Skip> skips;
     /// Bytes of call chunks the group wrote to its spill file, and sorted runs
     /// of calls the sort wrote; both are zero when the share held everything.
     std::uint64_t spilled_bytes = 0;
@@ -125,7 +125,7 @@ struct GroupProgress {
     std::atomic<std::uint64_t> calls{0};
     std::atomic<std::uint64_t> sorted{0};
     std::atomic<std::uint64_t> walked{0};
-    std::function<void()> on_update;
+    dstd::Function<void()> on_update;
 
     void enter(Phase p) noexcept {
         phase_since_ns.store(common::steady_now_ns(),
@@ -150,11 +150,11 @@ struct GroupProgress {
 /// run groups, sorted by directory then set. Problems found without reading
 /// traces are reported as skips.
 coro::CoroTask<Discovery> discover(coro::Scope& ctx,
-                                   std::vector<std::string> roots);
+                                   dstd::Vector<dstd::String> roots);
 
 /// 16-digit lowercase hex FNV-1a of `app|system|unique_input|nodes|ppn|
 /// papi_set`.
-std::string run_id(const RunKeys& keys);
+dstd::String run_id(const RunKeys& keys);
 
 /// Read one group's traces (files in parallel) and build each complete set's
 /// output, in set order. A set that fails a completeness or consistency check
@@ -176,7 +176,7 @@ std::string run_id(const RunKeys& keys);
 /// when it has none to spare. It must not wait and must be thread-safe; the
 /// caller keeps track of the bytes it granted and gets them back once the
 /// group's runs are done.
-using BorrowFn = std::function<std::uint64_t(std::uint64_t bytes)>;
+using BorrowFn = dstd::Function<std::uint64_t(std::uint64_t bytes)>;
 
 /// `borrow`, when given, is asked before a set is failed for its share, so a
 /// group whose state outgrows the share takes free memory of the budget

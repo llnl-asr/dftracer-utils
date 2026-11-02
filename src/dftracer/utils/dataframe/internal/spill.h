@@ -7,6 +7,7 @@
 #include <dftracer/utils/dataframe/agg.h>        // AggState, AggStatePtr
 #include <dftracer/utils/dataframe/lazyframe.h>  // Cursor, Morsel
 #include <dftracer/utils/dataframe/series.h>
+#include <dftracer/utils/dstd/memory.h>
 
 #include <atomic>
 #include <cstdint>
@@ -58,7 +59,7 @@ class PartFile {
     std::vector<Series> append(const std::vector<Series>& cols);
 
    private:
-    std::unique_ptr<common::SpillFile> file_;
+    dstd::UniquePtr<common::SpillFile> file_;
 };
 
 /// A self-cleaning spill directory holding one query's spill runs.

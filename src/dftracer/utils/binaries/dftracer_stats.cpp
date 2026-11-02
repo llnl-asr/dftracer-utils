@@ -7,6 +7,8 @@
 #include <dftracer/utils/common/timer.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/duql/query.h>
 #include <dftracer/utils/index/build/batch_builder.h>
 #include <dftracer/utils/index/build/index_batch_writer.h>
@@ -264,7 +266,7 @@ struct AggregateStatsResult {
     std::size_t successful_count = 0;
     std::size_t failed_count = 0;
     std::int64_t read_elapsed_ns = 0;
-    std::unordered_map<std::string, std::uint64_t> read_counters;
+    dstd::HashMap<dstd::String, std::uint64_t> read_counters;
 };
 
 struct IndexedRootSnapshot {
@@ -627,17 +629,18 @@ static void print_detailed_grouped_io(
                     display_key = display_key.substr(0, 27) + "...";
                 }
 
-                std::string size_mean = common::human_bytes(io->size.mean());
-                std::string size_p50 =
+                const dstd::String size_mean =
+                    common::human_bytes(io->size.mean());
+                const dstd::String size_p50 =
                     io->size.sketch.empty()
                         ? "-"
                         : common::human_bytes(io->size.sketch.quantile(0.5));
-                std::string bw_p50 =
+                const dstd::String bw_p50 =
                     (io->bandwidth.count() == 0 || io->bandwidth.sketch.empty())
                         ? "-"
                         : common::human_bytes(
                               io->bandwidth.sketch.quantile(0.5), "/s");
-                std::string offset_p50 =
+                const dstd::String offset_p50 =
                     (io->offset.count() == 0 || io->offset.sketch.empty())
                         ? "-"
                         : common::human_bytes(io->offset.sketch.quantile(0.5));

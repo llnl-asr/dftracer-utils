@@ -5,61 +5,63 @@
 #include <dftracer/utils/dstd/hash/fnv1a.h>
 #include <dftracer/utils/dstd/hash/hex64.h>
 #include <dftracer/utils/dstd/map.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/pair.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/trace/genesis/genesis.h>
 #include <dftracer/utils/utilities/filesystem/pattern_directory_scanner_utility.h>
 #include <simdjson.h>
 
 #include <algorithm>
 #include <charconv>
-#include <map>
-#include <optional>
-#include <string>
-#include <string_view>
-#include <vector>
 
 namespace dftracer::utils::trace::genesis {
 
 namespace {
 
-std::optional<std::int64_t> suffix_number(std::string_view name,
-                                          std::string_view prefix) {
-    if (name.substr(0, prefix.size()) != prefix) return std::nullopt;
+dstd::Optional<std::int64_t> suffix_number(dstd::StringView name,
+                                           dstd::StringView prefix) {
+    if (name.substr(0, prefix.size()) != prefix) return dstd::nullopt;
     std::int64_t v = 0;
     const char* first = name.data() + prefix.size();
     const char* last = name.data() + name.size();
     auto [ptr, ec] = std::from_chars(first, last, v);
-    if (ec != std::errc() || ptr != last || first == last) return std::nullopt;
+    if (ec != std::errc() || ptr != last || first == last) return dstd::nullopt;
     return v;
 }
 
 // `<stem>-<k>_chunk<c>.pfw.gz` -> k.
-std::optional<std::int64_t> slice_index(dstd::StringView file_name) {
+dstd::Optional<std::int64_t> slice_index(dstd::StringView file_name) {
     const auto chunk = file_name.rfind("_chunk");
     const auto dash = file_name.rfind('-', chunk);
     if (chunk == dstd::StringView::npos || dash == dstd::StringView::npos)
-        return std::nullopt;
+        return dstd::nullopt;
     std::int64_t v = 0;
     const char* first = file_name.data() + dash + 1;
     const char* last = file_name.data() + chunk;
     auto [ptr, ec] = std::from_chars(first, last, v);
-    if (ec != std::errc() || ptr != last || first == last) return std::nullopt;
+    if (ec != std::errc() || ptr != last || first == last) return dstd::nullopt;
     return v;
 }
 
 struct DirFiles {
     bool summary = false;
-    std::vector<std::pair<std::string, std::uint64_t>> traces;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> traces;
     // Traces directly in the run directory, used when it has no compacted/.
-    std::vector<std::pair<std::string, std::uint64_t>> run_traces;
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> run_traces;
     // raw/<set>/*.pfw.gz, used for a set whose compacted file is missing.
-    std::map<std::string, std::vector<std::pair<std::string, std::uint64_t>>>
+    dstd::Map<dstd::String,
+              dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>>
         raw;
-    std::map<std::string, std::vector<std::string>> gpu_csvs;
+    dstd::Map<dstd::String, dstd::Vector<dstd::String>> gpu_csvs;
 };
 
-void set_files(RunGroup& g,
-               const std::vector<std::pair<std::string, std::uint64_t>>& fs) {
+void set_files(
+    RunGroup& g,
+    const dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>>& fs) {
     g.files.clear();
     g.compressed_bytes = 0;
     for (const auto& [f, size] : fs) {
@@ -74,21 +76,21 @@ void keys_from_path(dstd::PathView dir, RunKeys& k) {
     const dstd::PathView system = input.parent();
     dstd::PathView app = system.parent();
     if (app.filename() == system.filename()) app = app.parent();
-    k.unique_input = std::string(input.filename());
-    k.system = std::string(system.filename());
-    k.app = std::string(app.filename());
+    k.unique_input = dstd::String(input.filename());
+    k.system = dstd::String(system.filename());
+    k.app = dstd::String(app.filename());
 }
 
-std::string get_string(simdjson::dom::object o, std::string_view key) {
-    std::string_view v;
+dstd::String get_string(simdjson::dom::object o, dstd::StringView key) {
+    dstd::StringView v;
     if (o[key].get(v) != simdjson::SUCCESS) return {};
-    return std::string(v);
+    return dstd::String(v);
 }
 
-std::optional<std::int64_t> get_int(simdjson::dom::object o,
-                                    std::string_view key) {
+dstd::Optional<std::int64_t> get_int(simdjson::dom::object o,
+                                     dstd::StringView key) {
     std::int64_t v = 0;
-    if (o[key].get(v) != simdjson::SUCCESS) return std::nullopt;
+    if (o[key].get(v) != simdjson::SUCCESS) return dstd::nullopt;
     return v;
 }
 
@@ -99,7 +101,7 @@ bool slices_complete(RunGroup& base, const DirFiles& files, Discovery& out) {
         out.skips.push_back({base.dir, "compacted", "no trace files"});
         return false;
     }
-    std::vector<std::int64_t> idx;
+    dstd::Vector<std::int64_t> idx;
     for (const auto& f : base.files) {
         const auto i = slice_index(dstd::PathView(f).filename());
         if (!i) {
@@ -109,13 +111,13 @@ bool slices_complete(RunGroup& base, const DirFiles& files, Discovery& out) {
         idx.push_back(*i);
     }
     std::sort(idx.begin(), idx.end());
-    std::string missing;
+    dstd::String missing;
     std::int64_t expect = 1;
     for (const auto i : idx) {
         if (i > expect) {
             if (!missing.empty()) missing += ',';
-            missing += std::to_string(expect);
-            if (i - 1 > expect) missing += "-" + std::to_string(i - 1);
+            missing += dstd::to_string(expect);
+            if (i - 1 > expect) missing += "-" + dstd::to_string(i - 1);
         }
         expect = i + 1;
     }
@@ -149,14 +151,14 @@ void discover_v1(dstd::PathView dir, const DirFiles& files,
     }
     k.nodes = *nodes;
     k.ppn = *ppn;
-    std::vector<std::string> names;
+    dstd::Vector<dstd::String> names;
     for (auto v : sets) {
-        std::string_view set;
+        dstd::StringView set;
         if (v.get(set) == simdjson::SUCCESS) names.emplace_back(set);
     }
     std::sort(names.begin(), names.end());
     for (const auto& set : names) {
-        const std::string file(
+        const dstd::String file(
             ((dir / "compacted").view() / (set + ".pfw.gz")).str());
         const auto it =
             std::find_if(files.traces.begin(), files.traces.end(),
@@ -200,7 +202,7 @@ void discover_v2(dstd::PathView dir, const DirFiles& files,
     k.ppn = *ppn;
     if (!slices_complete(base, files, out)) return;
 
-    std::map<std::string, SetSpec> ordered;
+    dstd::Map<dstd::String, SetSpec> ordered;
     for (auto [set, run] : runs) {
         simdjson::dom::object r;
         if (run.get(r) != simdjson::SUCCESS) continue;
@@ -208,22 +210,22 @@ void discover_v2(dstd::PathView dir, const DirFiles& files,
         if (r["completed_ok"].get(completed) == simdjson::SUCCESS &&
             !completed) {
             out.skips.push_back(
-                {base.dir, std::string(set), "completed_ok is false"});
+                {base.dir, dstd::String(set), "completed_ok is false"});
             continue;
         }
         SetSpec spec;
         spec.keys = k;
-        spec.keys.papi_set = std::string(set);
+        spec.keys.papi_set = dstd::String(set);
         simdjson::dom::array counters;
         if (r["papi_counters"].get(counters) == simdjson::SUCCESS) {
             for (auto c : counters) {
-                std::string_view name;
+                dstd::StringView name;
                 if (c.get(name) == simdjson::SUCCESS)
                     spec.papi_counters.emplace_back(name);
             }
         }
         std::sort(spec.papi_counters.begin(), spec.papi_counters.end());
-        ordered.emplace(std::string(set), std::move(spec));
+        ordered.emplace(dstd::String(set), std::move(spec));
     }
     for (auto& [_, spec] : ordered) base.sets.push_back(std::move(spec));
     if (!base.sets.empty()) out.groups.push_back(std::move(base));
@@ -251,9 +253,9 @@ void discover_dir(dstd::PathView root, dstd::PathView dir,
     if (!ppn || !nodes) return;
 
     RunGroup base;
-    base.dir = std::string(dir.str());
+    base.dir = dstd::String(dir.str());
     // Relative to the resolved root, as std::filesystem::relative was.
-    base.rel_dir = std::string(
+    base.rel_dir = dstd::String(
         dstd::relative(common::unwrap(dstd::fs::weakly_canonical(dir)).view(),
                        common::unwrap(dstd::fs::weakly_canonical(root)).view())
             .str());
@@ -272,7 +274,7 @@ void discover_dir(dstd::PathView root, dstd::PathView dir,
         out.skips.push_back({base.dir, "summary.json", "unparsable JSON"});
         return;
     }
-    base.summary_json = std::string(simdjson::minify(s));
+    base.summary_json = dstd::String(simdjson::minify(s));
     simdjson::dom::object runs;
     simdjson::dom::array sets;
     if (s["runs"].get(runs) == simdjson::SUCCESS) {
@@ -311,21 +313,24 @@ DirFiles& files_of(DirMap& dirs, dstd::PathView dir) {
 
 }  // namespace
 
-std::string run_id(const RunKeys& k) {
-    const std::string key = k.app + "|" + k.system + "|" + k.unique_input +
-                            "|" + std::to_string(k.nodes) + "|" +
-                            std::to_string(k.ppn) + "|" + k.papi_set;
-    return dstd::hash::format_hex64(dstd::hash::fnv1a_hash(key));
+dstd::String run_id(const RunKeys& k) {
+    const dstd::String key = k.app + "|" + k.system + "|" + k.unique_input +
+                             "|" + dstd::to_string(k.nodes) + "|" +
+                             dstd::to_string(k.ppn) + "|" + k.papi_set;
+    dstd::String id(16, '\0');
+    dstd::hash::format_hex64(dstd::hash::fnv1a_hash(key), id.data());
+    return id;
 }
 
 coro::CoroTask<Discovery> discover(coro::Scope& ctx,
-                                   std::vector<std::string> roots) {
+                                   dstd::Vector<dstd::String> roots) {
     Discovery out;
     const utilities::filesystem::PatternDirectoryScannerUtility scan;
     for (const auto& r : roots) {
         const dstd::Path root =
             common::unwrap(dstd::fs::absolute(dstd::PathView(r)));
         // A braced list inside the co_await expression crashes GCC 12.
+        // keep std: the scanner input holds a std::vector of std::string
         const std::vector<std::string> patterns{".pfw.gz", "summary.json",
                                                 ".csv"};
         utilities::filesystem::PatternDirectoryScannerUtilityInput input(
@@ -339,25 +344,25 @@ coro::CoroTask<Discovery> discover(coro::Scope& ctx,
                 files_of(dirs, parent).summary = true;
             } else if (parent.filename() == "compacted") {
                 files_of(dirs, parent.parent())
-                    .traces.emplace_back(std::string(path.str()), e.size);
+                    .traces.emplace_back(dstd::String(path.str()), e.size);
             } else if (path.extension() == ".gz" &&
                        parent.filename().starts_with("ppn_")) {
                 // <run>/<stem>-<k>_chunk<c>.pfw.gz: slices kept in the run
                 // directory itself rather than in compacted/.
                 files_of(dirs, parent)
-                    .run_traces.emplace_back(std::string(path.str()), e.size);
+                    .run_traces.emplace_back(dstd::String(path.str()), e.size);
             } else if (path.extension() == ".gz" &&
                        parent.parent().filename() == "raw") {
                 // <run>/raw/<set>/<file>.pfw.gz
                 files_of(dirs, parent.parent().parent())
-                    .raw[std::string(parent.filename())]
-                    .emplace_back(std::string(path.str()), e.size);
+                    .raw[dstd::String(parent.filename())]
+                    .emplace_back(dstd::String(path.str()), e.size);
             } else if (parent.filename() == "dftracer_service" &&
                        path.filename().starts_with("gpu_power_")) {
                 // <run>/raw/<set>/dftracer_service/gpu_power_<host>.csv
                 const dstd::PathView set = parent.parent();
                 files_of(dirs, set.parent().parent())
-                    .gpu_csvs[std::string(set.filename())]
+                    .gpu_csvs[dstd::String(set.filename())]
                     .emplace_back(path.str());
             }
         }

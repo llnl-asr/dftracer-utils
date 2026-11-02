@@ -2,12 +2,12 @@
 #ifndef DFTRACER_UTILS_COMMON_INTERN_TABLE_H
 #define DFTRACER_UTILS_COMMON_INTERN_TABLE_H
 
+#include <dftracer/utils/dstd/string.h>
 #include <dftracer/utils/dstd/string_intern.h>
 #include <dftracer/utils/memory/manager.h>
 
 #include <atomic>
 #include <cstdint>
-#include <string_view>
 #include <utility>
 
 namespace dftracer::utils::common {
@@ -50,13 +50,13 @@ class InternTable {
     dstd::StringIntern& strings() noexcept { return strings_; }
     const dstd::StringIntern& strings() const noexcept { return strings_; }
 
-    InternId intern(std::string_view sv) {
+    InternId intern(dstd::StringView sv) {
         return InternId(strings_.get_or_insert(sv));
     }
 
     /// Empty for NONE and for an id with no string.
-    std::string_view get(InternId id) const {
-        return id == InternId::NONE ? std::string_view{}
+    dstd::StringView get(InternId id) const {
+        return id == InternId::NONE ? dstd::StringView{}
                                     : strings_.resolve(id.value);
     }
 

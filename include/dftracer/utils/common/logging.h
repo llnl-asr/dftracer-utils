@@ -3,12 +3,13 @@
 #define DFTRACER_UTILS_COMMON_LOGGING_H
 
 #include <dftracer/utils/common/config.h>
+#include <dftracer/utils/common/platform_compat.h>
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
-#include <optional>
-#include <string_view>
 
 namespace dftracer::utils::common::logger {
 
@@ -43,7 +44,7 @@ void set_color(ColorMode mode);
 
 /// Name <-> Level. level_from_name accepts trace|debug|info|warn|warning|error|
 /// off|none and returns nullopt if unrecognized; level_name returns lowercase.
-std::optional<Level> level_from_name(std::string_view name);
+dstd::Optional<Level> level_from_name(dstd::StringView name);
 const char* level_name(Level level);
 
 namespace detail {
@@ -58,10 +59,8 @@ inline bool enabled(Level lvl) noexcept {
 
 /// Emit one formatted line. Thread-safe without a lock: the whole line is built
 /// locally and written in a single call (stdio per-stream lock).
-__attribute__((__format__(__printf__, 4, 5))) void write(Level lvl,
-                                                         const char* file,
-                                                         int line,
-                                                         const char* fmt, ...);
+DFTRACER_UTILS_PRINTF_FORMAT(4, 5)
+void write(Level lvl, const char* file, int line, const char* fmt, ...);
 
 /// Open/close a trace scope. The returned handle lives in the @ref ScopeTracer
 /// object so it follows a coroutine across thread migration (a thread-local
@@ -86,8 +85,9 @@ class ScopeTracer {
         if (enabled(Level::Trace)) handle_ = scope_open(file, line, func);
     }
 
-    __attribute__((__format__(__printf__, 5, 6))) ScopeTracer(
-        const char* file, int line, const char* func, const char* fmt, ...) {
+    DFTRACER_UTILS_PRINTF_FORMAT(5, 6)
+    ScopeTracer(const char* file, int line, const char* func, const char* fmt,
+                ...) {
         if (!enabled(Level::Trace)) return;
         char label[256];
         int off = std::snprintf(label, sizeof(label), "%s: ", func);

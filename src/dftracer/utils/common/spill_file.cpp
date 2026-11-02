@@ -10,15 +10,15 @@
 
 #include <cerrno>
 #include <cstring>
-#include <string>
+#include <memory>
 
 namespace dftracer::utils::common {
 
-Result<std::unique_ptr<SpillFile>> SpillFile::create() {
+Result<dstd::UniquePtr<SpillFile>> SpillFile::create() {
     auto dir = spill_dir();
     if (!dir) return dstd::Unexpected(dir.error());
     dstd::String path((dir->view() / "dftu_spill_XXXXXX").str());
-    std::unique_ptr<SpillFile> f(new SpillFile(spill_dir_in_memory(*dir)));
+    auto f = dstd::make_unique<SpillFile>(Key{}, spill_dir_in_memory(*dir));
     f->fd_ = dstd::ScopedFd(::mkostemp(path.data(), O_CLOEXEC));
     if (f->fd_.get() < 0)
         return make_error(

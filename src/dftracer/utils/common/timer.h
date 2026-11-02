@@ -2,10 +2,11 @@
 #ifndef DFTRACER_UTILS_COMMON_TIMER_H
 #define DFTRACER_UTILS_COMMON_TIMER_H
 
+#include <dftracer/utils/dstd/hash_map.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <chrono>
 #include <cstdint>
-#include <string>
-#include <unordered_map>
 
 namespace dftracer::utils::common {
 
@@ -31,19 +32,19 @@ inline std::int64_t elapsed_ms(std::int64_t t0_ms) {
 class Timer {
    public:
     Timer(bool autostart = false, bool verbose = false);
-    Timer(const std::string& name, bool autostart = false,
-          bool verbose = false);
+    Timer(dstd::StringView name, bool autostart = false, bool verbose = false);
     Timer(const char* name, bool autostart = false, bool verbose = false);
     ~Timer();
     void start();
     void stop();
     std::int64_t elapsed() const;
-    void increment(const std::string& key, std::uint64_t by = 1);
-    void set_counter(const std::string& key, std::uint64_t value);
-    const std::unordered_map<std::string, std::uint64_t>& counters() const;
-    void print_stages(const std::string& indent = "  ") const;
+    void increment(dstd::StringView key, std::uint64_t by = 1);
+    void set_counter(dstd::StringView key, std::uint64_t value);
+    /// The counters in no particular order.
+    const dstd::HashMap<dstd::String, std::uint64_t>& counters() const;
+    void print_stages(dstd::StringView indent = "  ") const;
 
-    inline const std::string& name() const { return name_; }
+    inline const dstd::String& name() const { return name_; }
     inline bool is_running() const { return running_; }
     inline bool is_stopped() const { return !running_; }
     inline bool is_verbose() const { return verbose_; }
@@ -55,7 +56,7 @@ class Timer {
         return *this;
     }
 
-    inline Timer& set_name(const std::string& name) {
+    inline Timer& set_name(dstd::StringView name) {
         name_ = name;
         return *this;
     }
@@ -68,11 +69,11 @@ class Timer {
    private:
     bool verbose_ = false;
     bool running_ = false;
-    std::string name_;
+    dstd::String name_;
     using Clock = std::chrono::high_resolution_clock;
     Clock::time_point start_time;
     Clock::time_point end_time;
-    std::unordered_map<std::string, std::uint64_t> counters_;
+    dstd::HashMap<dstd::String, std::uint64_t> counters_;
 };
 
 /// Self-contained scoped timer. Each instance captures its own start
@@ -80,10 +81,10 @@ class Timer {
 /// on destruction, so ScopedTimers can be nested freely.
 class ScopedTimer {
    public:
-    ScopedTimer(Timer& timer, std::string key)
+    ScopedTimer(Timer& timer, dstd::String key)
         : timer_(&timer), key_(std::move(key)), start_(Clock::now()) {}
 
-    ScopedTimer(Timer* timer, std::string key)
+    ScopedTimer(Timer* timer, dstd::String key)
         : timer_(timer), key_(std::move(key)), start_(Clock::now()) {}
 
     ~ScopedTimer() {
@@ -100,7 +101,7 @@ class ScopedTimer {
    private:
     using Clock = std::chrono::high_resolution_clock;
     Timer* timer_;
-    std::string key_;
+    dstd::String key_;
     Clock::time_point start_;
 };
 

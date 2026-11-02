@@ -15,10 +15,7 @@
 
 #include <atomic>
 #include <cstdint>
-#include <optional>
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -134,7 +131,7 @@ dstd::Path compute_local_spill_root() {
     // own directories under a mount, not the mount itself), so try the
     // per-user places that live on disk: /var/tmp, then ~/.cache.
     if (best.empty()) {
-        std::vector<dstd::Path> candidates;
+        dstd::Vector<dstd::Path> candidates;
         candidates.emplace_back("/var/tmp");
         const dstd::String home = env_str("HOME");
         if (!home.empty())
@@ -235,16 +232,17 @@ ScratchSession::~ScratchSession() {
     (void)dstd::fs::remove_all(dir_.view());
 }
 
-std::optional<ScratchSession> staged_build_scratch(
+dstd::Optional<ScratchSession> staged_build_scratch(
+    // keep std: the index build and the python bindings fill this list
     const std::vector<std::string>& files) {
     std::uint64_t input_bytes = 0;
-    for (const std::string& file : files) {
+    for (const auto& file : files) {
         InputFileStat st;
         if (stat_input(file, st)) input_bytes += st.size;
     }
     const int factor =
         Env::get<int>("DFTRACER_UTILS_INDEX_SIZE_FACTOR").value_or(3);
-    std::optional<ScratchSession> scratch(
+    dstd::Optional<ScratchSession> scratch(
         std::in_place,
         input_bytes * static_cast<std::uint64_t>(factor > 0 ? factor : 1));
     if (!scratch->valid()) scratch.reset();

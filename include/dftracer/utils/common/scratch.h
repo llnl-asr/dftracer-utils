@@ -3,10 +3,12 @@
 #define DFTRACER_UTILS_COMMON_SCRATCH_H
 
 #include <dftracer/utils/dstd/cstring_view.h>
+#include <dftracer/utils/dstd/optional.h>
 #include <dftracer/utils/dstd/path.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,7 +69,8 @@ class ScratchSession {
 /// A scratch directory to build the index of `files` in, sized from their bytes
 /// times $DFTRACER_UTILS_INDEX_SIZE_FACTOR, or nullopt when no scratch mount
 /// has room. The caller publishes the store it builds there with publish_path.
-std::optional<ScratchSession> staged_build_scratch(
+dstd::Optional<ScratchSession> staged_build_scratch(
+    // keep std: the index build and the python bindings fill this list
     const std::vector<std::string>& files);
 
 /// Move `src` (a directory or file built on scratch) to `dst`, replacing any

@@ -20,11 +20,16 @@
 
 #define DFTRACER_UTILS_MEMORY_PROBE_DEFINE_NEW
 #include <dftracer/utils/common/constants.h>
+#include <dftracer/utils/common/str_format.h>
 #include <dftracer/utils/coro/scope.h>
 #include <dftracer/utils/coro/task.h>
 #include <dftracer/utils/dataframe/dataframe.h>
 #include <dftracer/utils/dataframe/lazyframe.h>
 #include <dftracer/utils/dstd/fs.h>
+#include <dftracer/utils/dstd/string.h>
+#include <dftracer/utils/dstd/thread.h>
+#include <dftracer/utils/dstd/to_chars.h>
+#include <dftracer/utils/dstd/vector.h>
 #include <dftracer/utils/index/indexer.h>
 #include <dftracer/utils/memory/manager.h>
 #include <dftracer/utils/runtime/runtime.h>
@@ -42,14 +47,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <fstream>
-#include <memory>
-#include <optional>
-#include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
-#include <vector>
 
 using namespace dftracer::utils;
 namespace df = dftracer::utils::dataframe;
@@ -116,7 +115,7 @@ const char* group_name(PoolGroup g) {
     return "-";
 }
 
-bool ends_with(std::string_view s, std::string_view tail) {
+bool ends_with(dstd::StringView s, dstd::StringView tail) {
     return s.size() >= tail.size() && s.substr(s.size() - tail.size()) == tail;
 }
 
@@ -127,7 +126,7 @@ bool in_group(const memory::PoolStats& p, PoolGroup g) {
         case PoolGroup::Query:
             return ends_with(p.path, "/query");
         case PoolGroup::Genesis:
-            return p.path.find("/genesis/") != std::string::npos;
+            return p.path.find("/genesis/") != dstd::String::npos;
         case PoolGroup::FoldBuffers:
             return ends_with(p.path, "/fold buffers");
     }
@@ -149,9 +148,9 @@ struct Peaks {
 };
 
 struct Paths {
-    std::string trace;
-    std::string genesis_root;
-    std::string index_dir;
+    dstd::String trace;
+    dstd::String genesis_root;
+    dstd::String index_dir;
 };
 
 class Sampler {
@@ -186,7 +185,7 @@ class Sampler {
     void sample() {
         const mp::Reading r = mp::read();
         const std::int64_t live = mp::live_bytes();
-        const std::vector<memory::PoolStats> pools = memory::pool_stats();
+        const auto pools = memory::pool_stats();
         std::uint64_t group_live = 0;
         std::uint64_t group_reserved = 0;
         for (const memory::PoolStats& p : pools) {
@@ -227,7 +226,7 @@ class Sampler {
     std::atomic<bool> run_{true};
     bool stopped_ = false;
     Peaks result_;
-    std::thread thread_;
+    dstd::Thread thread_;
 };
 
 void run_plan(const df::LazyFrame& plan, std::uint64_t budget) {
@@ -241,6 +240,7 @@ void run_scoped(Fn fn) {
 
 void group_by(const Sizes& s) {
     run_plan(gen(s.frame_rows, s.frame_rows, 1)
+                 // keep std: group_by takes std::vector<std::string>
                  .group_by(std::vector<std::string>{"k", "v"},
                            {df::GroupAgg{df::Agg::Sum, "t", "t_sum"}}),
              PLAN_BUDGET);
@@ -266,19 +266,20 @@ void index_build(const Paths& p) {
     index::IndexerOptions options;
     options.index_dir = p.index_dir;
     options.bloom->required = false;
-    auto indexer = index::Indexer::open({p.trace}, options);
+    auto indexer = index::Indexer::open(
+        {std::string(p.trace.data(), p.trace.size())}, options);
     run_scoped([&](coro::Scope& scope) -> coro::CoroTask<void> {
         co_await indexer.rebuild(scope);
     });
 }
 
-coro::CoroTask<void> read_lines(std::string file) {
+coro::CoroTask<void> read_lines(dstd::String file) {
     simdjson::dom::parser parser;
-    auto gen =
-        utilities::fileio::lines::sources::async_streaming_gz_lines(file);
+    auto gen = utilities::fileio::lines::sources::async_streaming_gz_lines(
+        std::string(file.data(), file.size()));
     std::uint64_t parsed = 0;
     while (auto line = co_await gen.next()) {
-        std::string_view l = line->content;
+        dstd::StringView l = line->content;
         simdjson::dom::object o;
         if (!l.empty() && l.front() == '{' &&
             parser.parse(l.data(), l.size()).get(o) == simdjson::SUCCESS)
@@ -299,33 +300,37 @@ void genesis(const Paths& p) {
         [&](coro::Scope& ctx) { return genesis_run(ctx, p.genesis_root); });
 }
 
-std::string trace_text(std::int64_t lines) {
+dstd::String trace_text(std::int64_t lines) {
     static const char* const NAMES[] = {"read", "write", "open", "close"};
-    std::string out;
+    dstd::String out;
     for (std::int64_t i = 0; i < lines; ++i) {
         out += R"({"ph":"X","name":")";
         out += NAMES[i % 4];
-        out += R"(","cat":"POSIX","pid":)" + std::to_string(i % 4);
-        out += R"(,"tid":1,"ts":)" + std::to_string(1000 + i * 10);
-        out += R"(,"dur":)" + std::to_string(1 + i % 50);
+        out += R"(","cat":"POSIX","pid":)" + dstd::to_string(i % 4);
+        out += R"(,"tid":1,"ts":)" + dstd::to_string(1000 + i * 10);
+        out += R"(,"dur":)" + dstd::to_string(1 + i % 50);
         out +=
-            R"(,"args":{"fname":"/data/f)" + std::to_string(i % 8) + "\"}}\n";
+            R"(,"args":{"fname":"/data/f)" + dstd::to_string(i % 8) + "\"}}\n";
     }
     return out;
 }
 
-Paths prepare(const std::string& dir, const Sizes& s) {
+Paths prepare(const dstd::String& dir, const Sizes& s) {
     (void)dstd::fs::remove_all(dir);
     Paths p;
     p.trace = dir + "/trace/smoke.pfw.gz";
     write_gz(p.trace, trace_text(s.trace_lines));
     p.index_dir = dir + "/index";
-    const std::string run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
+    const dstd::String run = dir + "/genesis/app1/sys1/in1/nodes_1/ppn_1";
     require_ok(dstd::fs::create_directories(run), "create_directories");
-    std::ofstream((run + "/summary.json").c_str())
-        << R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
-           R"("nodes":1,"ppn":)"
-        << RANKS << R"(,"sets":["set1"]})";
+    require_ok(
+        dstd::fs::write_file(
+            run + "/summary.json",
+            common::str_cat(
+                R"({"ok":true,"app":"app1","system":"sys1","input":"in1",)"
+                R"("nodes":1,"ppn":)",
+                RANKS, R"(,"sets":["set1"]})")),
+        "write summary.json");
     write_gz(run + "/compacted/set1.pfw.gz", genesis_text(s.genesis_calls));
     p.genesis_root = dir + "/genesis";
     return p;
@@ -412,13 +417,13 @@ double mib(std::uint64_t bytes) { return static_cast<double>(bytes) / MIB; }
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool smoke = argc == 2 && std::string_view(argv[1]) == "--smoke";
+    const bool smoke = argc == 2 && dstd::StringView(argv[1]) == "--smoke";
     if (argc > 2 || (argc == 2 && !smoke)) {
         std::fprintf(stderr, "usage: memory_attribution_bench [--smoke]\n");
         return 2;
     }
     const Sizes sizes = smoke ? SMOKE_SIZES : FULL_SIZES;
-    const std::string dir(
+    const dstd::String dir(
         (dstd::fs::temp_directory() / "memory_attribution_bench").str());
     const Paths paths = prepare(dir, sizes);
 

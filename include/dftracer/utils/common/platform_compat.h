@@ -75,10 +75,10 @@
     alignas(DFTRACER_UTILS_OPTIMAL_ALIGNMENT) type name[size]
 
 #include <dftracer/utils/common/env.h>
+#include <dftracer/utils/dstd/thread.h>
 
 #include <cstddef>
 #include <cstdlib>
-#include <thread>
 
 #if defined(__linux__)
 #include <sched.h>
@@ -101,7 +101,7 @@ inline std::size_t hardware_concurrency() {
         if (allowed > 0) return static_cast<std::size_t>(allowed);
     }
 #endif
-    auto n = std::thread::hardware_concurrency();
+    const auto n = dstd::Thread::hardware_concurrency();
     return n == 0 ? 1u : static_cast<std::size_t>(n);
 }
 
@@ -143,6 +143,14 @@ extern "C" void __tsan_release(void *);
     __attribute__((no_thread_safety_analysis))
 #else
 #define DFTRACER_UTILS_NO_THREAD_SAFETY_ANALYSIS
+#endif
+
+/// printf-style argument checking where the compiler has it, nothing on MSVC.
+#if defined(__GNUC__) || defined(__clang__)
+#define DFTRACER_UTILS_PRINTF_FORMAT(FMT_INDEX, ARG_INDEX) \
+    __attribute__((__format__(__printf__, FMT_INDEX, ARG_INDEX)))
+#else
+#define DFTRACER_UTILS_PRINTF_FORMAT(FMT_INDEX, ARG_INDEX)
 #endif
 
 #endif  // DFTRACER_UTILS_COMMON_PLATFORM_COMPAT_H

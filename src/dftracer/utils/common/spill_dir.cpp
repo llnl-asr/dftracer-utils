@@ -11,6 +11,7 @@
 #include <dftracer/utils/dstd/path.h>
 #include <dftracer/utils/dstd/shutdown.h>
 #include <dftracer/utils/dstd/singleton.h>
+#include <dftracer/utils/dstd/to_chars.h>
 #include <dftracer/utils/memory/manager.h>
 #include <signal.h>
 #include <unistd.h>
@@ -18,7 +19,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
-#include <charconv>
 #include <mutex>
 
 namespace dftracer::utils::common {
@@ -154,7 +154,7 @@ memory::ExternalSlot& spill_slot() {
 // the charge of the directory holding it.
 struct SubdirRegistry {
     std::mutex mu;
-    dstd::Map<dstd::String, std::weak_ptr<SpillCharge>> by_path;
+    dstd::Map<dstd::String, dstd::WeakPtr<SpillCharge>> by_path;
 };
 
 SubdirRegistry& subdirs() { return dstd::Singleton<SubdirRegistry>::get(); }
@@ -226,7 +226,7 @@ void sweep_stale(dstd::PathView root, dstd::StringView prefix) {
         const char* first = name.data() + prefix.size() + 1 + tag.size();
         const char* last = name.data() + name.size();
         long pid = 0;
-        const auto [stop, perr] = std::from_chars(first, last, pid);
+        const auto [stop, perr] = dstd::from_chars(first, last, pid);
         if (perr != std::errc{} || stop == last || *stop != '_' || pid <= 0)
             continue;
         if (::kill(static_cast<pid_t>(pid), 0) == 0 || errno != ESRCH) continue;
@@ -264,7 +264,7 @@ Result<ScopedSpillSubdir> ScopedSpillSubdir::create(dstd::StringView prefix) {
             str_cat("spill: cannot create '", dir.str(), "' (",
                     made.error().message(), "); set ", constants::SPILL_DIR_ENV,
                     " to a writable directory"));
-    auto charge = std::make_shared<SpillCharge>(spill_dir_in_memory(*root));
+    auto charge = dstd::make_shared<SpillCharge>(spill_dir_in_memory(*root));
     SubdirRegistry& reg = subdirs();
     {
         std::lock_guard<std::mutex> lock(reg.mu);
@@ -273,7 +273,7 @@ Result<ScopedSpillSubdir> ScopedSpillSubdir::create(dstd::StringView prefix) {
     return ScopedSpillSubdir(dir, std::move(charge));
 }
 
-std::shared_ptr<SpillCharge> ScopedSpillSubdir::charge_for(
+dstd::SharedPtr<SpillCharge> ScopedSpillSubdir::charge_for(
     dstd::PathView file) {
     const dstd::PathView parent = file.parent();
     SubdirRegistry& reg = subdirs();

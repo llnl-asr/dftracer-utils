@@ -3,14 +3,14 @@
 #define DFTRACER_UTILS_COMMON_FORMAT_DETECTOR_H
 
 #include <dftracer/utils/common/archive_format.h>
+#include <dftracer/utils/dstd/string.h>
 
 #include <cstdio>
-#include <string>
 
 namespace dftracer::utils::common {
 class FormatDetector {
    public:
-    static ArchiveFormat detect(const std::string& file_path);
+    static ArchiveFormat detect(dstd::StringView file_path);
     static ArchiveFormat detect_from_content(FILE* file);
     static bool is_gzip(FILE* file);
 

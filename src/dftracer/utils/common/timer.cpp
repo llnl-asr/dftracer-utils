@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <dftracer/utils/common/logging.h>
 #include <dftracer/utils/common/timer.h>
+#include <dftracer/utils/dstd/pair.h>
+#include <dftracer/utils/dstd/vector.h>
 
 #include <algorithm>
 #include <cinttypes>
 #include <cstdio>
 #include <utility>
-#include <vector>
 
 namespace dftracer::utils::common {
 
@@ -17,7 +18,7 @@ Timer::Timer(bool autostart, bool verbose)
     }
 }
 
-Timer::Timer(const std::string& name, bool autostart, bool verbose)
+Timer::Timer(dstd::StringView name, bool autostart, bool verbose)
     : verbose_(verbose), running_(false), name_(name) {
     if (autostart) {
         start();
@@ -25,7 +26,7 @@ Timer::Timer(const std::string& name, bool autostart, bool verbose)
 }
 
 Timer::Timer(const char* name, bool autostart, bool verbose)
-    : Timer(std::string(name), autostart, verbose) {}
+    : Timer(dstd::StringView(name), autostart, verbose) {}
 
 Timer::~Timer() {
     stop();
@@ -63,30 +64,31 @@ std::int64_t Timer::elapsed() const {
     }
 }
 
-void Timer::increment(const std::string& key, std::uint64_t by) {
+void Timer::increment(dstd::StringView key, std::uint64_t by) {
     counters_[key] += by;
 }
 
-void Timer::set_counter(const std::string& key, std::uint64_t value) {
+void Timer::set_counter(dstd::StringView key, std::uint64_t value) {
     counters_[key] = value;
 }
 
-const std::unordered_map<std::string, std::uint64_t>& Timer::counters() const {
+const dstd::HashMap<dstd::String, std::uint64_t>& Timer::counters() const {
     return counters_;
 }
 
-void Timer::print_stages(const std::string& prefix) const {
+void Timer::print_stages(dstd::StringView prefix) const {
     if (counters_.empty()) return;
 
-    std::vector<std::pair<std::string, std::uint64_t>> sorted(counters_.begin(),
-                                                              counters_.end());
+    dstd::Vector<dstd::Pair<dstd::String, std::uint64_t>> sorted(
+        counters_.begin(), counters_.end());
     std::sort(sorted.begin(), sorted.end());
 
     std::uint64_t total_ns = 0;
     for (const auto& [_, ns] : sorted) total_ns += ns;
 
     if (!name_.empty()) {
-        std::printf("%s%s (%.2f ms)\n", prefix.c_str(), name_.c_str(),
+        std::printf("%.*s%s (%.2f ms)\n", static_cast<int>(prefix.size()),
+                    prefix.data(), name_.c_str(),
                     static_cast<double>(total_ns) / 1e6);
     }
     for (std::size_t i = 0; i < sorted.size(); ++i) {
@@ -96,7 +98,8 @@ void Timer::print_stages(const std::string& prefix) const {
         double pct = total_ns > 0 ? 100.0 * static_cast<double>(ns) /
                                         static_cast<double>(total_ns)
                                   : 0.0;
-        std::printf("%s%s %-28s %8.2f ms  (%5.1f%%)\n", prefix.c_str(),
+        std::printf("%.*s%s %-28s %8.2f ms  (%5.1f%%)\n",
+                    static_cast<int>(prefix.size()), prefix.data(),
                     last ? "\\-- " : "|-- ", key.c_str(), ms, pct);
     }
 }

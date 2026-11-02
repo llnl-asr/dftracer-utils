@@ -2,7 +2,7 @@
 #ifndef DFTRACER_UTILS_COMMON_SYMBOLIZE_H
 #define DFTRACER_UTILS_COMMON_SYMBOLIZE_H
 
-#include <string>
+#include <dftracer/utils/dstd/string.h>
 
 namespace dftracer::utils::common {
 
@@ -10,7 +10,7 @@ namespace dftracer::utils::common {
 /// reduced to the bare function name; falls back to "module+0xoffset" and then
 /// "?" when no symbol is available. Used by both the coroutine monitor and the
 /// logger's coroutine tracing.
-std::string symbolize_function(const void* fn);
+dstd::String symbolize_function(const void* fn);
 
 }  // namespace dftracer::utils::common
 

@@ -2,35 +2,36 @@
 #ifndef DFTRACER_UTILS_COMMON_ENV_H
 #define DFTRACER_UTILS_COMMON_ENV_H
 
+#include <dftracer/utils/dstd/optional.h>
+#include <dftracer/utils/dstd/string.h>
+
 #include <cstdint>
-#include <optional>
-#include <string_view>
 #include <type_traits>
 
 namespace dftracer::utils::common {
 
 class Env {
    public:
-    template <typename T = std::string_view>
-    static std::optional<T> get(std::string_view name);
+    template <typename T = dstd::StringView>
+    static dstd::Optional<T> get(dstd::StringView name);
 };
 
 template <typename T>
-std::optional<T> Env::get(std::string_view) {
+dstd::Optional<T> Env::get(dstd::StringView) {
     static_assert(sizeof(T) == 0,
                   "Env::get<T>() requires an explicit specialization");
-    return std::nullopt;
+    return dstd::nullopt;
 }
 
 template <>
-std::optional<std::string_view> Env::get<std::string_view>(
-    std::string_view name);
+dstd::Optional<dstd::StringView> Env::get<dstd::StringView>(
+    dstd::StringView name);
 
 template <>
-std::optional<int> Env::get<int>(std::string_view name);
+dstd::Optional<int> Env::get<int>(dstd::StringView name);
 
 template <>
-std::optional<std::uint64_t> Env::get<std::uint64_t>(std::string_view name);
+dstd::Optional<std::uint64_t> Env::get<std::uint64_t>(dstd::StringView name);
 
 }  // namespace dftracer::utils::common
 

@@ -11,6 +11,8 @@
 // DataDog DDSketch reference implementations:
 //   - Python: https://github.com/DataDog/sketches-py (Apache 2.0)
 //   - Java:   https://github.com/DataDog/sketches-java (Apache 2.0)
+// Modified from the originals (Apache-2.0, Copyright 2020-2021 Datadog, Inc.),
+// see THIRD-PARTY-NOTICES.md.
 //
 // The store is a dense array with an offset. When the key range exceeds the
 // bin limit, the lowest bins are collapsed (summed into the first bin) to

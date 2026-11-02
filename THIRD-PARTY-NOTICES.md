@@ -18,7 +18,7 @@ notices here cover only the third-party dependencies.
 | simdjson | `Apache-2.0 OR MIT` | https://github.com/simdjson/simdjson |
 | Apache Arrow nanoarrow | `Apache-2.0` | https://github.com/apache/arrow-nanoarrow |
 | zlib-ng | `Zlib` | https://github.com/zlib-ng/zlib-ng |
-| Zstandard (zstd) | `BSD-3-Clause OR GPL-2.0-only` | https://github.com/facebook/zstd |
+| Zstandard (zstd) | `BSD-3-Clause OR GPL-2.0-only` | https://github.com/meta/zstd |
 | libdeflate | `MIT` | https://github.com/ebiggers/libdeflate |
 | Boost.Math | `BSL-1.0` | https://github.com/boostorg/math |
 | yaml-cpp | `MIT` | https://github.com/jbeder/yaml-cpp |
@@ -30,6 +30,53 @@ notices here cover only the third-party dependencies.
 | ghc::filesystem | `MIT` | https://github.com/gulrak/filesystem |
 | PCRE2 | `BSD-3-Clause WITH PCRE2-exception` | https://github.com/PCRE2Project/pcre2 |
 | Vectorscan | `BSD-3-Clause` | https://github.com/VectorCamp/vectorscan |
+| utf8proc | MIT, and the Unicode, Inc. data files license (1991-2007) for `utf8proc_data.c` | https://github.com/JuliaStrings/utf8proc |
+
+## Vendored build tooling
+
+- CPM.cmake (`MIT`, https://github.com/cpm-cmake/CPM.cmake) is vendored as
+  `cmake/vendor/CPM_0.42.1.cmake`, which keeps its full license text.
+
+## Web viewer (embedded in the server binary)
+
+The server embeds the built web viewer. Versions come from
+`web/package-lock.json`.
+
+| Component | Version | License (SPDX) | Homepage |
+|---|---|---|---|
+| solid-js | 1.9.14 | `MIT` | https://www.npmjs.com/package/solid-js |
+| seroval | 1.5.4 | `MIT` | https://www.npmjs.com/package/seroval |
+| seroval-plugins | 1.5.4 | `MIT` | https://www.npmjs.com/package/seroval-plugins |
+| csstype | 3.2.3 | `MIT` | https://www.npmjs.com/package/csstype |
+| cytoscape | 3.30.2 | `MIT` | https://github.com/cytoscape/cytoscape.js |
+| cytoscape-dagre | 2.5.0 | `MIT` | https://www.npmjs.com/package/cytoscape-dagre |
+| dagre | 0.8.5 | `MIT` | https://github.com/dagrejs/dagre |
+| graphlib | 2.1.8 | `MIT` | https://github.com/dagrejs/graphlib |
+| lodash | 4.18.1 | `MIT` | https://github.com/lodash/lodash |
+
+## Adapted source code
+
+Code adapted rather than linked. The DDSketch collapsing dense store in
+`include/dftracer/utils/dataframe/sketch.h` and
+`src/dftracer/utils/dataframe/sketch.cpp` is adapted from Datadog's
+`sketches-py` and `sketches-java` under `Apache-2.0`. The code was modified:
+it was ported to C++ and changed.
+
+Their NOTICE texts:
+
+```
+Datadog sketches-py
+Copyright 2020 Datadog, Inc.
+
+This product includes software developed at Datadog (https://www.datadoghq.com/).
+```
+
+```
+Datadog sketches-java
+Copyright 2021 Datadog, Inc.
+
+This product includes software developed at Datadog (https://www.datadoghq.com/).
+```
 
 ## Test-only dependencies
 

@@ -233,6 +233,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   The counters frame keeps its rows and columns, and its rows now sort by host, name and time bucket.
 - Compress index values larger than 1 MB, which the store wrote raw before.
   The index of a 69 GB trace set with every column kept drops from 3.3 GB to 1.4 GB.
+- Require a unit such as `4MB` for the byte size flags that took a bare number of megabytes: `-s`/`--chunk-size` of `dftracer_split`, which defaulted to `4` meaning 4 MB, and `--read-batch-size` of `dftracer_index`.
+  A bare number is refused with an error that names the flag, and the defaults are `4MB`.
 
 ### Added
 
@@ -345,6 +347,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - Remove `track_default_args`, `custom_metric_fields` and the C ABI field `aggregation_track_default_args`.
   They fed per-argument stats that every index build stored and no query read.
 - Remove `IndexDatabase.write_aggregation_tracker` and the process-parent tracking of the aggregation tier, which every index build stored and no query read.
+- Remove `CoroScope::join_all()`, which was an alias of `CoroScope::join()`. Call `join()`.
+- Remove `DFTUtilsException::code()`. Read `condition()`, `error()`, `domain()` or `code_int()` instead, or `errorcode_of(e.error())` for the coarse code an `ErrorCode` names.
 
 ### Fixed
 

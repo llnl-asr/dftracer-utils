@@ -33,10 +33,9 @@ PyObject *py_error_type_for(dftracer::utils::ErrorCode code);
 /// type, falling back to the portable-condition map.
 PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e);
 
-// Set the current Python error from a caught C++ exception, choosing the typed
-// DFTUtils* exception (DFTUtilsException -> its code; std::invalid_argument ->
-// DFTUtilsValueError; else the DFTUtilsError base). Mirrors run_blocking's
-// dispatch for the bindings that catch and translate inline.
+// Set the current Python error from a caught C++ exception. DFTUtilsException
+// maps by its error, std::invalid_argument to DFTUtilsValueError and anything
+// else to the DFTUtilsError base, as run_blocking does for inline bindings.
 void set_typed_py_error(const std::exception &e);
 
 }  // namespace dftracer::utils::python

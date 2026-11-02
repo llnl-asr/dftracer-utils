@@ -1696,7 +1696,7 @@ TEST_CASE("Dynamic Tasks - Task submits child task at runtime") {
                 ++(*total_tasks_ptr);
                 co_return;
             });
-            co_await ctx.join_all();
+            co_await ctx.join();
             co_return;
         },
         "ParentTask");
@@ -1730,7 +1730,7 @@ TEST_CASE("Dynamic Tasks - Multiple dynamic children") {
                     co_return;
                 });
             }
-            co_await ctx.join_all();
+            co_await ctx.join();
             co_return;
         },
         "ParentTask");
@@ -1761,8 +1761,8 @@ TEST_CASE("Dynamic Tasks - Intra-task parallelism with result aggregation") {
                 });
             }
 
-            // Wait for all spawned tasks using join_all
-            co_await ctx.join_all();
+            // Wait for all spawned tasks using join
+            co_await ctx.join();
             co_return;
         },
         "ParentTaskWithAggregation");
@@ -1810,7 +1810,7 @@ TEST_CASE("Dynamic Tasks - Nested intra-task parallelism") {
             }
 
             // Wait for all level-1 children
-            co_await ctx.join_all();
+            co_await ctx.join();
             co_return;
         },
         "RootTaskWithNested");

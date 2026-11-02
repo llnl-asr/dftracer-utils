@@ -95,7 +95,7 @@ void IoThreadPool::stop() {
 }
 
 void IoThreadPool::submit(std::function<void()> fn) {
-    bool should_notify = false;
+    std::size_t waking = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         queue_.push(std::move(fn));
@@ -104,27 +104,16 @@ void IoThreadPool::submit(std::function<void()> fn) {
             live_.load(std::memory_order_relaxed) <
                 num_threads_.load(std::memory_order_relaxed))
             spawn_locked();
-        if (batch_threshold_ == 0) {
-            // Immediate mode (legacy behavior).
-            should_notify = true;
+        const unsigned unflushed =
+            unflushed_count_.load(std::memory_order_relaxed) + 1;
+        if (unflushed >= batch_threshold_) {
+            unflushed_count_.store(0, std::memory_order_relaxed);
+            waking = unflushed;
         } else {
-            const unsigned unflushed =
-                unflushed_count_.load(std::memory_order_relaxed) + 1;
-            if (unflushed >= batch_threshold_) {
-                unflushed_count_.store(0, std::memory_order_relaxed);
-                should_notify = true;
-            } else {
-                unflushed_count_.store(unflushed, std::memory_order_relaxed);
-            }
+            unflushed_count_.store(unflushed, std::memory_order_relaxed);
         }
     }
-    if (should_notify) {
-        if (batch_threshold_ == 0) {
-            cv_.notify_one();  // Legacy: wake one worker per op
-        } else {
-            wake(batch_threshold_);
-        }
-    }
+    if (waking != 0) wake(waking);
 }
 
 std::size_t IoThreadPool::flush() {

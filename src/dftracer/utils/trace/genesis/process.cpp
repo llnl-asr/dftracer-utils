@@ -185,13 +185,7 @@ dstd::Unexpected<GroupError> fail(std::string file, std::string reason,
 }
 
 dstd::Unexpected<GroupError> fail_from(const dstd::Error& e) {
-    ErrorCode legacy = errorcode_of(e.condition());
-    if (e.in_domain(dstd::CORE_ERROR_DOMAIN) && e.code() >= 0) {
-        const auto at = static_cast<std::size_t>(e.code());
-        if (at < std::size(dftracer::utils::CORE_ERROR_CODE_INFOS))
-            legacy = static_cast<ErrorCode>(at);
-    }
-    return fail("", std::string(e.message()), legacy);
+    return fail("", std::string(e.message()), errorcode_of(e));
 }
 
 // A group's memory is its share of the budget in four equal parts: the calls,

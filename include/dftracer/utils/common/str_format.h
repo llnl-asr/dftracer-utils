@@ -267,23 +267,6 @@ constexpr std::optional<std::uint64_t> parse_bytes(std::string_view s) {
     return static_cast<std::uint64_t>(bytes);
 }
 
-/// Parse a byte size where a bare number is measured in `native_bytes` units
-/// (e.g. 1024*1024 for a legacy value expressed in MB) while a unit-suffixed
-/// value ("512KB") is absolute. Lets a legacy MB argument accept human-readable
-/// strings without changing what its bare numbers mean. Returns nullopt on
-/// malformed input.
-constexpr std::optional<std::uint64_t> parse_bytes_as(
-    std::string_view s, std::uint64_t native_bytes) {
-    auto parsed = detail::split_value_unit(s);
-    if (!parsed) return std::nullopt;
-    if (parsed->second.empty()) {
-        if (parsed->first < 0.0) return std::nullopt;
-        return static_cast<std::uint64_t>(parsed->first *
-                                          static_cast<double>(native_bytes));
-    }
-    return parse_bytes(s);
-}
-
 /// Parse a human-readable duration such as "30", "500ms", "1.5h", "2m" into
 /// seconds. A bare number is seconds. Recognized units: ns, us, ms, s/sec,
 /// m/min, h/hr, d/day. Returns nullopt on malformed input or an unknown unit.

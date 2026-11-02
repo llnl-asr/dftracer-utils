@@ -371,7 +371,7 @@ TEST_SUITE("PathCatalog") {
                 index::Indexer::open({trace}, o);
                 FAIL("expected an error");
             } catch (const DFTUtilsException& e) {
-                CHECK(e.code() == ErrorCode::InvalidArgument);
+                CHECK(e.error().is_code(ErrorCode::InvalidArgument));
                 CHECK(std::string(e.what()).find("stats_share") !=
                       std::string::npos);
             }

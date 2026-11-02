@@ -78,7 +78,7 @@ std::vector<std::string> split_args(const std::string& in, const std::string&,
             "-n",
             "bench",
             "-s",
-            "64"};
+            "64MB"};
 }
 
 std::vector<std::string> validate_args(const std::string& in,

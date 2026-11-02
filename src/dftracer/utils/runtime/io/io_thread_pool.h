@@ -25,12 +25,9 @@ struct IoPoolOptions {
 /// Small, dedicated thread pool for I/O backends.
 /// Runs blocking syscalls off the executor's compute workers.
 ///
-/// Supports optional batched submission: when batch_threshold > 0,
-/// submit() queues work without waking threads and auto-flushes
-/// when the pending count reaches the threshold.  flush() submits
-/// all queued work with a single notify_all (reducing futex wakes
-/// from N to 1 per batch).  When batch_threshold == 0 (default),
-/// submit() wakes one thread immediately (legacy behavior).
+/// submit() queues work and wakes threads once `batch_threshold` items wait,
+/// one thread per waiting item. flush() wakes threads for the items still
+/// waiting. A threshold of 0 or 1 wakes a thread on every submit.
 ///
 /// The thread count given to the constructor is the cap.
 class IoThreadPool {
@@ -65,12 +62,10 @@ class IoThreadPool {
         return live_.load(std::memory_order_acquire);
     }
 
-    /// Submit work. When batch_threshold > 0, queues without waking
-    /// and auto-flushes at threshold.  Thread-safe.
+    /// Thread-safe.
     void submit(std::function<void()> fn);
 
-    /// Flush all queued work to pool threads (single notify_all).
-    /// Returns number of unflushed items that were pending.
+    /// Returns the number of items that were waiting for a wake.
     std::size_t flush();
 
     /// File operations submitted whose completion has not been delivered. A

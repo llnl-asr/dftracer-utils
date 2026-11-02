@@ -76,14 +76,14 @@ TEST_SUITE("Indexer") {
             Indexer::open({});
             FAIL("expected an error");
         } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::InvalidArgument);
+            CHECK(e.error().is_code(ErrorCode::InvalidArgument));
         }
         const std::string missing = "/no/such/dir/trace.pfw.gz";
         try {
             Indexer::open({missing});
             FAIL("expected an error");
         } catch (const DFTUtilsException& e) {
-            CHECK(e.code() == ErrorCode::NotFound);
+            CHECK(e.error().is_code(ErrorCode::NotFound));
             CHECK(std::string(e.what()).find(missing) != std::string::npos);
         }
     }

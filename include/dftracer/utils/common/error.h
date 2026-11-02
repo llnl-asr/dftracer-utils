@@ -79,8 +79,7 @@ constexpr dstd::Condition condition_of(ErrorCode code) noexcept {
     return error_info(code).condition;
 }
 
-/// Condition -> best-effort legacy ErrorCode, for the back-compat code()
-/// accessor on a domain error; conditions with no equivalent fold to UNKNOWN.
+/// The closest ErrorCode of a condition, or Unknown when none matches.
 constexpr ErrorCode errorcode_of(dstd::Condition c) noexcept {
     switch (c) {
         case dstd::Condition::Unknown:
@@ -105,6 +104,18 @@ constexpr ErrorCode errorcode_of(dstd::Condition c) noexcept {
     return ErrorCode::Unknown;
 }
 
+/// The ErrorCode of a core-domain error, else the equivalent of its
+/// condition.
+inline ErrorCode errorcode_of(const dstd::Error& error) noexcept {
+    const auto code = static_cast<ErrorCode>(error.code());
+    if (error.code() >= 0 &&
+        static_cast<std::size_t>(error.code()) <
+            std::size(CORE_ERROR_CODE_INFOS) &&
+        error.is_code(code))
+        return code;
+    return errorcode_of(error.condition());
+}
+
 /// Recoverable-failure channel; reserve exceptions for the unrecoverable.
 template <typename T>
 using Result = dstd::Expected<T, dstd::Error>;
@@ -123,19 +134,14 @@ dstd::Unexpected<dstd::Error> make_error(E code, std::string_view message) {
     return dstd::Unexpected<dstd::Error>(dstd::Error{code, message});
 }
 
-/// Throwable carrying an ErrorCode (so any catch site, notably the Python
-/// boundary, can inspect code()) plus the extensible (domain, condition)
-/// identity, so a domain error throws without collapsing to a legacy code.
+/// Throwable carrying the (domain, condition) identity of a failure, so a
+/// domain error throws without collapsing to a coarse code.
 class DFTUtilsException : public std::runtime_error {
    public:
     DFTUtilsException(ErrorCode code, const std::string& message)
-        : std::runtime_error(message), error_(code, message), code_(code) {}
+        : std::runtime_error(message), error_(code, message) {}
     explicit DFTUtilsException(const dstd::Error& error)
-        : std::runtime_error(std::string(error.message())), error_(error) {
-        const auto legacy = static_cast<ErrorCode>(error.code());
-        code_ =
-            error.is_code(legacy) ? legacy : errorcode_of(error.condition());
-    }
+        : std::runtime_error(std::string(error.message())), error_(error) {}
 
     /// Concatenation factory (numbers via to_chars; no format string):
     ///   throw DFTUtilsException::cat(ErrorCode::IO,
@@ -159,8 +165,6 @@ class DFTUtilsException : public std::runtime_error {
         return DFTUtilsException(code, std::move(msg));
     }
 
-    /// Legacy coarse code (core-domain proxy for a domain error).
-    ErrorCode code() const noexcept { return code_; }
     std::uint64_t domain() const noexcept { return error_.domain().id; }
     std::string_view domain_name() const noexcept {
         return error_.domain().name;
@@ -171,7 +175,6 @@ class DFTUtilsException : public std::runtime_error {
 
    private:
     dstd::Error error_;
-    ErrorCode code_;
 };
 
 /// The value of `r`, or throws DFTUtilsException with its error.

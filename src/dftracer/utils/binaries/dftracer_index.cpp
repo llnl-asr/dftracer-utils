@@ -39,7 +39,7 @@ class IndexArgParse : public cli::ArgParse {
     double stats_share = 0.05;
     std::uint64_t memory_budget = 0;
     std::string record_schema;
-    std::size_t read_batch_size = 4;
+    std::size_t read_batch_size = 4ull * 1024 * 1024;
     std::size_t expected_entries = 1024;
     double false_positive_rate = 0.01;
     std::vector<std::string> plugins;
@@ -80,9 +80,9 @@ class IndexArgParse : public cli::ArgParse {
         parser()
             .add_argument("--read-batch-size")
             .help(
-                "Batch read size for stream processing (default: 4MB). A bare "
-                "number is MB; suffixed values (e.g. 512KB) are absolute")
-            .default_value(std::string("4"));
+                "Batch read size for stream processing, with a unit (default: "
+                "4MB, e.g. 512KB, 4MB)")
+            .default_value(std::string("4MB"));
 
         parser()
             .add_argument("--schema")
@@ -130,7 +130,7 @@ class IndexArgParse : public cli::ArgParse {
         memory_budget = cli::get_bytes_arg(parser(), "--memory-budget");
         record_schema = parser().get<std::string>("--schema");
         read_batch_size =
-            cli::get_bytes_arg(parser(), "--read-batch-size", 1024ull * 1024);
+            cli::get_bytes_arg_with_unit(parser(), "--read-batch-size");
         expected_entries = parser().get<std::size_t>("--expected-entries");
         false_positive_rate = parser().get<double>("--false-positive-rate");
         plugins = parser().get<std::vector<std::string>>("--plugin");

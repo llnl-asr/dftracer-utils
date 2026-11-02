@@ -508,9 +508,6 @@ class CoroScope {
         co_return;
     }
 
-    /// Alias for join() -- backward compatibility with old join_all() callers.
-    coro::CoroTask<void> join_all() { return join(); }
-
     // ====================================================================
     // Accessor / Utility
     // ====================================================================

@@ -107,7 +107,7 @@ PyObject *py_error_type_for(const dftracer::utils::DFTUtilsException &e) {
     // Domain-specific types take precedence over the portable-condition map.
     if (e.domain() == dftracer::utils::duql::ERROR_DOMAIN.id)
         return g_dft_duql_error;
-    return py_error_type_for(e.code());
+    return py_error_type_for(errorcode_of(e.error()));
 }
 
 void set_typed_py_error(const std::exception &e) {

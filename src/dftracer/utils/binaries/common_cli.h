@@ -179,17 +179,18 @@ inline std::size_t get_bytes_arg(const argparse::ArgumentParser& p,
     return static_cast<std::size_t>(*parsed);
 }
 
-// As get_bytes_arg, but a bare number is measured in `native_bytes` units (e.g.
-// 1024*1024 when the flag has historically taken MB); a unit-suffixed value is
-// absolute. Preserves back-compat for MB-denominated flags.
-inline std::size_t get_bytes_arg(const argparse::ArgumentParser& p,
-                                 const char* name, std::uint64_t native_bytes) {
+// As get_bytes_arg, but the value must carry a unit. A bare number is refused,
+// so a value that once meant megabytes cannot silently become bytes. Throws
+// std::runtime_error like get_bytes_arg.
+inline std::size_t get_bytes_arg_with_unit(const argparse::ArgumentParser& p,
+                                           const char* name) {
     const auto raw = p.get<std::string>(name);
-    auto parsed = dftracer::utils::parse_bytes_as(raw, native_bytes);
-    if (!parsed) {
-        throw std::runtime_error(
-            dftracer::utils::str_cat("Invalid byte size for ", name, ": '", raw,
-                                     "' (use e.g. 4, 4MB, 512KB)"));
+    auto parsed = dftracer::utils::parse_bytes(raw);
+    const auto parts = dftracer::utils::detail::split_value_unit(raw);
+    if (!parsed || !parts || parts->second.empty()) {
+        throw std::runtime_error(dftracer::utils::str_cat(
+            "Invalid byte size for ", name, ": '", raw,
+            "' (a unit is required, use e.g. 4MB or 512KB)"));
     }
     return static_cast<std::size_t>(*parsed);
 }

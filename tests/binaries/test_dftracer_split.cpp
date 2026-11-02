@@ -221,6 +221,31 @@ TEST_SUITE("DFTracerSplit") {
         CHECK(count_gz_lines_in_dir(many) == count_gz_lines_in_dir(one));
     }
 
+    TEST_CASE("a chunk size without a unit is refused") {
+        auto binary = find_split_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_split binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        REQUIRE(!create_pfw_gz(env, 1000, 0).empty());
+
+        dftu_utils_test::set_test_library_path(binary);
+        const std::string out = env.get_dir() + "/split_bare";
+        int rc = -1;
+        const std::string text = dftu_utils_test::run_process_capture(
+            binary,
+            {"-d", input_dir(env), "-o", out, "-s", "4", "--disable-watchdog"},
+            true, &rc);
+        INFO(text);
+        CHECK(rc != 0);
+        CHECK(text.find("--chunk-size") != std::string::npos);
+        CHECK(text.find("a unit is required") != std::string::npos);
+        CHECK(!fs::exists(out));
+    }
+
     TEST_CASE("a tiny memory budget gives the same output") {
         auto binary = find_split_binary();
         if (binary.empty()) {

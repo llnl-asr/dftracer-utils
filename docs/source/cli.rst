@@ -22,10 +22,12 @@ repeated in each tool's section.
    1024-based, so ``KB`` == ``KiB``, ``B`` is bytes and ``b`` is bits (divided
    by 8). Every ``<s>`` flag also accepts a duration suffix (``30s``, ``5m``,
    ``1.5h``, ``500ms``, ``200us``). A **bare number keeps the flag's native
-   unit**: a ``<bytes>`` flag reads it as bytes, an MB-scaled flag (e.g.
-   ``--chunk-size <MB>``) reads it as MB, and a ``<s>`` flag reads it as
-   seconds. The same coercion is available from the Python API, whose
-   byte/duration arguments accept either a number or a unit string.
+   unit**: a ``<bytes>`` flag reads it as bytes and a ``<s>`` flag reads it as
+   seconds. Two flags take no bare number at all, because theirs once meant
+   megabytes: ``--chunk-size`` of ``dftracer_split`` and
+   ``--read-batch-size`` of ``dftracer_index`` require a unit such as ``4MB``.
+   The same coercion is available from the Python API, whose byte/duration
+   arguments accept either a number or a unit string.
 
 **Pipeline** (``PipelineArgs``)
 
@@ -175,7 +177,7 @@ dftracer_split
 - ``-n, --app-name <name>`` - Application name for output files (default: app)
 - ``-d, --directory <path>`` - Input directory containing gzip trace files (``.pfw.gz``, ``.jsonl.gz`` or ``.ndjson.gz``), read with all of its subfolders (default: .)
 - ``-o, --output <dir>`` - Output directory for split files (default: ./split)
-- ``-s, --chunk-size <MB>`` - Output file size in MB, approximate **compressed** on-disk size (default: 4)
+- ``-s, --chunk-size <bytes>`` - Output file size, approximate **compressed** on-disk size, with a unit (default: 4MB, e.g. ``512KB``, ``4MB``)
 - ``-c, --compress`` - Compress output files with gzip (a value-less flag;
   output is gzip-compressed by default)
 - ``--checkpoint-size <bytes>`` - Gzip member size of the output files in
@@ -210,10 +212,10 @@ dftracer_split
    dftracer_split -d ./logs -o ./split_output
 
    # Split with 10MB chunks and custom app name
-   dftracer_split -d ./traces -s 10 -n myapp -o ./chunks
+   dftracer_split -d ./traces -s 10MB -n myapp -o ./chunks
 
    # Larger chunks with a fine-grained 4 MB checkpoint size for more read parallelism
-   dftracer_split -d ./traces -s 256 --checkpoint-size 4194304 -o ./chunks
+   dftracer_split -d ./traces -s 256MB --checkpoint-size 4194304 -o ./chunks
 
    # Verify that split output matches the input event IDs
    dftracer_split -d ./data --verify -o ./output
@@ -532,7 +534,7 @@ dftracer_index
 - ``--index-dir <path>`` - Directory to store index files (default: same as data files)
 - ``--expected-entries <count>`` - Expected entries per chunk for bloom filter sizing (default: 1024)
 - ``--false-positive-rate <rate>`` - Bloom filter false positive rate (default: 0.01)
-- ``--read-batch-size <MB>`` - Batch read size in MB for stream processing (default: 4)
+- ``--read-batch-size <bytes>`` - Batch read size for stream processing, with a unit (default: 4MB, e.g. ``512KB``, ``4MB``)
 - ``--plugin <path>`` - Plugin shared library to load for the build. Its index extensions are built for every file (repeatable)
 
 This binary also accepts the shared :ref:`cli-shared-flags` (Pipeline,

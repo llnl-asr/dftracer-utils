@@ -78,10 +78,9 @@ class SplitArgParse : public cli::ArgParse {
         parser()
             .add_argument("-s", "--chunk-size")
             .help(
-                "Output file size, approximate compressed/on-disk (default: "
-                "4MB). A bare number is MB; suffixed values (e.g. 512KB) are "
-                "absolute")
-            .default_value(std::string("4"));
+                "Output file size, approximate compressed/on-disk, with a unit "
+                "(default: 4MB, e.g. 512KB, 4MB)")
+            .default_value(std::string("4MB"));
 
         parser()
             .add_argument("-c", "--compress")
@@ -99,7 +98,7 @@ class SplitArgParse : public cli::ArgParse {
         app_name = parser().get<std::string>("--app-name");
         output_dir = parser().get<std::string>("--output");
         chunk_size_bytes =
-            cli::get_bytes_arg(parser(), "--chunk-size", 1024ull * 1024);
+            cli::get_bytes_arg_with_unit(parser(), "--chunk-size");
         compress = parser().get<bool>("--compress");
         verify = parser().get<bool>("--verify");
     }

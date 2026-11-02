@@ -195,6 +195,27 @@ TEST_SUITE("DFTracerIndex") {
         run(1, 2);
     }
 
+    TEST_CASE("a read batch size without a unit is refused") {
+        auto binary = find_index_binary();
+        if (binary.empty()) {
+            MESSAGE("dftracer_index binary not found, skipping.");
+            return;
+        }
+
+        dftu_utils_test::TestEnvironment env(100);
+        REQUIRE(env.is_valid());
+        REQUIRE(!create_pfw_gz(env, 100, 0).empty());
+
+        dftu_utils_test::set_test_library_path(binary);
+        int rc = -1;
+        const std::string out = dftu_utils_test::run_process_capture(
+            binary, {"-d", env.get_dir(), "--read-batch-size", "4"}, true, &rc);
+        INFO(out);
+        CHECK(rc != 0);
+        CHECK(out.find("--read-batch-size") != std::string::npos);
+        CHECK(out.find("a unit is required") != std::string::npos);
+    }
+
     TEST_CASE("a tier of other settings is cleared and built again") {
         auto binary = find_index_binary();
         if (binary.empty()) {

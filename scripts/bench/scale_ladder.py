@@ -444,7 +444,7 @@ def build_cmd(tool, binary, in_path, is_file, run_dir, threads, stage_dir):
     elif tool == "view":
         cmd += src + ["--index-dir", idx, "--group-by", "name"]
     elif tool == "split":
-        cmd += src + ["-o", out, "-n", "bench", "-s", "64"]
+        cmd += src + ["-o", out, "-n", "bench", "-s", "64MB"]
     elif tool in ("validate", "pgzip"):
         cmd += src
     elif tool == "comparator":

@@ -148,7 +148,7 @@ CoroScope and Structured Concurrency
 
 - ``spawn(lambda)`` returning ``SpawnFuture<T>`` - Always returns an awaitable future (for both void and typed coroutines). The return value can be ignored for fire-and-forget usage, or ``co_await``'d to wait for that specific coroutine.
 - ``scope(lambda)`` - Create a child scope (all spawned work must complete before returning)
-- ``join_all()`` - Wait for all spawned work to complete
+- ``join()`` - Wait for all spawned work to complete
 
 Example with parallel work:
 
@@ -166,7 +166,7 @@ Example with parallel work:
        }
        
        // Wait for all spawned tasks to complete
-       co_await scope.join_all();
+       co_await scope.join();
        
        co_return;
    });
@@ -184,7 +184,7 @@ Create a child scope for structured concurrency:
                    co_return;
                });
            }
-           // Implicit join_all() when this lambda returns
+           // Implicit join() when this lambda returns
            co_return;
        });
        
@@ -726,9 +726,10 @@ Error Handling
 Errors in pipeline tasks propagate to the caller of ``Pipeline::execute()``. Exceptions thrown in task lambdas are captured and re-thrown by the pipeline.
 
 The library throws ``DFTUtilsException`` (and its subsystem subclasses), which
-derive ``std::runtime_error`` and carry an ``ErrorCode`` via ``code()``. Catch
-``DFTUtilsException`` to inspect the category, or ``std::exception`` to handle
-any failure. See :doc:`cpp_api/runtime`.
+derive ``std::runtime_error`` and hold a ``dstd::Error``. Catch
+``DFTUtilsException`` and read ``error()``, ``condition()`` or
+``errorcode_of(e.error())`` to inspect the category, or catch ``std::exception``
+to handle any failure. See :doc:`cpp_api/runtime`.
 
 **Exception propagation from tasks:**
 

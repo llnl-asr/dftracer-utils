@@ -54,7 +54,7 @@ processing.
 .. code-block:: bash
 
    # Split ./traces into ~64 MB gzip chunks under ./split, named run_*
-   dftracer_split -d ./traces -o ./split -n run -s 64
+   dftracer_split -d ./traces -o ./split -n run -s 64MB
 
 .. list-table::
    :header-rows: 1
@@ -73,9 +73,9 @@ processing.
      - ``app``
      - Application name used in output filenames.
    * - ``-s``, ``--chunk-size``
-     - ``4``
-     - Output file size, approximate on-disk size. A bare number is MB. A
-       suffixed value such as ``512KB`` is absolute.
+     - ``4MB``
+     - Output file size, approximate on-disk size. A unit is required, since a
+       bare number here once meant megabytes: write ``4MB`` or ``512KB``.
    * - ``-c``, ``--compress``
      - on
      - Compress output with gzip.

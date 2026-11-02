@@ -9,22 +9,25 @@ using namespace dftracer::utils;
 
 TEST_CASE("an ErrorCode error keeps its code through the exception") {
     const DFTUtilsException e(ErrorCode::Io, "cannot open trace");
-    CHECK(e.code() == ErrorCode::Io);
+    const DFTUtilsException reader(ErrorCode::Reader, "short read");
     CHECK(e.condition() == dstd::Condition::Io);
     CHECK(e.domain() == dstd::CORE_ERROR_DOMAIN.id);
     CHECK(e.domain_name() == "dftracer.utils.core");
     CHECK(std::string(e.what()) == "cannot open trace");
     CHECK(e.error().is_code(ErrorCode::Io));
+    CHECK(errorcode_of(e.error()) == ErrorCode::Io);
+    CHECK(reader.condition() == dstd::Condition::Internal);
+    CHECK(errorcode_of(reader.error()) == ErrorCode::Reader);
 }
 
-TEST_CASE("a Condition error maps to the legacy code by its condition") {
+TEST_CASE("a Condition error maps to an ErrorCode by its condition") {
     const DFTUtilsException cancelled(
         dstd::Error{dstd::Condition::Cancelled, "stop"});
-    CHECK(cancelled.code() == ErrorCode::Unknown);
+    CHECK(errorcode_of(cancelled.error()) == ErrorCode::Unknown);
     CHECK(cancelled.condition() == dstd::Condition::Cancelled);
 
     const DFTUtilsException io(dstd::Error{dstd::Condition::Io, "read"});
-    CHECK(io.code() == ErrorCode::Io);
+    CHECK(errorcode_of(io.error()) == ErrorCode::Io);
     CHECK(std::string(io.what()) == "read");
 }
 
@@ -33,7 +36,7 @@ TEST_CASE("a duql error keeps its domain and maps by its condition") {
     CHECK(err.domain().name == "dftracer.utils.duql");
     const DFTUtilsException e(err);
     CHECK(e.domain() == err.domain().id);
-    CHECK(e.code() == errorcode_of(err.condition()));
+    CHECK(errorcode_of(e.error()) == errorcode_of(err.condition()));
 }
 
 TEST_CASE("make_error carries the code and the message") {

@@ -1025,7 +1025,7 @@ coro::CoroTask<Result<AggQueryResult>> run_agg_query(const AggQuery& query) {
         Runner runner(query, result);
         co_await runner.run();
     } catch (const DFTUtilsException& e) {
-        co_return make_error(e.code(), e.what());
+        co_return dstd::Unexpected<dstd::Error>(e.error());
     } catch (const std::exception& e) {
         co_return make_error(ErrorCode::Unknown, e.what());
     }

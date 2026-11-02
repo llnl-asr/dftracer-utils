@@ -73,7 +73,7 @@ Two channels carry an error, chosen by whether the immediate caller is expected 
   ``make_error(code, message)`` builds the error side, and ``DFTU_TRY`` propagates it in a coroutine.
 - ``DFTUtilsException`` is for the case the caller cannot handle.
   It is thrown, not returned, and it holds a ``dstd::Error``.
-  It crosses the Python boundary with its ``code()``, ``domain()`` and ``condition()`` intact, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.
+  It crosses the Python boundary with its ``domain()``, ``code_int()`` and ``condition()`` intact, so a ``try`` and ``except`` in Python can branch on the same identity as a C++ caller.
 
 Keeping exceptions for the failures that cannot be handled keeps the common failure paths (a malformed query, a missing file) as ordinary returned values.
 A coroutine checks such a value with a plain ``if`` before it decides whether to go on, so no exception has to survive a suspension point on that path.

@@ -142,6 +142,11 @@ inline int valgrind_threads(int n) {
 #endif
 }
 
+/// Removes `path` when this process exits normally, so a test that never
+/// cleans up leaves nothing in the temp directory. A forked child that calls
+/// exit() leaves its parent's paths alone.
+void remember_test_path(const dftracer::utils::dstd::Path& path);
+
 inline dftracer::utils::dstd::Path make_unique_test_path(
     const std::string& name) {
     static std::atomic<unsigned long long> counter{0};
@@ -161,8 +166,10 @@ inline dftracer::utils::dstd::Path make_unique_test_path(
         std::to_string(pid) + "_" + std::to_string(now) + "_" +
         std::to_string(tid) + "_" +
         std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
-    return dftracer::utils::dstd::fs::temp_directory() /
-           (name + "_" + unique_id);
+    dftracer::utils::dstd::Path path =
+        dftracer::utils::dstd::fs::temp_directory() / (name + "_" + unique_id);
+    remember_test_path(path);
+    return path;
 }
 
 /// Write `content` as a gzip trace at `path` and return that path. Traces

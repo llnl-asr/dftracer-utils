@@ -8,6 +8,7 @@
 #include <dftracer/utils/trace/internal/utils.h>
 #include <dftracer/utils/utilities/fileio/compress/libdeflate_gzip.h>
 #include <testing_utilities.h>
+#include <unistd.h>
 #include <zlib.h>
 
 #include <algorithm>
@@ -18,9 +19,52 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
+
+namespace {
+
+// keep std: test bookkeeping kept out of the memory budget, since it lives
+// until after the memory exit check.
+struct RememberedPaths {
+    std::mutex mutex;
+    std::vector<std::string> paths;
+    pid_t owner = ::getpid();
+};
+
+RememberedPaths& remembered() {
+    static RememberedPaths r;
+    return r;
+}
+
+void remove_remembered_paths() {
+    RememberedPaths& r = remembered();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    if (::getpid() != r.owner) return;
+    for (const auto& p : r.paths)
+        (void)dftracer::utils::dstd::fs::remove_all(
+            dftracer::utils::dstd::PathView(p))
+            .has_value();
+    r.paths.clear();
+}
+
+}  // namespace
+
+void dftu_utils_test::remember_test_path(
+    const dftracer::utils::dstd::Path& path) {
+    RememberedPaths& r = remembered();
+    // Registered after `remembered()` is built, so it runs before that object
+    // is destroyed.
+    static const bool registered = [] {
+        std::atexit(remove_remembered_paths);
+        return true;
+    }();
+    (void)registered;
+    std::lock_guard<std::mutex> lock(r.mutex);
+    r.paths.emplace_back(path.str());
+}
 
 extern "C" {
 size_t mb_to_b(double mb) { return static_cast<std::size_t>(mb * 1024 * 1024); }

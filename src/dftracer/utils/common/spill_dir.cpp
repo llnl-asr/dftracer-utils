@@ -6,6 +6,7 @@
 #include <dftracer/utils/common/scratch.h>
 #include <dftracer/utils/common/spill_dir.h>
 #include <dftracer/utils/common/spill_dir_internal.h>
+#include <dftracer/utils/dstd/singleton.h>
 #include <dftracer/utils/memory/manager.h>
 #include <signal.h>
 #include <unistd.h>
@@ -98,17 +99,25 @@ Result<std::string> spill_dir() {
     return dir;
 }
 
+namespace {
+
+struct DirKinds {
+    std::mutex mu;
+    std::map<std::string, bool> kinds;
+    bool warned = false;
+};
+
+}  // namespace
+
 bool spill_dir_in_memory(const std::string& dir) {
-    static std::mutex mu;
-    static auto* kinds = new std::map<std::string, bool>();
-    static bool warned = false;
-    std::lock_guard<std::mutex> lock(mu);
-    const auto found = kinds->find(dir);
-    if (found != kinds->end()) return found->second;
+    DirKinds& known = dstd::Singleton<DirKinds>::get();
+    std::lock_guard<std::mutex> lock(known.mu);
+    const auto found = known.kinds.find(dir);
+    if (found != known.kinds.end()) return found->second;
     const bool in_memory = is_memory_filesystem(filesystem_kind(dir));
-    kinds->emplace(dir, in_memory);
-    if (in_memory && !warned) {
-        warned = true;
+    known.kinds.emplace(dir, in_memory);
+    if (in_memory && !known.warned) {
+        known.warned = true;
         DFTRACER_UTILS_LOG_WARN(
             "spill directory '%s' is RAM-backed (tmpfs): spilled bytes stay in "
             "memory and count toward the memory budget; set %s to a directory "
@@ -120,10 +129,12 @@ bool spill_dir_in_memory(const std::string& dir) {
 
 namespace {
 
+struct SpillSlot {
+    memory::ExternalSlot slot{memory::attach_external("spill")};
+};
+
 memory::ExternalSlot& spill_slot() {
-    static auto* slot =
-        new memory::ExternalSlot(memory::attach_external("spill"));
-    return *slot;
+    return dstd::Singleton<SpillSlot>::get().slot;
 }
 
 // The live subdirectories by path, so a writer that has only a file path finds
@@ -133,10 +144,7 @@ struct SubdirRegistry {
     std::unordered_map<std::string, std::weak_ptr<SpillCharge>> by_path;
 };
 
-SubdirRegistry& subdirs() {
-    static auto* r = new SubdirRegistry();
-    return *r;
-}
+SubdirRegistry& subdirs() { return dstd::Singleton<SubdirRegistry>::get(); }
 
 }  // namespace
 
@@ -170,6 +178,11 @@ SpillCharge::~SpillCharge() {
 }
 
 namespace {
+
+struct SweptPrefixes {
+    std::mutex mu;
+    std::set<std::string> prefixes;
+};
 
 // A spill root on a shared file system holds the directories of other hosts,
 // whose pids mean nothing here.
@@ -212,11 +225,10 @@ void sweep_stale(const fs::path& root, std::string_view prefix) {
 Result<ScopedSpillSubdir> ScopedSpillSubdir::create(std::string_view prefix) {
     auto root = spill_dir();
     if (!root) return dstd::Unexpected(std::move(root).error());
-    static std::mutex mu;
-    static std::set<std::string> swept;
+    SweptPrefixes& swept = dstd::Singleton<SweptPrefixes>::get();
     {
-        std::lock_guard<std::mutex> lock(mu);
-        if (swept.insert(std::string(prefix)).second)
+        std::lock_guard<std::mutex> lock(swept.mu);
+        if (swept.prefixes.insert(std::string(prefix)).second)
             sweep_stale(*root, prefix);
     }
     static std::atomic<std::uint64_t> counter{0};

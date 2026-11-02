@@ -15,6 +15,12 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 namespace {
 
 namespace scan = dftracer::utils::trace::views::detail::scan;

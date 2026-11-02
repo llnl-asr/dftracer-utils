@@ -13,6 +13,12 @@
 #include <fstream>
 #include <string>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;
 

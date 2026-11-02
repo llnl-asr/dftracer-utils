@@ -8,6 +8,11 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 namespace {
 
 std::string views_root_of(const std::string& gz) {

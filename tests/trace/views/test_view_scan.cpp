@@ -14,6 +14,12 @@
 #include <limits>
 #include <map>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 TEST_SUITE("View") {
     TEST_CASE(
         "View - builder ops return independent views (lazy, no shared state)") {

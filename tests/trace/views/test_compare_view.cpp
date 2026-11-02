@@ -8,6 +8,11 @@
 
 #include <string>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+
 using namespace test_view_common;
 namespace comparator = dftracer::utils::trace::comparator;
 

@@ -30,9 +30,7 @@
  */
 namespace dftu::memory_workloads {
 
-using namespace dftracer::utils;
 using dftracer::utils::coro::CoroTask;
-namespace df = dftracer::utils::dataframe;
 
 constexpr std::int64_t MORSEL_ROWS = 8192;
 constexpr std::uint64_t PLAN_BUDGET = 1ULL << 36;
@@ -43,12 +41,13 @@ inline std::uint64_t mix(std::uint64_t x) {
     return dftracer::utils::dstd::hash::fnv1a_mix(x);
 }
 
-class GenCursor : public df::Cursor {
+class GenCursor : public dftracer::utils::dataframe::Cursor {
    public:
     GenCursor(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
         : rows_(rows), keys_(keys), seed_(seed) {}
 
-    CoroTask<std::optional<df::Morsel>> next(std::int64_t) override {
+    CoroTask<std::optional<dftracer::utils::dataframe::Morsel>> next(
+        std::int64_t) override {
         if (at_ >= rows_) co_return std::nullopt;
         const std::int64_t n = std::min(MORSEL_ROWS, rows_ - at_);
         std::vector<std::int64_t> k(static_cast<std::size_t>(n));
@@ -64,11 +63,14 @@ class GenCursor : public df::Cursor {
             v[j] = static_cast<std::int64_t>(h >> 20) % 1000003;
         }
         at_ += n;
-        df::Morsel m;
+        dftracer::utils::dataframe::Morsel m;
         m.rows = n;
-        m.columns.push_back(df::Series::flat_i64(k.data(), n));
-        m.columns.push_back(df::Series::flat_i64(t.data(), n));
-        m.columns.push_back(df::Series::flat_i64(v.data(), n));
+        m.columns.push_back(
+            dftracer::utils::dataframe::Series::flat_i64(k.data(), n));
+        m.columns.push_back(
+            dftracer::utils::dataframe::Series::flat_i64(t.data(), n));
+        m.columns.push_back(
+            dftracer::utils::dataframe::Series::flat_i64(v.data(), n));
         co_return m;
     }
 
@@ -79,24 +81,28 @@ class GenCursor : public df::Cursor {
     std::int64_t at_ = 0;
 };
 
-class GenSource : public df::Source {
+class GenSource : public dftracer::utils::dataframe::Source {
    public:
     GenSource(std::int64_t rows, std::int64_t keys, std::uint64_t seed)
         : rows_(rows), keys_(keys), seed_(seed) {}
 
-    df::Schema schema() const override {
+    dftracer::utils::dataframe::Schema schema() const override {
         const std::int64_t zero = 0;
-        const df::DataType i = df::Series::flat_i64(&zero, 1).data_type();
-        df::Schema out;
-        out.fields = {df::Field{"k", i, true}, df::Field{"t", i, true},
-                      df::Field{"v", i, true}};
+        const dftracer::utils::dataframe::DataType i =
+            dftracer::utils::dataframe::Series::flat_i64(&zero, 1).data_type();
+        dftracer::utils::dataframe::Schema out;
+        out.fields = {dftracer::utils::dataframe::Field{"k", i, true},
+                      dftracer::utils::dataframe::Field{"t", i, true},
+                      dftracer::utils::dataframe::Field{"v", i, true}};
         return out;
     }
 
-    df::ScanResult scan(const df::ScanRequest& req) const override {
-        df::ScanResult r;
+    dftracer::utils::dataframe::ScanResult scan(
+        const dftracer::utils::dataframe::ScanRequest& req) const override {
+        dftracer::utils::dataframe::ScanResult r;
         r.cursor = std::make_unique<GenCursor>(rows_, keys_, seed_);
-        r.filters.assign(req.filters.size(), df::Pushed::No);
+        r.filters.assign(req.filters.size(),
+                         dftracer::utils::dataframe::Pushed::No);
         return r;
     }
 
@@ -106,27 +112,32 @@ class GenSource : public df::Source {
     std::uint64_t seed_;
 };
 
-inline df::LazyFrame gen(std::int64_t rows, std::int64_t keys,
-                         std::uint64_t seed) {
-    return df::LazyFrame::scan(std::make_shared<GenSource>(rows, keys, seed));
+inline dftracer::utils::dataframe::LazyFrame gen(std::int64_t rows,
+                                                 std::int64_t keys,
+                                                 std::uint64_t seed) {
+    return dftracer::utils::dataframe::LazyFrame::scan(
+        std::make_shared<GenSource>(rows, keys, seed));
 }
 
-inline CoroTask<std::int64_t> drain_count(df::LazyFrame lf) {
+inline CoroTask<std::int64_t> drain_count(
+    dftracer::utils::dataframe::LazyFrame lf) {
     std::int64_t n = 0;
     auto g = lf.stream(MORSEL_ROWS);
     while (auto frame = co_await g.next()) n += frame->num_rows();
     co_return n;
 }
 
-inline CoroTask<void> genesis_run(CoroScope& ctx, std::string root) {
+inline CoroTask<void> genesis_run(dftracer::utils::CoroScope& ctx,
+                                  std::string root) {
     std::vector<std::string> roots{std::move(root)};
-    auto discovery = co_await trace::genesis::discover(ctx, std::move(roots));
+    auto discovery = co_await dftracer::utils::trace::genesis::discover(
+        ctx, std::move(roots));
     if (discovery.groups.empty()) {
         std::fprintf(stderr, "genesis found no run group\n");
         std::exit(1);
     }
     for (auto& group : discovery.groups) {
-        auto result = co_await trace::genesis::process_group(
+        auto result = co_await dftracer::utils::trace::genesis::process_group(
             ctx, std::move(group), GENESIS_SHARE);
         std::size_t lines = 0;
         for (auto& run : result.runs) lines += run.lines().size();
@@ -138,8 +149,9 @@ inline CoroTask<void> genesis_run(CoroScope& ctx, std::string root) {
 }
 
 inline void write_gz(const std::string& path, const std::string& content) {
-    common::fs::create_directories(common::fs::path(path).parent_path());
-    utilities::fileio::compress::GzipMemberCompressor comp(1);
+    dftracer::utils::common::fs::create_directories(
+        dftracer::utils::common::fs::path(path).parent_path());
+    dftracer::utils::utilities::fileio::compress::GzipMemberCompressor comp(1);
     auto member = comp.compress_member(
         reinterpret_cast<const std::uint8_t*>(content.data()), content.size());
     if (!member) {

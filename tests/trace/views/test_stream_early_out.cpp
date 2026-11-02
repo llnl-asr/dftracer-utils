@@ -9,6 +9,11 @@
 #include <string>
 #include <thread>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+
 namespace {
 
 // A sentinel captured by the source View's cancel predicate. The predicate is

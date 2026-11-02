@@ -12,6 +12,12 @@
 #include <string_view>
 #include <vector>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 template <>
 struct doctest::StringMaker<std::set<std::string>> {
     static doctest::String convert(const std::set<std::string>& names) {

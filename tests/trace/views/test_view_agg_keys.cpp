@@ -5,6 +5,12 @@
 
 #include <optional>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace test_view_common;
+using namespace aggparity;
+
 namespace scan = dftracer::utils::trace::views::detail::scan;
 
 TEST_SUITE("View") {

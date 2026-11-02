@@ -27,6 +27,10 @@
 // them to <dir> instead of comparing against data/. Quantiles compare at the
 // DDSketch accuracy, means and moments at 1e-9 and the rest exactly.
 
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace test_view_common;
+
 namespace {
 
 namespace df = dftracer::utils::dataframe;

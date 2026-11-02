@@ -72,15 +72,17 @@ struct HistBin {
 };
 
 // Bins of a list<struct<lo,hi,count>> hist column at `row`.
-inline std::vector<HistBin> hist_bins(const dataframe::DataFrame& b,
-                                      std::int64_t row, std::string_view name) {
-    const dataframe::Series& lc =
-        b.columns[static_cast<std::size_t>(bcol(b, name))];
+inline std::vector<HistBin> hist_bins(
+    const dftracer::utils::dataframe::DataFrame& b, std::int64_t row,
+    std::string_view name) {
+    const dftracer::utils::dataframe::Series& lc =
+        b.columns[static_cast<std::size_t>(test_view_common::bcol(b, name))];
     const std::int32_t* off = lc.offsets();
-    const dataframe::Series st = lc.child(0);  // struct<lo,hi,count>
-    const dataframe::Series lo = st.child(0);
-    const dataframe::Series hi = st.child(1);
-    const dataframe::Series cnt = st.child(2);
+    const dftracer::utils::dataframe::Series st =
+        lc.child(0);  // struct<lo,hi,count>
+    const dftracer::utils::dataframe::Series lo = st.child(0);
+    const dftracer::utils::dataframe::Series hi = st.child(1);
+    const dftracer::utils::dataframe::Series cnt = st.child(2);
     const double* lop = lo.data<double>();
     const double* hip = hi.data<double>();
     const std::uint64_t* cntp = cnt.data<std::uint64_t>();
@@ -94,23 +96,26 @@ using gmoracle::groupmap_oracle;
 
 // The engine collect path (run_collect_via_engine + post-ops), the production
 // aggregation path every aggregating View collect takes.
-inline dataframe::DataFrame engine_collect(
+inline dftracer::utils::dataframe::DataFrame engine_collect(
     const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
-    namespace detail = dftracer::utils::trace::views::detail;
     // One pool for the whole binary: these cases each drive a collect, and a
     // fresh pool per call dominates the run under valgrind.
-    static Runtime rt;
-    dataframe::DataFrame result;
-    rt.run_blocking("engine-collect", [&](CoroScope&) -> coro::CoroTask<void> {
-        result = co_await detail::run_collect_via_engine(*v);
-    });
-    return detail::apply_agg_post_ops(std::move(result), *v);
+    static dftracer::utils::Runtime rt;
+    dftracer::utils::dataframe::DataFrame result;
+    rt.run_blocking("engine-collect",
+                    [&](dftracer::utils::CoroScope&)
+                        -> dftracer::utils::coro::CoroTask<void> {
+                        result = co_await dftracer::utils::trace::views::
+                            detail::run_collect_via_engine(*v);
+                    });
+    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
+        std::move(result), *v);
 }
 
 // Two aggregation frames equal, pairing rows by their composite key text so a
 // differently-ordered group set still compares row for row.
-inline void frames_equal(const dataframe::DataFrame& a,
-                         const dataframe::DataFrame& b,
+inline void frames_equal(const dftracer::utils::dataframe::DataFrame& a,
+                         const dftracer::utils::dataframe::DataFrame& b,
                          const std::vector<std::string>& keys) {
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
@@ -118,11 +123,12 @@ inline void frames_equal(const dataframe::DataFrame& a,
         CHECK(a.columns[i].type() == b.columns[i].type());
     }
     REQUIRE(a.num_rows() == b.num_rows());
-    auto keyed = [&](const dataframe::DataFrame& df) {
+    auto keyed = [&](const dftracer::utils::dataframe::DataFrame& df) {
         std::vector<std::pair<std::string, std::int64_t>> rows;
         for (std::int64_t r = 0; r < df.num_rows(); ++r) {
             std::string s;
-            for (const auto& k : keys) s += bstr(df, r, k) + '\x1f';
+            for (const auto& k : keys)
+                s += test_view_common::bstr(df, r, k) + '\x1f';
             rows.emplace_back(std::move(s), r);
         }
         std::sort(rows.begin(), rows.end());
@@ -132,15 +138,18 @@ inline void frames_equal(const dataframe::DataFrame& a,
     const auto br = keyed(b);
     for (std::size_t i = 0; i < ar.size(); ++i)
         for (const auto& name : a.names) {
-            const auto c = static_cast<std::size_t>(bcol(a, name));
-            if (a.columns[c].type() == dataframe::TypeId::String) {
+            const auto c =
+                static_cast<std::size_t>(test_view_common::bcol(a, name));
+            if (a.columns[c].type() ==
+                dftracer::utils::dataframe::TypeId::String) {
                 CHECK(a.columns[c].is_null(ar[i].second) ==
                       b.columns[c].is_null(br[i].second));
-                CHECK(bstr(a, ar[i].second, name) ==
-                      bstr(b, br[i].second, name));
+                CHECK(test_view_common::bstr(a, ar[i].second, name) ==
+                      test_view_common::bstr(b, br[i].second, name));
             } else
-                CHECK(bnum(a, ar[i].second, name) ==
-                      doctest::Approx(bnum(b, br[i].second, name)));
+                CHECK(test_view_common::bnum(a, ar[i].second, name) ==
+                      doctest::Approx(
+                          test_view_common::bnum(b, br[i].second, name)));
         }
 }
 
@@ -170,30 +179,31 @@ inline std::string write_agg_engine_trace(const std::string& dir) {
 }
 
 // The engine collect path and the GroupMap oracle over the same built plan.
-inline dataframe::DataFrame collect_engine_plan(
+inline dftracer::utils::dataframe::DataFrame collect_engine_plan(
     const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
-    namespace detail = dftracer::utils::trace::views::detail;
     // One pool for the whole binary: a fresh one per collect dominates the
     // run under Valgrind.
     static dftracer::utils::Runtime rt;
-    dataframe::DataFrame result;
+    dftracer::utils::dataframe::DataFrame result;
     rt.run_blocking("agg-engine",
                     [&](dftracer::utils::CoroScope&)
                         -> dftracer::utils::coro::CoroTask<void> {
-                        result = co_await detail::run_collect_via_engine(*v);
+                        result = co_await dftracer::utils::trace::views::
+                            detail::run_collect_via_engine(*v);
                     });
-    return detail::apply_agg_post_ops(std::move(result), *v);
+    return dftracer::utils::trace::views::detail::apply_agg_post_ops(
+        std::move(result), *v);
 }
-inline dataframe::DataFrame collect_groupmap_plan(
+inline dftracer::utils::dataframe::DataFrame collect_groupmap_plan(
     const dftracer::utils::trace::views::detail::scan::ScanPlan& v) {
     return groupmap_oracle(v);
 }
 
-inline void check_match(const dataframe::DataFrame& a0,
-                        const dataframe::DataFrame& b0,
+inline void check_match(const dftracer::utils::dataframe::DataFrame& a0,
+                        const dftracer::utils::dataframe::DataFrame& b0,
                         const std::string& key) {
-    dataframe::DataFrame a = a0.sort_by(key, false);
-    dataframe::DataFrame b = b0.sort_by(key, false);
+    dftracer::utils::dataframe::DataFrame a = a0.sort_by(key, false);
+    dftracer::utils::dataframe::DataFrame b = b0.sort_by(key, false);
     REQUIRE(a.names.size() == b.names.size());
     for (std::size_t i = 0; i < a.names.size(); ++i) {
         CHECK(a.names[i] == b.names[i]);
@@ -202,17 +212,21 @@ inline void check_match(const dataframe::DataFrame& a0,
     REQUIRE(a.num_rows() == b.num_rows());
     for (std::int64_t r = 0; r < a.num_rows(); ++r)
         for (const auto& name : a.names) {
-            const auto c = static_cast<std::size_t>(bcol(a, name));
-            if (a.columns[c].type() == dataframe::TypeId::String) {
+            const auto c =
+                static_cast<std::size_t>(test_view_common::bcol(a, name));
+            if (a.columns[c].type() ==
+                dftracer::utils::dataframe::TypeId::String) {
                 CHECK(a.columns[c].is_null(r) == b.columns[c].is_null(r));
-                CHECK(bstr(a, r, name) == bstr(b, r, name));
+                CHECK(test_view_common::bstr(a, r, name) ==
+                      test_view_common::bstr(b, r, name));
             } else
-                CHECK(bnum(a, r, name) == doctest::Approx(bnum(b, r, name)));
+                CHECK(test_view_common::bnum(a, r, name) ==
+                      doctest::Approx(test_view_common::bnum(b, r, name)));
         }
 }
 
-inline void check_match_multi(const dataframe::DataFrame& a0,
-                              const dataframe::DataFrame& b0,
+inline void check_match_multi(const dftracer::utils::dataframe::DataFrame& a0,
+                              const dftracer::utils::dataframe::DataFrame& b0,
                               const std::vector<std::string>& keys) {
     REQUIRE(a0.names.size() == b0.names.size());
     for (std::size_t i = 0; i < a0.names.size(); ++i) {
@@ -220,10 +234,11 @@ inline void check_match_multi(const dataframe::DataFrame& a0,
         CHECK(a0.columns[i].type() == b0.columns[i].type());
     }
     REQUIRE(a0.num_rows() == b0.num_rows());
-    auto sort_key = [&](const dataframe::DataFrame& df, std::int64_t r) {
+    auto sort_key = [&](const dftracer::utils::dataframe::DataFrame& df,
+                        std::int64_t r) {
         std::string s;
         for (const auto& k : keys) {
-            s += bstr(df, r, k);
+            s += test_view_common::bstr(df, r, k);
             s += '\x1f';
         }
         return s;
@@ -237,71 +252,88 @@ inline void check_match_multi(const dataframe::DataFrame& a0,
     std::sort(br.begin(), br.end());
     for (std::size_t i = 0; i < ar.size(); ++i)
         for (const auto& name : a0.names) {
-            const auto c = static_cast<std::size_t>(bcol(a0, name));
-            if (a0.columns[c].type() == dataframe::TypeId::String) {
+            const auto c =
+                static_cast<std::size_t>(test_view_common::bcol(a0, name));
+            if (a0.columns[c].type() ==
+                dftracer::utils::dataframe::TypeId::String) {
                 CHECK(a0.columns[c].is_null(ar[i].second) ==
                       b0.columns[c].is_null(br[i].second));
-                CHECK(bstr(a0, ar[i].second, name) ==
-                      bstr(b0, br[i].second, name));
+                CHECK(test_view_common::bstr(a0, ar[i].second, name) ==
+                      test_view_common::bstr(b0, br[i].second, name));
             } else
-                CHECK(bnum(a0, ar[i].second, name) ==
-                      doctest::Approx(bnum(b0, br[i].second, name)));
+                CHECK(test_view_common::bnum(a0, ar[i].second, name) ==
+                      doctest::Approx(
+                          test_view_common::bnum(b0, br[i].second, name)));
         }
 }
 
 inline void run_both_file(const std::string& file, const std::string& file_idx,
-                          const GroupKey& gk, const std::string& key_col,
+                          const dftracer::utils::trace::views::GroupKey& gk,
+                          const std::string& key_col,
                           std::uint64_t mem_budget) {
     auto build = [&] {
-        namespace scan = dftracer::utils::trace::views::detail::scan;
-        scan::ScanPlan v = scan::from_file(file, file_idx);
-        if (mem_budget) v = scan::memory_budget(v, mem_budget);
-        return scan::agg(scan::group_by(v, {gk}),
-                         {
-                             {AggOp::Count, "", "n"},
-                             {AggOp::Sum, "dur", "sum_dur"},
-                             {AggOp::Mean, "dur", "mean_dur"},
-                             {AggOp::Min, "dur", "min_dur"},
-                             {AggOp::Max, "dur", "max_dur"},
-                             {AggOp::Var, "dur", "var_dur"},
-                             {AggOp::Std, "dur", "std_dur"},
-                             {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-                             {AggOp::ArgMax, "name", "top_name", "dur"},
-                             {AggOp::SetUnion, "cat", "cats"},
-                         });
+        dftracer::utils::trace::views::detail::scan::ScanPlan v =
+            dftracer::utils::trace::views::detail::scan::from_file(file,
+                                                                   file_idx);
+        if (mem_budget)
+            v = dftracer::utils::trace::views::detail::scan::memory_budget(
+                v, mem_budget);
+        return dftracer::utils::trace::views::detail::scan::agg(
+            dftracer::utils::trace::views::detail::scan::group_by(v, {gk}),
+            {
+                {dftracer::utils::trace::views::AggOp::Count, "", "n"},
+                {dftracer::utils::trace::views::AggOp::Sum, "dur", "sum_dur"},
+                {dftracer::utils::trace::views::AggOp::Mean, "dur", "mean_dur"},
+                {dftracer::utils::trace::views::AggOp::Min, "dur", "min_dur"},
+                {dftracer::utils::trace::views::AggOp::Max, "dur", "max_dur"},
+                {dftracer::utils::trace::views::AggOp::Var, "dur", "var_dur"},
+                {dftracer::utils::trace::views::AggOp::Std, "dur", "std_dur"},
+                {dftracer::utils::trace::views::AggOp::Pct, "dur", "p90_dur",
+                 "", 0.9},
+                {dftracer::utils::trace::views::AggOp::ArgMax, "name",
+                 "top_name", "dur"},
+                {dftracer::utils::trace::views::AggOp::SetUnion, "cat", "cats"},
+            });
     };
-    dataframe::DataFrame legacy = collect_groupmap_plan(build());
-    dataframe::DataFrame engine = collect_engine_plan(build());
+    dftracer::utils::dataframe::DataFrame legacy =
+        collect_groupmap_plan(build());
+    dftracer::utils::dataframe::DataFrame engine = collect_engine_plan(build());
     check_match(legacy, engine, key_col);
 }
 
-inline void run_both_multi(std::vector<ViewFile> files,
-                           const std::vector<GroupKey>& gks,
-                           const std::vector<std::string>& key_cols,
-                           std::uint64_t mem_budget) {
+inline void run_both_multi(
+    std::vector<dftracer::utils::trace::views::ViewFile> files,
+    const std::vector<dftracer::utils::trace::views::GroupKey>& gks,
+    const std::vector<std::string>& key_cols, std::uint64_t mem_budget) {
     auto build = [&] {
-        namespace scan = dftracer::utils::trace::views::detail::scan;
-        scan::ScanPlan v = scan::from_files(files);
-        if (mem_budget) v = scan::memory_budget(v, mem_budget);
-        return scan::agg(scan::group_by(v, gks),
-                         {
-                             {AggOp::Count, "", "n"},
-                             {AggOp::Sum, "dur", "sum_dur"},
-                             {AggOp::Mean, "dur", "mean_dur"},
-                             {AggOp::Var, "dur", "var_dur"},
-                             {AggOp::Pct, "dur", "p90_dur", "", 0.9},
-                             {AggOp::ArgMax, "name", "top_name", "dur"},
-                         });
+        dftracer::utils::trace::views::detail::scan::ScanPlan v =
+            dftracer::utils::trace::views::detail::scan::from_files(files);
+        if (mem_budget)
+            v = dftracer::utils::trace::views::detail::scan::memory_budget(
+                v, mem_budget);
+        return dftracer::utils::trace::views::detail::scan::agg(
+            dftracer::utils::trace::views::detail::scan::group_by(v, gks),
+            {
+                {dftracer::utils::trace::views::AggOp::Count, "", "n"},
+                {dftracer::utils::trace::views::AggOp::Sum, "dur", "sum_dur"},
+                {dftracer::utils::trace::views::AggOp::Mean, "dur", "mean_dur"},
+                {dftracer::utils::trace::views::AggOp::Var, "dur", "var_dur"},
+                {dftracer::utils::trace::views::AggOp::Pct, "dur", "p90_dur",
+                 "", 0.9},
+                {dftracer::utils::trace::views::AggOp::ArgMax, "name",
+                 "top_name", "dur"},
+            });
     };
-    dataframe::DataFrame legacy = collect_groupmap_plan(build());
-    dataframe::DataFrame engine = collect_engine_plan(build());
+    dftracer::utils::dataframe::DataFrame legacy =
+        collect_groupmap_plan(build());
+    dftracer::utils::dataframe::DataFrame engine = collect_engine_plan(build());
     check_match_multi(legacy, engine, key_cols);
 }
 
 // The environment both binaries build their traces under. Static: doctest
 // re-enters a case per subcase, and each trace is written and indexed once.
-inline TestEnvironment& parity_env() {
-    static TestEnvironment env(200);
+inline dftu_utils_test::TestEnvironment& parity_env() {
+    static dftu_utils_test::TestEnvironment env(200);
     return env;
 }
 
@@ -314,6 +346,4 @@ inline std::string parity_sub(const char* name) {
 
 }  // namespace aggparity
 
-using namespace aggparity;  // NOLINT(google-build-using-namespace)
-
-#endif                      // DFTRACER_UTILS_TESTS_AGG_PARITY_COMMON_H
+#endif  // DFTRACER_UTILS_TESTS_AGG_PARITY_COMMON_H

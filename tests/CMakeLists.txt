@@ -163,6 +163,12 @@ add_test(
     "bad=$(grep -rnE '^[[:space:]]*#[[:space:]]*include[[:space:]]*\"' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.c' --include='*.cc' --include='*.cpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"quoted include; use <dftracer/utils/...> or the path from tests/ or benchmarks/:\"; echo \"$bad\"; exit 1; fi"
     ${CMAKE_SOURCE_DIR})
 add_test(
+  NAME no_header_using_namespace
+  COMMAND
+    sh -c
+    "bad=$(grep -rnE '^[[:space:]]*using namespace' \"$0/include\" \"$0/src\" \"$0/tests\" \"$0/benchmarks\" \"$0/examples\" --include='*.h' --include='*.hpp' --include='*.inl'); if [ -n \"$bad\" ]; then echo \"using namespace in a header; qualify the names and put the directive in the .cpp:\"; echo \"$bad\"; exit 1; fi"
+    ${CMAKE_SOURCE_DIR})
+add_test(
   NAME store_no_upward
   COMMAND
     sh -c

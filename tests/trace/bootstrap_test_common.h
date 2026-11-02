@@ -16,12 +16,8 @@
 
 namespace bootstrap_test {
 
-using namespace dftracer::utils;
-using namespace dftracer::utils::trace::views;
-namespace dataframe = dftracer::utils::dataframe;
-
 inline std::map<std::string, std::int64_t> counts(
-    const dataframe::DataFrame& df) {
+    const dftracer::utils::dataframe::DataFrame& df) {
     std::map<std::string, std::int64_t> out;
     for (std::int64_t i = 0; i < df.num_rows(); ++i)
         out[test_view_common::bstr(df, i, "name")] =
@@ -29,11 +25,11 @@ inline std::map<std::string, std::int64_t> counts(
     return out;
 }
 
-inline std::vector<ViewFile> view_files_of(
+inline std::vector<dftracer::utils::trace::views::ViewFile> view_files_of(
     const std::vector<std::string>& files, const std::string& index_dir) {
-    std::vector<ViewFile> view_files;
+    std::vector<dftracer::utils::trace::views::ViewFile> view_files;
     for (const auto& f : files) {
-        ViewFile vf;
+        dftracer::utils::trace::views::ViewFile vf;
         vf.file_path = f;
         vf.index_path = dftracer::utils::trace::internal::determine_index_path(
             f, index_dir);
@@ -42,16 +38,20 @@ inline std::vector<ViewFile> view_files_of(
     return view_files;
 }
 
-inline dataframe::DataFrame count_by_name(const std::vector<std::string>& files,
-                                          const std::string& index_dir) {
-    const auto view = View::from_files(view_files_of(files, index_dir))
-                          .group_by({GroupKey::name()})
-                          .agg({{AggOp::Count, "", "n"}});
-    dataframe::DataFrame out;
-    default_runtime().run_blocking("bootstrap-parallelism",
-                                   [&](CoroScope&) -> coro::CoroTask<void> {
-                                       out = co_await view.collect();
-                                   });
+inline dftracer::utils::dataframe::DataFrame count_by_name(
+    const std::vector<std::string>& files, const std::string& index_dir) {
+    const auto view =
+        dftracer::utils::trace::views::View::from_files(
+            view_files_of(files, index_dir))
+            .group_by({dftracer::utils::trace::views::GroupKey::name()})
+            .agg({{dftracer::utils::trace::views::AggOp::Count, "", "n"}});
+    dftracer::utils::dataframe::DataFrame out;
+    dftracer::utils::default_runtime().run_blocking(
+        "bootstrap-parallelism",
+        [&](dftracer::utils::CoroScope&)
+            -> dftracer::utils::coro::CoroTask<void> {
+            out = co_await view.collect();
+        });
     return out;
 }
 

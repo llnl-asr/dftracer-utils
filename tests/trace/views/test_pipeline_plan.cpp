@@ -8,6 +8,11 @@
 #include <stdexcept>
 #include <string>
 
+using namespace dftracer::utils;
+using namespace dftracer::utils::trace::internal;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 namespace views_detail = dftracer::utils::trace::views::detail;
 namespace scan = dftracer::utils::trace::views::detail::scan;
 using scan::ScanPlan;

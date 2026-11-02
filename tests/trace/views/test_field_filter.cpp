@@ -4,6 +4,11 @@
 #include <doctest/doctest.h>
 #include <trace/views/test_view_common.h>
 
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 using dftracer::utils::dataframe::field::F;
 
 TEST_SUITE("View unified F filter") {

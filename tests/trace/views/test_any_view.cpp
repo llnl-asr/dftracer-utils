@@ -8,6 +8,10 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+
 namespace {
 
 constexpr int RECORDS = 3000;

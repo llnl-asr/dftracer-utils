@@ -21,21 +21,16 @@
 #include <string>
 #include <vector>
 
-using namespace dftracer::utils;
-using namespace dftracer::utils::trace::internal;
-using namespace dftracer::utils::trace::views;
-using namespace dftu_utils_test;
-
 namespace test_view_common {
 
 template <class T>
-T run(coro::CoroTask<T> task) {
+T run(dftracer::utils::coro::CoroTask<T> task) {
     return dftracer::utils::default_runtime().submit(std::move(task)).get();
 }
 
 // A trace mixing POSIX and STDIO events so filters have something to cut.
-inline std::string create_mixed_trace(TestEnvironment& env, int posix_n,
-                                      int stdio_n) {
+inline std::string create_mixed_trace(dftu_utils_test::TestEnvironment& env,
+                                      int posix_n, int stdio_n) {
     std::string pfw = env.get_dir() + "/mixed.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < posix_n; ++i) {
@@ -51,7 +46,7 @@ inline std::string create_mixed_trace(TestEnvironment& env, int posix_n,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    common::fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
@@ -59,8 +54,8 @@ inline std::string create_mixed_trace(TestEnvironment& env, int posix_n,
 // `member_bytes` each, so the scan must cross member boundaries. Each member's
 // last event straddles into the next member (content here, terminating newline
 // there), which is exactly the case that must not drop events.
-inline std::string create_multimember_trace(TestEnvironment& env, int n,
-                                            std::size_t member_bytes) {
+inline std::string create_multimember_trace(
+    dftu_utils_test::TestEnvironment& env, int n, std::size_t member_bytes) {
     std::string pfw = env.get_dir() + "/mm.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < n; ++i) {
@@ -71,12 +66,13 @@ inline std::string create_multimember_trace(TestEnvironment& env, int n,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip_multimember(pfw, gz, member_bytes);
-    common::fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
 // A trace with ph="X" events plus ph="C" counter events (aggregator style).
-inline std::string create_trace_with_counters(TestEnvironment& env) {
+inline std::string create_trace_with_counters(
+    dftu_utils_test::TestEnvironment& env) {
     std::string pfw = env.get_dir() + "/ctr.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < 10; ++i)
@@ -90,13 +86,14 @@ inline std::string create_trace_with_counters(TestEnvironment& env) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    common::fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
 // Many ph="C" counter events over two names (cpu, gpu), enough to span several
 // scan batches so a tiny memory budget forces multiple spills of each group.
-inline std::string create_bulk_counters(TestEnvironment& env, int n) {
+inline std::string create_bulk_counters(dftu_utils_test::TestEnvironment& env,
+                                        int n) {
     std::string pfw = env.get_dir() + "/bulk.pfw";
     std::ofstream ofs(pfw);
     for (int i = 0; i < n; ++i) {
@@ -108,19 +105,19 @@ inline std::string create_bulk_counters(TestEnvironment& env, int n) {
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    common::fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
 // A file of cpu counter events with the given user_pct readings (one per
 // event).
-inline std::string create_counter_file(TestEnvironment& env,
+inline std::string create_counter_file(dftu_utils_test::TestEnvironment& env,
                                        const std::string& tag,
                                        const std::vector<int>& user_pcts) {
     // Each shard gets its own dir so its index (keyed off the parent dir) does
     // not collide with the other shard's.
     std::string dir = env.get_dir() + "/" + tag;
-    common::fs::create_directories(dir);
+    dftracer::utils::common::fs::create_directories(dir);
     std::string pfw = dir + "/ctr.pfw";
     std::ofstream ofs(pfw);
     int ts = 1000;
@@ -132,12 +129,12 @@ inline std::string create_counter_file(TestEnvironment& env,
     ofs.close();
     std::string gz = pfw + ".gz";
     dftu_utils_test::compress_file_to_gzip(pfw, gz);
-    common::fs::remove(pfw);
+    dftracer::utils::common::fs::remove(pfw);
     return gz;
 }
 
 // Collects every streamed line.
-struct StringSink : ExportSink {
+struct StringSink : dftracer::utils::trace::views::ExportSink {
     std::string buffer;
     void write(std::string_view data) override { buffer.append(data); }
 
@@ -162,26 +159,28 @@ inline std::size_t count_containing(const std::vector<std::string>& lines,
     return n;
 }
 
-// Helpers for reading a collect() result, now a columnar dataframe::DataFrame.
-// A DataFrame stores names + typed columns with no group/value/text category,
-// so tests address columns by name.
-inline std::int64_t bcol(const dataframe::DataFrame& b, std::string_view name) {
+// Helpers for reading a collect() result, now a columnar
+// dftracer::utils::dataframe::DataFrame. A DataFrame stores names + typed
+// columns with no group/value/text category, so tests address columns by name.
+inline std::int64_t bcol(const dftracer::utils::dataframe::DataFrame& b,
+                         std::string_view name) {
     for (std::size_t i = 0; i < b.names.size(); ++i)
         if (b.names[i] == name) return static_cast<std::int64_t>(i);
     return -1;
 }
 
-inline bool bhas(const dataframe::DataFrame& b, std::string_view name) {
+inline bool bhas(const dftracer::utils::dataframe::DataFrame& b,
+                 std::string_view name) {
     return bcol(b, name) >= 0;
 }
 
 // Numeric value at `row` of the column named `name`, widened to double
 // regardless of the column's stored width (Int64/Uint64/Float64).
-inline double bnum(const dataframe::DataFrame& b, std::int64_t row,
-                   std::string_view name) {
+inline double bnum(const dftracer::utils::dataframe::DataFrame& b,
+                   std::int64_t row, std::string_view name) {
     const auto c =
         b.columns[static_cast<std::size_t>(bcol(b, name))].materialize();
-    using T = dataframe::TypeId;
+    using T = dftracer::utils::dataframe::TypeId;
     if (c.type() == T::Int64)
         return static_cast<double>(c.data<std::int64_t>()[row]);
     if (c.type() == T::Uint64)
@@ -194,8 +193,8 @@ inline double bnum(const dataframe::DataFrame& b, std::int64_t row,
     return c.data<double>()[row];
 }
 
-inline std::string bstr(const dataframe::DataFrame& b, std::int64_t row,
-                        std::string_view name) {
+inline std::string bstr(const dftracer::utils::dataframe::DataFrame& b,
+                        std::int64_t row, std::string_view name) {
     return std::string(
         b.columns[static_cast<std::size_t>(bcol(b, name))].string_at(row));
 }
@@ -206,14 +205,16 @@ inline std::string bstr(const dataframe::DataFrame& b, std::int64_t row,
 // the same data. doctest runs cases serially, so concurrent access is not a
 // concern.
 struct SharedIndexedTrace {
-    TestEnvironment env{200};
+    dftu_utils_test::TestEnvironment env{200};
     std::string gz;
     std::string idx;
     SharedIndexedTrace() {
         gz = create_mixed_trace(env, 30, 20);
-        idx = determine_index_path(gz, "");
+        idx = dftracer::utils::trace::internal::determine_index_path(gz, "");
         StringSink sink;
-        View::from_file(gz, idx).sink_json(sink).get();
+        dftracer::utils::trace::views::View::from_file(gz, idx)
+            .sink_json(sink)
+            .get();
     }
 };
 
@@ -224,6 +225,5 @@ inline const SharedIndexedTrace& shared_trace() {
 }
 
 }  // namespace test_view_common
-using namespace test_view_common;
 
 #endif  // DFTRACER_UTILS_TESTS_VIEW_COMMON_H

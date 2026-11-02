@@ -303,7 +303,6 @@ constexpr std::string_view MONTHS[12] = {
 // +0000 and %Z is UTC.
 template <class String>
 inline void format_time(String& out, const CivilTime& t, std::string_view fmt) {
-    using namespace calendar_detail;
     for (std::size_t i = 0; i < fmt.size(); ++i) {
         if (fmt[i] != '%') {
             out.push_back(fmt[i]);
@@ -311,66 +310,68 @@ inline void format_time(String& out, const CivilTime& t, std::string_view fmt) {
         }
         switch (fmt[++i]) {
             case 'Y':
-                append_year(out, t.year);
+                calendar_detail::append_year(out, t.year);
                 break;
             case 'y':
-                append_padded(out, floor_mod(t.year, 100), 2);
+                calendar_detail::append_padded(out, floor_mod(t.year, 100), 2);
                 break;
             case 'm':
-                append_padded(out, t.month, 2);
+                calendar_detail::append_padded(out, t.month, 2);
                 break;
             case 'd':
-                append_padded(out, t.day, 2);
+                calendar_detail::append_padded(out, t.day, 2);
                 break;
             case 'H':
-                append_padded(out, t.hour, 2);
+                calendar_detail::append_padded(out, t.hour, 2);
                 break;
             case 'I':
-                append_padded(out, t.hour % 12 == 0 ? 12 : t.hour % 12, 2);
+                calendar_detail::append_padded(
+                    out, t.hour % 12 == 0 ? 12 : t.hour % 12, 2);
                 break;
             case 'M':
-                append_padded(out, t.minute, 2);
+                calendar_detail::append_padded(out, t.minute, 2);
                 break;
             case 'S':
-                append_padded(out, t.second, 2);
+                calendar_detail::append_padded(out, t.second, 2);
                 break;
             case 'f':
-                append_padded(out, t.nanosecond / 1'000, 6);
+                calendar_detail::append_padded(out, t.nanosecond / 1'000, 6);
                 break;
             case 'j':
-                append_padded(out, t.day_of_year, 3);
+                calendar_detail::append_padded(out, t.day_of_year, 3);
                 break;
             case 'a':
-                out.append(WEEKDAYS[t.day_of_week].substr(0, 3));
+                out.append(
+                    calendar_detail::WEEKDAYS[t.day_of_week].substr(0, 3));
                 break;
             case 'A':
-                out.append(WEEKDAYS[t.day_of_week]);
+                out.append(calendar_detail::WEEKDAYS[t.day_of_week]);
                 break;
             case 'b':
-                out.append(MONTHS[t.month - 1].substr(0, 3));
+                out.append(calendar_detail::MONTHS[t.month - 1].substr(0, 3));
                 break;
             case 'B':
-                out.append(MONTHS[t.month - 1]);
+                out.append(calendar_detail::MONTHS[t.month - 1]);
                 break;
             case 'p':
                 out.append(t.hour < 12 ? "AM" : "PM");
                 break;
             case 'F':
-                append_year(out, t.year);
+                calendar_detail::append_year(out, t.year);
                 out.push_back('-');
-                append_padded(out, t.month, 2);
+                calendar_detail::append_padded(out, t.month, 2);
                 out.push_back('-');
-                append_padded(out, t.day, 2);
+                calendar_detail::append_padded(out, t.day, 2);
                 break;
             case 'T':
-                append_padded(out, t.hour, 2);
+                calendar_detail::append_padded(out, t.hour, 2);
                 out.push_back(':');
-                append_padded(out, t.minute, 2);
+                calendar_detail::append_padded(out, t.minute, 2);
                 out.push_back(':');
-                append_padded(out, t.second, 2);
+                calendar_detail::append_padded(out, t.second, 2);
                 break;
             case 's':
-                append_wide(out, t.epoch_seconds);
+                calendar_detail::append_wide(out, t.epoch_seconds);
                 break;
             case 'z':
                 out.append("+0000");

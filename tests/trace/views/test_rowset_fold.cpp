@@ -13,6 +13,11 @@
 #include <string>
 #include <vector>
 
+using namespace dftracer::utils::trace::internal;
+using namespace dftracer::utils::trace::views;
+using namespace dftu_utils_test;
+using namespace test_view_common;
+
 using namespace dftracer::utils::trace::views::detail;
 using namespace dftracer::utils::index::extensions;
 namespace ix = dftracer::utils::index;
